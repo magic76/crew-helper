@@ -265,25 +265,30 @@ public class NativeLiveActivity extends Activity {
         LinearLayout controlActions = new LinearLayout(this);
         controlActions.setOrientation(LinearLayout.HORIZONTAL);
         controlActions.setGravity(Gravity.CENTER_VERTICAL);
+        controlActions.setClipChildren(false);
+        controlActions.setClipToPadding(false);
         interruptionButton = makeControlButton();
         awakeButton = makeControlButton();
         noiseButton = makeControlButton();
-        LinearLayout.LayoutParams interruptionLp = new LinearLayout.LayoutParams(0, dp(42), 1f);
+        LinearLayout.LayoutParams interruptionLp = new LinearLayout.LayoutParams(0, dp(46), 1f);
         interruptionLp.setMargins(0, dp(8), 0, 0);
         controlActions.addView(interruptionButton, interruptionLp);
-        LinearLayout.LayoutParams awakeLp = new LinearLayout.LayoutParams(0, dp(42), 1f);
+        LinearLayout.LayoutParams awakeLp = new LinearLayout.LayoutParams(0, dp(46), 1f);
         awakeLp.setMargins(dp(6), dp(8), 0, 0);
         controlActions.addView(awakeButton, awakeLp);
-        LinearLayout.LayoutParams noiseLp = new LinearLayout.LayoutParams(0, dp(42), 1f);
+        LinearLayout.LayoutParams noiseLp = new LinearLayout.LayoutParams(0, dp(46), 1f);
         noiseLp.setMargins(dp(6), dp(8), 0, 0);
         controlActions.addView(noiseButton, noiseLp);
-        controlCard.addView(controlActions);
+        LinearLayout.LayoutParams controlActionsLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        controlActionsLp.setMargins(0, 0, 0, dp(8));
+        controlCard.addView(controlActions, controlActionsLp);
 
         toneButton = makeControlButton();
         toneButton.setTextSize(11);
         LinearLayout.LayoutParams toneLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(40));
-        toneLp.setMargins(0, dp(8), 0, 0);
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(44));
+        toneLp.setMargins(0, 0, 0, dp(8));
         controlCard.addView(toneButton, toneLp);
 
         LinearLayout noiseRow = new LinearLayout(this);
@@ -475,6 +480,7 @@ public class NativeLiveActivity extends Activity {
         button.setMinWidth(0);
         button.setMinimumWidth(0);
         button.setIncludeFontPadding(false);
+        button.setStateListAnimator(null);
         button.setPadding(dp(4), dp(4), dp(4), dp(4));
         return button;
     }
@@ -485,22 +491,29 @@ public class NativeLiveActivity extends Activity {
         return false;
     }
 
+    private void setButtonCard(Button btn, int bgColor, int borderColor, float radiusDp) {
+        if (btn == null) return;
+        btn.setBackground(CrewTheme.createCard(this, bgColor, borderColor, radiusDp));
+        btn.setStateListAnimator(null);
+        btn.setPadding(dp(4), dp(4), dp(4), dp(4));
+    }
+
     private void refreshAssistantControls() {
         if (interruptionButton == null) return;
         boolean active = client != null && client.isRunning();
         boolean allowInterruption = active && client.isVoiceInterruptionAllowed();
         interruptionButton.setText(allowInterruption ? I18n.get(this, "🎙️ 可插話", "🎙️ Interrupt") : I18n.get(this, "🛡️ 防插話", "🛡️ Protected"));
-        interruptionButton.setBackground(CrewTheme.createCard(this, allowInterruption ? Color.parseColor("#064E3B") : Color.parseColor("#78350F"), allowInterruption ? CrewTheme.EMERALD_500 : CrewTheme.AMBER_500, 10));
+        setButtonCard(interruptionButton, allowInterruption ? Color.parseColor("#064E3B") : Color.parseColor("#78350F"), allowInterruption ? CrewTheme.EMERALD_500 : CrewTheme.AMBER_500, 10);
         boolean awake = FloatingBubbleManager.isKeepAwakeActive();
         awakeButton.setText(awake ? I18n.get(this, "☀️ 常亮", "☀️ Awake") : I18n.get(this, "☾ 休眠", "☾ Sleep"));
-        awakeButton.setBackground(CrewTheme.createCard(this, awake ? Color.parseColor("#422006") : CrewTheme.BG_ELEVATED, awake ? CrewTheme.AMBER_500 : CrewTheme.BORDER_SUBTLE, 10));
+        setButtonCard(awakeButton, awake ? Color.parseColor("#422006") : CrewTheme.BG_ELEVATED, awake ? CrewTheme.AMBER_500 : CrewTheme.BORDER_SUBTLE, 10);
         String noise = client != null ? client.getNoiseMode() : AppConfig.getNoiseMode(this);
         noiseButton.setText("noisy".equals(noise) ? I18n.get(this, "🛡️ 嘈雜", "🛡️ Noisy") : ("quiet".equals(noise) ? I18n.get(this, "🌙 安靜", "🌙 Quiet") : I18n.get(this, "✦ 自動", "✦ Auto")));
-        noiseButton.setBackground(CrewTheme.createCard(this, "noisy".equals(noise) ? Color.parseColor("#78350F") : CrewTheme.BG_ELEVATED, "noisy".equals(noise) ? CrewTheme.AMBER_500 : CrewTheme.BORDER_SUBTLE, 10));
+        setButtonCard(noiseButton, "noisy".equals(noise) ? Color.parseColor("#78350F") : CrewTheme.BG_ELEVATED, "noisy".equals(noise) ? CrewTheme.AMBER_500 : CrewTheme.BORDER_SUBTLE, 10);
         if (toneButton != null) {
             toneButton.setText(I18n.get(this, "✨ 語氣：", "✨ Tone: ") + liveToneLabel(AppConfig.getLiveTone(this)));
             toneButton.setTextColor(CrewTheme.TEXT_PRIMARY);
-            toneButton.setBackground(CrewTheme.createCard(this, Color.parseColor("#172554"), CrewTheme.INDIGO_500, 10));
+            setButtonCard(toneButton, Color.parseColor("#172554"), CrewTheme.INDIGO_500, 10);
         }
         int suppression = client != null ? client.getNoiseSuppression() : AppConfig.getNoiseSuppression(this);
         if (noiseSlider != null && noiseSlider.getProgress() != suppression) noiseSlider.setProgress(suppression);
@@ -516,9 +529,9 @@ public class NativeLiveActivity extends Activity {
         cameraButton.setTextColor(active ? CrewTheme.TEXT_PRIMARY : inactive);
         screenButton.setTextColor(active ? CrewTheme.TEXT_PRIMARY : inactive);
         micButton.setTextColor(active ? CrewTheme.TEXT_PRIMARY : inactive);
-        cameraButton.setBackground(CrewTheme.createCard(this, CrewTheme.BG_ELEVATED, CrewTheme.BORDER_SUBTLE, 12));
-        screenButton.setBackground(CrewTheme.createCard(this, CrewTheme.BG_ELEVATED, CrewTheme.BORDER_SUBTLE, 12));
-        micButton.setBackground(CrewTheme.createCard(this, muted ? Color.parseColor("#881337") : CrewTheme.TEAL_500, muted ? CrewTheme.ROSE_500 : CrewTheme.TEAL_400, 12));
+        setButtonCard(cameraButton, CrewTheme.BG_ELEVATED, CrewTheme.BORDER_SUBTLE, 12);
+        setButtonCard(screenButton, CrewTheme.BG_ELEVATED, CrewTheme.BORDER_SUBTLE, 12);
+        setButtonCard(micButton, muted ? Color.parseColor("#881337") : CrewTheme.TEAL_500, muted ? CrewTheme.ROSE_500 : CrewTheme.TEAL_400, 12);
     }
 
     private String nextLiveTone(String current) {
