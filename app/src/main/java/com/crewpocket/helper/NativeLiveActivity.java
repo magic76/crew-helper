@@ -44,6 +44,7 @@ public class NativeLiveActivity extends Activity {
     private Button screenButton;
     private Button micButton;
     private Button noiseButton;
+    private Button toneButton;
     private SeekBar noiseSlider;
     private TextView noiseLevelText;
     private TextView microphoneMeterText;
@@ -257,32 +258,47 @@ public class NativeLiveActivity extends Activity {
         controlTitle.setTextSize(12);
         controlTitle.setTypeface(Typeface.DEFAULT_BOLD);
         controlTitle.setTextColor(CrewTheme.TEAL_300);
-        controlHeader.addView(controlTitle, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        controlHeader.addView(controlTitle, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        controlCard.addView(controlHeader);
+
+        LinearLayout controlActions = new LinearLayout(this);
+        controlActions.setOrientation(LinearLayout.HORIZONTAL);
+        controlActions.setGravity(Gravity.CENTER_VERTICAL);
         interruptionButton = makeControlButton();
         awakeButton = makeControlButton();
         noiseButton = makeControlButton();
-        controlHeader.addView(interruptionButton, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38)));
-        LinearLayout.LayoutParams awakeLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38));
-        awakeLp.setMargins(dp(6), 0, 0, 0);
-        controlHeader.addView(awakeButton, awakeLp);
-        LinearLayout.LayoutParams noiseLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38));
-        noiseLp.setMargins(dp(6), 0, 0, 0);
-        controlHeader.addView(noiseButton, noiseLp);
-        controlCard.addView(controlHeader);
+        LinearLayout.LayoutParams interruptionLp = new LinearLayout.LayoutParams(0, dp(42), 1f);
+        interruptionLp.setMargins(0, dp(8), 0, 0);
+        controlActions.addView(interruptionButton, interruptionLp);
+        LinearLayout.LayoutParams awakeLp = new LinearLayout.LayoutParams(0, dp(42), 1f);
+        awakeLp.setMargins(dp(6), dp(8), 0, 0);
+        controlActions.addView(awakeButton, awakeLp);
+        LinearLayout.LayoutParams noiseLp = new LinearLayout.LayoutParams(0, dp(42), 1f);
+        noiseLp.setMargins(dp(6), dp(8), 0, 0);
+        controlActions.addView(noiseButton, noiseLp);
+        controlCard.addView(controlActions);
+
+        toneButton = makeControlButton();
+        toneButton.setTextSize(11);
+        LinearLayout.LayoutParams toneLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(40));
+        toneLp.setMargins(0, dp(8), 0, 0);
+        controlCard.addView(toneButton, toneLp);
 
         LinearLayout noiseRow = new LinearLayout(this);
         noiseRow.setOrientation(LinearLayout.HORIZONTAL);
         noiseRow.setGravity(Gravity.CENTER_VERTICAL);
         noiseRow.setPadding(0, dp(8), 0, 0);
         TextView noiseLabel = new TextView(this);
-        noiseLabel.setText(I18n.get(this, "插話門檻", "Interrupt gate"));
+        noiseLabel.setText(I18n.get(this, "雜音防打斷", "Noise guard"));
         noiseLabel.setTextSize(10);
         noiseLabel.setTextColor(CrewTheme.TEXT_SECONDARY);
         noiseRow.addView(noiseLabel, new LinearLayout.LayoutParams(dp(58), ViewGroup.LayoutParams.WRAP_CONTENT));
         noiseSlider = new SeekBar(this);
         noiseSlider.setMax(100);
         noiseSlider.setProgress(AppConfig.getNoiseSuppression(this));
-        noiseSlider.setContentDescription(I18n.get(this, "插話門檻：左側較容易觸發插話，右側較不易被環境聲打斷", "Interrupt gate: left is more sensitive, right rejects ambient interruptions"));
+        noiseSlider.setContentDescription(I18n.get(this, "雜音防打斷：左側較快可插話，右側會過濾更多短暫環境雜音", "Noise guard: left interrupts sooner; right filters more brief ambient noise"));
         noiseRow.addView(noiseSlider, new LinearLayout.LayoutParams(0, dp(36), 1f));
         noiseLevelText = new TextView(this);
         noiseLevelText.setTextSize(10);
@@ -408,6 +424,14 @@ public class NativeLiveActivity extends Activity {
                 refreshAssistantControls();
             }
         });
+        toneButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                AppConfig.setLiveTone(NativeLiveActivity.this, nextLiveTone(AppConfig.getLiveTone(NativeLiveActivity.this)));
+                refreshAssistantControls();
+                Toast.makeText(NativeLiveActivity.this,
+                        I18n.get(NativeLiveActivity.this, "語氣模式將於下次 Live 通話套用", "Tone will apply to the next Live call"), Toast.LENGTH_SHORT).show();
+            }
+        });
         noiseSlider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar bar, int progress, boolean fromUser) {
                 AppConfig.setNoiseSuppression(NativeLiveActivity.this, progress);
@@ -416,7 +440,7 @@ public class NativeLiveActivity extends Activity {
             }
             @Override public void onStartTrackingTouch(SeekBar bar) {}
             @Override public void onStopTrackingTouch(SeekBar bar) {
-                Toast.makeText(NativeLiveActivity.this, I18n.get(NativeLiveActivity.this, "插話門檻已調整", "Interrupt gate adjusted"), Toast.LENGTH_SHORT).show();
+                Toast.makeText(NativeLiveActivity.this, I18n.get(NativeLiveActivity.this, "雜音防打斷強度已調整", "Noise guard adjusted"), Toast.LENGTH_SHORT).show();
             }
         });
         micButton.setOnClickListener(new View.OnClickListener() {
@@ -442,10 +466,16 @@ public class NativeLiveActivity extends Activity {
 
     private Button makeControlButton() {
         Button button = new Button(this);
-        button.setTextSize(10);
+        button.setTextSize(10.5f);
         button.setAllCaps(false);
         button.setTextColor(CrewTheme.TEXT_PRIMARY);
-        button.setPadding(dp(5), 0, dp(5), 0);
+        button.setGravity(Gravity.CENTER);
+        button.setMinHeight(0);
+        button.setMinimumHeight(0);
+        button.setMinWidth(0);
+        button.setMinimumWidth(0);
+        button.setIncludeFontPadding(false);
+        button.setPadding(dp(4), dp(4), dp(4), dp(4));
         return button;
     }
 
@@ -467,6 +497,11 @@ public class NativeLiveActivity extends Activity {
         String noise = client != null ? client.getNoiseMode() : AppConfig.getNoiseMode(this);
         noiseButton.setText("noisy".equals(noise) ? I18n.get(this, "🛡️ 嘈雜", "🛡️ Noisy") : ("quiet".equals(noise) ? I18n.get(this, "🌙 安靜", "🌙 Quiet") : I18n.get(this, "✦ 自動", "✦ Auto")));
         noiseButton.setBackground(CrewTheme.createCard(this, "noisy".equals(noise) ? Color.parseColor("#78350F") : CrewTheme.BG_ELEVATED, "noisy".equals(noise) ? CrewTheme.AMBER_500 : CrewTheme.BORDER_SUBTLE, 10));
+        if (toneButton != null) {
+            toneButton.setText(I18n.get(this, "✨ 語氣：", "✨ Tone: ") + liveToneLabel(AppConfig.getLiveTone(this)));
+            toneButton.setTextColor(CrewTheme.TEXT_PRIMARY);
+            toneButton.setBackground(CrewTheme.createCard(this, Color.parseColor("#172554"), CrewTheme.INDIGO_500, 10));
+        }
         int suppression = client != null ? client.getNoiseSuppression() : AppConfig.getNoiseSuppression(this);
         if (noiseSlider != null && noiseSlider.getProgress() != suppression) noiseSlider.setProgress(suppression);
         updateNoiseLevel(suppression);
@@ -486,6 +521,21 @@ public class NativeLiveActivity extends Activity {
         micButton.setBackground(CrewTheme.createCard(this, muted ? Color.parseColor("#881337") : CrewTheme.TEAL_500, muted ? CrewTheme.ROSE_500 : CrewTheme.TEAL_400, 12));
     }
 
+    private String nextLiveTone(String current) {
+        String[] tones = new String[]{"natural", "warm", "lively", "professional", "calm", "urgent"};
+        for (int i = 0; i < tones.length; i++) if (tones[i].equals(current)) return tones[(i + 1) % tones.length];
+        return "warm";
+    }
+
+    private String liveToneLabel(String tone) {
+        if ("natural".equals(tone)) return I18n.get(this, "自然", "Natural");
+        if ("lively".equals(tone)) return I18n.get(this, "活潑", "Lively");
+        if ("professional".equals(tone)) return I18n.get(this, "專業", "Professional");
+        if ("calm".equals(tone)) return I18n.get(this, "沉穩", "Calm");
+        if ("urgent".equals(tone)) return I18n.get(this, "緊急", "Urgent");
+        return I18n.get(this, "溫暖", "Warm");
+    }
+
     private void updateNoiseLevel(int value) {
         if (noiseLevelText == null) return;
         String label = value < 35 ? I18n.get(this, "低", "Low") : (value < 70 ? I18n.get(this, "中", "Med") : I18n.get(this, "高", "High"));
@@ -500,7 +550,7 @@ public class NativeLiveActivity extends Activity {
         String db = String.format(java.util.Locale.US, "%.0f", dbfs);
         String gate = String.format(java.util.Locale.US, "%.0f", gateDbfs);
         microphoneMeterText.setText(I18n.get(this, "收音 ", "Mic ") + db + " dB · "
-            + I18n.get(this, "門檻 ", "Gate ") + gate + " dB · "
+            + I18n.get(this, "防打斷門檻 ", "Guard ") + gate + " dB · "
             + (sending ? I18n.get(this, "送出中", "Sending") : I18n.get(this, "已過濾", "Filtered")));
         microphoneMeterText.setTextColor(sending ? CrewTheme.TEAL_300 : CrewTheme.TEXT_MUTED);
     }
@@ -537,12 +587,14 @@ public class NativeLiveActivity extends Activity {
                 boolean micSeen = lastMicMeterAt >= startedAt && lastMicDbfs > -90d;
                 boolean sent = observedMicSend;
                 boolean stillReady = client != null && client.isRunning() && client.isSetupReady();
+                boolean protectedWhileSpeaking = client != null && client.isAiSpeaking();
                 String result = "✓ 麥克風權限\n✓ 網路連線\n"
                         + (stillReady ? "✓ Gemini 已連線" : "✕ Gemini 連線已中斷") + "\n"
+                        + "✓ 播放輸出：" + (client == null ? "尚未初始化" : client.getAudioOutputBackend()) + "\n"
                         + (micSeen ? "✓ 收音 " + Math.round(lastMicDbfs) + " dB" : "✕ 沒有收到麥克風音量") + "\n"
-                        + (sent ? "✓ PCM 音訊正在送出" : "✕ 尚未偵測到音訊送出");
+                        + (sent ? "✓ PCM 音訊正在送出" : (protectedWhileSpeaking ? "✓ AI 播放中，收音保護啟用" : "✕ 尚未偵測到音訊送出"));
                 diagnosticText.setText(result);
-                diagnosticText.setTextColor(stillReady && micSeen && sent ? CrewTheme.EMERALD_400 : CrewTheme.ROSE_400);
+                diagnosticText.setTextColor(stillReady && micSeen && (sent || protectedWhileSpeaking) ? CrewTheme.EMERALD_400 : CrewTheme.ROSE_400);
                 diagnosticButton.setEnabled(true);
                 diagnosticButton.setText(I18n.get(NativeLiveActivity.this, "🧪 再次執行自檢", "🧪 Run again"));
             }
@@ -613,7 +665,7 @@ public class NativeLiveActivity extends Activity {
     private void startClient(String key) {
         String serverUrl = AppConfig.getServerUrl(this);
         String voiceName = AppConfig.getVoiceName(this);
-        client = new NativeGeminiLiveClient(key, serverUrl, voiceName, AppConfig.getNoiseMode(this), AppConfig.getNoiseSuppression(this), new NativeGeminiLiveClient.Listener() {
+        client = new NativeGeminiLiveClient(key, serverUrl, voiceName, AppConfig.getNoiseMode(this), AppConfig.getNoiseSuppression(this), AppConfig.getLiveTone(this), new NativeGeminiLiveClient.Listener() {
             @Override public void onStatus(final String text) {
                 if (text != null && text.contains("已連線")) reconnectAttempts = 0;
                 updateStatus(CrewTheme.TEAL_400, text);
@@ -621,7 +673,17 @@ public class NativeLiveActivity extends Activity {
             @Override public void onStopped(final String reason) {
                 runOnUiThread(new Runnable() {
                     @Override public void run() {
-                        if (!callRequested) {
+                        // Gemini's end_voice_session deliberately reports "已結束".
+                        // Never revive a session the user or assistant intentionally closed.
+                        if (isGracefulCallEnd(reason)) {
+                            callRequested = false;
+                            client = null;
+                            handler.removeCallbacks(reconnectRunnable);
+                            handler.removeCallbacks(connectionWatchdog);
+                            updateStatus(CrewTheme.TEXT_MUTED, reason);
+                            updateCallButtonUi(false);
+                            refreshAssistantControls();
+                        } else if (!callRequested) {
                             updateStatus(CrewTheme.TEXT_MUTED, reason);
                             handler.removeCallbacks(connectionWatchdog);
                             updateCallButtonUi(false);
@@ -663,6 +725,11 @@ public class NativeLiveActivity extends Activity {
         handler.postDelayed(connectionWatchdog, 18000);
         updateCallButtonUi(true);
         refreshAssistantControls();
+    }
+
+    private boolean isGracefulCallEnd(String reason) {
+        String text = reason == null ? "" : reason.trim();
+        return "已結束".equals(text) || text.contains("使用者結束") || text.contains("掛斷");
     }
 
     private void appendTranscript(String role, String text) {
