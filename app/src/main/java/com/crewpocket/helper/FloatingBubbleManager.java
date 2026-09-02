@@ -364,6 +364,10 @@ public class FloatingBubbleManager {
         }
     }
 
+    public boolean isBubbleShowing() {
+        return bubbleView != null;
+    }
+
     public void scheduleAutoDock() {
         autoDockHandler.removeCallbacks(autoDockRunnable);
         if (bubbleView != null && !isDocked) {
@@ -946,6 +950,25 @@ public class FloatingBubbleManager {
                         }
                     });
                     headerRow.addView(voiceWakeButton);
+
+                    TextView hideBubbleBtn = new TextView(context);
+                    hideBubbleBtn.setText(I18n.get(context, "🚪 隱藏球", "🚪 Exit"));
+                    hideBubbleBtn.setTextSize(11);
+                    hideBubbleBtn.setTextColor(Color.parseColor("#FB7185"));
+                    hideBubbleBtn.setBackground(CrewTheme.createCard(context, Color.parseColor("#4C0519"), Color.parseColor("#E11D48"), 10));
+                    hideBubbleBtn.setPadding(dp(8), dp(3), dp(8), dp(3));
+                    LinearLayout.LayoutParams hideLp = new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                    hideLp.setMargins(dp(6), 0, 0, 0);
+                    hideBubbleBtn.setOnClickListener(new View.OnClickListener() {
+                        @Override public void onClick(View v) {
+                            vibrateShort();
+                            hideVoiceControls();
+                            hideBubble();
+                            Toast.makeText(context, I18n.get(context, "隨行助理已隱藏，可至 App 隨時重新開啟", "Floating assistant hidden"), Toast.LENGTH_SHORT).show();
+                        }
+                    });
+                    headerRow.addView(hideBubbleBtn, hideLp);
 
                     TextView close = new TextView(context);
                     close.setText("✕");

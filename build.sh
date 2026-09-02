@@ -30,8 +30,24 @@ d8 --output bin/ bin/classes/com/crewpocket/helper/*.class app/libs/*.jar
 echo "4. Packaging APK..."
 aapt package -f -M app/src/main/AndroidManifest.xml -S app/src/main/res -I "$FRAMEWORK_RES" -F bin/unsigned.apk
 
+echo "4.5 Building Oboe native audio output (arm64-v8a)..."
+mkdir -p bin/lib/arm64-v8a bin/oboe-obj
+OBOE_SOURCES="$(find third_party/oboe/src -type f -name '*.cpp')"
+printf '%s\n' app/src/main/cpp/CrewOboeOutput.cpp $OBOE_SOURCES | xargs -r -n 1 -P 4 sh -c '
+  SOURCE="$0"
+  OBJECT="bin/oboe-obj/$(basename "${SOURCE%.cpp}").o"
+  clang++ -fPIC -std=c++17 -O2 \
+    -Ithird_party/oboe/include -Ithird_party/oboe/src -I/data/data/com.termux/files/usr/include \
+    -c "$SOURCE" -o "$OBJECT"
+'
+clang++ -shared -Wl,-z,max-page-size=16384 \
+  bin/oboe-obj/*.o -llog -lOpenSLES -o bin/lib/arm64-v8a/libcrewaudio.so
+cp /data/data/com.termux/files/usr/lib/libc++_shared.so bin/lib/arm64-v8a/
+
 cd bin
 aapt add unsigned.apk classes.dex
+aapt add unsigned.apk lib/arm64-v8a/libcrewaudio.so
+aapt add unsigned.apk lib/arm64-v8a/libc++_shared.so
 cd "$SCRIPT_DIR"
 
 echo "5. Signing APK..."

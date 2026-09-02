@@ -135,7 +135,7 @@ public class NativeLiveService extends Service {
         }
         final String serverUrl = AppConfig.getServerUrl(this);
         final String voiceName = AppConfig.getVoiceName(this);
-        client = new NativeGeminiLiveClient(apiKey, serverUrl, voiceName, AppConfig.getNoiseMode(this), AppConfig.getNoiseSuppression(this), new NativeGeminiLiveClient.Listener() {
+        client = new NativeGeminiLiveClient(apiKey, serverUrl, voiceName, AppConfig.getNoiseMode(this), AppConfig.getNoiseSuppression(this), AppConfig.getLiveTone(this), new NativeGeminiLiveClient.Listener() {
             @Override public void onStatus(String text) {
                 if (text != null && text.contains("已連線")) reconnectAttempts = 0;
                 updateStatus(text, true);
@@ -161,6 +161,12 @@ public class NativeLiveService extends Service {
             end(reason);
             return;
         }
+        // end_voice_session and a user hang-up both reach NativeGeminiLiveClient.stop(),
+        // which reports "已結束".  That is a deliberate end, never a reconnect case.
+        if (isGracefulCallEnd(reason)) {
+            end(reason);
+            return;
+        }
         if (reconnectAttempts >= 3) {
             end("重連 3 次仍失敗：" + reason);
             return;
@@ -171,6 +177,11 @@ public class NativeLiveService extends Service {
         updateStatus("連線中斷，正在重新連線（" + reconnectAttempts + "/3）…", true);
         visualHandler.removeCallbacks(reconnectRunnable);
         visualHandler.postDelayed(reconnectRunnable, delayMs);
+    }
+
+    private boolean isGracefulCallEnd(String reason) {
+        String text = reason == null ? "" : reason.trim();
+        return "已結束".equals(text) || text.contains("使用者結束") || text.contains("掛斷");
     }
 
     private void updateStatus(String status, boolean showOngoing) {

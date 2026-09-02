@@ -31,6 +31,7 @@ public class MainActivity extends Activity {
     private LinearLayout pageContent;
     private final Button[] navButtons = new Button[4];
     private int activeTab = 0;
+    private Button assistantToggleButton;
 
     private int dp(float val) {
         return CrewTheme.dp(this, val);
@@ -82,9 +83,12 @@ public class MainActivity extends Activity {
 
     private void renderHomePage() {
         LinearLayout root = pageContent;
+
+        // ── 1. Tactical Cyberpunk Brand Header ──
         LinearLayout headerRow = new LinearLayout(this);
         headerRow.setOrientation(LinearLayout.HORIZONTAL);
         headerRow.setGravity(Gravity.CENTER_VERTICAL);
+        headerRow.setPadding(0, 0, 0, dp(6));
 
         TextView brandIcon = new TextView(this);
         brandIcon.setText("🤖");
@@ -100,14 +104,14 @@ public class MainActivity extends Activity {
         titleBadgeRow.setGravity(Gravity.CENTER_VERTICAL);
 
         TextView title = new TextView(this);
-        title.setText("Crew Pocket");
+        title.setText("Crew Helper");
         title.setTextSize(20);
         title.setTextColor(CrewTheme.TEXT_PRIMARY);
         title.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
         titleBadgeRow.addView(title);
 
         TextView versionBadge = new TextView(this);
-        versionBadge.setText("HELPER");
+        versionBadge.setText("AI");
         versionBadge.setTextSize(9);
         versionBadge.setTextColor(CrewTheme.TEAL_300);
         versionBadge.setTypeface(Typeface.MONOSPACE);
@@ -170,11 +174,20 @@ public class MainActivity extends Activity {
 
         addSectionTitle(root, I18n.get(this, "立即開始", "START HERE"));
 
-        root.addView(makePrimaryButton("🫧 " + I18n.get(this, "啟動隨行助理", "Launch Floating Assistant"), new View.OnClickListener() {
+        assistantToggleButton = (Button) makePrimaryButton("", new View.OnClickListener() {
             @Override public void onClick(View v) {
-                enableBubble();
+                FloatingBubbleManager manager = FloatingBubbleManager.getInstance(MainActivity.this);
+                if (manager.isBubbleShowing()) {
+                    manager.hideBubble();
+                    Toast.makeText(MainActivity.this, I18n.get(MainActivity.this, "隨行助理已隱藏", "Floating Assistant hidden"), Toast.LENGTH_SHORT).show();
+                } else {
+                    enableBubble();
+                }
+                updateAssistantToggleButton();
             }
-        }));
+        });
+        updateAssistantToggleButton();
+        root.addView(assistantToggleButton);
 
         root.addView(makeActionCard("◉", I18n.get(this, "進入 Live 對話", "Open Live Conversation"),
             I18n.get(this, "即時語音通話、逐字稿與完整控制", "Realtime voice, transcript, and full call controls"), CrewTheme.EMERALD_400, new View.OnClickListener() {
@@ -389,6 +402,19 @@ public class MainActivity extends Activity {
         lp.setMargins(0, 0, 0, dp(12));
         button.setLayoutParams(lp);
         return button;
+    }
+
+    private void updateAssistantToggleButton() {
+        if (assistantToggleButton == null) return;
+        FloatingBubbleManager manager = FloatingBubbleManager.getInstance(this);
+        boolean showing = manager.isBubbleShowing();
+        assistantToggleButton.setText(showing
+            ? ("❌ " + I18n.get(this, "隱藏隨行助理", "Hide Floating Assistant"))
+            : ("🫧 " + I18n.get(this, "啟動隨行助理", "Launch Floating Assistant")));
+        assistantToggleButton.setTextColor(showing ? CrewTheme.ROSE_400 : Color.WHITE);
+        assistantToggleButton.setBackground(showing
+            ? CrewTheme.createCard(this, Color.parseColor("#4C0519"), Color.parseColor("#E11D48"), 16)
+            : CrewTheme.createGradientButton(this, CrewTheme.TEAL_500, CrewTheme.INDIGO_500, 16));
     }
 
     private void enableBubble() {
@@ -957,6 +983,7 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         refreshServiceStatus();
+        updateAssistantToggleButton();
     }
 
     private void refreshServiceStatus() {

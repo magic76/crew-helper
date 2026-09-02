@@ -11,6 +11,7 @@ public class AppConfig {
     public static final String KEY_LOCAL_BRIDGE = "local_bridge_enabled";
     public static final String KEY_NOISE_MODE = "noise_mode";
     public static final String KEY_NOISE_SUPPRESSION = "noise_suppression";
+    public static final String KEY_LIVE_TONE = "live_tone";
 
     public static final String DEFAULT_VOICE = "Kore";
     public static final String DEFAULT_SERVER = "http://127.0.0.1:8000";
@@ -101,7 +102,24 @@ public class AppConfig {
         getPrefs(context).edit().putInt(KEY_NOISE_SUPPRESSION, Math.max(0, Math.min(100, value))).apply();
     }
 
-    // ── 6. App Language (Bilingual: "auto", "zh", "en") ──
+    // ── 6. Live speaking style (applied at the next session setup) ──
+    public static String getLiveTone(Context context) {
+        if (context == null) return "warm";
+        String tone = getPrefs(context).getString(KEY_LIVE_TONE, "warm");
+        return isLiveTone(tone) ? tone : "warm";
+    }
+
+    public static void setLiveTone(Context context, String tone) {
+        if (context == null) return;
+        getPrefs(context).edit().putString(KEY_LIVE_TONE, isLiveTone(tone) ? tone : "warm").apply();
+    }
+
+    private static boolean isLiveTone(String tone) {
+        return "natural".equals(tone) || "warm".equals(tone) || "lively".equals(tone)
+                || "professional".equals(tone) || "calm".equals(tone) || "urgent".equals(tone);
+    }
+
+    // ── 7. App Language (Bilingual: "auto", "zh", "en") ──
     public static final String KEY_LANGUAGE = "app_language";
 
     public static String getLanguage(Context context) {

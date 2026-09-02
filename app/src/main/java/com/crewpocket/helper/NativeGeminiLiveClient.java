@@ -49,6 +49,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private final String voiceName;
     private volatile String noiseMode;
     private volatile int noiseSuppression;
+    private final String liveTone;
     private final Listener listener;
     private volatile boolean running;
     private volatile String stage = "尚未開始";
@@ -56,6 +57,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private WebSocket webSocket;
     private AudioRecord recorder;
     private AudioTrack player;
+    private volatile boolean usingOboeOutput;
+    private volatile String audioOutputBackend = "尚未初始化";
     // WebSocket callbacks must stay fast: audio writes can block for a whole
     // buffer. Keep PCM on a bounded queue and feed AudioTrack from one thread.
     private final BlockingQueue<byte[]> audioQueue = new LinkedBlockingQueue<byte[]>(96);
@@ -75,18 +78,23 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private volatile int lastScreenHeight = 1;
     private final Set<String> handledToolCalls = new HashSet<String>();
 
-    NativeGeminiLiveClient(String apiKey, Listener listener) { this(apiKey, "", AppConfig.DEFAULT_VOICE, "auto", 35, listener); }
-    NativeGeminiLiveClient(String apiKey, String serverUrl, Listener listener) { this(apiKey, serverUrl, AppConfig.DEFAULT_VOICE, "auto", 35, listener); }
+    NativeGeminiLiveClient(String apiKey, Listener listener) { this(apiKey, "", AppConfig.DEFAULT_VOICE, "auto", 35, "warm", listener); }
+    NativeGeminiLiveClient(String apiKey, String serverUrl, Listener listener) { this(apiKey, serverUrl, AppConfig.DEFAULT_VOICE, "auto", 35, "warm", listener); }
     NativeGeminiLiveClient(String apiKey, String serverUrl, String voiceName, String noiseMode, int noiseSuppression, Listener listener) {
+        this(apiKey, serverUrl, voiceName, noiseMode, noiseSuppression, "warm", listener);
+    }
+    NativeGeminiLiveClient(String apiKey, String serverUrl, String voiceName, String noiseMode, int noiseSuppression, String liveTone, Listener listener) {
         this.apiKey = apiKey;
         this.serverUrl = serverUrl == null ? "" : serverUrl.trim();
         this.voiceName = voiceName == null || voiceName.trim().isEmpty() ? AppConfig.DEFAULT_VOICE : voiceName.trim();
         this.noiseMode = "quiet".equals(noiseMode) || "noisy".equals(noiseMode) ? noiseMode : "auto";
         this.noiseSuppression = Math.max(0, Math.min(100, noiseSuppression));
+        this.liveTone = liveTone == null ? "warm" : liveTone;
         this.listener = listener;
     }
     boolean isRunning() { return running; }
     String getStage() { return stage; }
+    String getAudioOutputBackend() { return audioOutputBackend; }
     boolean canSendVisualFrame() { return running && System.currentTimeMillis() >= visualHoldUntil; }
 
     boolean sendText(String text) {
@@ -168,6 +176,14 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private volatile boolean agentMuted = false;
     private volatile boolean aiSpeaking = false;
     private volatile boolean interruptedCurrentTurn = false;
+    private final Handler interruptionHandler = new Handler(Looper.getMainLooper());
+    private final Runnable clearInterruptedFallback = new Runnable() {
+        @Override public void run() {
+            // Some interrupted turns never carry turnComplete.  Never let a
+            // stale guard permanently discard audio from the next answer.
+            interruptedCurrentTurn = false;
+        }
+    };
     private volatile boolean allowVoiceInterruption = true; // 🎙️ 語音插話：預設開啟（隨時自由說話打斷 AI；若關閉則為防插話保護模式）
 
     boolean isAgentMuted() { return agentMuted; }
@@ -188,7 +204,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     boolean toggleAgentMute() {
         // 🛑 Tap-to-Interrupt: If AI is speaking, clicking center button instantly interrupts the AI
         if (aiSpeaking) {
-            interruptedCurrentTurn = true;
+            markCurrentTurnInterrupted();
             aiSpeaking = false;
             stopPlayback();
             listener.onSpeakingChanged(false);
@@ -212,6 +228,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
     void stopPlayback() {
         audioQueue.clear();
+        if (usingOboeOutput) { NativeOboeOutput.flush(); return; }
         synchronized (playerLock) {
             try {
                 if (player != null) {
@@ -223,17 +240,24 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     }
 
     private void triggerLocalInterruption() {
-        interruptedCurrentTurn = true;
+        markCurrentTurnInterrupted();
         aiSpeaking = false;
         stopPlayback();
         listener.onSpeakingChanged(false);
         Log.d(TAG, "⚡ 本地零延遲語音插話觸發：立即停止播放並無縫收音");
     }
 
+    private void markCurrentTurnInterrupted() {
+        interruptedCurrentTurn = true;
+        interruptionHandler.removeCallbacks(clearInterruptedFallback);
+        interruptionHandler.postDelayed(clearInterruptedFallback, 1800);
+    }
+
     void stop() {
         boolean wasRunning = running;
         running = false;
         setupReady = false;
+        interruptionHandler.removeCallbacks(clearInterruptedFallback);
         stopAudio();
         try { if (webSocket != null) webSocket.close(1000, "Client ended call"); } catch (Exception ignored) {}
         try { if (httpClient != null) httpClient.dispatcher().executorService().shutdown(); } catch (Exception ignored) {}
@@ -313,11 +337,14 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if (server == null) return;
         if (server.optBoolean("interrupted", false)) {
             stopPlayback();
-            interruptedCurrentTurn = true;
             if (aiSpeaking) {
                 aiSpeaking = false;
                 listener.onSpeakingChanged(false);
             }
+            // This is Gemini's acknowledgement that the old response has
+            // stopped.  The next model turn is safe to play immediately.
+            interruptionHandler.removeCallbacks(clearInterruptedFallback);
+            interruptedCurrentTurn = false;
             return;
         }
         JSONObject inputTranscript = server.optJSONObject("inputTranscription");
@@ -350,6 +377,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if (server.optBoolean("turnComplete", server.optBoolean("turn_complete", false))) {
             visualHoldUntil = System.currentTimeMillis() + 1000;
             interruptedCurrentTurn = false;
+            interruptionHandler.removeCallbacks(clearInterruptedFallback);
             if (aiSpeaking) {
                 aiSpeaking = false;
                 listener.onSpeakingChanged(false);
@@ -410,12 +438,22 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 + "3. 第三層（Vision 視覺兜底）：只有在 inspect_ui 完全取不到有效節點（例如 Canvas 畫布、遊戲自訂 UI）時，才呼叫 take_screenshot 截圖並以座標點擊。"
                 + "【結束通話】當使用者說『關閉』、『掛斷』、『結束通話』、『退下』、『先這樣』或『再見』時，先簡短道別一句（如『好的，先為您關閉，隨時喊我！』），並一律呼叫 end_voice_session 工具以自動掛斷連線。"
                 + "【定時提醒與畫面巡檢】當使用者要求計時（如『5分鐘後叫我』）呼叫 schedule_reminder；週期性檢查畫面（如『每分鐘看一次畫面跟我說』）或等待條件（如『等出現已送達時叫我』）呼叫 start_screen_monitor；查詢目前排程呼叫 list_active_schedules；取消排程呼叫 cancel_schedule。"
-                + "【動作執行迴圈】遵守『inspect_ui 觀察 → 決策語意動作 → 執行動作 → 再次 inspect_ui 驗證結果 → 推進下一步（最多5步）』。"))));
+                + "【動作執行迴圈】遵守『inspect_ui 觀察 → 決策語意動作 → 執行動作 → 再次 inspect_ui 驗證結果 → 推進下一步（最多5步）』。"
+                + "【語氣模式】" + liveToneInstruction()))));
         String skillPlaybook = loadVoiceSkillPlaybook();
         if (!skillPlaybook.isEmpty()) {
             setup.getJSONObject("systemInstruction").getJSONArray("parts").getJSONObject(0).put("text", setup.getJSONObject("systemInstruction").getJSONArray("parts").getJSONObject(0).optString("text") + "【已載入手機技能手冊】" + skillPlaybook);
         }
         root.put("setup", setup); return root.toString();
+    }
+
+    private String liveToneInstruction() {
+        if ("natural".equals(liveTone)) return "自然對話；語氣平衡、清楚，不刻意表演。";
+        if ("lively".equals(liveTone)) return "活潑有精神；節奏明快、帶正向情緒，但不可浮誇或過度喧鬧。";
+        if ("professional".equals(liveTone)) return "專業俐落；條理清晰、用詞精確、少寒暄。";
+        if ("calm".equals(liveTone)) return "沉穩安定；放慢些許節奏，使用溫和且讓人安心的語氣。";
+        if ("urgent".equals(liveTone)) return "緊急直接；先說最重要的結論與下一步，保持冷靜、不可製造恐慌。";
+        return "溫暖親切；自然帶有友善起伏，讓人容易感受關心，但保持簡潔。";
     }
 
     private JSONArray buildToolDeclarations() throws Exception {
@@ -923,6 +961,14 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     }
 
     private void createAudioPlayer() {
+        usingOboeOutput = NativeOboeOutput.start();
+        if (usingOboeOutput) {
+            String info = NativeOboeOutput.getInfo();
+            audioOutputBackend = info == null ? "Oboe／AAudio 低延遲" : info;
+            Log.i(TAG, "Oboe low-latency output enabled");
+            return;
+        }
+        audioOutputBackend = "Android AudioTrack 備援";
         synchronized (playerLock) {
             try { if (player != null) { player.stop(); player.release(); } } catch (Exception ignored) {}
             int outMin = AudioTrack.getMinBufferSize(24000, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
@@ -936,6 +982,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
     private void startPlaybackWorker() {
         audioQueue.clear();
+        if (usingOboeOutput) { audioPlaybackRunning = true; return; }
         audioPlaybackRunning = true;
         audioPlaybackThread = new Thread(new Runnable() {
             @Override public void run() { runPlaybackLoop(); }
@@ -979,7 +1026,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
     private void writeAudioChunk(byte[] pcm) {
         if (pcm == null || pcm.length == 0 || interruptedCurrentTurn || agentMuted) return;
-        lastPlaybackActiveAt = System.currentTimeMillis() + (pcm.length * 1000L / (24000 * 2));
         int written;
         synchronized (playerLock) {
             // 🛡️ Ensure AudioTrack is in PLAYING state (e.g. after interruption flush/pause)
@@ -1047,8 +1093,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 // Calibration is observational only. Never silence the user's first words.
             }
 
-            // Slider adjusts the local speech gate continuously: 0 = most sensitive,
-            // 100 = strongest noise rejection. Mode supplies a sensible starting point.
+            // The environment bar only guards *interruptions while Gemini speaks*.
+            // It never replaces outgoing PCM with silence, so quiet user speech remains safe.
             double modeBase = "noisy".equals(mode) ? 1.45 : ("quiet".equals(mode) ? 0.65 : 0.90);
             double gateMultiplier = modeBase + suppression * 0.008;
             double minBase = "noisy".equals(mode) ? 0.022 : ("quiet".equals(mode) ? 0.002 : 0.006);
@@ -1071,20 +1117,33 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                     continue;
                 }
 
-                // Interruption requires a longer, louder speech run than ordinary transmission.
-                double interruptThreshold = Math.max("noisy".equals(mode) ? 0.105 : 0.075, noiseFloor * ("noisy".equals(mode) ? 3.0 : 2.2));
+                // Speaker echo can be continuous, particularly immediately after a
+                // tool result.  A real interruption must now persist for at least
+                // 560 ms; while output is still audible, add a further 160 ms and
+                // energy margin. The center button remains an instant interrupt.
+                boolean outputAudible = System.currentTimeMillis() < lastPlaybackActiveAt;
+                int requiredVoiceFrames = 14 + (suppression + 24) / 25 + (outputAudible ? 4 : 0);
+                double baseInterrupt = ("noisy".equals(mode) ? 0.130 : 0.100)
+                        + suppression * 0.00030 + (outputAudible ? 0.025 : 0.0);
+                double floorMultiplier = ("noisy".equals(mode) ? 3.0 : 2.2) + suppression * 0.012;
+                double interruptThreshold = Math.max(baseInterrupt, noiseFloor * floorMultiplier);
                 if (speechCandidate && rms >= interruptThreshold) {
                     consecutiveVoiceFrames++;
-                    if (consecutiveVoiceFrames >= ("noisy".equals(mode) ? 6 : 4)) {
+                    if (consecutiveVoiceFrames >= requiredVoiceFrames) {
                         triggerLocalInterruption();
                         consecutiveVoiceFrames = 0;
                     }
                 } else {
-                    if (consecutiveVoiceFrames > 0) consecutiveVoiceFrames--;
+                    // Do not let separate bursts accumulate into a false interruption.
+                    consecutiveVoiceFrames = 0;
                 }
 
                 // 若尚未確認為明確插話指令，暫緩將喇叭音訊回傳給 Gemini，避免伺服器端迴音干擾
                 if (aiSpeaking) {
+                    // The microphone is live; only upstream transmission is held
+                    // while the assistant speaks. Keep the meter fresh so voice
+                    // diagnostics never report a false missing-microphone error.
+                    reportMicrophoneLevel(rms, gateThreshold, false);
                     continue;
                 }
             } else {
@@ -1131,6 +1190,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     }
     private void enqueueAudio(byte[] pcm) {
         if (agentMuted || interruptedCurrentTurn || pcm == null || pcm.length == 0) return;
+        long durationMs = pcm.length * 1000L / (24000 * 2);
+        lastPlaybackActiveAt = Math.max(System.currentTimeMillis(), lastPlaybackActiveAt) + durationMs;
+        if (usingOboeOutput) { NativeOboeOutput.write(pcm); return; }
         // Preserve current speech instead of blocking the WebSocket callback.
         if (!audioQueue.offer(pcm)) {
             audioQueue.poll();
@@ -1141,11 +1203,14 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private synchronized void fail(String message, Throwable error) {
         if (!running) return;
         if (error != null) Log.e(TAG, message, error); else Log.e(TAG, message);
-        running = false; stopAudio(); listener.onStopped(message);
+        running = false;
+        interruptionHandler.removeCallbacks(clearInterruptedFallback);
+        stopAudio(); listener.onStopped(message);
     }
     private void stopAudio() {
         audioPlaybackRunning = false;
         audioQueue.clear();
+        if (usingOboeOutput) { NativeOboeOutput.stop(); usingOboeOutput = false; }
         try { if (audioPlaybackThread != null) audioPlaybackThread.interrupt(); } catch (Exception ignored) {}
         audioPlaybackThread = null;
         if (aecEffect != null) { try { aecEffect.release(); } catch (Exception ignored) {} aecEffect = null; }
