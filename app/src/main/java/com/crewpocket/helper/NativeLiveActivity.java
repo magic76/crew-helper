@@ -270,25 +270,25 @@ public class NativeLiveActivity extends Activity {
         interruptionButton = makeControlButton();
         awakeButton = makeControlButton();
         noiseButton = makeControlButton();
-        LinearLayout.LayoutParams interruptionLp = new LinearLayout.LayoutParams(0, dp(46), 1f);
-        interruptionLp.setMargins(0, dp(8), 0, 0);
+        LinearLayout.LayoutParams interruptionLp = new LinearLayout.LayoutParams(0, dp(44), 1f);
+        interruptionLp.setMargins(0, 0, 0, 0);
         controlActions.addView(interruptionButton, interruptionLp);
-        LinearLayout.LayoutParams awakeLp = new LinearLayout.LayoutParams(0, dp(46), 1f);
-        awakeLp.setMargins(dp(6), dp(8), 0, 0);
+        LinearLayout.LayoutParams awakeLp = new LinearLayout.LayoutParams(0, dp(44), 1f);
+        awakeLp.setMargins(dp(6), 0, 0, 0);
         controlActions.addView(awakeButton, awakeLp);
-        LinearLayout.LayoutParams noiseLp = new LinearLayout.LayoutParams(0, dp(46), 1f);
-        noiseLp.setMargins(dp(6), dp(8), 0, 0);
+        LinearLayout.LayoutParams noiseLp = new LinearLayout.LayoutParams(0, dp(44), 1f);
+        noiseLp.setMargins(dp(6), 0, 0, 0);
         controlActions.addView(noiseButton, noiseLp);
         LinearLayout.LayoutParams controlActionsLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        controlActionsLp.setMargins(0, 0, 0, dp(8));
+        controlActionsLp.setMargins(0, dp(8), 0, dp(10));
         controlCard.addView(controlActions, controlActionsLp);
 
         toneButton = makeControlButton();
         toneButton.setTextSize(11);
         LinearLayout.LayoutParams toneLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(44));
-        toneLp.setMargins(0, 0, 0, dp(8));
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(42));
+        toneLp.setMargins(0, 0, 0, dp(10));
         controlCard.addView(toneButton, toneLp);
 
         LinearLayout noiseRow = new LinearLayout(this);
