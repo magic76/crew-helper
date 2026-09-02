@@ -30,3 +30,4 @@ key.properties
 Thumbs.db
 *.log
 *.tmp
+*.idsig
