@@ -131,4 +131,17 @@ public class AppConfig {
         if (context == null) return;
         getPrefs(context).edit().putString(KEY_LANGUAGE, lang == null ? "auto" : lang.trim()).apply();
     }
+
+    // ── 8. User-defined Custom System Prompt ──
+    public static final String KEY_CUSTOM_PROMPT = "custom_system_prompt";
+
+    public static String getCustomSystemPrompt(Context context) {
+        if (context == null) return "";
+        return getPrefs(context).getString(KEY_CUSTOM_PROMPT, "");
+    }
+
+    public static void setCustomSystemPrompt(Context context, String prompt) {
+        if (context == null) return;
+        getPrefs(context).edit().putString(KEY_CUSTOM_PROMPT, prompt == null ? "" : prompt.trim()).apply();
+    }
 }

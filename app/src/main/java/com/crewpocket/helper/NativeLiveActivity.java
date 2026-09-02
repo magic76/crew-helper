@@ -45,6 +45,7 @@ public class NativeLiveActivity extends Activity {
     private Button micButton;
     private Button noiseButton;
     private Button toneButton;
+    private Button promptButton;
     private SeekBar noiseSlider;
     private TextView noiseLevelText;
     private TextView microphoneMeterText;
@@ -288,8 +289,15 @@ public class NativeLiveActivity extends Activity {
         toneButton.setTextSize(11);
         LinearLayout.LayoutParams toneLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(42));
-        toneLp.setMargins(0, 0, 0, dp(10));
+        toneLp.setMargins(0, 0, 0, dp(8));
         controlCard.addView(toneButton, toneLp);
+
+        promptButton = makeControlButton();
+        promptButton.setTextSize(11);
+        LinearLayout.LayoutParams promptLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(42));
+        promptLp.setMargins(0, 0, 0, dp(10));
+        controlCard.addView(promptButton, promptLp);
 
         LinearLayout noiseRow = new LinearLayout(this);
         noiseRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -437,6 +445,11 @@ public class NativeLiveActivity extends Activity {
                         I18n.get(NativeLiveActivity.this, "語氣模式將於下次 Live 通話套用", "Tone will apply to the next Live call"), Toast.LENGTH_SHORT).show();
             }
         });
+        promptButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                showCustomPromptDialog();
+            }
+        });
         noiseSlider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar bar, int progress, boolean fromUser) {
                 AppConfig.setNoiseSuppression(NativeLiveActivity.this, progress);
@@ -514,6 +527,15 @@ public class NativeLiveActivity extends Activity {
             toneButton.setText(I18n.get(this, "✨ 語氣：", "✨ Tone: ") + liveToneLabel(AppConfig.getLiveTone(this)));
             toneButton.setTextColor(CrewTheme.TEXT_PRIMARY);
             setButtonCard(toneButton, Color.parseColor("#172554"), CrewTheme.INDIGO_500, 10);
+        }
+        if (promptButton != null) {
+            String p = AppConfig.getCustomSystemPrompt(this);
+            boolean hasPrompt = !p.isEmpty();
+            promptButton.setText(hasPrompt
+                    ? ("🧠 " + I18n.get(this, "自訂 Prompt（已啟用）", "Custom Prompt (Active)"))
+                    : ("🧠 " + I18n.get(this, "自訂 Prompt（點擊自訂人設）", "Custom Prompt (Default)")));
+            promptButton.setTextColor(hasPrompt ? CrewTheme.AMBER_400 : CrewTheme.TEXT_SECONDARY);
+            setButtonCard(promptButton, hasPrompt ? Color.parseColor("#451A03") : CrewTheme.BG_ELEVATED, hasPrompt ? CrewTheme.AMBER_500 : CrewTheme.BORDER_SUBTLE, 10);
         }
         int suppression = client != null ? client.getNoiseSuppression() : AppConfig.getNoiseSuppression(this);
         if (noiseSlider != null && noiseSlider.getProgress() != suppression) noiseSlider.setProgress(suppression);
@@ -678,7 +700,7 @@ public class NativeLiveActivity extends Activity {
     private void startClient(String key) {
         String serverUrl = AppConfig.getServerUrl(this);
         String voiceName = AppConfig.getVoiceName(this);
-        client = new NativeGeminiLiveClient(key, serverUrl, voiceName, AppConfig.getNoiseMode(this), AppConfig.getNoiseSuppression(this), AppConfig.getLiveTone(this), new NativeGeminiLiveClient.Listener() {
+        client = new NativeGeminiLiveClient(key, serverUrl, voiceName, AppConfig.getNoiseMode(this), AppConfig.getNoiseSuppression(this), AppConfig.getLiveTone(this), AppConfig.getCustomSystemPrompt(this), new NativeGeminiLiveClient.Listener() {
             @Override public void onStatus(final String text) {
                 if (text != null && text.contains("已連線")) reconnectAttempts = 0;
                 updateStatus(CrewTheme.TEAL_400, text);
@@ -761,6 +783,46 @@ public class NativeLiveActivity extends Activity {
         super.onRequestPermissionsResult(requestCode, permissions, results);
         if (requestCode == REQUEST_RECORD_AUDIO && results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) toggleCall();
         else if (requestCode == REQUEST_RECORD_AUDIO) updateStatus(CrewTheme.ROSE_500, "未取得麥克風權限");
+    }
+
+    private void showCustomPromptDialog() {
+        final android.widget.EditText input = new android.widget.EditText(this);
+        input.setText(AppConfig.getCustomSystemPrompt(this));
+        input.setHint(I18n.get(this, "例如：「你是一位幽默熱情的隨身助理，說話風趣精簡，稱呼我為指揮官...」", "e.g. 'You are a witty, concise tactical AI assistant. Address me as Commander...'"));
+        input.setHintTextColor(CrewTheme.TEXT_MUTED);
+        input.setTextColor(CrewTheme.TEXT_PRIMARY);
+        input.setTextSize(13);
+        input.setMinLines(5);
+        input.setMaxLines(10);
+        input.setGravity(Gravity.TOP | Gravity.START);
+        input.setBackground(CrewTheme.createCard(this, CrewTheme.BG_PRIMARY, CrewTheme.BORDER_SUBTLE, 12));
+        input.setPadding(dp(14), dp(12), dp(14), dp(12));
+
+        LinearLayout container = new LinearLayout(this);
+        container.setOrientation(LinearLayout.VERTICAL);
+        container.setPadding(dp(20), dp(10), dp(20), dp(10));
+        container.addView(input);
+
+        new android.app.AlertDialog.Builder(this)
+            .setTitle("🧠 " + I18n.get(this, "自訂語音模型 Prompt", "Custom Voice Prompt"))
+            .setMessage(I18n.get(this, "在此設定專屬於您的 AI 角色、稱呼與說話風格。此設定具最高優先權，將於下次通話生效。", "Define your AI persona, tone, and preferences. Takes top priority in live sessions."))
+            .setView(container)
+            .setPositiveButton(I18n.get(this, "儲存", "Save"), new android.content.DialogInterface.OnClickListener() {
+                @Override public void onClick(android.content.DialogInterface d, int which) {
+                    AppConfig.setCustomSystemPrompt(NativeLiveActivity.this, input.getText().toString());
+                    Toast.makeText(NativeLiveActivity.this, I18n.get(NativeLiveActivity.this, "✅ 已儲存自訂 Prompt！", "✅ Custom Prompt saved!"), Toast.LENGTH_SHORT).show();
+                    refreshAssistantControls();
+                }
+            })
+            .setNeutralButton(I18n.get(this, "清空/恢復預設", "Reset Default"), new android.content.DialogInterface.OnClickListener() {
+                @Override public void onClick(android.content.DialogInterface d, int which) {
+                    AppConfig.setCustomSystemPrompt(NativeLiveActivity.this, "");
+                    Toast.makeText(NativeLiveActivity.this, I18n.get(NativeLiveActivity.this, "已恢復預設 Prompt", "Reset to default prompt"), Toast.LENGTH_SHORT).show();
+                    refreshAssistantControls();
+                }
+            })
+            .setNegativeButton(I18n.get(this, "取消", "Cancel"), null)
+            .show();
     }
 
     @Override protected void onDestroy() {

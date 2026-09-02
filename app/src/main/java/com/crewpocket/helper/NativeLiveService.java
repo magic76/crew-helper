@@ -135,7 +135,7 @@ public class NativeLiveService extends Service {
         }
         final String serverUrl = AppConfig.getServerUrl(this);
         final String voiceName = AppConfig.getVoiceName(this);
-        client = new NativeGeminiLiveClient(apiKey, serverUrl, voiceName, AppConfig.getNoiseMode(this), AppConfig.getNoiseSuppression(this), AppConfig.getLiveTone(this), new NativeGeminiLiveClient.Listener() {
+        client = new NativeGeminiLiveClient(apiKey, serverUrl, voiceName, AppConfig.getNoiseMode(this), AppConfig.getNoiseSuppression(this), AppConfig.getLiveTone(this), AppConfig.getCustomSystemPrompt(this), new NativeGeminiLiveClient.Listener() {
             @Override public void onStatus(String text) {
                 if (text != null && text.contains("已連線")) reconnectAttempts = 0;
                 updateStatus(text, true);

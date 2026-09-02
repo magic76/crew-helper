@@ -77,19 +77,24 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private volatile int lastScreenWidth = 1;
     private volatile int lastScreenHeight = 1;
     private final Set<String> handledToolCalls = new HashSet<String>();
+    private String customPrompt = "";
 
-    NativeGeminiLiveClient(String apiKey, Listener listener) { this(apiKey, "", AppConfig.DEFAULT_VOICE, "auto", 35, "warm", listener); }
-    NativeGeminiLiveClient(String apiKey, String serverUrl, Listener listener) { this(apiKey, serverUrl, AppConfig.DEFAULT_VOICE, "auto", 35, "warm", listener); }
+    NativeGeminiLiveClient(String apiKey, Listener listener) { this(apiKey, "", AppConfig.DEFAULT_VOICE, "auto", 35, "warm", "", listener); }
+    NativeGeminiLiveClient(String apiKey, String serverUrl, Listener listener) { this(apiKey, serverUrl, AppConfig.DEFAULT_VOICE, "auto", 35, "warm", "", listener); }
     NativeGeminiLiveClient(String apiKey, String serverUrl, String voiceName, String noiseMode, int noiseSuppression, Listener listener) {
-        this(apiKey, serverUrl, voiceName, noiseMode, noiseSuppression, "warm", listener);
+        this(apiKey, serverUrl, voiceName, noiseMode, noiseSuppression, "warm", "", listener);
     }
     NativeGeminiLiveClient(String apiKey, String serverUrl, String voiceName, String noiseMode, int noiseSuppression, String liveTone, Listener listener) {
+        this(apiKey, serverUrl, voiceName, noiseMode, noiseSuppression, liveTone, "", listener);
+    }
+    NativeGeminiLiveClient(String apiKey, String serverUrl, String voiceName, String noiseMode, int noiseSuppression, String liveTone, String customPrompt, Listener listener) {
         this.apiKey = apiKey;
         this.serverUrl = serverUrl == null ? "" : serverUrl.trim();
         this.voiceName = voiceName == null || voiceName.trim().isEmpty() ? AppConfig.DEFAULT_VOICE : voiceName.trim();
         this.noiseMode = "quiet".equals(noiseMode) || "noisy".equals(noiseMode) ? noiseMode : "auto";
         this.noiseSuppression = Math.max(0, Math.min(100, noiseSuppression));
         this.liveTone = liveTone == null ? "warm" : liveTone;
+        this.customPrompt = customPrompt == null ? "" : customPrompt.trim();
         this.listener = listener;
     }
     boolean isRunning() { return running; }
@@ -427,8 +432,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         setup.put("inputAudioTranscription", new JSONObject());
         setup.put("outputAudioTranscription", new JSONObject());
         setup.put("tools", new JSONArray().put(new JSONObject().put("functionDeclarations", buildToolDeclarations())));
-        setup.put("systemInstruction", new JSONObject().put("parts", new JSONArray().put(new JSONObject().put("text",
-                "你是 Crew Pocket 的原生即時語音助理。你的定位是高階『規劃者 (Planner) 與意圖解讀者』。自然、準確、極簡地回應；最終回答一律以 AUDIO 語音說出。"
+        String customPrompt = this.customPrompt;
+        String baseInstruction = "你是 Crew Helper 的原生即時語音助理。你的定位是高階『規劃者 (Planner) 與意圖解讀者』。自然、準確、極簡地回應；最終回答一律以 AUDIO 語音說出。"
                 + "【工具邊界與授權】只有使用者本輪最新一句明確口令要求操作手機時，才可呼叫手機工具；過去對話、推測或一般問題絕不可授權操作。一般問題直接回答。"
                 + "【安全防護】絕對禁止刪除、付款、購買、修改帳戶、輸入密碼、OTP、簡訊驗證碼；遇到此類敏感操作一律停止並語音提示使用者自行操作。"
                 + "【手機操作三層架構】"
@@ -439,7 +444,12 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 + "【結束通話】當使用者說『關閉』、『掛斷』、『結束通話』、『退下』、『先這樣』或『再見』時，先簡短道別一句（如『好的，先為您關閉，隨時喊我！』），並一律呼叫 end_voice_session 工具以自動掛斷連線。"
                 + "【定時提醒與畫面巡檢】當使用者要求計時（如『5分鐘後叫我』）呼叫 schedule_reminder；週期性檢查畫面（如『每分鐘看一次畫面跟我說』）或等待條件（如『等出現已送達時叫我』）呼叫 start_screen_monitor；查詢目前排程呼叫 list_active_schedules；取消排程呼叫 cancel_schedule。"
                 + "【動作執行迴圈】遵守『inspect_ui 觀察 → 決策語意動作 → 執行動作 → 再次 inspect_ui 驗證結果 → 推進下一步（最多5步）』。"
-                + "【語氣模式】" + liveToneInstruction()))));
+                + "【語氣模式】" + liveToneInstruction();
+
+        if (customPrompt != null && !customPrompt.trim().isEmpty()) {
+            baseInstruction = "【使用者自訂角色設定與指示（最高優先級）】\n" + customPrompt.trim() + "\n\n" + baseInstruction;
+        }
+        setup.put("systemInstruction", new JSONObject().put("parts", new JSONArray().put(new JSONObject().put("text", baseInstruction))));
         String skillPlaybook = loadVoiceSkillPlaybook();
         if (!skillPlaybook.isEmpty()) {
             setup.getJSONObject("systemInstruction").getJSONArray("parts").getJSONObject(0).put("text", setup.getJSONObject("systemInstruction").getJSONArray("parts").getJSONObject(0).optString("text") + "【已載入手機技能手冊】" + skillPlaybook);

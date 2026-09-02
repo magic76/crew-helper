@@ -272,6 +272,12 @@ public class MainActivity extends Activity {
         pageContent.addView(makeActionCard("🗣️", I18n.cardVoicePersonaTitle(this), AppConfig.getVoiceName(this), CrewTheme.TEAL_400, new View.OnClickListener() {
             @Override public void onClick(View v) { showVoicePersonaDialog(); }
         }));
+        String customPromptSummary = AppConfig.getCustomSystemPrompt(this).isEmpty()
+            ? I18n.get(this, "預設官方設定（點擊自訂專屬人設與口吻）", "Default prompt (Tap to customize)")
+            : I18n.get(this, "已啟用自訂人設 Prompt", "Custom prompt active");
+        pageContent.addView(makeActionCard("🧠", I18n.get(this, "語音模型 Prompt 設定", "Voice Model Prompt"), customPromptSummary, CrewTheme.AMBER_400, new View.OnClickListener() {
+            @Override public void onClick(View v) { showCustomPromptDialog(); }
+        }));
         pageContent.addView(makeActionCard("🌐", I18n.cardLanguageTitle(this), I18n.cardLanguageDesc(this), CrewTheme.INDIGO_400, new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -772,6 +778,46 @@ public class MainActivity extends Activity {
                 previewTts.speak("你好！我是 " + voice.name + "，我是你的隨身特工語音助理，很高興為你服務！", TextToSpeech.QUEUE_FLUSH, null, "sample_" + voice.name);
             }
         } catch (Exception ignored) {}
+    }
+
+    private void showCustomPromptDialog() {
+        final android.widget.EditText input = new android.widget.EditText(this);
+        input.setText(AppConfig.getCustomSystemPrompt(this));
+        input.setHint(I18n.get(this, "例如：「你是一位幽默熱情的隨身助理，說話風趣精簡，稱呼我為指揮官...」", "e.g. 'You are a witty, concise tactical AI assistant. Address me as Commander...'"));
+        input.setHintTextColor(CrewTheme.TEXT_MUTED);
+        input.setTextColor(CrewTheme.TEXT_PRIMARY);
+        input.setTextSize(13);
+        input.setMinLines(5);
+        input.setMaxLines(10);
+        input.setGravity(Gravity.TOP | Gravity.START);
+        input.setBackground(CrewTheme.createCard(this, CrewTheme.BG_PRIMARY, CrewTheme.BORDER_SUBTLE, 12));
+        input.setPadding(dp(14), dp(12), dp(14), dp(12));
+
+        LinearLayout container = new LinearLayout(this);
+        container.setOrientation(LinearLayout.VERTICAL);
+        container.setPadding(dp(20), dp(10), dp(20), dp(10));
+        container.addView(input);
+
+        new android.app.AlertDialog.Builder(this)
+            .setTitle("🧠 " + I18n.get(this, "自訂語音模型 Prompt", "Custom Voice Prompt"))
+            .setMessage(I18n.get(this, "在此設定專屬於您的 AI 角色、稱呼與說話風格。此設定具最高優先權，將於下次通話生效。", "Define your AI persona, tone, and preferences. Takes top priority in live sessions."))
+            .setView(container)
+            .setPositiveButton(I18n.get(this, "儲存", "Save"), new android.content.DialogInterface.OnClickListener() {
+                @Override public void onClick(android.content.DialogInterface d, int which) {
+                    AppConfig.setCustomSystemPrompt(MainActivity.this, input.getText().toString());
+                    Toast.makeText(MainActivity.this, I18n.get(MainActivity.this, "✅ 已儲存自訂 Prompt！", "✅ Custom Prompt saved!"), Toast.LENGTH_SHORT).show();
+                    if (activeTab == 3) renderTab(3);
+                }
+            })
+            .setNeutralButton(I18n.get(this, "清空/恢復預設", "Reset Default"), new android.content.DialogInterface.OnClickListener() {
+                @Override public void onClick(android.content.DialogInterface d, int which) {
+                    AppConfig.setCustomSystemPrompt(MainActivity.this, "");
+                    Toast.makeText(MainActivity.this, I18n.get(MainActivity.this, "已恢復預設 Prompt", "Reset to default prompt"), Toast.LENGTH_SHORT).show();
+                    if (activeTab == 3) renderTab(3);
+                }
+            })
+            .setNegativeButton(I18n.get(this, "取消", "Cancel"), null)
+            .show();
     }
 
     private int currentFilterTab = 0; // 0: All, 1: Female, 2: Male
