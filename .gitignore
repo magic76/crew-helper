@@ -1,0 +1,32 @@
+# Android Studio / IntelliJ IDEA
+.idea/
+.gradle/
+*.iml
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Build artifacts
+build/
+app/build/
+bin/
+gen/
+out/
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+
+# Keystores & Signing Secrets (Always protect private keys!)
+*.keystore
+!test.keystore
+*.jks
+key.properties
+
+# OS & Temp Files
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
