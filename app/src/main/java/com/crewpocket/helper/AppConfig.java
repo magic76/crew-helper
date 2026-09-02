@@ -9,6 +9,8 @@ public class AppConfig {
     public static final String KEY_SERVER_URL = "custom_server_url";
     public static final String KEY_VOICE_NAME = "live_voice_name";
     public static final String KEY_LOCAL_BRIDGE = "local_bridge_enabled";
+    public static final String KEY_NOISE_MODE = "noise_mode";
+    public static final String KEY_NOISE_SUPPRESSION = "noise_suppression";
 
     public static final String DEFAULT_VOICE = "Kore";
     public static final String DEFAULT_SERVER = "http://127.0.0.1:8000";
@@ -75,7 +77,31 @@ public class AppConfig {
         getPrefs(context).edit().putBoolean(KEY_LOCAL_BRIDGE, enabled).apply();
     }
 
-    // ── 5. App Language (Bilingual: "auto", "zh", "en") ──
+    // ── 5. Voice environment: auto, quiet, or noisy ──
+    public static String getNoiseMode(Context context) {
+        if (context == null) return "auto";
+        String mode = getPrefs(context).getString(KEY_NOISE_MODE, "auto");
+        return "quiet".equals(mode) || "noisy".equals(mode) ? mode : "auto";
+    }
+
+    public static void setNoiseMode(Context context, String mode) {
+        if (context == null) return;
+        String clean = "quiet".equals(mode) || "noisy".equals(mode) ? mode : "auto";
+        getPrefs(context).edit().putString(KEY_NOISE_MODE, clean).apply();
+    }
+
+    public static int getNoiseSuppression(Context context) {
+        if (context == null) return 35;
+        int value = getPrefs(context).getInt(KEY_NOISE_SUPPRESSION, 35);
+        return Math.max(0, Math.min(100, value));
+    }
+
+    public static void setNoiseSuppression(Context context, int value) {
+        if (context == null) return;
+        getPrefs(context).edit().putInt(KEY_NOISE_SUPPRESSION, Math.max(0, Math.min(100, value))).apply();
+    }
+
+    // ── 6. App Language (Bilingual: "auto", "zh", "en") ──
     public static final String KEY_LANGUAGE = "app_language";
 
     public static String getLanguage(Context context) {

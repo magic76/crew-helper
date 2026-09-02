@@ -42,10 +42,13 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         void onStopped(String reason);
         void onTranscript(String role, String text);
         void onSpeakingChanged(boolean speaking);
+        void onMicrophoneLevel(double dbfs, double gateDbfs, boolean sending);
     }
     private final String apiKey;
     private final String serverUrl;
     private final String voiceName;
+    private volatile String noiseMode;
+    private volatile int noiseSuppression;
     private final Listener listener;
     private volatile boolean running;
     private volatile String stage = "尚未開始";
@@ -72,12 +75,14 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private volatile int lastScreenHeight = 1;
     private final Set<String> handledToolCalls = new HashSet<String>();
 
-    NativeGeminiLiveClient(String apiKey, Listener listener) { this(apiKey, "", AppConfig.DEFAULT_VOICE, listener); }
-    NativeGeminiLiveClient(String apiKey, String serverUrl, Listener listener) { this(apiKey, serverUrl, AppConfig.DEFAULT_VOICE, listener); }
-    NativeGeminiLiveClient(String apiKey, String serverUrl, String voiceName, Listener listener) {
+    NativeGeminiLiveClient(String apiKey, Listener listener) { this(apiKey, "", AppConfig.DEFAULT_VOICE, "auto", 35, listener); }
+    NativeGeminiLiveClient(String apiKey, String serverUrl, Listener listener) { this(apiKey, serverUrl, AppConfig.DEFAULT_VOICE, "auto", 35, listener); }
+    NativeGeminiLiveClient(String apiKey, String serverUrl, String voiceName, String noiseMode, int noiseSuppression, Listener listener) {
         this.apiKey = apiKey;
         this.serverUrl = serverUrl == null ? "" : serverUrl.trim();
         this.voiceName = voiceName == null || voiceName.trim().isEmpty() ? AppConfig.DEFAULT_VOICE : voiceName.trim();
+        this.noiseMode = "quiet".equals(noiseMode) || "noisy".equals(noiseMode) ? noiseMode : "auto";
+        this.noiseSuppression = Math.max(0, Math.min(100, noiseSuppression));
         this.listener = listener;
     }
     boolean isRunning() { return running; }
@@ -168,7 +173,12 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     boolean isAgentMuted() { return agentMuted; }
     boolean isAiSpeaking() { return aiSpeaking; }
     boolean isVoiceInterruptionAllowed() { return allowVoiceInterruption; }
+    boolean isSetupReady() { return setupReady; }
     void setAllowVoiceInterruption(boolean allow) { this.allowVoiceInterruption = allow; }
+    String getNoiseMode() { return noiseMode; }
+    void setNoiseMode(String mode) { noiseMode = "quiet".equals(mode) || "noisy".equals(mode) ? mode : "auto"; }
+    int getNoiseSuppression() { return noiseSuppression; }
+    void setNoiseSuppression(int value) { noiseSuppression = Math.max(0, Math.min(100, value)); }
 
     void loadVoiceprintProfile() {
         // Voiceprint bypassed for direct, robust latency-free communication
@@ -1002,23 +1012,56 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     }
 
     private volatile long lastPlaybackActiveAt = 0;
+    private volatile long lastMeterReportAt = 0;
     private double noiseFloor = 0.015;
-    private static final double MIN_INTERRUPT_THRESHOLD = 0.075; // Raised from 0.035 to resist ambient noise
-    private static final int REQUIRED_CONSECUTIVE_FRAMES = 4; // 160ms sustained speech energy
+    private static final int CALIBRATION_FRAMES = 20; // 800 ms at 40 ms/frame
 
     private void sendMic() {
         byte[] pcm = new byte[1280]; // 40ms @ 16kHz 16-bit mono
         int consecutiveVoiceFrames = 0;
+        int calibrationFrames = 0;
+        double[] calibrationSamples = new double[CALIBRATION_FRAMES];
 
         while (running && recorder != null && webSocket != null) {
             int count = recorder.read(pcm, 0, pcm.length); if (count <= 0) continue;
             if (agentMuted) continue;
 
             double rms = calculateRms(pcm, count);
+            String mode = noiseMode;
+            int suppression = noiseSuppression;
 
-            // 🌿 Dynamically track ambient background noise floor when user is quiet
-            if (!aiSpeaking && rms < 0.05) {
-                noiseFloor = noiseFloor * 0.96 + rms * 0.04;
+            // First 0.8 s establishes a local acoustic baseline and is never sent upstream.
+            // It prevents the server VAD from treating connection-time background noise as speech.
+            if (calibrationFrames < CALIBRATION_FRAMES) {
+                calibrationSamples[calibrationFrames] = rms;
+                calibrationFrames++;
+                if (calibrationFrames == CALIBRATION_FRAMES) {
+                    Arrays.sort(calibrationSamples);
+                    double baseline = 0;
+                    for (int i = 0; i < 12; i++) baseline += calibrationSamples[i];
+                    noiseFloor = Math.max(0.008, baseline / 12.0);
+                    // This is an audio status, not a connection stage.  Do not overwrite
+                    // setupComplete in the connection watchdog with a calibration message.
+                    listener.onStatus("環境降噪已校正（" + mode + "）");
+                }
+                // Calibration is observational only. Never silence the user's first words.
+            }
+
+            // Slider adjusts the local speech gate continuously: 0 = most sensitive,
+            // 100 = strongest noise rejection. Mode supplies a sensible starting point.
+            double modeBase = "noisy".equals(mode) ? 1.45 : ("quiet".equals(mode) ? 0.65 : 0.90);
+            double gateMultiplier = modeBase + suppression * 0.008;
+            double minBase = "noisy".equals(mode) ? 0.022 : ("quiet".equals(mode) ? 0.002 : 0.006);
+            double minGate = minBase + suppression * 0.00010;
+            double gateThreshold = Math.max(minGate, noiseFloor * gateMultiplier);
+            // Energy is the fail-open source of truth.  The old zero-crossing condition
+            // rejected soft vowels on some Android microphones, leaving Gemini silent.
+            boolean speechCandidate = rms >= gateThreshold;
+
+            // Learn only frames rejected as speech. This lets the floor rise in a busy street
+            // without slowly learning the user's own voice as "noise".
+            if (!speechCandidate && !aiSpeaking) {
+                noiseFloor = noiseFloor * 0.985 + Math.min(rms, 0.18) * 0.015;
             }
 
             if (aiSpeaking) {
@@ -1028,12 +1071,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                     continue;
                 }
 
-                // 🎙️ 智慧抗噪插話判定：
-                // 門檻提升至動態底噪的 2.2 倍（且不低於 0.075），並要求連續 4 訊框（160ms）持續發聲
-                double dynamicThreshold = Math.max(MIN_INTERRUPT_THRESHOLD, noiseFloor * 2.2);
-                if (rms >= dynamicThreshold) {
+                // Interruption requires a longer, louder speech run than ordinary transmission.
+                double interruptThreshold = Math.max("noisy".equals(mode) ? 0.105 : 0.075, noiseFloor * ("noisy".equals(mode) ? 3.0 : 2.2));
+                if (speechCandidate && rms >= interruptThreshold) {
                     consecutiveVoiceFrames++;
-                    if (consecutiveVoiceFrames >= REQUIRED_CONSECUTIVE_FRAMES) {
+                    if (consecutiveVoiceFrames >= ("noisy".equals(mode) ? 6 : 4)) {
                         triggerLocalInterruption();
                         consecutiveVoiceFrames = 0;
                     }
@@ -1051,11 +1093,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
             byte[] chunk = (count == pcm.length) ? pcm.clone() : Arrays.copyOf(pcm, count);
 
-            // 🛡️ 靜音微弱底噪門檻：若聲音能量低於底噪臨界值，壓制微弱雜音，防止 Gemini 伺服器誤判背景音為使用者說話
-            double gateThreshold = Math.max(0.012, noiseFloor * 1.15);
-            if (!aiSpeaking && rms < gateThreshold) {
-                Arrays.fill(chunk, (byte) 0);
-            }
+            // Do not locally replace PCM with silence.  Energy-only gating is not a real VAD
+            // and can suppress quiet human speech; Android's hardware NoiseSuppressor remains
+            // active while all captured speech is delivered to Gemini.
+            reportMicrophoneLevel(rms, gateThreshold, true);
 
             // 🎙️ 連續即時串流給 Gemini Live
             try {
@@ -1066,6 +1107,27 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 if (!webSocket.send(root.toString())) throw new Exception("audio send failed");
             } catch (Exception error) { fail("麥克風串流失敗：" + error.getMessage(), error); }
         }
+    }
+
+    private double calculateZeroCrossingRate(byte[] pcm, int count) {
+        if (count < 4) return 0;
+        int crossings = 0;
+        short previous = (short) ((pcm[0] & 0xFF) | (pcm[1] << 8));
+        for (int i = 2; i < count - 1; i += 2) {
+            short current = (short) ((pcm[i] & 0xFF) | (pcm[i + 1] << 8));
+            if ((previous < 0 && current >= 0) || (previous >= 0 && current < 0)) crossings++;
+            previous = current;
+        }
+        return (double) crossings / Math.max(1, count / 2);
+    }
+
+    private void reportMicrophoneLevel(double rms, double gate, boolean sending) {
+        long now = System.currentTimeMillis();
+        if (now - lastMeterReportAt < 180) return;
+        lastMeterReportAt = now;
+        double dbfs = rms <= 0.000001 ? -96.0 : Math.max(-96.0, 20.0 * Math.log10(rms));
+        double gateDbfs = gate <= 0.000001 ? -96.0 : Math.max(-96.0, 20.0 * Math.log10(gate));
+        listener.onMicrophoneLevel(dbfs, gateDbfs, sending);
     }
     private void enqueueAudio(byte[] pcm) {
         if (agentMuted || interruptedCurrentTurn || pcm == null || pcm.length == 0) return;

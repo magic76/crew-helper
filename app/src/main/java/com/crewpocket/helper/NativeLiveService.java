@@ -28,6 +28,14 @@ public class NativeLiveService extends Service {
     private final Handler visualHandler = new Handler(Looper.getMainLooper());
     private boolean sharingCamera;
     private boolean sharingScreen;
+    private int reconnectAttempts;
+    private boolean stopRequested;
+    private final Runnable reconnectRunnable = new Runnable() {
+        @Override public void run() {
+            if (!active || stopRequested) return;
+            startLiveClient();
+        }
+    };
 
     static boolean isActive() { return active; }
 
@@ -91,6 +99,7 @@ public class NativeLiveService extends Service {
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? ACTION_START : intent.getAction();
         if (ACTION_STOP.equals(action)) {
+            stopRequested = true;
             end("已結束");
             return START_NOT_STICKY;
         }
@@ -107,30 +116,61 @@ public class NativeLiveService extends Service {
             return START_NOT_STICKY;
         }
         active = true;
+        stopRequested = false;
+        reconnectAttempts = 0;
         if (CrewAccessibilityService.getInstance() != null) {
             CrewAccessibilityService.getInstance().stopNativeWakeWordListener();
         }
         FloatingBubbleManager.getInstance(this).updateNativeLiveStatus("正在連線 Gemini Live", true);
-        final String apiKey = key;
+        startLiveClient();
+        return START_STICKY;
+    }
+
+    private void startLiveClient() {
+        if (!active || stopRequested) return;
+        final String apiKey = AppConfig.getGeminiApiKey(this);
+        if (apiKey.length() < 20) {
+            end("尚未設定 Gemini API Key，請至主畫面填寫");
+            return;
+        }
         final String serverUrl = AppConfig.getServerUrl(this);
         final String voiceName = AppConfig.getVoiceName(this);
-        client = new NativeGeminiLiveClient(apiKey, serverUrl, voiceName, new NativeGeminiLiveClient.Listener() {
+        client = new NativeGeminiLiveClient(apiKey, serverUrl, voiceName, AppConfig.getNoiseMode(this), AppConfig.getNoiseSuppression(this), new NativeGeminiLiveClient.Listener() {
             @Override public void onStatus(String text) {
+                if (text != null && text.contains("已連線")) reconnectAttempts = 0;
                 updateStatus(text, true);
             }
             @Override public void onStopped(String reason) {
-                end(reason);
+                handleClientStopped(reason);
             }
             @Override public void onTranscript(String role, String text) {
-                // The foreground service deliberately stays visually quiet.
-                // Full transcript remains available from the native test page.
+                FloatingBubbleManager.getInstance(NativeLiveService.this).updateLiveTranscript(role, text);
             }
             @Override public void onSpeakingChanged(boolean speaking) {
                 FloatingBubbleManager.getInstance(NativeLiveService.this).refreshVoiceControls();
             }
+            @Override public void onMicrophoneLevel(double dbfs, double gateDbfs, boolean sending) {
+                FloatingBubbleManager.getInstance(NativeLiveService.this).updateLiveMicrophoneLevel(dbfs, sending);
+            }
         });
         client.start();
-        return START_STICKY;
+    }
+
+    private void handleClientStopped(String reason) {
+        if (!active || stopRequested) {
+            end(reason);
+            return;
+        }
+        if (reconnectAttempts >= 3) {
+            end("重連 3 次仍失敗：" + reason);
+            return;
+        }
+        reconnectAttempts++;
+        client = null;
+        long delayMs = 900L * reconnectAttempts;
+        updateStatus("連線中斷，正在重新連線（" + reconnectAttempts + "/3）…", true);
+        visualHandler.removeCallbacks(reconnectRunnable);
+        visualHandler.postDelayed(reconnectRunnable, delayMs);
     }
 
     private void updateStatus(String status, boolean showOngoing) {
@@ -195,6 +235,8 @@ public class NativeLiveService extends Service {
     };
 
     private synchronized void end(String reason) {
+        stopRequested = true;
+        visualHandler.removeCallbacks(reconnectRunnable);
         CameraPreviewOverlay.getInstance(this).hide();
         if (!active && client == null) {
             FloatingBubbleManager.getInstance(this).updateNativeLiveStatus(reason, false);
@@ -249,6 +291,8 @@ public class NativeLiveService extends Service {
     }
 
     @Override public void onDestroy() {
+        stopRequested = true;
+        visualHandler.removeCallbacks(reconnectRunnable);
         active = false;
         sharingCamera = false;
         sharingScreen = false;

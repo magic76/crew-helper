@@ -104,7 +104,7 @@ public class CrewAccessibilityService extends AccessibilityService {
 
     private android.os.PowerManager.WakeLock screenWakeLock = null;
 
-    private synchronized void setScreenKeepAwake(boolean enable) {
+    private synchronized boolean setScreenKeepAwake(boolean enable) {
         try {
             if (enable) {
                 if (screenWakeLock == null) {
@@ -125,7 +125,12 @@ public class CrewAccessibilityService extends AccessibilityService {
                     screenWakeLock.release();
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (SecurityException error) {
+            Log.e("CrewAccessibility", "Keep Awake requires WAKE_LOCK permission", error);
+        } catch (Exception error) {
+            Log.e("CrewAccessibility", "Unable to change Keep Awake state", error);
+        }
+        return screenWakeLock != null && screenWakeLock.isHeld();
     }
 
     public static boolean isKeepAwakeActive() {
@@ -137,8 +142,7 @@ public class CrewAccessibilityService extends AccessibilityService {
         CrewAccessibilityService service = instance;
         if (service != null) {
             boolean next = !isKeepAwakeActive();
-            service.setScreenKeepAwake(next);
-            return next;
+            return service.setScreenKeepAwake(next);
         }
         return false;
     }
@@ -679,8 +683,8 @@ public class CrewAccessibilityService extends AccessibilityService {
                 }
             } else if (path.startsWith("/keep_awake")) {
                 boolean enable = body.contains("\"enabled\":true") || body.contains("\"enable\":true");
-                setScreenKeepAwake(enable);
-                responseJson = "{\"success\":true,\"keepAwake\":" + enable + "}";
+                boolean active = setScreenKeepAwake(enable);
+                responseJson = "{\"success\":" + (active == enable) + ",\"keepAwake\":" + active + "}";
             } else if (path.startsWith("/key")) {
                 String key = "HOME";
                 if (body.contains("\"BACK\"")) key = "BACK";

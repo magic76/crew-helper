@@ -60,7 +60,7 @@ public final class I18n {
     }
 
     public static String cardBubbleDesc(Context ctx) {
-        return get(ctx, "短按開始/結束通話；長按開啟文字面板", "Tap to talk; Long-press to open command panel");
+        return get(ctx, "短按開啟控制台；長按開始／結束 Live 通話", "Tap for controls; long-press to start or end a Live call");
     }
 
     public static String cardNotificationTitle(Context ctx) {

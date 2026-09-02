@@ -28,6 +28,9 @@ public class MainActivity extends Activity {
     private TextView statusDetail;
     private LinearLayout statusCard;
     private TextToSpeech previewTts;
+    private LinearLayout pageContent;
+    private final Button[] navButtons = new Button[4];
+    private int activeTab = 0;
 
     private int dp(float val) {
         return CrewTheme.dp(this, val);
@@ -44,17 +47,41 @@ public class MainActivity extends Activity {
         }
         getWindow().getDecorView().setBackgroundColor(CrewTheme.BG_PRIMARY);
 
+        LinearLayout appRoot = new LinearLayout(this);
+        appRoot.setOrientation(LinearLayout.VERTICAL);
+        appRoot.setBackgroundColor(CrewTheme.BG_PRIMARY);
+
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
         scroll.setBackgroundColor(CrewTheme.BG_PRIMARY);
+        pageContent = new LinearLayout(this);
+        pageContent.setOrientation(LinearLayout.VERTICAL);
+        pageContent.setPadding(dp(20), dp(28), dp(20), dp(16));
+        scroll.addView(pageContent);
+        appRoot.addView(scroll, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(20), dp(36), dp(20), dp(32));
-        root.setBackgroundColor(CrewTheme.BG_PRIMARY);
-        scroll.addView(root);
+        appRoot.addView(buildBottomNavigation());
+        setContentView(appRoot);
+        renderTab(0);
 
-        // ── 1. Top Brand Header ──
+        // Request only the runtime permissions needed by the features the user opens.
+        checkAndRequestPermissions();
+    }
+
+    private void renderTab(int tab) {
+        activeTab = tab;
+        pageContent.removeAllViews();
+        if (tab == 0) renderHomePage();
+        else if (tab == 1) renderLivePage();
+        else if (tab == 2) renderAutomationPage();
+        else renderSettingsPage();
+        refreshNavigation();
+        refreshServiceStatus();
+    }
+
+    private void renderHomePage() {
+        LinearLayout root = pageContent;
         LinearLayout headerRow = new LinearLayout(this);
         headerRow.setOrientation(LinearLayout.HORIZONTAL);
         headerRow.setGravity(Gravity.CENTER_VERTICAL);
@@ -80,7 +107,7 @@ public class MainActivity extends Activity {
         titleBadgeRow.addView(title);
 
         TextView versionBadge = new TextView(this);
-        versionBadge.setText("HELPER v2.0");
+        versionBadge.setText("HELPER");
         versionBadge.setTextSize(9);
         versionBadge.setTextColor(CrewTheme.TEAL_300);
         versionBadge.setTypeface(Typeface.MONOSPACE);
@@ -141,17 +168,28 @@ public class MainActivity extends Activity {
 
         root.addView(statusCard);
 
-        // ── Section Label ──
+        addSectionTitle(root, I18n.get(this, "立即開始", "START HERE"));
+
+        root.addView(makePrimaryButton("🫧 " + I18n.get(this, "啟動隨行助理", "Launch Floating Assistant"), new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                enableBubble();
+            }
+        }));
+
+        root.addView(makeActionCard("◉", I18n.get(this, "進入 Live 對話", "Open Live Conversation"),
+            I18n.get(this, "即時語音通話、逐字稿與完整控制", "Realtime voice, transcript, and full call controls"), CrewTheme.EMERALD_400, new View.OnClickListener() {
+                @Override public void onClick(View v) { startActivity(new Intent(MainActivity.this, NativeLiveActivity.class)); }
+            }));
+
+        // ── Service shortcuts ──
         TextView sectionTitle = new TextView(this);
-        sectionTitle.setText(I18n.sectionCoreServices(this));
+        sectionTitle.setText(I18n.get(this, "服務與權限", "SERVICES & PERMISSIONS"));
         sectionTitle.setTextSize(12);
         sectionTitle.setTypeface(Typeface.DEFAULT_BOLD);
         sectionTitle.setTextColor(CrewTheme.INDIGO_400);
         sectionTitle.setPadding(dp(4), dp(4), 0, dp(8));
         root.addView(sectionTitle);
 
-        // ── 3. Action Cards ──
-        // A. Accessibility Service
         root.addView(makeActionCard("⚙️", I18n.cardAccessibilityTitle(this), I18n.cardAccessibilityDesc(this), CrewTheme.INDIGO_500, new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -159,100 +197,83 @@ public class MainActivity extends Activity {
             }
         }));
 
-        // B. Floating Voice Bubble
-        root.addView(makeActionCard("🫧", I18n.cardBubbleTitle(this), I18n.cardBubbleDesc(this), CrewTheme.TEAL_400, new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                FloatingBubbleManager manager = FloatingBubbleManager.getInstance(MainActivity.this);
-                if (!manager.canDrawOverlays()) {
-                    Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                            Uri.parse("package:" + getPackageName()));
-                    startActivity(intent);
-                    return;
-                }
-                manager.showBubble();
-                Toast.makeText(MainActivity.this, I18n.get(MainActivity.this, "🎙️ 浮動泡泡已啟用！短按錄音，長按展開", "🎙️ Floating Bubble Enabled! Tap to talk"), Toast.LENGTH_SHORT).show();
-            }
-        }));
+        addFooter(root, false);
+    }
 
-        // C. Notification Controls
-        root.addView(makeActionCard("🔔", I18n.cardNotificationTitle(this), I18n.cardNotificationDesc(this), CrewTheme.CYAN_400, new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
+    private void renderLivePage() {
+        addPageHeading("🎙️", I18n.get(this, "Live 語音助理", "Live Voice Assistant"),
+            I18n.get(this, "開始即時 Gemini 對話，通話控制會固定顯示在畫面中。", "Start a realtime Gemini conversation with in-call controls."));
+        pageContent.addView(makePrimaryButton("🎙️ " + I18n.get(this, "開始 Live 通話", "Start Live Call"), new View.OnClickListener() {
+            @Override public void onClick(View v) { startActivity(new Intent(MainActivity.this, NativeLiveActivity.class)); }
+        }));
+        pageContent.addView(makeActionCard("☀️", I18n.cardKeepAwakeTitle(this),
+            I18n.cardKeepAwakeDesc(this, FloatingBubbleManager.isKeepAwakeActive()), CrewTheme.AMBER_400, new View.OnClickListener() {
+                @Override public void onClick(View v) {
+                    boolean active = FloatingBubbleManager.toggleKeepAwake(MainActivity.this);
+                    Toast.makeText(MainActivity.this, active ? "☀️ " + I18n.get(MainActivity.this, "螢幕常亮已開啟", "Screen Keep Awake ON") : "🌙 " + I18n.get(MainActivity.this, "螢幕常亮已關閉", "Screen Keep Awake OFF"), Toast.LENGTH_SHORT).show();
+                    renderTab(1);
+                }
+            }));
+        pageContent.addView(makeActionCard("🗣️", I18n.get(this, "語音角色", "Voice Persona"),
+            AppConfig.getVoiceName(this), CrewTheme.TEAL_400, new View.OnClickListener() {
+                @Override public void onClick(View v) { showVoicePersonaDialog(); }
+            }));
+    }
+
+    private void renderAutomationPage() {
+        addPageHeading("⚙️", I18n.get(this, "自動化", "Automation"),
+            I18n.get(this, "管理跨 App 協助、懸浮控制與裝置感知權限。", "Manage cross-app assistance, floating controls, and device permissions."));
+        pageContent.addView(makeActionCard("🛡️", I18n.cardAccessibilityTitle(this), I18n.cardAccessibilityDesc(this), CrewTheme.INDIGO_500, new View.OnClickListener() {
+            @Override public void onClick(View v) { showAccessibilityDisclosureDialog(); }
+        }));
+        pageContent.addView(makeActionCard("🫧", I18n.cardBubbleTitle(this), I18n.cardBubbleDesc(this), CrewTheme.TEAL_400, new View.OnClickListener() {
+            @Override public void onClick(View v) { enableBubble(); }
+        }));
+        pageContent.addView(makeActionCard("🔔", I18n.cardNotificationTitle(this), I18n.cardNotificationDesc(this), CrewTheme.CYAN_400, new View.OnClickListener() {
+            @Override public void onClick(View v) {
                 FloatingBubbleManager.getInstance(MainActivity.this).showNotification();
                 Toast.makeText(MainActivity.this, I18n.get(MainActivity.this, "✅ 通知欄常駐面板已開啟！", "✅ Notification panel activated!"), Toast.LENGTH_SHORT).show();
             }
         }));
-
-        // D. Native Gemini Live Test
-        root.addView(makeActionCard("🎙️", I18n.cardNativeLiveTitle(this), I18n.cardNativeLiveDesc(this), CrewTheme.EMERALD_400, new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                startActivity(new Intent(MainActivity.this, NativeLiveActivity.class));
-            }
+        pageContent.addView(makeActionCard("📸", I18n.cardCameraTitle(this), I18n.cardCameraDesc(this), CrewTheme.AMBER_400, new View.OnClickListener() {
+            @Override public void onClick(View v) { requestCameraPermission(); }
         }));
+    }
 
-        // E. Camera Permission
-        root.addView(makeActionCard("📸", I18n.cardCameraTitle(this), I18n.cardCameraDesc(this), CrewTheme.AMBER_400, new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    if (checkSelfPermission(android.Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-                        requestPermissions(new String[]{android.Manifest.permission.CAMERA}, 101);
-                    } else {
-                        Toast.makeText(MainActivity.this, I18n.get(MainActivity.this, "✅ 相機權限已就緒！", "✅ Camera permission ready!"), Toast.LENGTH_SHORT).show();
-                    }
-                }
-            }
-        }));
-
-        // F. Screen Keep Awake Toggle Card
-        boolean awakeActive = FloatingBubbleManager.isKeepAwakeActive();
-        root.addView(makeActionCard("☀️", I18n.cardKeepAwakeTitle(this),
-            I18n.cardKeepAwakeDesc(this, awakeActive),
-            CrewTheme.AMBER_400,
-            new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    boolean active = FloatingBubbleManager.toggleKeepAwake(MainActivity.this);
-                    Toast.makeText(MainActivity.this, active ? I18n.get(MainActivity.this, "☀️ 螢幕常亮已開啟！", "☀️ Screen Keep Awake ON!") : I18n.get(MainActivity.this, "🌙 螢幕常亮已關閉！", "🌙 Screen Keep Awake OFF!"), Toast.LENGTH_SHORT).show();
-                    // Recreate view to refresh status text
-                    recreate();
-                }
-            }
-        ));
-
-        // G. Dual-Mode Settings Card (Standalone vs Connected Server)
+    private void renderSettingsPage() {
+        addPageHeading("⚙️", I18n.get(this, "設定", "Settings"),
+            I18n.get(this, "帳號、連線、語音與偏好設定。", "Connection, voice, and app preferences."));
         boolean isStandalone = AppConfig.isStandaloneMode(this);
         String currentServer = AppConfig.getServerUrl(this);
         String modeSummary = isStandalone
             ? I18n.get(this, "模式：☁️ 純獨立雲端模式 (直連 Gemini Live)", "Mode: ☁️ Standalone Cloud (Gemini Live)")
             : I18n.get(this, "模式：🔗 Crew Pocket 連線 (" + currentServer + ")", "Mode: 🔗 Connected Server (" + currentServer + ")");
 
-        root.addView(makeActionCard("⚙️", I18n.cardSettingsTitle(this), modeSummary + " · " + I18n.get(this, "點擊配置", "Tap to configure"), CrewTheme.CYAN_400, new View.OnClickListener() {
+        pageContent.addView(makeActionCard("🔐", I18n.cardSettingsTitle(this), modeSummary, CrewTheme.CYAN_400, new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 showSettingsDialog();
             }
         }));
 
-        // H. Language Switcher Card
-        root.addView(makeActionCard("🌐", I18n.cardLanguageTitle(this), I18n.cardLanguageDesc(this), CrewTheme.INDIGO_400, new View.OnClickListener() {
+        pageContent.addView(makeActionCard("🗣️", I18n.cardVoicePersonaTitle(this), AppConfig.getVoiceName(this), CrewTheme.TEAL_400, new View.OnClickListener() {
+            @Override public void onClick(View v) { showVoicePersonaDialog(); }
+        }));
+        pageContent.addView(makeActionCard("🌐", I18n.cardLanguageTitle(this), I18n.cardLanguageDesc(this), CrewTheme.INDIGO_400, new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 showLanguageDialog();
             }
         }));
 
-        // I. Voice Persona Selection Card
-        root.addView(makeActionCard("🗣️", I18n.cardVoicePersonaTitle(this), I18n.cardVoicePersonaDesc(this), CrewTheme.TEAL_400, new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                showVoicePersonaDialog();
-            }
-        }));
+        pageContent.addView(makeActionCard("⌘", I18n.get(this, "診斷資訊", "Diagnostics"),
+            I18n.get(this, "服務狀態、版本與本機 Bridge", "Service status, version, and local bridge"), CrewTheme.TEXT_MUTED, new View.OnClickListener() {
+                @Override public void onClick(View v) { showDiagnosticsDialog(); }
+            }));
+        addFooter(pageContent, true);
+    }
 
-        // ── 4. Footer Brand Info ──
+    private void addFooter(LinearLayout root, boolean showBridge) {
         LinearLayout footer = new LinearLayout(this);
         footer.setOrientation(LinearLayout.VERTICAL);
         footer.setGravity(Gravity.CENTER);
@@ -265,20 +286,139 @@ public class MainActivity extends Activity {
         footerBrand.setTextColor(CrewTheme.TEXT_MUTED);
         footer.addView(footerBrand);
 
-        TextView footerHost = new TextView(this);
-        footerHost.setText("Local Bridge Server: 127.0.0.1:8766");
-        footerHost.setTextSize(9);
-        footerHost.setTypeface(Typeface.MONOSPACE);
-        footerHost.setTextColor(CrewTheme.TEXT_DISABLED);
-        footerHost.setPadding(0, dp(2), 0, 0);
-        footer.addView(footerHost);
+        if (showBridge) {
+            TextView footerHost = new TextView(this);
+            footerHost.setText("Local Bridge Server: 127.0.0.1:8766");
+            footerHost.setTextSize(9);
+            footerHost.setTypeface(Typeface.MONOSPACE);
+            footerHost.setTextColor(CrewTheme.TEXT_DISABLED);
+            footerHost.setPadding(0, dp(2), 0, 0);
+            footer.addView(footerHost);
+        }
 
         root.addView(footer);
 
-        setContentView(scroll);
+    }
 
-        // Auto request core permissions on launch
-        checkAndRequestPermissions();
+    private View buildBottomNavigation() {
+        LinearLayout nav = new LinearLayout(this);
+        nav.setOrientation(LinearLayout.HORIZONTAL);
+        nav.setGravity(Gravity.CENTER);
+        nav.setPadding(dp(8), dp(8), dp(8), dp(10));
+        nav.setBackground(CrewTheme.createCard(this, CrewTheme.BG_SURFACE, CrewTheme.BORDER_SUBTLE, 0));
+        // Deliberately icon-only: compact, consistent, and easier to scan one-handed.
+        String[] icons = new String[]{"⌂", "◉", "✦", "⚙"};
+        String[] descriptions = new String[]{
+            I18n.get(this, "首頁", "Home"), "Live",
+            I18n.get(this, "自動化", "Automation"), I18n.get(this, "設定", "Settings")
+        };
+        for (int i = 0; i < icons.length; i++) {
+            final int index = i;
+            Button button = new Button(this);
+            button.setText(icons[i]);
+            button.setContentDescription(descriptions[i]);
+            button.setTextSize(24);
+            button.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
+            button.setGravity(Gravity.CENTER);
+            button.setAllCaps(false);
+            button.setPadding(0, 0, 0, 0);
+            button.setMinHeight(dp(48));
+            button.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) { renderTab(index); }
+            });
+            navButtons[i] = button;
+            nav.addView(button, new LinearLayout.LayoutParams(0, dp(52), 1f));
+        }
+        return nav;
+    }
+
+    private void refreshNavigation() {
+        for (int i = 0; i < navButtons.length; i++) {
+            Button button = navButtons[i];
+            if (button == null) continue;
+            boolean selected = i == activeTab;
+            button.setTextColor(selected ? CrewTheme.TEAL_300 : CrewTheme.TEXT_MUTED);
+            button.setTypeface(selected ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
+            button.setBackground(CrewTheme.createCard(this,
+                selected ? Color.argb(35, 45, 212, 191) : Color.TRANSPARENT,
+                selected ? CrewTheme.BORDER_TEAL : Color.TRANSPARENT, 12));
+        }
+    }
+
+    private void addPageHeading(String icon, String title, String description) {
+        TextView iconView = new TextView(this);
+        iconView.setText(icon);
+        iconView.setTextSize(27);
+        pageContent.addView(iconView);
+        TextView titleView = new TextView(this);
+        titleView.setText(title);
+        titleView.setTextSize(23);
+        titleView.setTypeface(Typeface.DEFAULT_BOLD);
+        titleView.setTextColor(CrewTheme.TEXT_PRIMARY);
+        titleView.setPadding(0, dp(5), 0, 0);
+        pageContent.addView(titleView);
+        TextView descView = new TextView(this);
+        descView.setText(description);
+        descView.setTextSize(12);
+        descView.setTextColor(CrewTheme.TEXT_SECONDARY);
+        descView.setPadding(0, dp(4), 0, dp(18));
+        pageContent.addView(descView);
+    }
+
+    private void addSectionTitle(LinearLayout root, String title) {
+        TextView label = new TextView(this);
+        label.setText(title);
+        label.setTextSize(12);
+        label.setTypeface(Typeface.DEFAULT_BOLD);
+        label.setTextColor(CrewTheme.INDIGO_400);
+        label.setPadding(dp(4), dp(4), 0, dp(8));
+        root.addView(label);
+    }
+
+    private View makePrimaryButton(String label, View.OnClickListener listener) {
+        Button button = new Button(this);
+        button.setText(label);
+        button.setTextSize(15);
+        button.setTypeface(Typeface.DEFAULT_BOLD);
+        button.setTextColor(Color.WHITE);
+        button.setAllCaps(false);
+        button.setGravity(Gravity.CENTER);
+        button.setBackground(CrewTheme.createGradientButton(this, CrewTheme.TEAL_500, CrewTheme.INDIGO_500, 16));
+        button.setOnClickListener(listener);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56));
+        lp.setMargins(0, 0, 0, dp(12));
+        button.setLayoutParams(lp);
+        return button;
+    }
+
+    private void enableBubble() {
+        FloatingBubbleManager manager = FloatingBubbleManager.getInstance(this);
+        if (!manager.canDrawOverlays()) {
+            startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + getPackageName())));
+            return;
+        }
+        manager.showBubble();
+        Toast.makeText(this, I18n.get(this, "🎙️ 浮動泡泡已啟用！短按開啟控制台，長按開始／結束 Live 通話", "🎙️ Floating Bubble enabled! Tap for controls; long-press to start or end a Live call"), Toast.LENGTH_SHORT).show();
+    }
+
+    private void requestCameraPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || checkSelfPermission(android.Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+            Toast.makeText(this, I18n.get(this, "✅ 相機權限已就緒！", "✅ Camera permission ready!"), Toast.LENGTH_SHORT).show();
+        } else {
+            requestPermissions(new String[]{android.Manifest.permission.CAMERA}, 101);
+        }
+    }
+
+    private void showDiagnosticsDialog() {
+        String state = CrewAccessibilityService.isServiceRunning()
+            ? I18n.get(this, "已啟用", "Running") : I18n.get(this, "未啟用", "Stopped");
+        new android.app.AlertDialog.Builder(this)
+            .setTitle(I18n.get(this, "診斷資訊", "Diagnostics"))
+            .setMessage("Crew Helper v2.0\n\n" + I18n.get(this, "無障礙服務：", "Accessibility: ") + state
+                + "\nLive Service: " + (NativeLiveService.isActive() ? "Active" : "Idle")
+                + "\nBridge: 127.0.0.1:8766")
+            .setPositiveButton(I18n.get(this, "關閉", "Close"), null)
+            .show();
     }
 
     private View makeActionCard(String icon, String titleText, String descText, int accentColor, View.OnClickListener onClick) {
@@ -816,6 +956,11 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        refreshServiceStatus();
+    }
+
+    private void refreshServiceStatus() {
+        if (statusDot == null || statusText == null || statusDetail == null || statusCard == null || activeTab != 0) return;
         if (CrewAccessibilityService.isServiceRunning()) {
             statusDot.setTextColor(CrewTheme.EMERALD_400);
             statusText.setText(I18n.serviceRunningTitle(this));

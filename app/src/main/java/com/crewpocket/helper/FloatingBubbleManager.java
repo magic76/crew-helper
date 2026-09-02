@@ -203,12 +203,21 @@ public class FloatingBubbleManager {
     private DockIconButton voiceMuteButton = null;
     private TextView voiceInterruptionButton = null;
     private TextView voiceWakeButton = null;
+    private TextView voiceStatusText = null;
+    private TextView voiceMeterText = null;
+    private TextView voiceTranscriptText = null;
     private View dialogView = null;
     private WindowManager.LayoutParams bubbleParams = null;
     private WindowManager.LayoutParams dialogParams = null;
     private boolean isDialogShowing = false;
     private String currentState = "IDLE";
     private boolean nativeLiveRequested = false;
+    private String latestLiveStatus = "待命";
+    private double latestMicDbfs = -96d;
+    private boolean latestMicSending = false;
+    private String latestLiveTranscript = "等待對話開始…";
+    private String latestLiveTranscriptRole = "";
+    private Runnable transcriptRefreshRunnable = null;
     private TextView dialogStatusText = null;
     private Button dialogStopButton = null;
     private String pendingImagePath = null;
@@ -240,7 +249,7 @@ public class FloatingBubbleManager {
     private static boolean isKeepAwakeActive = false;
 
     public static synchronized boolean isKeepAwakeActive() {
-        return isKeepAwakeActive;
+        return appWakeLock != null && appWakeLock.isHeld();
     }
 
     public static synchronized boolean toggleKeepAwake(Context ctx) {
@@ -265,7 +274,14 @@ public class FloatingBubbleManager {
                     appWakeLock.release();
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (SecurityException error) {
+            android.util.Log.e("FloatingBubble", "Keep Awake requires WAKE_LOCK permission", error);
+            isKeepAwakeActive = false;
+        } catch (Exception error) {
+            android.util.Log.e("FloatingBubble", "Unable to change Keep Awake state", error);
+            isKeepAwakeActive = appWakeLock != null && appWakeLock.isHeld();
+        }
+        isKeepAwakeActive = appWakeLock != null && appWakeLock.isHeld();
         return isKeepAwakeActive;
     }
 
@@ -737,6 +753,13 @@ public class FloatingBubbleManager {
                 // Give immediate visual feedback; the service will replace it
                 // with its real connection status moments later.
                 updateNativeLiveStatus("正在連線 Gemini Live", true);
+                // A new call must explain itself: reveal the controls once so
+                // users do not have to infer that a lone bubble is listening.
+                mainHandler.postDelayed(new Runnable() {
+                    @Override public void run() {
+                        if (nativeLiveRequested || NativeLiveService.isActive()) showVoiceControls();
+                    }
+                }, 280);
             }
         } catch (Exception error) {
             updateNotification("🎙️ 無法啟動原生語音");
@@ -748,13 +771,91 @@ public class FloatingBubbleManager {
         mainHandler.post(new Runnable() {
             @Override public void run() {
                 nativeLiveRequested = active;
+                latestLiveStatus = text == null || text.trim().isEmpty() ? (active ? "語音通話中" : "待命") : text.trim();
                 if (bubbleView != null) {
-                    bubbleView.setNativeVoiceState(active ? 1 : 0);
+                    bubbleView.setNativeVoiceState(isLiveError(latestLiveStatus) ? 3 : (active ? 1 : 0));
                 }
                 refreshVoiceControls();
                 updateNotification("🎙️ " + (text == null || text.isEmpty() ? (active ? "語音通話中" : "待命") : text));
             }
         });
+    }
+
+    /** Lightweight telemetry from the foreground voice service for the expanded dock. */
+    public void updateLiveMicrophoneLevel(final double dbfs, final boolean sending) {
+        mainHandler.post(new Runnable() {
+            @Override public void run() {
+                latestMicDbfs = dbfs;
+                latestMicSending = sending;
+                updateVoiceTelemetryUi();
+            }
+        });
+    }
+
+    /**
+     * Gemini sends a spoken sentence in several streaming fragments.  The dock
+     * must merge them first; rendering every fragment makes Chinese appear as
+     * a succession of one- or two-character lines.
+     */
+    public void updateLiveTranscript(final String role, final String text) {
+        if (text == null || text.trim().isEmpty()) return;
+        mainHandler.post(new Runnable() {
+            @Override public void run() {
+                String speaker = "Gemini".equalsIgnoreCase(role) ? "助理" : "你";
+                String fragment = text.trim().replaceAll("\\s+", " ");
+                if (!speaker.equals(latestLiveTranscriptRole)) {
+                    latestLiveTranscriptRole = speaker;
+                    latestLiveTranscript = speaker + "：" + fragment;
+                } else {
+                    String prefix = speaker + "：";
+                    String existing = latestLiveTranscript.startsWith(prefix)
+                            ? latestLiveTranscript.substring(prefix.length()) : latestLiveTranscript;
+                    // Input/output transcription can be cumulative, whereas
+                    // modelTurn text is token-like.  Cover both without
+                    // duplicating the same words.
+                    if (fragment.startsWith(existing)) {
+                        latestLiveTranscript = prefix + fragment;
+                    } else if (!existing.endsWith(fragment)) {
+                        latestLiveTranscript = prefix + existing + fragment;
+                    }
+                }
+                if (latestLiveTranscript.length() > 180) {
+                    latestLiveTranscript = latestLiveTranscript.substring(0, 177) + "…";
+                }
+                if (transcriptRefreshRunnable != null) mainHandler.removeCallbacks(transcriptRefreshRunnable);
+                transcriptRefreshRunnable = new Runnable() {
+                    @Override public void run() {
+                        transcriptRefreshRunnable = null;
+                        updateVoiceTranscriptUi();
+                    }
+                };
+                mainHandler.postDelayed(transcriptRefreshRunnable, 220);
+            }
+        });
+    }
+
+    private boolean isLiveError(String status) {
+        String lower = status == null ? "" : status.toLowerCase();
+        return lower.contains("失敗") || lower.contains("錯誤") || lower.contains("未取得")
+                || lower.contains("尚未設定") || lower.contains("無法");
+    }
+
+    private void updateVoiceTelemetryUi() {
+        if (voiceStatusText != null) {
+            boolean error = isLiveError(latestLiveStatus);
+            voiceStatusText.setText((error ? "● " : "● ") + latestLiveStatus);
+            voiceStatusText.setTextColor(Color.parseColor(error ? "#FDA4AF" : "#93C5FD"));
+        }
+        if (voiceMeterText != null) {
+            long db = Math.round(Math.max(-96d, Math.min(0d, latestMicDbfs)));
+            String state = !NativeLiveService.isActive() ? "等待通話" : (latestMicSending ? "正在送出" : "靜音中");
+            voiceMeterText.setText("🎙 收音 " + db + " dB · " + state);
+        }
+    }
+
+    private void updateVoiceTranscriptUi() {
+        if (voiceTranscriptText == null) return;
+        voiceTranscriptText.setText(latestLiveTranscript);
     }
 
     private void toggleVoiceControls() {
@@ -857,6 +958,20 @@ public class FloatingBubbleManager {
                     headerRow.addView(close);
                     dock.addView(headerRow);
 
+                    voiceStatusText = new TextView(context);
+                    voiceStatusText.setTextSize(12);
+                    voiceStatusText.setSingleLine(true);
+                    voiceStatusText.setPadding(dp(4), 0, dp(4), dp(4));
+                    dock.addView(voiceStatusText, new LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+                    voiceMeterText = new TextView(context);
+                    voiceMeterText.setTextSize(11);
+                    voiceMeterText.setTextColor(Color.parseColor("#CBD5E1"));
+                    voiceMeterText.setPadding(dp(4), dp(4), dp(4), dp(8));
+                    dock.addView(voiceMeterText, new LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
                     // 📱 Ergonomic Bottom Dock matching Web UI:
                     // Layout: [Camera Icon] [Screen Icon] [Center Large Mute/Interrupt Icon] [Hangup/Call Icon]
                     LinearLayout row = new LinearLayout(context);
@@ -869,6 +984,10 @@ public class FloatingBubbleManager {
                     voiceScreenButton = makeDockIconButton();
                     voiceMuteButton = makeDockIconButton();
                     voiceCallButton = makeDockIconButton();
+                    voiceCameraButton.setContentDescription("切換相機分享");
+                    voiceScreenButton.setContentDescription("切換螢幕分享");
+                    voiceMuteButton.setContentDescription("靜音或打斷助理");
+                    voiceCallButton.setContentDescription("開始或結束 Live 通話");
 
                     voiceCameraButton.setOnClickListener(new View.OnClickListener() {
                         @Override public void onClick(View v) {
@@ -923,9 +1042,19 @@ public class FloatingBubbleManager {
                     row.addView(voiceCallButton, sideLp);
 
                     dock.addView(row);
+
+                    voiceTranscriptText = new TextView(context);
+                    voiceTranscriptText.setTextSize(11);
+                    voiceTranscriptText.setTextColor(Color.parseColor("#94A3B8"));
+                    voiceTranscriptText.setMaxLines(2);
+                    voiceTranscriptText.setPadding(dp(4), dp(7), dp(4), 0);
+                    dock.addView(voiceTranscriptText, new LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
                     voiceControlView = dock;
                     windowManager.addView(dock, voiceControlParams);
                     refreshVoiceControls();
+                    updateVoiceTelemetryUi();
+                    updateVoiceTranscriptUi();
                 } catch (Exception error) {
                     voiceControlView = null;
                 } finally {
@@ -948,6 +1077,9 @@ public class FloatingBubbleManager {
                 voiceScreenButton = null;
                 voiceMuteButton = null;
                 voiceWakeButton = null;
+                voiceStatusText = null;
+                voiceMeterText = null;
+                voiceTranscriptText = null;
             }
         });
     }
@@ -959,7 +1091,10 @@ public class FloatingBubbleManager {
                 boolean isAiSpeaking = NativeLiveService.isAiSpeaking();
                 
                 if (bubbleView != null) {
-                    if (isAiSpeaking) {
+                    if (isLiveError(latestLiveStatus)) {
+                        wakeBubbleFromDock();
+                        bubbleView.setNativeVoiceState(3);
+                    } else if (isAiSpeaking) {
                         wakeBubbleFromDock();
                         bubbleView.setNativeVoiceState(2); // Amber = AI speaking
                     } else if (isLiveActive) {
@@ -1067,6 +1202,7 @@ public class FloatingBubbleManager {
                 if (voiceWakeButton != null) {
                     updateWakeButtonUi(voiceWakeButton, isKeepAwakeActive());
                 }
+                updateVoiceTelemetryUi();
             }
         });
     }
@@ -1605,12 +1741,13 @@ public class FloatingBubbleManager {
         private SweepGradient idleSweepGradient;
         private SweepGradient activeSweepGradient;
         private SweepGradient speakingSweepGradient;
+        private SweepGradient errorSweepGradient;
         private SweepGradient rainbowSweepGradient;
         private Matrix matrix = new Matrix();
         private float rotationAngle = 0f;
         private boolean isFlowing = false;
         private boolean isSuccessFlash = false;
-        // 0 idle, 1 live call active, 2 AI speaking
+        // 0 idle, 1 connected/listening, 2 AI speaking, 3 connection error
         private int nativeVoiceState = 0;
         private ValueAnimator continuousRotator;
 
@@ -1677,34 +1814,39 @@ public class FloatingBubbleManager {
             float cx = w / 2f;
             float cy = h / 2f;
 
-            // 1. Idle Gradient: Teal -> Cyan -> Indigo -> Purple -> Teal (Web #live-voice-btn match)
+            // 1. Idle is deliberately neutral: it should not look as if it is listening.
             int[] idleColors = new int[]{
-                Color.parseColor("#14B8A6"), // Teal 500
-                Color.parseColor("#06B6D4"), // Cyan 500
-                Color.parseColor("#6366F1"), // Indigo 500
-                Color.parseColor("#A855F7"), // Purple 500
-                Color.parseColor("#14B8A6")  // Teal 500
+                Color.parseColor("#64748B"),
+                Color.parseColor("#94A3B8"),
+                Color.parseColor("#475569"),
+                Color.parseColor("#64748B")
             };
-            float[] idlePositions = new float[]{0.0f, 0.25f, 0.60f, 0.85f, 1.0f};
+            float[] idlePositions = new float[]{0.0f, 0.32f, 0.72f, 1.0f};
             idleSweepGradient = new SweepGradient(cx, cy, idleColors, idlePositions);
 
-            // 2. Active Call Gradient: Rose -> Red -> Orange -> Rose
+            // 2. Blue says "connected and listening".
             int[] activeColors = new int[]{
-                Color.parseColor("#F43F5E"), // Rose 500
-                Color.parseColor("#EF4444"), // Red 500
-                Color.parseColor("#FB923C"), // Orange 400
-                Color.parseColor("#F43F5E")  // Rose 500
+                Color.parseColor("#38BDF8"),
+                Color.parseColor("#2563EB"),
+                Color.parseColor("#818CF8"),
+                Color.parseColor("#38BDF8")
             };
             activeSweepGradient = new SweepGradient(cx, cy, activeColors, null);
 
-            // 3. Speaking Gradient: Amber -> Gold -> Yellow -> Amber
+            // 3. Purple is reserved for the assistant speaking.
             int[] speakColors = new int[]{
-                Color.parseColor("#F59E0B"), // Amber 500
-                Color.parseColor("#FBBF24"), // Amber 400
-                Color.parseColor("#FDE047"), // Yellow 300
-                Color.parseColor("#F59E0B")  // Amber 500
+                Color.parseColor("#A855F7"),
+                Color.parseColor("#C084FC"),
+                Color.parseColor("#7C3AED"),
+                Color.parseColor("#A855F7")
             };
             speakingSweepGradient = new SweepGradient(cx, cy, speakColors, null);
+
+            int[] errorColors = new int[]{
+                Color.parseColor("#F43F5E"), Color.parseColor("#EF4444"),
+                Color.parseColor("#FB7185"), Color.parseColor("#F43F5E")
+            };
+            errorSweepGradient = new SweepGradient(cx, cy, errorColors, null);
 
             // 4. Fast Rainbow Thinking Stream
             int[] rainbowColors = new int[]{
@@ -1773,6 +1915,8 @@ public class FloatingBubbleManager {
             SweepGradient currentGradient;
             if (nativeVoiceState == 2) {
                 currentGradient = speakingSweepGradient;
+            } else if (nativeVoiceState == 3) {
+                currentGradient = errorSweepGradient;
             } else if (nativeVoiceState == 1) {
                 currentGradient = activeSweepGradient;
             } else if (isFlowing) {
@@ -1791,7 +1935,9 @@ public class FloatingBubbleManager {
             // ── 3. Perfectly Centered Crisp Microphone (Web Style) ──
             Paint mic = new Paint(Paint.ANTI_ALIAS_FLAG);
             if (nativeVoiceState == 2) {
-                mic.setColor(Color.parseColor("#FEF3C7")); // Warm Gold/Amber White
+                mic.setColor(Color.parseColor("#F3E8FF"));
+            } else if (nativeVoiceState == 3) {
+                mic.setColor(Color.parseColor("#FFF1F2"));
             } else if (nativeVoiceState == 1) {
                 mic.setColor(Color.parseColor("#FFFFFF")); // Pure White in Call
             } else {
