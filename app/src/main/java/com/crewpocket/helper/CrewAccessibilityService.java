@@ -67,12 +67,11 @@ public class CrewAccessibilityService extends AccessibilityService {
         isRunning = true;
         startLocalServer();
 
-        // Start the notification entry point; the floating bubble is opt-in only.
+        // The floating bubble stays opt-in; no notification-bar control is used.
         mainHandler.postDelayed(new Runnable() {
             @Override
             public void run() {
                 try {
-                    FloatingBubbleManager.getInstance(CrewAccessibilityService.this).showNotification();
                     startNativeWakeWordListener();
                 } catch (Exception ignored) {}
             }
@@ -159,7 +158,6 @@ public class CrewAccessibilityService extends AccessibilityService {
         try {
             FloatingBubbleManager manager = FloatingBubbleManager.getInstance(this);
             manager.hideBubble();
-            manager.cancelNotification();
         } catch (Exception ignored) {}
         instance = null;
         super.onDestroy();
@@ -177,8 +175,10 @@ public class CrewAccessibilityService extends AccessibilityService {
                     if (serverSocket != null) {
                         try { serverSocket.close(); } catch (Exception e) {}
                     }
-                    // 🛡️ Bind strictly to loopback (127.0.0.1) so LAN/Wi-Fi devices cannot access
-                    serverSocket = new ServerSocket(PORT, 50, java.net.InetAddress.getLoopbackAddress());
+                    // Bind explicitly to IPv4 loopback. getLoopbackAddress() can
+                    // resolve to ::1 on Samsung, while all in-app bridge clients
+                    // intentionally use 127.0.0.1:8766.
+                    serverSocket = new ServerSocket(PORT, 50, java.net.InetAddress.getByName("127.0.0.1"));
                     while (isRunning && !serverSocket.isClosed()) {
                         final Socket socket = serverSocket.accept();
                         new Thread(new Runnable() {
@@ -526,12 +526,9 @@ public class CrewAccessibilityService extends AccessibilityService {
                 responseJson = "{\"success\":true,\"action\":\"NOTIFIED\",\"state\":\"" + state + "\"}";
             } else if (path.startsWith("/bubble")) {
                 mainHandler.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        FloatingBubbleManager.getInstance(CrewAccessibilityService.this).showNotification();
-                    }
+                    @Override public void run() { FloatingBubbleManager.getInstance(CrewAccessibilityService.this).showBubble(); }
                 });
-                responseJson = "{\"success\":true,\"action\":\"NOTIFICATION_SHOWN\"}";
+                responseJson = "{\"success\":true,\"action\":\"BUBBLE_SHOWN\"}";
             } else if (path.startsWith("/tap")) {
                 float x = 0, y = 0;
                 try {

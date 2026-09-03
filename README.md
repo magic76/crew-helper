@@ -1,7 +1,7 @@
 # 🤖 Crew Helper (AI Voice & Automation Copilot)
 
 <p align="center">
-  <img src="assets/icon.png" width="128" height="128" alt="Crew Helper Icon" style="border-radius: 28px;" />
+  <img src="assets/icon_circle_ring.png" width="128" height="128" alt="Crew Helper Icon" />
 </p>
 
 <p align="center">

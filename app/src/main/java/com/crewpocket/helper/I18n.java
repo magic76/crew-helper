@@ -63,14 +63,6 @@ public final class I18n {
         return get(ctx, "短按開啟控制台；長按開始／結束 Live 通話", "Tap for controls; long-press to start or end a Live call");
     }
 
-    public static String cardNotificationTitle(Context ctx) {
-        return get(ctx, "開啟通知欄常駐控制", "Notification Controls");
-    }
-
-    public static String cardNotificationDesc(Context ctx) {
-        return get(ctx, "由通知中心隨時呼叫 AI 語音與截圖", "Quickly invoke AI voice and screenshot from notification bar");
-    }
-
     public static String cardNativeLiveTitle(Context ctx) {
         return get(ctx, "原生 Gemini Live 測試", "Native Gemini Live Test");
     }

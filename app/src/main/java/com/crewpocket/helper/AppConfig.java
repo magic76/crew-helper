@@ -12,6 +12,9 @@ public class AppConfig {
     public static final String KEY_NOISE_MODE = "noise_mode";
     public static final String KEY_NOISE_SUPPRESSION = "noise_suppression";
     public static final String KEY_LIVE_TONE = "live_tone";
+    public static final String KEY_INTERRUPTION_SENSITIVITY = "interruption_sensitivity";
+    public static final String KEY_AUDIO_OUTPUT = "audio_output";
+    public static final String KEY_VOICE_PRESET = "voice_preset";
 
     public static final String DEFAULT_VOICE = "Kore";
     public static final String DEFAULT_SERVER = "http://127.0.0.1:8000";
@@ -114,12 +117,46 @@ public class AppConfig {
         getPrefs(context).edit().putString(KEY_LIVE_TONE, isLiveTone(tone) ? tone : "warm").apply();
     }
 
+    // ── 7. Barge-in and audio route ──
+    public static int getInterruptionSensitivity(Context context) {
+        if (context == null) return 55;
+        return Math.max(0, Math.min(100, getPrefs(context).getInt(KEY_INTERRUPTION_SENSITIVITY, 55)));
+    }
+
+    public static void setInterruptionSensitivity(Context context, int value) {
+        if (context == null) return;
+        getPrefs(context).edit().putInt(KEY_INTERRUPTION_SENSITIVITY, Math.max(0, Math.min(100, value))).apply();
+    }
+
+    /** "call" keeps AEC-friendly communication routing; "media" follows media volume/devices. */
+    public static String getAudioOutput(Context context) {
+        if (context == null) return "call";
+        return "media".equals(getPrefs(context).getString(KEY_AUDIO_OUTPUT, "call")) ? "media" : "call";
+    }
+
+    public static void setAudioOutput(Context context, String output) {
+        if (context == null) return;
+        getPrefs(context).edit().putString(KEY_AUDIO_OUTPUT, "media".equals(output) ? "media" : "call").apply();
+    }
+
+    public static String getVoicePreset(Context context) {
+        if (context == null) return "custom";
+        return getPrefs(context).getString(KEY_VOICE_PRESET, "custom");
+    }
+
+    public static void applyVoicePreset(Context context, String preset, String voice, String tone) {
+        if (context == null) return;
+        getPrefs(context).edit().putString(KEY_VOICE_PRESET, preset == null ? "custom" : preset)
+                .putString(KEY_VOICE_NAME, voice == null ? DEFAULT_VOICE : voice)
+                .putString(KEY_LIVE_TONE, isLiveTone(tone) ? tone : "warm").apply();
+    }
+
     private static boolean isLiveTone(String tone) {
         return "natural".equals(tone) || "warm".equals(tone) || "lively".equals(tone)
                 || "professional".equals(tone) || "calm".equals(tone) || "urgent".equals(tone);
     }
 
-    // ── 7. App Language (Bilingual: "auto", "zh", "en") ──
+    // ── 8. App Language (Bilingual: "auto", "zh", "en") ──
     public static final String KEY_LANGUAGE = "app_language";
 
     public static String getLanguage(Context context) {
@@ -132,7 +169,7 @@ public class AppConfig {
         getPrefs(context).edit().putString(KEY_LANGUAGE, lang == null ? "auto" : lang.trim()).apply();
     }
 
-    // ── 8. User-defined Custom System Prompt ──
+    // ── 9. User-defined Custom System Prompt ──
     public static final String KEY_CUSTOM_PROMPT = "custom_system_prompt";
 
     public static String getCustomSystemPrompt(Context context) {

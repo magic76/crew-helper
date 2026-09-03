@@ -2,7 +2,6 @@ package com.crewpocket.helper;
 
 import android.app.Notification;
 import android.app.NotificationManager;
-import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.pm.PackageManager;
@@ -87,6 +86,16 @@ public class NativeLiveService extends Service {
         return instance != null && instance.client != null && instance.client.isAiSpeaking();
     }
 
+    static int getInterruptionSensitivity(Context context) {
+        return instance != null && instance.client != null ? instance.client.getInterruptionSensitivity()
+                : AppConfig.getInterruptionSensitivity(context);
+    }
+
+    static void setInterruptionSensitivity(Context context, int value) {
+        AppConfig.setInterruptionSensitivity(context, value);
+        if (instance != null && instance.client != null) instance.client.setInterruptionSensitivity(value);
+    }
+
     static boolean isCameraSharing() { return instance != null && instance.sharingCamera; }
     static boolean isScreenSharing() { return instance != null && instance.sharingScreen; }
 
@@ -109,7 +118,7 @@ public class NativeLiveService extends Service {
             end("未取得麥克風權限，請先允許麥克風再開始通話");
             return START_NOT_STICKY;
         }
-        startForeground(NOTIFICATION_ID, buildNotification("正在連線 Gemini Live"));
+        startForeground(NOTIFICATION_ID, buildNotification());
         String key = AppConfig.getGeminiApiKey(this);
         if (key.length() < 20) {
             end("尚未設定 Gemini API Key，請至主畫面填寫");
@@ -128,6 +137,14 @@ public class NativeLiveService extends Service {
 
     private void startLiveClient() {
         if (!active || stopRequested) return;
+        // There must be exactly one Live owner in the process.  A paused
+        // NativeLiveActivity used to keep its own socket/Oboe stream alive,
+        // producing doubled syllables when the bubble service then started.
+        NativeLiveActivity.releaseLocalClientForService();
+        if (client != null) {
+            try { client.stop(); } catch (Exception ignored) {}
+            client = null;
+        }
         final String apiKey = AppConfig.getGeminiApiKey(this);
         if (apiKey.length() < 20) {
             end("尚未設定 Gemini API Key，請至主畫面填寫");
@@ -135,7 +152,7 @@ public class NativeLiveService extends Service {
         }
         final String serverUrl = AppConfig.getServerUrl(this);
         final String voiceName = AppConfig.getVoiceName(this);
-        client = new NativeGeminiLiveClient(apiKey, serverUrl, voiceName, AppConfig.getNoiseMode(this), AppConfig.getNoiseSuppression(this), AppConfig.getLiveTone(this), AppConfig.getCustomSystemPrompt(this), new NativeGeminiLiveClient.Listener() {
+        client = new NativeGeminiLiveClient(apiKey, serverUrl, voiceName, AppConfig.getNoiseMode(this), AppConfig.getNoiseSuppression(this), AppConfig.getLiveTone(this), AppConfig.getCustomSystemPrompt(this), AppConfig.getInterruptionSensitivity(this), AppConfig.getAudioOutput(this), new NativeGeminiLiveClient.Listener() {
             @Override public void onStatus(String text) {
                 if (text != null && text.contains("已連線")) reconnectAttempts = 0;
                 updateStatus(text, true);
@@ -186,8 +203,6 @@ public class NativeLiveService extends Service {
 
     private void updateStatus(String status, boolean showOngoing) {
         if (!active) return;
-        NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-        if (nm != null) nm.notify(NOTIFICATION_ID, buildNotification(status));
         FloatingBubbleManager.getInstance(this).updateNativeLiveStatus(status, showOngoing);
     }
 
@@ -269,21 +284,12 @@ public class NativeLiveService extends Service {
         stopSelf();
     }
 
-    private Notification buildNotification(String status) {
-        Intent open = new Intent(this, NativeLiveActivity.class);
-        int flags = PendingIntent.FLAG_UPDATE_CURRENT;
-        if (Build.VERSION.SDK_INT >= 23) flags |= 0x04000000; // FLAG_IMMUTABLE
-        PendingIntent content = PendingIntent.getActivity(this, 0, open, flags);
-        Intent stopIntent = new Intent(this, NativeLiveService.class).setAction(ACTION_STOP);
-        PendingIntent stop = PendingIntent.getService(this, 1, stopIntent, flags);
+    private Notification buildNotification() {
         Notification.Builder builder = new Notification.Builder(this)
                 .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-                .setContentTitle("Crew Pocket 語音通話中")
-                .setContentText(status)
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
-                .setContentIntent(content)
-                .addAction(new Notification.Action.Builder(android.R.drawable.ic_media_pause, "結束", stop).build());
+                .setShowWhen(false);
         if (Build.VERSION.SDK_INT >= 26) {
             try { Notification.Builder.class.getMethod("setChannelId", String.class).invoke(builder, CHANNEL_ID); } catch (Exception ignored) {}
         }
@@ -295,7 +301,7 @@ public class NativeLiveService extends Service {
         try {
             Class<?> cls = Class.forName("android.app.NotificationChannel");
             Object channel = cls.getConstructor(String.class, CharSequence.class, int.class)
-                    .newInstance(CHANNEL_ID, "Crew Pocket 即時語音", NotificationManager.IMPORTANCE_LOW);
+                    .newInstance(CHANNEL_ID, "Crew Helper", NotificationManager.IMPORTANCE_MIN);
             NotificationManager.class.getMethod("createNotificationChannel", cls)
                     .invoke((NotificationManager) getSystemService(NOTIFICATION_SERVICE), channel);
         } catch (Exception ignored) {}

@@ -134,9 +134,6 @@ public class ScheduledTaskManager {
                 if (task.cancelled) return;
                 if (System.currentTimeMillis() >= task.targetTime) {
                     activeTasks.remove(task.id);
-                    try {
-                        FloatingBubbleManager.getInstance(context).updateNotification("⏰ 監控已結束：" + task.label);
-                    } catch (Exception ignored) {}
                     return;
                 }
 
@@ -205,9 +202,6 @@ public class ScheduledTaskManager {
 
         speak(title + "。" + message);
 
-        try {
-            FloatingBubbleManager.getInstance(context).updateNotification("⏰ " + title + "：" + message);
-        } catch (Exception ignored) {}
     }
 
     public void speak(String text) {

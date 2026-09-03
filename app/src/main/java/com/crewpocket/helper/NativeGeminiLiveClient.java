@@ -3,6 +3,7 @@ package com.crewpocket.helper;
 import android.media.AudioFormat;
 import android.media.AudioRecord;
 import android.media.AudioTrack;
+import android.media.AudioAttributes;
 import android.media.MediaRecorder;
 import android.util.Base64;
 import android.util.Log;
@@ -50,6 +51,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private volatile String noiseMode;
     private volatile int noiseSuppression;
     private final String liveTone;
+    private volatile int interruptionSensitivity;
+    private final String audioOutput;
     private final Listener listener;
     private volatile boolean running;
     private volatile String stage = "尚未開始";
@@ -79,15 +82,18 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private final Set<String> handledToolCalls = new HashSet<String>();
     private String customPrompt = "";
 
-    NativeGeminiLiveClient(String apiKey, Listener listener) { this(apiKey, "", AppConfig.DEFAULT_VOICE, "auto", 35, "warm", "", listener); }
-    NativeGeminiLiveClient(String apiKey, String serverUrl, Listener listener) { this(apiKey, serverUrl, AppConfig.DEFAULT_VOICE, "auto", 35, "warm", "", listener); }
+    NativeGeminiLiveClient(String apiKey, Listener listener) { this(apiKey, "", AppConfig.DEFAULT_VOICE, "auto", 35, "warm", "", 55, "call", listener); }
+    NativeGeminiLiveClient(String apiKey, String serverUrl, Listener listener) { this(apiKey, serverUrl, AppConfig.DEFAULT_VOICE, "auto", 35, "warm", "", 55, "call", listener); }
     NativeGeminiLiveClient(String apiKey, String serverUrl, String voiceName, String noiseMode, int noiseSuppression, Listener listener) {
-        this(apiKey, serverUrl, voiceName, noiseMode, noiseSuppression, "warm", "", listener);
+        this(apiKey, serverUrl, voiceName, noiseMode, noiseSuppression, "warm", "", 55, "call", listener);
     }
     NativeGeminiLiveClient(String apiKey, String serverUrl, String voiceName, String noiseMode, int noiseSuppression, String liveTone, Listener listener) {
-        this(apiKey, serverUrl, voiceName, noiseMode, noiseSuppression, liveTone, "", listener);
+        this(apiKey, serverUrl, voiceName, noiseMode, noiseSuppression, liveTone, "", 55, "call", listener);
     }
     NativeGeminiLiveClient(String apiKey, String serverUrl, String voiceName, String noiseMode, int noiseSuppression, String liveTone, String customPrompt, Listener listener) {
+        this(apiKey, serverUrl, voiceName, noiseMode, noiseSuppression, liveTone, customPrompt, 55, "call", listener);
+    }
+    NativeGeminiLiveClient(String apiKey, String serverUrl, String voiceName, String noiseMode, int noiseSuppression, String liveTone, String customPrompt, int interruptionSensitivity, String audioOutput, Listener listener) {
         this.apiKey = apiKey;
         this.serverUrl = serverUrl == null ? "" : serverUrl.trim();
         this.voiceName = voiceName == null || voiceName.trim().isEmpty() ? AppConfig.DEFAULT_VOICE : voiceName.trim();
@@ -95,6 +101,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         this.noiseSuppression = Math.max(0, Math.min(100, noiseSuppression));
         this.liveTone = liveTone == null ? "warm" : liveTone;
         this.customPrompt = customPrompt == null ? "" : customPrompt.trim();
+        this.interruptionSensitivity = Math.max(0, Math.min(100, interruptionSensitivity));
+        this.audioOutput = "media".equals(audioOutput) ? "media" : "call";
         this.listener = listener;
     }
     boolean isRunning() { return running; }
@@ -200,6 +208,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     void setNoiseMode(String mode) { noiseMode = "quiet".equals(mode) || "noisy".equals(mode) ? mode : "auto"; }
     int getNoiseSuppression() { return noiseSuppression; }
     void setNoiseSuppression(int value) { noiseSuppression = Math.max(0, Math.min(100, value)); }
+    int getInterruptionSensitivity() { return interruptionSensitivity; }
+    void setInterruptionSensitivity(int value) { interruptionSensitivity = Math.max(0, Math.min(100, value)); }
 
     void loadVoiceprintProfile() {
         // Voiceprint bypassed for direct, robust latency-free communication
@@ -480,7 +490,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         tools.put(new JSONObject().put("name", "cancel_schedule").put("description", "Cancel one or all active timers/screen monitors.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("task_id", new JSONObject().put("type", "STRING").put("description", "Optional task ID to cancel, e.g. 'timer_1'")).put("label_hint", new JSONObject().put("type", "STRING").put("description", "Optional keyword/label of the timer to cancel")).put("cancel_all", new JSONObject().put("type", "BOOLEAN").put("description", "Set true to cancel all active timers and monitors")))));
         tools.put(new JSONObject().put("name", "take_screenshot").put("description", "Capture the phone screen ONLY when inspect_ui has no nodes (e.g. Canvas, Unity, WebGL, custom game UI) or user explicitly requests it."));
         tools.put(new JSONObject().put("name", "end_voice_session").put("description", "End or hang up the voice call immediately when the user asks to close, exit, hang up, or says goodbye (e.g. 關閉, 掛斷, 結束通話, 退下, 再見, 先這樣)."));
-        tools.put(new JSONObject().put("name", "send_to_main_chat").put("description", "Send a clean message to Crew Pocket main chat ONLY when user explicitly asks.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("message", new JSONObject().put("type", "STRING"))).put("required", new JSONArray().put("message"))));
+        tools.put(new JSONObject().put("name", "save_to_main_chat").put("description", "Save a concise result or note to Crew Pocket main chat ONLY when the user explicitly asks to save, record, or send it there. Never use this for ordinary conversation.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("message", new JSONObject().put("type", "STRING").put("description", "The exact concise note to save"))).put("required", new JSONArray().put("message"))));
         return tools;
     }
 
@@ -544,7 +554,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                         }, 1200);
                         return;
                     }
-                    else if ("send_to_main_chat".equals(name)) result = sendToMainChat(args);
+                    else if ("save_to_main_chat".equals(name) || "send_to_main_chat".equals(name)) result = sendToMainChat(args);
                     else result.put("success", false).put("error", "不支援的原生工具：" + name);
                     sendToolResponse(id, name, result);
                 } catch (Exception error) {
@@ -869,7 +879,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 reader.close();
                 JSONObject reply = raw.length() == 0 ? new JSONObject() : new JSONObject(raw.toString());
                 reply.put("success", true);
-                reply.put("message", "已成功傳送到 Crew Pocket 主對話！");
+                reply.put("message", "已儲存至 Crew Pocket 主對話。");
                 return reply;
             }
         } catch (Exception e) {
@@ -971,7 +981,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     }
 
     private void createAudioPlayer() {
-        usingOboeOutput = NativeOboeOutput.start();
+        usingOboeOutput = NativeOboeOutput.start(audioOutput);
         if (usingOboeOutput) {
             String info = NativeOboeOutput.getInfo();
             audioOutputBackend = info == null ? "Oboe／AAudio 低延遲" : info;
@@ -984,9 +994,13 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             int outMin = AudioTrack.getMinBufferSize(24000, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
             // One second leaves room for GC, image upload, and transient Wi-Fi jitter.
             int bufferBytes = Math.max(outMin * 8, 48000);
-            player = new AudioTrack(android.media.AudioManager.STREAM_MUSIC, 24000,
-                    AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT,
-                    bufferBytes, AudioTrack.MODE_STREAM);
+            AudioAttributes attributes = new AudioAttributes.Builder()
+                    .setUsage("media".equals(audioOutput) ? AudioAttributes.USAGE_MEDIA : AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build();
+            AudioFormat format = new AudioFormat.Builder().setSampleRate(24000)
+                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO).setEncoding(AudioFormat.ENCODING_PCM_16BIT).build();
+            player = new AudioTrack.Builder().setAudioAttributes(attributes).setAudioFormat(format)
+                    .setBufferSizeInBytes(bufferBytes).setTransferMode(AudioTrack.MODE_STREAM).build();
         }
     }
 
@@ -1128,14 +1142,21 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 }
 
                 // Speaker echo can be continuous, particularly immediately after a
-                // tool result.  A real interruption must now persist for at least
-                // 560 ms; while output is still audible, add a further 160 ms and
-                // energy margin. The center button remains an instant interrupt.
+                // tool result. Hardware AEC is active, so do not require shouting:
+                // normal close-range speech should interrupt within about 0.3 s.
+                // The center button remains an instant interrupt.
                 boolean outputAudible = System.currentTimeMillis() < lastPlaybackActiveAt;
-                int requiredVoiceFrames = 14 + (suppression + 24) / 25 + (outputAudible ? 4 : 0);
-                double baseInterrupt = ("noisy".equals(mode) ? 0.130 : 0.100)
-                        + suppression * 0.00030 + (outputAudible ? 0.025 : 0.0);
-                double floorMultiplier = ("noisy".equals(mode) ? 3.0 : 2.2) + suppression * 0.012;
+                int requiredVoiceFrames = 5 + (suppression + 30) / 35 + (outputAudible ? 2 : 0);
+                double baseInterrupt = ("noisy".equals(mode) ? 0.070 : 0.048)
+                        + suppression * 0.00022 + (outputAudible ? 0.010 : 0.0);
+                double floorMultiplier = ("noisy".equals(mode) ? 2.1 : 1.65) + suppression * 0.008;
+                // 0 = deliberate / resistant to stray sound; 100 = quickest barge-in.
+                // Keep a floor so a click or residual speaker echo cannot instantly cut speech.
+                double sensitivity = interruptionSensitivity / 100.0;
+                requiredVoiceFrames += Math.round((1.0 - sensitivity) * 7.0 - sensitivity * 2.0);
+                requiredVoiceFrames = Math.max(2, requiredVoiceFrames);
+                baseInterrupt += (1.0 - sensitivity) * 0.035 - sensitivity * 0.012;
+                floorMultiplier += (1.0 - sensitivity) * 0.55 - sensitivity * 0.20;
                 double interruptThreshold = Math.max(baseInterrupt, noiseFloor * floorMultiplier);
                 if (speechCandidate && rms >= interruptThreshold) {
                     consecutiveVoiceFrames++;

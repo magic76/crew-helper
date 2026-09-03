@@ -48,20 +48,20 @@ public:
         }
         return oboe::DataCallbackResult::Continue;
     }
-    bool open(oboe::SharingMode sharingMode) {
+    bool open(oboe::SharingMode sharingMode, bool mediaOutput) {
         oboe::AudioStreamBuilder b;
         b.setDirection(oboe::Direction::Output)->setPerformanceMode(oboe::PerformanceMode::LowLatency)
-         ->setSharingMode(sharingMode)->setUsage(oboe::Usage::VoiceCommunication)
+         ->setSharingMode(sharingMode)->setUsage(mediaOutput ? oboe::Usage::Media : oboe::Usage::VoiceCommunication)
          ->setFormat(oboe::AudioFormat::I16)->setChannelCount(oboe::ChannelCount::Mono)
          ->setSampleRate(24000)->setSampleRateConversionQuality(oboe::SampleRateConversionQuality::Medium)
          ->setFormatConversionAllowed(true)->setChannelConversionAllowed(true)->setDataCallback(this);
         return b.openStream(stream) == oboe::Result::OK && stream;
     }
-    bool start() {
+    bool start(bool mediaOutput) {
         stop(); read.store(0); write.store(0); fifoUnderruns.store(0); fifoDroppedSamples.store(0); primed.store(false);
         // Exclusive provides the fastest path. Some devices or active routes
         // deny it, so retry Shared rather than failing the voice assistant.
-        if (!open(oboe::SharingMode::Exclusive)) { stop(); if (!open(oboe::SharingMode::Shared)) { stop(); return false; } }
+        if (!open(oboe::SharingMode::Exclusive, mediaOutput)) { stop(); if (!open(oboe::SharingMode::Shared, mediaOutput)) { stop(); return false; } }
         int32_t burst = stream->getFramesPerBurst();
         if (burst > 0) stream->setBufferSizeInFrames(burst * 2);
         if (stream->requestStart() != oboe::Result::OK) { stop(); return false; }
@@ -94,7 +94,7 @@ public:
     }
 } engine;
 }
-extern "C" JNIEXPORT jboolean JNICALL Java_com_crewpocket_helper_NativeOboeOutput_nativeStart(JNIEnv*, jclass) { return engine.start() ? JNI_TRUE : JNI_FALSE; }
+extern "C" JNIEXPORT jboolean JNICALL Java_com_crewpocket_helper_NativeOboeOutput_nativeStart(JNIEnv*, jclass, jboolean mediaOutput) { return engine.start(mediaOutput == JNI_TRUE) ? JNI_TRUE : JNI_FALSE; }
 extern "C" JNIEXPORT void JNICALL Java_com_crewpocket_helper_NativeOboeOutput_nativeStop(JNIEnv*, jclass) { engine.stop(); }
 extern "C" JNIEXPORT void JNICALL Java_com_crewpocket_helper_NativeOboeOutput_nativeFlush(JNIEnv*, jclass) { uint32_t w = engine.write.load(); engine.read.store(w); engine.primed.store(false); }
 extern "C" JNIEXPORT void JNICALL Java_com_crewpocket_helper_NativeOboeOutput_nativeWrite(JNIEnv *env, jclass, jbyteArray pcm, jint length) {

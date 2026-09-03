@@ -6,8 +6,8 @@ final class NativeOboeOutput {
     static {
         try { System.loadLibrary("crewaudio"); available = true; } catch (Throwable ignored) { available = false; }
     }
-    static boolean start() {
-        try { return available && nativeStart(); }
+    static boolean start(String outputMode) {
+        try { return available && nativeStart("media".equals(outputMode)); }
         catch (Throwable ignored) { available = false; return false; }
     }
     static void stop() { if (available) nativeStop(); }
@@ -17,7 +17,7 @@ final class NativeOboeOutput {
         try { return available ? nativeGetInfo() : null; }
         catch (Throwable ignored) { return null; }
     }
-    private static native boolean nativeStart();
+    private static native boolean nativeStart(boolean mediaOutput);
     private static native void nativeStop();
     private static native void nativeFlush();
     private static native void nativeWrite(byte[] pcm, int length);

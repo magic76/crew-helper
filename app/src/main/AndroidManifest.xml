@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.crewpocket.helper"
-    android:versionCode="53"
-    android:versionName="1.8.16">
+    android:versionCode="60"
+    android:versionName="1.8.23">
 
     <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34" />
 
@@ -17,7 +17,6 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
@@ -74,8 +73,5 @@
                 android:resource="@xml/accessibility_service_config" />
         </service>
 
-        <receiver
-            android:name=".CrewNotificationReceiver"
-            android:exported="false" />
     </application>
 </manifest>

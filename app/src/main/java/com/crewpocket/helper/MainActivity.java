@@ -180,10 +180,16 @@ public class MainActivity extends Activity {
                 if (manager.isBubbleShowing()) {
                     manager.hideBubble();
                     Toast.makeText(MainActivity.this, I18n.get(MainActivity.this, "隨行助理已隱藏", "Floating Assistant hidden"), Toast.LENGTH_SHORT).show();
+                    updateAssistantToggleButton();
                 } else {
-                    enableBubble();
+                    if (enableBubble(new Runnable() {
+                        @Override public void run() { updateAssistantToggleButton(); }
+                    })) {
+                        // showBubble attaches asynchronously. Show the intended
+                        // ON state immediately instead of reading stale state.
+                        setAssistantToggleButton(true);
+                    }
                 }
-                updateAssistantToggleButton();
             }
         });
         updateAssistantToggleButton();
@@ -241,12 +247,6 @@ public class MainActivity extends Activity {
         }));
         pageContent.addView(makeActionCard("🫧", I18n.cardBubbleTitle(this), I18n.cardBubbleDesc(this), CrewTheme.TEAL_400, new View.OnClickListener() {
             @Override public void onClick(View v) { enableBubble(); }
-        }));
-        pageContent.addView(makeActionCard("🔔", I18n.cardNotificationTitle(this), I18n.cardNotificationDesc(this), CrewTheme.CYAN_400, new View.OnClickListener() {
-            @Override public void onClick(View v) {
-                FloatingBubbleManager.getInstance(MainActivity.this).showNotification();
-                Toast.makeText(MainActivity.this, I18n.get(MainActivity.this, "✅ 通知欄常駐面板已開啟！", "✅ Notification panel activated!"), Toast.LENGTH_SHORT).show();
-            }
         }));
         pageContent.addView(makeActionCard("📸", I18n.cardCameraTitle(this), I18n.cardCameraDesc(this), CrewTheme.AMBER_400, new View.OnClickListener() {
             @Override public void onClick(View v) { requestCameraPermission(); }
@@ -413,7 +413,11 @@ public class MainActivity extends Activity {
     private void updateAssistantToggleButton() {
         if (assistantToggleButton == null) return;
         FloatingBubbleManager manager = FloatingBubbleManager.getInstance(this);
-        boolean showing = manager.isBubbleShowing();
+        setAssistantToggleButton(manager.isBubbleShowing());
+    }
+
+    private void setAssistantToggleButton(boolean showing) {
+        if (assistantToggleButton == null) return;
         assistantToggleButton.setText(showing
             ? ("❌ " + I18n.get(this, "隱藏隨行助理", "Hide Floating Assistant"))
             : ("🫧 " + I18n.get(this, "啟動隨行助理", "Launch Floating Assistant")));
@@ -423,14 +427,19 @@ public class MainActivity extends Activity {
             : CrewTheme.createGradientButton(this, CrewTheme.TEAL_500, CrewTheme.INDIGO_500, 16));
     }
 
-    private void enableBubble() {
+    private boolean enableBubble() {
+        return enableBubble(null);
+    }
+
+    private boolean enableBubble(final Runnable onShown) {
         FloatingBubbleManager manager = FloatingBubbleManager.getInstance(this);
         if (!manager.canDrawOverlays()) {
             startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + getPackageName())));
-            return;
+            return false;
         }
-        manager.showBubble();
+        manager.showBubble(onShown);
         Toast.makeText(this, I18n.get(this, "🎙️ 浮動泡泡已啟用！短按開啟控制台，長按開始／結束 Live 通話", "🎙️ Floating Bubble enabled! Tap for controls; long-press to start or end a Live call"), Toast.LENGTH_SHORT).show();
+        return true;
     }
 
     private void requestCameraPermission() {
@@ -521,9 +530,6 @@ public class MainActivity extends Activity {
             }
         }
         if (Build.VERSION.SDK_INT >= 33) {
-            if (checkSelfPermission("android.permission.POST_NOTIFICATIONS") != PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 103);
-            }
             if (checkSelfPermission("android.permission.READ_MEDIA_IMAGES") != PackageManager.PERMISSION_GRANTED) {
                 requestPermissions(new String[]{"android.permission.READ_MEDIA_IMAGES"}, 102);
             }
@@ -1041,8 +1047,6 @@ public class MainActivity extends Activity {
             statusDetail.setText(I18n.serviceRunningDetail(this));
             statusDetail.setTextColor(CrewTheme.TEXT_SECONDARY);
             statusCard.setBackground(CrewTheme.createCard(this, Color.parseColor("#14064E3B"), Color.parseColor("#33059669"), 16));
-            FloatingBubbleManager manager = FloatingBubbleManager.getInstance(this);
-            manager.showNotification();
         } else {
             statusDot.setTextColor(CrewTheme.ROSE_500);
             statusText.setText(I18n.serviceStoppedTitle(this));

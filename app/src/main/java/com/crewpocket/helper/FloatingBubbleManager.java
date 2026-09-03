@@ -3,13 +3,10 @@ package com.crewpocket.helper;
 import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
 import android.animation.ValueAnimator;
-import android.app.Notification;
-import android.app.NotificationManager;
-import android.app.PendingIntent;
 import android.content.Context;
-import android.content.Intent;
-import android.net.Uri;
 import android.graphics.Canvas;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.Matrix;
 import android.graphics.Paint;
@@ -20,6 +17,7 @@ import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Base64;
 
 import android.os.Vibrator;
 import android.provider.Settings;
@@ -35,10 +33,14 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+
+import org.json.JSONObject;
 
 public class FloatingBubbleManager {
     public interface SendCallback {
@@ -48,8 +50,6 @@ public class FloatingBubbleManager {
         void onResult(boolean success, String detail);
     }
     private static FloatingBubbleManager instance;
-    static final String NOTIFICATION_CHANNEL_ID = "crew_pocket_helper";
-    static final int NOTIFICATION_ID = 8766;
     private final Context context;
     private final WindowManager windowManager;
     private final Handler mainHandler;
@@ -203,6 +203,12 @@ public class FloatingBubbleManager {
     private DockIconButton voiceMuteButton = null;
     private TextView voiceInterruptionButton = null;
     private TextView voiceWakeButton = null;
+    private TextView voiceSensitivityButton = null;
+    private TextView voicePresetButton = null;
+    private TextView voiceOutputButton = null;
+    private TextView voiceSettingsToggleButton = null;
+    private LinearLayout voiceSettingsPanel = null;
+    private LinearLayout voiceSettingsChoices = null;
     private TextView voiceStatusText = null;
     private TextView voiceMeterText = null;
     private TextView voiceTranscriptText = null;
@@ -220,7 +226,9 @@ public class FloatingBubbleManager {
     private Runnable transcriptRefreshRunnable = null;
     private TextView dialogStatusText = null;
     private Button dialogStopButton = null;
-    private String pendingImagePath = null;
+    // Image data remains in Helper until the user explicitly sends it to the
+    // connected Crew Pocket server; no server-side screenshot command is used.
+    private String pendingImageData = null;
     private Runnable safetyTimeoutRunnable = null;
 
     private FloatingBubbleManager(Context context) {
@@ -429,6 +437,11 @@ public class FloatingBubbleManager {
     }
 
     public void showBubble() {
+        showBubble(null);
+    }
+
+    /** Invokes onShown only after the overlay has been attached successfully. */
+    public void showBubble(final Runnable onShown) {
         if (!canDrawOverlays()) return;
         if (bubbleView != null) return;
 
@@ -532,6 +545,7 @@ public class FloatingBubbleManager {
                     windowManager.addView(bubbleView, bubbleParams);
                     isDocked = false;
                     scheduleAutoDock();
+                    if (onShown != null) onShown.run();
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
@@ -564,96 +578,6 @@ public class FloatingBubbleManager {
         } catch (Exception ignored) {}
     }
 
-    public void openCrewPocket() {
-        try {
-            String server = AppConfig.getServerUrl(context);
-            if (server != null && !server.isEmpty()) {
-                Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(server));
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                context.startActivity(intent);
-            } else {
-                Intent intent = new Intent(context, MainActivity.class);
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                context.startActivity(intent);
-            }
-        } catch (Exception e) {
-            Toast.makeText(context, "無法開啟主介面", Toast.LENGTH_SHORT).show();
-        }
-    }
-
-    /** The old overlay command panel is retired; notification entry opens Crew Pocket. */
-    public void openInputUi() {
-        openCrewPocket();
-    }
-
-    public void showNotification() {
-        updateNotification(friendlyState(currentState));
-    }
-
-    public void updateNotification(final String status) {
-        mainHandler.post(new Runnable() {
-            @Override public void run() {
-                try {
-                    NotificationManager notifications = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
-                    if (Build.VERSION.SDK_INT >= 26) {
-                        try {
-                            Class<?> channelClass = Class.forName("android.app.NotificationChannel");
-                            Object channel = channelClass.getConstructor(String.class, CharSequence.class, int.class)
-                                .newInstance(NOTIFICATION_CHANNEL_ID, "Crew Pocket 控制", NotificationManager.IMPORTANCE_LOW);
-                            channelClass.getMethod("setDescription", String.class)
-                                .invoke(channel, "Crew Helper 的通知欄控制");
-                            channelClass.getMethod("setShowBadge", boolean.class).invoke(channel, false);
-                            NotificationManager.class.getMethod("createNotificationChannel", channelClass)
-                                .invoke(notifications, channel);
-                        } catch (Exception ignored) {}
-                    }
-                    String fullStatus = status == null ? "待命" : status;
-                    String compactStatus = compactNotificationStatus(fullStatus);
-
-                    Intent inputIntent = new Intent(context, CrewNotificationReceiver.class)
-                        .setAction(CrewNotificationReceiver.ACTION_INPUT);
-                    int mutableFlags = PendingIntent.FLAG_UPDATE_CURRENT;
-                    // FLAG_MUTABLE (API 31) kept as a literal for the Android 24 compile SDK.
-                    if (Build.VERSION.SDK_INT >= 31) mutableFlags |= 0x02000000;
-                    PendingIntent inputPending = PendingIntent.getBroadcast(context, 2, inputIntent, mutableFlags);
-                    android.app.RemoteInput remoteInput = new android.app.RemoteInput.Builder(
-                        CrewNotificationReceiver.EXTRA_INPUT).setLabel("輸入給最近對話的訊息").build();
-
-                    Notification.Builder builder = new Notification.Builder(context);
-                    if (Build.VERSION.SDK_INT >= 26) {
-                        try {
-                            Notification.Builder.class.getMethod("setChannelId", String.class)
-                                .invoke(builder, NOTIFICATION_CHANNEL_ID);
-                        } catch (Exception ignored) {}
-                    }
-                    builder.setSmallIcon(android.R.drawable.ic_dialog_info)
-                        .setContentTitle("Crew Pocket Helper")
-                        .setContentText(compactStatus)
-                        .setStyle(new Notification.BigTextStyle().bigText(fullStatus))
-                        .setOngoing(true)
-                        .setOnlyAlertOnce(true)
-                        .setShowWhen(false)
-                        .setCategory(Notification.CATEGORY_SERVICE)
-                        .addAction(new Notification.Action.Builder(android.R.drawable.ic_menu_send, "輸入訊息", inputPending)
-                            .addRemoteInput(remoteInput).build());
-                    notifications.notify(NOTIFICATION_ID, builder.build());
-                } catch (Exception ignored) {}
-            }
-        });
-    }
-
-    private String compactNotificationStatus(String status) {
-        String oneLine = status.replaceAll("\\s+", " ").trim();
-        return oneLine.length() > 48 ? oneLine.substring(0, 45) + "..." : oneLine;
-    }
-
-    public void cancelNotification() {
-        try {
-            NotificationManager notifications = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
-            notifications.cancel(NOTIFICATION_ID);
-        } catch (Exception ignored) {}
-    }
-
     // 🌊 Set Water Flow / Thinking State
     public void setThinkingState(final boolean thinking) {
         mainHandler.post(new Runnable() {
@@ -674,7 +598,6 @@ public class FloatingBubbleManager {
                             currentState = "IDLE";
                             setThinkingState(false);
                             updateDialogStatus("待命");
-                            updateNotification("待命");
                         }
                     };
                     mainHandler.postDelayed(safetyTimeoutRunnable, 40000);
@@ -696,26 +619,21 @@ public class FloatingBubbleManager {
             setThinkingState(true);
             String thinkingStatus = text == null || text.isEmpty() ? "AI 回覆中" : "AI 回覆中 · " + text;
             updateDialogStatus(thinkingStatus);
-            updateNotification(thinkingStatus);
         } else if ("TOOL".equalsIgnoreCase(state)) {
             setThinkingState(true);
             String toolStatus = text == null || text.isEmpty() ? "正在執行工具" : text;
             updateDialogStatus(toolStatus);
-            updateNotification(toolStatus);
         } else if ("ERROR".equalsIgnoreCase(state)) {
             setThinkingState(false);
             updateDialogStatus("執行失敗");
-            updateNotification("執行失敗");
         } else if ("DONE".equalsIgnoreCase(state) || "COMPLETED".equalsIgnoreCase(state)) {
             setThinkingState(false);
             vibrateSuccess();
             String doneStatus = text == null || text.isEmpty() ? "已完成" : "已完成 · " + text;
             updateDialogStatus(doneStatus);
-            updateNotification(doneStatus);
         } else if ("IDLE".equalsIgnoreCase(state)) {
             setThinkingState(false);
             updateDialogStatus("待命");
-            updateNotification("待命");
         }
     }
 
@@ -766,7 +684,6 @@ public class FloatingBubbleManager {
                 }, 280);
             }
         } catch (Exception error) {
-            updateNotification("🎙️ 無法啟動原生語音");
         }
     }
 
@@ -780,7 +697,6 @@ public class FloatingBubbleManager {
                     bubbleView.setNativeVoiceState(isLiveError(latestLiveStatus) ? 3 : (active ? 1 : 0));
                 }
                 refreshVoiceControls();
-                updateNotification("🎙️ " + (text == null || text.isEmpty() ? (active ? "語音通話中" : "待命") : text));
             }
         });
     }
@@ -951,25 +867,6 @@ public class FloatingBubbleManager {
                     });
                     headerRow.addView(voiceWakeButton);
 
-                    TextView hideBubbleBtn = new TextView(context);
-                    hideBubbleBtn.setText(I18n.get(context, "🚪 隱藏球", "🚪 Exit"));
-                    hideBubbleBtn.setTextSize(11);
-                    hideBubbleBtn.setTextColor(Color.parseColor("#FB7185"));
-                    hideBubbleBtn.setBackground(CrewTheme.createCard(context, Color.parseColor("#4C0519"), Color.parseColor("#E11D48"), 10));
-                    hideBubbleBtn.setPadding(dp(8), dp(3), dp(8), dp(3));
-                    LinearLayout.LayoutParams hideLp = new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-                    hideLp.setMargins(dp(6), 0, 0, 0);
-                    hideBubbleBtn.setOnClickListener(new View.OnClickListener() {
-                        @Override public void onClick(View v) {
-                            vibrateShort();
-                            hideVoiceControls();
-                            hideBubble();
-                            Toast.makeText(context, I18n.get(context, "隨行助理已隱藏，可至 App 隨時重新開啟", "Floating assistant hidden"), Toast.LENGTH_SHORT).show();
-                        }
-                    });
-                    headerRow.addView(hideBubbleBtn, hideLp);
-
                     TextView close = new TextView(context);
                     close.setText("✕");
                     close.setTextSize(18);
@@ -981,12 +878,30 @@ public class FloatingBubbleManager {
                     headerRow.addView(close);
                     dock.addView(headerRow);
 
+                    LinearLayout statusRow = new LinearLayout(context);
+                    statusRow.setOrientation(LinearLayout.HORIZONTAL);
+                    statusRow.setGravity(Gravity.CENTER_VERTICAL);
                     voiceStatusText = new TextView(context);
                     voiceStatusText.setTextSize(12);
                     voiceStatusText.setSingleLine(true);
                     voiceStatusText.setPadding(dp(4), 0, dp(4), dp(4));
-                    dock.addView(voiceStatusText, new LinearLayout.LayoutParams(
-                            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+                    statusRow.addView(voiceStatusText, new LinearLayout.LayoutParams(
+                            0, dp(40), 1f));
+
+                    // A compact icon sits directly below the close action and
+                    // keeps infrequent settings out of the call-control flow.
+                    voiceSettingsToggleButton = makeVoiceSettingButton();
+                    voiceSettingsToggleButton.setText("⚙");
+                    voiceSettingsToggleButton.setTextSize(20);
+                    voiceSettingsToggleButton.setContentDescription("開啟語音設定");
+                    voiceSettingsToggleButton.setOnClickListener(new View.OnClickListener() {
+                        @Override public void onClick(View v) {
+                            if (voiceSettingsPanel == null) return;
+                            voiceSettingsPanel.setVisibility(voiceSettingsPanel.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE);
+                        }
+                    });
+                    statusRow.addView(voiceSettingsToggleButton, new LinearLayout.LayoutParams(dp(40), dp(40)));
+                    dock.addView(statusRow);
 
                     voiceMeterText = new TextView(context);
                     voiceMeterText.setTextSize(11);
@@ -994,6 +909,39 @@ public class FloatingBubbleManager {
                     voiceMeterText.setPadding(dp(4), dp(4), dp(4), dp(8));
                     dock.addView(voiceMeterText, new LinearLayout.LayoutParams(
                             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+                    voiceSettingsPanel = new LinearLayout(context);
+                    voiceSettingsPanel.setOrientation(LinearLayout.VERTICAL);
+                    voiceSettingsPanel.setVisibility(View.GONE);
+                    LinearLayout settingsRow = new LinearLayout(context);
+                    settingsRow.setOrientation(LinearLayout.HORIZONTAL);
+                    settingsRow.setGravity(Gravity.CENTER_VERTICAL);
+                    settingsRow.setPadding(0, 0, 0, dp(6));
+                    voiceSensitivityButton = makeVoiceSettingButton();
+                    voicePresetButton = makeVoiceSettingButton();
+                    voiceOutputButton = makeVoiceSettingButton();
+                    voiceSensitivityButton.setOnClickListener(new View.OnClickListener() {
+                        @Override public void onClick(View v) { showVoiceSettingChoices("sensitivity"); }
+                    });
+                    voicePresetButton.setOnClickListener(new View.OnClickListener() {
+                        @Override public void onClick(View v) { showVoiceSettingChoices("preset"); }
+                    });
+                    voiceOutputButton.setOnClickListener(new View.OnClickListener() {
+                        @Override public void onClick(View v) { showVoiceSettingChoices("output"); }
+                    });
+                    LinearLayout.LayoutParams settingLp = new LinearLayout.LayoutParams(0, dp(42), 1f);
+                    settingsRow.addView(voiceSensitivityButton, settingLp);
+                    LinearLayout.LayoutParams presetLp = new LinearLayout.LayoutParams(0, dp(42), 1f);
+                    presetLp.setMargins(dp(6), 0, dp(6), 0);
+                    settingsRow.addView(voicePresetButton, presetLp);
+                    settingsRow.addView(voiceOutputButton, new LinearLayout.LayoutParams(0, dp(42), 1f));
+                    voiceSettingsPanel.addView(settingsRow);
+                    voiceSettingsChoices = new LinearLayout(context);
+                    voiceSettingsChoices.setOrientation(LinearLayout.HORIZONTAL);
+                    voiceSettingsChoices.setGravity(Gravity.CENTER_VERTICAL);
+                    voiceSettingsChoices.setPadding(0, 0, 0, dp(8));
+                    voiceSettingsPanel.addView(voiceSettingsChoices);
+                    dock.addView(voiceSettingsPanel);
 
                     // 📱 Ergonomic Bottom Dock matching Web UI:
                     // Layout: [Camera Icon] [Screen Icon] [Center Large Mute/Interrupt Icon] [Hangup/Call Icon]
@@ -1100,6 +1048,12 @@ public class FloatingBubbleManager {
                 voiceScreenButton = null;
                 voiceMuteButton = null;
                 voiceWakeButton = null;
+                voiceSensitivityButton = null;
+                voicePresetButton = null;
+                voiceOutputButton = null;
+                voiceSettingsToggleButton = null;
+                voiceSettingsPanel = null;
+                voiceSettingsChoices = null;
                 voiceStatusText = null;
                 voiceMeterText = null;
                 voiceTranscriptText = null;
@@ -1225,9 +1179,105 @@ public class FloatingBubbleManager {
                 if (voiceWakeButton != null) {
                     updateWakeButtonUi(voiceWakeButton, isKeepAwakeActive());
                 }
+                updateVoiceQuickSettingsUi();
                 updateVoiceTelemetryUi();
             }
         });
+    }
+
+    private TextView makeVoiceSettingButton() {
+        TextView button = new TextView(context);
+        button.setTextSize(10);
+        button.setGravity(Gravity.CENTER);
+        button.setSingleLine(true);
+        button.setPadding(dp(5), 0, dp(5), 0);
+        button.setClickable(true);
+        button.setFocusable(true);
+        return button;
+    }
+
+    private void updateVoiceQuickSettingsUi() {
+        int sensitivity = NativeLiveService.getInterruptionSensitivity(context);
+        if (voiceSensitivityButton != null) {
+            voiceSensitivityButton.setText("🎙 插話 ›");
+            applyVoiceSettingStyle(voiceSensitivityButton, Color.parseColor("#064E3B"), Color.parseColor("#10B981"), Color.parseColor("#6EE7B7"));
+        }
+        if (voicePresetButton != null) {
+            voicePresetButton.setText("🎭 角色 ›");
+            applyVoiceSettingStyle(voicePresetButton, Color.parseColor("#312E81"), Color.parseColor("#818CF8"), Color.parseColor("#C7D2FE"));
+        }
+        if (voiceOutputButton != null) {
+            boolean media = "media".equals(AppConfig.getAudioOutput(context));
+            voiceOutputButton.setText("🔊 輸出 ›");
+            applyVoiceSettingStyle(voiceOutputButton, media ? Color.parseColor("#164E63") : Color.parseColor("#3F1D5B"), media ? Color.parseColor("#22D3EE") : Color.parseColor("#C084FC"), Color.WHITE);
+        }
+        if (voiceSettingsToggleButton != null) {
+            applyVoiceSettingStyle(voiceSettingsToggleButton, Color.parseColor("#1E293B"), Color.parseColor("#475569"), Color.parseColor("#CBD5E1"));
+            voiceSettingsToggleButton.setText("⚙");
+        }
+    }
+
+    private void applyVoiceSettingStyle(TextView button, int fill, int stroke, int text) {
+        GradientDrawable bg = new GradientDrawable();
+        bg.setCornerRadius(dp(12));
+        bg.setColor(fill);
+        bg.setStroke(dp(1), stroke);
+        button.setBackground(bg);
+        button.setTextColor(text);
+    }
+
+    private String interruptionLabel(int value) {
+        return value < 35 ? "插話低" : (value > 70 ? "插話高" : "插話中");
+    }
+
+    private String voicePresetLabel(String preset) {
+        if ("professional".equals(preset)) return "專業";
+        if ("teacher".equals(preset)) return "導師";
+        if ("calm".equals(preset)) return "沉穩";
+        if ("command".equals(preset)) return "指揮";
+        if ("warm".equals(preset)) return "溫暖";
+        return "自訂";
+    }
+
+    /** All choices stay inside the overlay, avoiding Activity-token dialogs. */
+    private void showVoiceSettingChoices(String menu) {
+        if (voiceSettingsChoices == null) return;
+        voiceSettingsChoices.removeAllViews();
+        if ("sensitivity".equals(menu)) {
+            addVoiceChoice("低", new Runnable() { @Override public void run() { NativeLiveService.setInterruptionSensitivity(context, 25); Toast.makeText(context, "插話靈敏度：低", Toast.LENGTH_SHORT).show(); } });
+            addVoiceChoice("中", new Runnable() { @Override public void run() { NativeLiveService.setInterruptionSensitivity(context, 55); Toast.makeText(context, "插話靈敏度：中", Toast.LENGTH_SHORT).show(); } });
+            addVoiceChoice("高", new Runnable() { @Override public void run() { NativeLiveService.setInterruptionSensitivity(context, 85); Toast.makeText(context, "插話靈敏度：高", Toast.LENGTH_SHORT).show(); } });
+        } else if ("output".equals(menu)) {
+            addVoiceChoice("📞 通話", new Runnable() { @Override public void run() { AppConfig.setAudioOutput(context, "call"); Toast.makeText(context, "下次通話使用通話音訊", Toast.LENGTH_SHORT).show(); } });
+            addVoiceChoice("🔊 媒體", new Runnable() { @Override public void run() { AppConfig.setAudioOutput(context, "media"); Toast.makeText(context, "下次通話使用媒體音訊", Toast.LENGTH_SHORT).show(); } });
+        } else {
+            final String[] ids = {"warm", "professional", "teacher", "calm", "command"};
+            final String[] voices = {"Kore", "Charon", "Aoede", "Fenrir", "Puck"};
+            final String[] tones = {"warm", "professional", "lively", "calm", "urgent"};
+            for (int i = 0; i < ids.length; i++) {
+                final int index = i;
+                addVoiceChoice(voicePresetLabel(ids[i]), new Runnable() { @Override public void run() {
+                    AppConfig.applyVoicePreset(context, ids[index], voices[index], tones[index]);
+                    Toast.makeText(context, "角色將於下次通話套用", Toast.LENGTH_SHORT).show();
+                }});
+            }
+        }
+    }
+
+    private void addVoiceChoice(String label, final Runnable action) {
+        TextView choice = makeVoiceSettingButton();
+        choice.setText(label);
+        applyVoiceSettingStyle(choice, Color.parseColor("#0F2744"), Color.parseColor("#38BDF8"), Color.parseColor("#E0F2FE"));
+        choice.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                action.run();
+                if (voiceSettingsChoices != null) voiceSettingsChoices.removeAllViews();
+                refreshVoiceControls();
+            }
+        });
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(40), 1f);
+        if (voiceSettingsChoices.getChildCount() > 0) lp.setMargins(dp(5), 0, 0, 0);
+        voiceSettingsChoices.addView(choice, lp);
     }
 
     public void showDialog() {
@@ -1256,6 +1306,7 @@ public class FloatingBubbleManager {
                     LinearLayout card = new LinearLayout(context);
                     card.setOrientation(LinearLayout.VERTICAL);
                     card.setPadding(dp(16), dp(12), dp(16), dp(16));
+                    final boolean connectedMode = !AppConfig.isStandaloneMode(context);
 
                     GradientDrawable cardBg = new GradientDrawable();
                     cardBg.setColor(Color.parseColor("#F50F172A")); // Luxury Slate 900
@@ -1271,14 +1322,14 @@ public class FloatingBubbleManager {
                     header.setPadding(dp(2), dp(2), dp(2), dp(6));
 
                     TextView title = new TextView(context);
-                    title.setText("🤖 Crew Pocket");
+                    title.setText(connectedMode ? "🤖 Crew Pocket" : "🎙️ Crew Helper");
                     title.setTextSize(14);
                     title.setTextColor(Color.WHITE);
                     title.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
                     header.addView(title);
 
                     TextView badge = new TextView(context);
-                    badge.setText("隨身指令");
+                    badge.setText(connectedMode ? "隨身指令" : "獨立模式");
                     badge.setTextSize(9);
                     badge.setTextColor(Color.parseColor("#5EEAD4")); // Teal 300
                     badge.setTypeface(android.graphics.Typeface.MONOSPACE);
@@ -1377,6 +1428,7 @@ public class FloatingBubbleManager {
                     inputBg.setCornerRadius(dp(14));
                     inputBg.setStroke(dp(1), Color.parseColor("#334155")); // Slate 700
                     input.setBackground(inputBg);
+                    input.setVisibility(connectedMode ? View.VISIBLE : View.GONE);
 
                     LinearLayout.LayoutParams inputLp = new LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
@@ -1401,6 +1453,7 @@ public class FloatingBubbleManager {
                     snapBg.setCornerRadius(dp(10));
                     snapBg.setStroke(dp(1), Color.parseColor("#334155"));
                     btnSnap.setBackground(snapBg);
+                    btnSnap.setVisibility(connectedMode ? View.VISIBLE : View.GONE);
                     btnSnap.setOnClickListener(new View.OnClickListener() {
                         @Override
                         public void onClick(View v) {
@@ -1411,7 +1464,10 @@ public class FloatingBubbleManager {
                                 @Override public void onResult(boolean success, String detail) {
                                     btnSnap.setEnabled(true);
                                     if (success) {
-                                        pendingImagePath = "/uploads/phone_screen_opt.webp";
+                                        if (pendingImageData == null || pendingImageData.isEmpty()) {
+                                            updateDialogStatus("截圖資料無法使用，請重試");
+                                            return;
+                                        }
                                         input.setHint("已截圖，輸入你想問的問題…");
                                         updateDialogStatus("截圖已準備，請輸入問題");
                                     } else {
@@ -1441,6 +1497,7 @@ public class FloatingBubbleManager {
                     );
                     sendBg.setCornerRadius(dp(10));
                     btnSend.setBackground(sendBg);
+                    btnSend.setVisibility(connectedMode ? View.VISIBLE : View.GONE);
                     btnSend.setOnClickListener(new View.OnClickListener() {
                         @Override
                         public void onClick(View v) {
@@ -1449,12 +1506,12 @@ public class FloatingBubbleManager {
                                 vibrateShort();
                                 btnSend.setEnabled(false);
                                 updateDialogStatus("正在連線…");
-                                final String imagePath = pendingImagePath;
-                                sendMessageToCrewPocket(msg, imagePath, new SendCallback() {
+                                final String imageData = pendingImageData;
+                                sendMessageToCrewPocket(msg, imageData, new SendCallback() {
                                     @Override public void onResult(boolean success, String detail) {
                                         btnSend.setEnabled(true);
                                         if (success) {
-                                            pendingImagePath = null;
+                                            pendingImageData = null;
                                             hideDialog();
                                         }
                                         else updateDialogStatus("傳送失敗，請重試");
@@ -1498,31 +1555,6 @@ public class FloatingBubbleManager {
                     awakeLp.setMargins(0, 0, dp(6), 0);
                     actions.addView(btnAwake, awakeLp);
 
-                    Button btnOpen = new Button(context);
-                    btnOpen.setText("🌐 開啟");
-                    btnOpen.setTextColor(Color.parseColor("#A5B4FC"));
-                    btnOpen.setTextSize(11);
-                    btnOpen.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-                    btnOpen.setAllCaps(false);
-                    btnOpen.setMinHeight(dp(38));
-                    btnOpen.setPadding(dp(6), 0, dp(6), 0);
-                    GradientDrawable openBg = new GradientDrawable();
-                    openBg.setColor(Color.parseColor("#1E293B"));
-                    openBg.setCornerRadius(dp(10));
-                    openBg.setStroke(dp(1), Color.parseColor("#334155"));
-                    btnOpen.setBackground(openBg);
-                    btnOpen.setOnClickListener(new View.OnClickListener() {
-                        @Override public void onClick(View v) {
-                            vibrateShort();
-                            hideDialog();
-                            openCrewPocket();
-                        }
-                    });
-                    LinearLayout.LayoutParams openLp = new LinearLayout.LayoutParams(
-                        0, dp(38), 0.9f
-                    );
-                    actions.addView(btnOpen, openLp);
-
                     card.addView(actions);
 
                     dialogStopButton = new Button(context);
@@ -1538,7 +1570,7 @@ public class FloatingBubbleManager {
                     stopBg.setCornerRadius(dp(10));
                     stopBg.setStroke(dp(1), Color.parseColor("#991B1B"));
                     dialogStopButton.setBackground(stopBg);
-                    dialogStopButton.setVisibility(("THINKING".equals(currentState) || "TOOL".equals(currentState)) ? View.VISIBLE : View.GONE);
+                    dialogStopButton.setVisibility(connectedMode && ("THINKING".equals(currentState) || "TOOL".equals(currentState)) ? View.VISIBLE : View.GONE);
                     dialogStopButton.setOnClickListener(new View.OnClickListener() {
                         @Override public void onClick(View v) {
                             stopCrewPocketGeneration();
@@ -1589,9 +1621,18 @@ public class FloatingBubbleManager {
         sendMessageToCrewPocket(message, null, callback);
     }
 
-    public void sendMessageToCrewPocket(final String message, final String imagePath, final SendCallback callback) {
+    public void sendMessageToCrewPocket(final String message, final String imageData, final SendCallback callback) {
+        if (AppConfig.isStandaloneMode(context)) {
+            mainHandler.post(new Runnable() {
+                @Override public void run() {
+                    setThinkingState(false);
+                    updateDialogStatus("此功能需要 Crew Pocket 連線模式");
+                    if (callback != null) callback.onResult(false, "Crew Pocket 未連線");
+                }
+            });
+            return;
+        }
         setThinkingState(true);
-        updateNotification("AI 回覆中");
         new Thread(new Runnable() {
             @Override
             public void run() {
@@ -1616,8 +1657,8 @@ public class FloatingBubbleManager {
                             conn.setReadTimeout(4000);
 
                             String payload = "{\"message\":\"" + escapeJson(message) + "\",\"source\":\"FloatingBubble\"";
-                            if (imagePath != null && !imagePath.isEmpty()) {
-                                payload += ",\"image_path\":\"" + escapeJson(imagePath) + "\"";
+                            if (imageData != null && !imageData.isEmpty()) {
+                                payload += ",\"image_base64\":\"" + imageData + "\"";
                             }
                             payload += "}";
                             byte[] bytes = payload.getBytes(StandardCharsets.UTF_8);
@@ -1649,50 +1690,10 @@ public class FloatingBubbleManager {
                         if (!result) {
                             setThinkingState(false);
                             updateDialogStatus("Crew Pocket 尚未連線");
-                            updateNotification("Crew Pocket 尚未連線");
                         }
                         if (callback != null) callback.onResult(result, resultDetail);
                     }
                 });
-            }
-        }).start();
-    }
-
-    public void sendNotificationMessage(final String message) {
-        setThinkingState(true);
-        updateNotification("正在傳送訊息");
-        new Thread(new Runnable() {
-            @Override public void run() {
-                boolean success = false;
-                HttpURLConnection conn = null;
-                try {
-                    URL url = new URL("http://127.0.0.1:8000/api/inbound/messages");
-                    conn = (HttpURLConnection) url.openConnection();
-                    conn.setRequestMethod("POST");
-                    conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
-                    conn.setDoOutput(true);
-                    conn.setConnectTimeout(4000);
-                    conn.setReadTimeout(4000);
-                    String payload = "{\"message\":\"" + escapeJson(message) + "\",\"source\":\"CrewHelper\"}";
-                    byte[] bytes = payload.getBytes(StandardCharsets.UTF_8);
-                    conn.setFixedLengthStreamingMode(bytes.length);
-                    OutputStream os = conn.getOutputStream();
-                    os.write(bytes);
-                    os.close();
-                    int code = conn.getResponseCode();
-                    success = code >= 200 && code < 300;
-                } catch (Exception ignored) {
-                } finally {
-                    if (conn != null) conn.disconnect();
-                }
-                if (!success) {
-                    mainHandler.post(new Runnable() {
-                        @Override public void run() {
-                            setThinkingState(false);
-                            updateNotification("Crew Pocket 尚未連線");
-                        }
-                    });
-                }
             }
         }).start();
     }
@@ -1704,16 +1705,31 @@ public class FloatingBubbleManager {
                 String detail = "截圖失敗";
                 HttpURLConnection conn = null;
                 try {
-                    URL url = new URL("http://127.0.0.1:8000/api/phone/screenshot");
+                    URL url = new URL("http://127.0.0.1:8766/screenshot");
                     conn = (HttpURLConnection) url.openConnection();
                     conn.setRequestMethod("POST");
                     conn.setConnectTimeout(4000);
                     conn.setReadTimeout(8000);
                     int code = conn.getResponseCode();
-                    success = code >= 200 && code < 300;
-                    detail = "HTTP " + code;
-                    if (success && conn.getInputStream() != null) conn.getInputStream().close();
+                    InputStream stream = code >= 200 && code < 300 ? conn.getInputStream() : conn.getErrorStream();
+                    ByteArrayOutputStream response = new ByteArrayOutputStream();
+                    if (stream != null) {
+                        byte[] chunk = new byte[4096];
+                        int count;
+                        while ((count = stream.read(chunk)) != -1) response.write(chunk, 0, count);
+                        stream.close();
+                    }
+                    JSONObject result = new JSONObject(new String(response.toByteArray(), StandardCharsets.UTF_8));
+                    String path = result.optString("latestPath", result.optString("path", ""));
+                    if (code >= 200 && code < 300 && result.optBoolean("success") && !path.isEmpty()) {
+                        pendingImageData = encodeScreenshotForUpload(path);
+                        success = true;
+                        detail = "本機截圖完成";
+                    } else {
+                        detail = result.optString("error", "截圖失敗（HTTP " + code + "）");
+                    }
                 } catch (Exception e) {
+                    pendingImageData = null;
                     detail = e.getMessage() == null ? "截圖連線失敗" : e.getMessage();
                 } finally {
                     if (conn != null) conn.disconnect();
@@ -1727,6 +1743,23 @@ public class FloatingBubbleManager {
                 });
             }
         }).start();
+    }
+
+    private String encodeScreenshotForUpload(String path) throws Exception {
+        Bitmap bitmap = BitmapFactory.decodeFile(path);
+        if (bitmap == null) throw new Exception("無法讀取截圖資料");
+        if (Math.max(bitmap.getWidth(), bitmap.getHeight()) > 1440) {
+            float scale = 1440f / Math.max(bitmap.getWidth(), bitmap.getHeight());
+            Bitmap scaled = Bitmap.createScaledBitmap(bitmap, Math.round(bitmap.getWidth() * scale), Math.round(bitmap.getHeight() * scale), true);
+            bitmap.recycle();
+            bitmap = scaled;
+        }
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 82, output);
+        bitmap.recycle();
+        byte[] bytes = output.toByteArray();
+        if (bytes.length == 0 || bytes.length > 8 * 1024 * 1024) throw new Exception("截圖壓縮後大小異常");
+        return Base64.encodeToString(bytes, Base64.NO_WRAP);
     }
 
     public void stopCrewPocketGeneration() {
