@@ -1083,6 +1083,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         JSONObject reply = helperPost("/tap", new JSONObject().put("x", Math.round(targetX)).put("y", Math.round(targetY)));
         reply.put("resolvedFrom", resolvedFromNode ? "ui_node" : (coordinateSpace.isEmpty() ? "legacy" : coordinateSpace));
         reply.put("visionSize", lastVisionWidth + "x" + lastVisionHeight).put("screenSize", lastScreenWidth + "x" + lastScreenHeight);
+        autoVerifyUiSnapshot(reply, 350);
         return reply;
     }
 
@@ -1104,7 +1105,42 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             }
         }
         return new JSONObject().put("success", true).put("nodeCount", nodes == null ? 0 : nodes.length()).put("visible", visible)
-                .put("message", "已讀取目前 UI；請只根據 visible 節點決定下一步。");
+                .put("message", "已讀取目前真實 UI 節點；請務必只根據此 visible 內容向使用者作答，切勿自行腦補。");
+    }
+
+    /**
+     * 🛡️ Automatic Post-Action Verification Engine:
+     * Immediately captures the real UI state after any action (launch/tap/type/press_key),
+     * embedding actual visible nodes and package name into the tool response.
+     * This physically eliminates premature hallucination by giving Gemini the ground-truth result.
+     */
+    private void autoVerifyUiSnapshot(JSONObject response, int waitDelayMs) {
+        if (response == null || !response.optBoolean("success", false)) return;
+        try {
+            if (waitDelayMs > 0) Thread.sleep(waitDelayMs);
+            JSONObject raw = helperGet("/nodes");
+            if (raw.optBoolean("success")) {
+                String currentPkg = raw.optString("package", "");
+                JSONArray nodes = raw.optJSONArray("nodes");
+                JSONArray visible = new JSONArray();
+                if (nodes != null) {
+                    for (int i = 0; i < nodes.length() && visible.length() < 30; i++) {
+                        JSONObject node = nodes.optJSONObject(i);
+                        if (node == null) continue;
+                        String text = node.optString("text", "").trim();
+                        String desc = node.optString("desc", "").trim();
+                        if (text.isEmpty() && desc.isEmpty()) continue;
+                        visible.put(new JSONObject().put("text", text).put("desc", desc).put("clickable", node.optBoolean("clickable")));
+                    }
+                }
+                JSONObject verification = new JSONObject();
+                verification.put("currentPackage", currentPkg);
+                verification.put("verifiedNodeCount", nodes == null ? 0 : nodes.length());
+                verification.put("actualVisibleContent", visible);
+                verification.put("instruction", "【系統真實校驗結果】以上為動作執行後的真實畫面內容。請直接根據 actualVisibleContent 向使用者報告實際看見的狀態，絕對不可捏造尚未出現的內容！");
+                response.put("autoVerification", verification);
+            }
+        } catch (Exception ignored) {}
     }
 
     private JSONObject launchApp(JSONObject args) throws Exception {
@@ -1117,7 +1153,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             JSONObject reply = helperPost("/launch", new JSONObject().put("package", explicitPkg));
             if (reply.optBoolean("success")) {
                 lastCandidateApps.clear();
-                reply.put("app", app.isEmpty() ? explicitPkg : app).put("message", "已啟動 App，請立刻 inspect_ui 驗證。");
+                reply.put("app", app.isEmpty() ? explicitPkg : app).put("message", "已啟動 App，以下為啟動後的最新畫面。");
+                autoVerifyUiSnapshot(reply, 800);
             }
             return reply;
         }
@@ -1133,7 +1170,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 lastCandidateApps.clear();
                 JSONObject reply = helperPost("/launch", new JSONObject().put("package", chosen.optString("package", "")));
                 if (reply.optBoolean("success")) {
-                    reply.put("app", chosen.optString("label", "App")).put("message", "已為您啟動「" + chosen.optString("label", "App") + "」，請立刻 inspect_ui 驗證。");
+                    reply.put("app", chosen.optString("label", "App")).put("message", "已為您啟動「" + chosen.optString("label", "App") + "」，以下為啟動後的最新畫面。");
+                    autoVerifyUiSnapshot(reply, 800);
                 }
                 return reply;
             }
@@ -1170,7 +1208,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             lastCandidateApps.clear();
             JSONObject reply = helperPost("/launch", new JSONObject().put("package", exactMatch.optString("package", "")));
             if (reply.optBoolean("success")) {
-                reply.put("app", exactMatch.optString("label", app)).put("message", "已啟動 App，請立刻 inspect_ui 驗證。");
+                reply.put("app", exactMatch.optString("label", app)).put("message", "已啟動 App，以下為啟動後的最新畫面。");
+                autoVerifyUiSnapshot(reply, 800);
             }
             return reply;
         }
@@ -1181,7 +1220,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             JSONObject candidate = matches.optJSONObject(0);
             JSONObject reply = helperPost("/launch", new JSONObject().put("package", candidate.optString("package", "")));
             if (reply.optBoolean("success")) {
-                reply.put("app", candidate.optString("label", app)).put("message", "已啟動 App，請立刻 inspect_ui 驗證。");
+                reply.put("app", candidate.optString("label", app)).put("message", "已啟動 App，以下為啟動後的最新畫面。");
+                autoVerifyUiSnapshot(reply, 800);
             }
             return reply;
         }
@@ -1288,13 +1328,16 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         JSONObject reply = helperPost("/type", new JSONObject().put("text", text));
         reply.put("success", true);
         reply.put("message", "已在輸入框輸入：「" + text + "」");
+        autoVerifyUiSnapshot(reply, 350);
         return reply;
     }
 
     private JSONObject pressKey(JSONObject args) throws Exception {
         String key = args.optString("key", "").toUpperCase();
-        if (!("HOME".equals(key) || "BACK".equals(key) || "RECENTS".equals(key))) return new JSONObject().put("success", false).put("error", "不支援的系統按鍵");
-        return helperPost("/key", new JSONObject().put("key", key));
+        if (!("HOME".equals(key) || "BACK".equals(key) || "RECENTS".equals(key) || "NOTIFICATIONS".equals(key) || "QUICK_SETTINGS".equals(key) || "POWER_DIALOG".equals(key))) return new JSONObject().put("success", false).put("error", "不支援的系統按鍵");
+        JSONObject reply = helperPost("/key", new JSONObject().put("key", key));
+        autoVerifyUiSnapshot(reply, 400);
+        return reply;
     }
 
     private JSONObject sendToMainChat(JSONObject args) throws Exception {
