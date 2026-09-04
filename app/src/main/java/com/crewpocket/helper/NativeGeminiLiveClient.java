@@ -101,6 +101,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private Runnable agentResponseWatchdog;
     private String customPrompt = "";
     private final ArrayList<JSONObject> lastCandidateApps = new ArrayList<JSONObject>();
+    private final java.util.concurrent.atomic.AtomicBoolean screenCaptureInProgress = new java.util.concurrent.atomic.AtomicBoolean(false);
 
     NativeGeminiLiveClient(String apiKey, Listener listener) { this(apiKey, "", AppConfig.DEFAULT_VOICE, "auto", 35, "warm", "", 55, "call", listener); }
     NativeGeminiLiveClient(String apiKey, String serverUrl, Listener listener) { this(apiKey, serverUrl, AppConfig.DEFAULT_VOICE, "auto", 35, "warm", "", 55, "call", listener); }
@@ -210,13 +211,21 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             Log.d(TAG, "略過螢幕影格：Gemini 尚未完成 setupComplete");
             return;
         }
+        if (!screenCaptureInProgress.compareAndSet(false, true)) {
+            Log.d(TAG, "略過螢幕影格：前一幀截圖仍在處理中，避免延遲堆疊");
+            return;
+        }
         new Thread(new Runnable() {
             @Override public void run() {
                 try {
                     JSONObject result = captureAndSendScreen();
                     long sequence = ++screenFrameSequence;
                     Log.d(TAG, result.optBoolean("success") ? "螢幕影格 #" + sequence + " 已送達 Gemini（" + System.currentTimeMillis() + "）" : "螢幕影格 #" + sequence + " 未送達 Gemini：" + result.optString("error"));
-                } catch (Exception error) { Log.w(TAG, "螢幕影格傳送失敗：" + error.getMessage()); }
+                } catch (Exception error) {
+                    Log.w(TAG, "螢幕影格傳送失敗：" + error.getMessage());
+                } finally {
+                    screenCaptureInProgress.set(false);
+                }
             }
         }, "crew-native-live-screen").start();
     }
@@ -959,23 +968,24 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         try { before = helperGet("/nodes"); } catch (Exception ignored) {}
         JSONObject reply = new JSONObject();
         String execution = "gesture";
-        // Vertical scrolling can use the foreground app's own scroll action.
-        // It is more reliable than a fixed drag for lists and Settings pages.
-        if ("up".equals(direction) || "down".equals(direction)) {
+        String currentPkg = before.optString("package", "").toLowerCase(Locale.ROOT);
+        boolean isMapsOrCanvas = currentPkg.contains("maps") || currentPkg.contains("game") || currentPkg.contains("camera");
+
+        // Vertical scrolling can use the foreground app's own scroll action for standard lists (e.g. Settings).
+        // Skip ui_node scroll for maps/canvas/horizontal gestures to avoid 1.3s unnecessary wait.
+        if (!isMapsOrCanvas && ("up".equals(direction) || "down".equals(direction))) {
             reply = helperPost("/scroll", new JSONObject().put("direction", "up".equals(direction) ? "forward" : "backward"));
             execution = "ui_node";
-            Thread.sleep(500);
+            Thread.sleep(250);
         }
         JSONObject after = new JSONObject();
         try { after = helperGet("/nodes"); } catch (Exception ignored) {}
         boolean changed = !nodeSignature(before).equals(nodeSignature(after));
-        // Canvas, maps and some custom views expose no scrollable node.  If a
-        // semantic action was unavailable or made no visible change, fall back
-        // once to the existing proportional gesture.
+        // Canvas, maps and custom views expose no scrollable node. Fall back to fluid gesture.
         if (!reply.optBoolean("success") || !changed) {
             reply = helperPost("/swipe", new JSONObject().put("x1", x1).put("y1", y1).put("x2", x2).put("y2", y2).put("duration", duration));
-            execution = "gesture_fallback";
-            Thread.sleep(800);
+            execution = "gesture";
+            Thread.sleep(350);
             try { after = helperGet("/nodes"); } catch (Exception ignored) {}
             changed = !nodeSignature(before).equals(nodeSignature(after));
         }
@@ -983,8 +993,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         reply.put("distance", distance);
         reply.put("screenSize", width + "x" + height);
         reply.put("execution", execution);
-        // A list can keep exactly the same labels after scrolling; send the
-        // post-gesture frame so Gemini sees the actual viewport, not just text.
+        // Send the post-gesture frame so Gemini sees the actual viewport
         JSONObject visual = new JSONObject();
         try { visual = captureAndSendScreen(); } catch (Exception error) { visual.put("success", false).put("error", error.getMessage()); }
         reply.put("screenChanged", changed);
@@ -1396,7 +1405,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if (bitmap == null) return false;
         int sourceWidth = bitmap.getWidth();
         int sourceHeight = bitmap.getHeight();
-        int maxEdge = 1280;
+        int maxEdge = 1024;
         if (Math.max(bitmap.getWidth(), bitmap.getHeight()) > maxEdge) {
             float scale = maxEdge / (float) Math.max(bitmap.getWidth(), bitmap.getHeight());
             Bitmap scaled = Bitmap.createScaledBitmap(bitmap, Math.round(bitmap.getWidth() * scale), Math.round(bitmap.getHeight() * scale), true);
@@ -1409,7 +1418,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             lastScreenHeight = sourceHeight;
         }
         ByteArrayOutputStream output = new ByteArrayOutputStream();
-        bitmap.compress(Bitmap.CompressFormat.JPEG, 76, output); bitmap.recycle();
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 72, output); bitmap.recycle();
         JSONObject video = new JSONObject().put("mimeType", "image/jpeg").put("data", Base64.encodeToString(output.toByteArray(), Base64.NO_WRAP));
         return webSocket != null && webSocket.send(new JSONObject().put("realtimeInput", new JSONObject().put("video", video)).toString());
     }
