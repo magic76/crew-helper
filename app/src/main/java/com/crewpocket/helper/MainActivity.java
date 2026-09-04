@@ -29,9 +29,8 @@ public class MainActivity extends Activity {
     private LinearLayout statusCard;
     private TextToSpeech previewTts;
     private LinearLayout pageContent;
-    private final Button[] navButtons = new Button[4];
+    private final Button[] navButtons = new Button[3];
     private int activeTab = 0;
-    private Button assistantToggleButton;
 
     private int dp(float val) {
         return CrewTheme.dp(this, val);
@@ -57,7 +56,7 @@ public class MainActivity extends Activity {
         scroll.setBackgroundColor(CrewTheme.BG_PRIMARY);
         pageContent = new LinearLayout(this);
         pageContent.setOrientation(LinearLayout.VERTICAL);
-        pageContent.setPadding(dp(20), dp(28), dp(20), dp(16));
+        pageContent.setPadding(dp(20), dp(24), dp(20), dp(16));
         scroll.addView(pageContent);
         appRoot.addView(scroll, new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
@@ -66,7 +65,7 @@ public class MainActivity extends Activity {
         setContentView(appRoot);
         renderTab(0);
 
-        // Request only the runtime permissions needed by the features the user opens.
+        // Request only runtime permissions when needed
         checkAndRequestPermissions();
     }
 
@@ -74,8 +73,7 @@ public class MainActivity extends Activity {
         activeTab = tab;
         pageContent.removeAllViews();
         if (tab == 0) renderHomePage();
-        else if (tab == 1) renderLivePage();
-        else if (tab == 2) renderAutomationPage();
+        else if (tab == 1) renderDecksPage();
         else renderSettingsPage();
         refreshNavigation();
         refreshServiceStatus();
@@ -84,16 +82,16 @@ public class MainActivity extends Activity {
     private void renderHomePage() {
         LinearLayout root = pageContent;
 
-        // ── 1. Tactical Cyberpunk Brand Header ──
+        // ── 1. Tactical Brand Header ──
         LinearLayout headerRow = new LinearLayout(this);
         headerRow.setOrientation(LinearLayout.HORIZONTAL);
         headerRow.setGravity(Gravity.CENTER_VERTICAL);
-        headerRow.setPadding(0, 0, 0, dp(6));
+        headerRow.setPadding(0, 0, 0, dp(4));
 
         TextView brandIcon = new TextView(this);
         brandIcon.setText("🤖");
-        brandIcon.setTextSize(26);
-        brandIcon.setPadding(0, 0, dp(10), 0);
+        brandIcon.setTextSize(28);
+        brandIcon.setPadding(0, 0, dp(12), 0);
         headerRow.addView(brandIcon);
 
         LinearLayout brandTextCol = new LinearLayout(this);
@@ -105,13 +103,13 @@ public class MainActivity extends Activity {
 
         TextView title = new TextView(this);
         title.setText("Crew Helper");
-        title.setTextSize(20);
+        title.setTextSize(22);
         title.setTextColor(CrewTheme.TEXT_PRIMARY);
         title.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
         titleBadgeRow.addView(title);
 
         TextView versionBadge = new TextView(this);
-        versionBadge.setText("AI");
+        versionBadge.setText("AI COPILOT");
         versionBadge.setTextSize(9);
         versionBadge.setTextColor(CrewTheme.TEAL_300);
         versionBadge.setTypeface(Typeface.MONOSPACE);
@@ -125,8 +123,8 @@ public class MainActivity extends Activity {
         brandTextCol.addView(titleBadgeRow);
 
         TextView subtitle = new TextView(this);
-        subtitle.setText(I18n.appSubtitle(this));
-        subtitle.setTextSize(11);
+        subtitle.setText(I18n.get(this, "專屬 AI 隨身特工 · 即時語音與螢幕操作", "AI Floating Assistant · Realtime Voice & Screen Actions"));
+        subtitle.setTextSize(12);
         subtitle.setTextColor(CrewTheme.TEXT_SECONDARY);
         subtitle.setPadding(0, dp(2), 0, 0);
         brandTextCol.addView(subtitle);
@@ -134,13 +132,13 @@ public class MainActivity extends Activity {
         headerRow.addView(brandTextCol);
         root.addView(headerRow);
 
-        // ── 2. Live Service Status Card ──
+        // ── 2. Smart Service / Permission Status Banner ──
         statusCard = new LinearLayout(this);
         statusCard.setOrientation(LinearLayout.VERTICAL);
         statusCard.setPadding(dp(16), dp(14), dp(16), dp(14));
         LinearLayout.LayoutParams statusCardLp = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        statusCardLp.setMargins(0, dp(22), 0, dp(18));
+        statusCardLp.setMargins(0, dp(18), 0, dp(16));
         statusCard.setLayoutParams(statusCardLp);
 
         LinearLayout statusTitleRow = new LinearLayout(this);
@@ -150,154 +148,203 @@ public class MainActivity extends Activity {
         statusDot = new TextView(this);
         statusDot.setText("●");
         statusDot.setTextSize(14);
-        statusDot.setTextColor(CrewTheme.ROSE_500);
         statusDot.setPadding(0, 0, dp(8), 0);
         statusTitleRow.addView(statusDot);
 
         statusText = new TextView(this);
-        statusText.setText(I18n.serviceStoppedTitle(this));
         statusText.setTextSize(13);
         statusText.setTypeface(Typeface.DEFAULT_BOLD);
-        statusText.setTextColor(CrewTheme.TEXT_PRIMARY);
         statusTitleRow.addView(statusText);
 
         statusCard.addView(statusTitleRow);
 
         statusDetail = new TextView(this);
-        statusDetail.setText(I18n.serviceStoppedDetail(this));
         statusDetail.setTextSize(11);
-        statusDetail.setTextColor(CrewTheme.TEXT_SECONDARY);
         statusDetail.setPadding(dp(22), dp(4), 0, 0);
         statusCard.addView(statusDetail);
 
-        root.addView(statusCard);
-
-        addSectionTitle(root, I18n.get(this, "立即開始", "START HERE"));
-
-        assistantToggleButton = (Button) makePrimaryButton("", new View.OnClickListener() {
+        statusCard.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
-                FloatingBubbleManager manager = FloatingBubbleManager.getInstance(MainActivity.this);
-                if (manager.isBubbleShowing()) {
-                    manager.hideBubble();
-                    Toast.makeText(MainActivity.this, I18n.get(MainActivity.this, "隨行助理已隱藏", "Floating Assistant hidden"), Toast.LENGTH_SHORT).show();
-                    updateAssistantToggleButton();
-                } else {
-                    if (enableBubble(new Runnable() {
-                        @Override public void run() { updateAssistantToggleButton(); }
-                    })) {
-                        // showBubble attaches asynchronously. Show the intended
-                        // ON state immediately instead of reading stale state.
-                        setAssistantToggleButton(true);
-                    }
-                }
+                if (!CrewAccessibilityService.isServiceRunning()) showAccessibilityDisclosureDialog();
             }
         });
-        updateAssistantToggleButton();
-        root.addView(assistantToggleButton);
 
-        root.addView(makeActionCard("◉", I18n.get(this, "進入 Live 對話", "Open Live Conversation"),
-            I18n.get(this, "即時語音通話、逐字稿與完整控制", "Realtime voice, transcript, and full call controls"), CrewTheme.EMERALD_400, new View.OnClickListener() {
+        root.addView(statusCard);
+
+        // ── 3. Core Action 1: Hero Live Voice Button ──
+        addSectionTitle(root, I18n.get(this, "🚀 核心功能", "CORE ACTIONS"));
+
+        Button liveHeroBtn = new Button(this);
+        liveHeroBtn.setText("🎙️ " + I18n.get(this, "開始即時語音對話", "Start Live Conversation"));
+        liveHeroBtn.setTextSize(16);
+        liveHeroBtn.setTypeface(Typeface.DEFAULT_BOLD);
+        liveHeroBtn.setTextColor(Color.WHITE);
+        liveHeroBtn.setAllCaps(false);
+        liveHeroBtn.setGravity(Gravity.CENTER);
+        liveHeroBtn.setBackground(CrewTheme.createGradientButton(this, CrewTheme.TEAL_500, CrewTheme.INDIGO_500, 16));
+        liveHeroBtn.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                startActivity(new Intent(MainActivity.this, NativeLiveActivity.class));
+            }
+        });
+        LinearLayout.LayoutParams heroLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(58));
+        heroLp.setMargins(0, 0, 0, dp(12));
+        root.addView(liveHeroBtn, heroLp);
+
+        // ── 4. Core Action 2: Floating Bubble Toggle Card ──
+        FloatingBubbleManager manager = FloatingBubbleManager.getInstance(this);
+        boolean bubbleOn = manager.isBubbleShowing();
+        String bubbleTitle = I18n.get(this, "桌面隨身助理球", "Floating Assistant Bubble");
+        String bubbleDesc = bubbleOn
+            ? I18n.get(this, "狀態：🟢 運作中 · 點擊隱藏桌面懸浮球", "Status: 🟢 Active · Tap to hide bubble")
+            : I18n.get(this, "狀態：⚪ 未開啟 · 點擊在桌面隨時召喚 AI", "Status: ⚪ Inactive · Tap to show floating bubble");
+
+        root.addView(makeActionCard("🫧", bubbleTitle, bubbleDesc, CrewTheme.TEAL_400, new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                FloatingBubbleManager mgr = FloatingBubbleManager.getInstance(MainActivity.this);
+                if (mgr.isBubbleShowing()) {
+                    mgr.hideBubble();
+                    Toast.makeText(MainActivity.this, I18n.get(MainActivity.this, "隨行助理已隱藏", "Floating Assistant hidden"), Toast.LENGTH_SHORT).show();
+                } else {
+                    enableBubble();
+                }
+                renderHomePage();
+                refreshServiceStatus();
+            }
+        }));
+
+        // ── 5. Quick Starter Inspiration ──
+        addSectionTitle(root, I18n.get(this, "💡 您可以試著對助理說：", "TRY SAYING TO ASSISTANT"));
+
+        root.addView(makeActionCard("💬", I18n.get(this, "「幫我看現在螢幕上的內容」", "\"Look at what's currently on my screen\""),
+            I18n.get(this, "自動辨識畫面文字、圖表與按鈕並提供解答", "Understand screen text & layout instantly"), CrewTheme.INDIGO_400, new View.OnClickListener() {
                 @Override public void onClick(View v) { startActivity(new Intent(MainActivity.this, NativeLiveActivity.class)); }
             }));
 
-        root.addView(makeActionCard("▣", I18n.get(this, "Deck 簡報", "Live Decks"),
-            I18n.get(this, "開啟範例、匯入卡片資料夾或交給語音助理導覽", "Open examples, import a Deck folder, or let Live guide it"), CrewTheme.TEAL_400, new View.OnClickListener() {
-                @Override public void onClick(View v) { startActivity(new Intent(MainActivity.this, DeckActivity.class)); }
+        root.addView(makeActionCard("📊", I18n.get(this, "「用簡報介紹範例 Deck」", "\"Present the welcome deck with slides\""),
+            I18n.get(this, "AI 語音自動翻頁、展示圖表與精美資料卡片", "Voice auto-advance live presentation"), CrewTheme.AMBER_400, new View.OnClickListener() {
+                @Override public void onClick(View v) { renderTab(1); }
             }));
 
-        // ── Service shortcuts ──
-        TextView sectionTitle = new TextView(this);
-        sectionTitle.setText(I18n.get(this, "服務與權限", "SERVICES & PERMISSIONS"));
-        sectionTitle.setTextSize(12);
-        sectionTitle.setTypeface(Typeface.DEFAULT_BOLD);
-        sectionTitle.setTextColor(CrewTheme.INDIGO_400);
-        sectionTitle.setPadding(dp(4), dp(4), 0, dp(8));
-        root.addView(sectionTitle);
-
-        root.addView(makeActionCard("⚙️", I18n.cardAccessibilityTitle(this), I18n.cardAccessibilityDesc(this), CrewTheme.INDIGO_500, new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                showAccessibilityDisclosureDialog();
-            }
-        }));
+        root.addView(makeActionCard("⏰", I18n.get(this, "「10 分鐘後提醒我」", "\"Remind me in 10 minutes\""),
+            I18n.get(this, "設定智慧定時提醒與背景畫面巡檢監控", "Schedule timer or automated screen monitor"), CrewTheme.CYAN_400, new View.OnClickListener() {
+                @Override public void onClick(View v) { startActivity(new Intent(MainActivity.this, NativeLiveActivity.class)); }
+            }));
 
         addFooter(root, false);
     }
 
-    private void renderLivePage() {
-        addPageHeading("🎙️", I18n.get(this, "Live 語音助理", "Live Voice Assistant"),
-            I18n.get(this, "開始即時 Gemini 對話，通話控制會固定顯示在畫面中。", "Start a realtime Gemini conversation with in-call controls."));
-        pageContent.addView(makePrimaryButton("🎙️ " + I18n.get(this, "開始 Live 通話", "Start Live Call"), new View.OnClickListener() {
-            @Override public void onClick(View v) { startActivity(new Intent(MainActivity.this, NativeLiveActivity.class)); }
-        }));
-        pageContent.addView(makeActionCard("▣", I18n.get(this, "Deck 簡報", "Live Decks"),
-            I18n.get(this, "先預覽或匯入卡片；開始通話後可由語音自動導覽", "Preview or import cards; Live can guide them after the call starts"), CrewTheme.TEAL_400, new View.OnClickListener() {
-                @Override public void onClick(View v) { startActivity(new Intent(MainActivity.this, DeckActivity.class)); }
+    private void renderDecksPage() {
+        addPageHeading("▣", I18n.get(this, "Live Deck 簡報中心", "Live Deck Center"),
+            I18n.get(this, "AI 語音自動翻頁、資料卡片與圖表生動講解。", "AI voice auto-advance, interactive cards, and data presentations."));
+
+        // Action 1: Import Folder
+        pageContent.addView(makeActionCard("➕", I18n.get(this, "匯入 Deck 資料夾", "Import Deck Folder"),
+            I18n.get(this, "選擇包含 deck.json 與圖片的資料夾進行展示", "Select a folder containing deck.json and images"), CrewTheme.INDIGO_400, new View.OnClickListener() {
+                @Override public void onClick(View v) {
+                    Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+                    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+                    startActivityForResult(intent, 741);
+                }
             }));
+
+        // Action 2: Ephemeral Info Card
+        pageContent.addView(makeActionCard("⚡", I18n.get(this, "AI 即席簡報生成", "On-the-fly Deck Generation"),
+            I18n.get(this, "在語音中說『幫我做一份簡報介紹...』，AI 會立即生成帶圖片的卡片並為您導播！", "Say 'create a deck about...', AI will generate cards with web images and present!"), CrewTheme.AMBER_400, new View.OnClickListener() {
+                @Override public void onClick(View v) { startActivity(new Intent(MainActivity.this, NativeLiveActivity.class)); }
+            }));
+
+        // Installed Decks Section
+        addSectionTitle(pageContent, I18n.get(this, "📁 已安裝簡報庫", "INSTALLED DECKS"));
+        try {
+            org.json.JSONObject res = DeckRepository.listDecks();
+            org.json.JSONArray decks = res.optJSONArray("decks");
+            if (decks != null && decks.length() > 0) {
+                for (int i = 0; i < decks.length(); i++) {
+                    final org.json.JSONObject deck = decks.getJSONObject(i);
+                    final String deckId = deck.optString("deckId");
+                    String deckTitle = deck.optString("title", deckId);
+                    int cardCount = deck.optInt("cards", 0);
+                    pageContent.addView(makeActionCard("▣", deckTitle,
+                        cardCount + " " + I18n.get(MainActivity.this, "張卡片 · 點擊全螢幕預覽", "cards · Tap to open full screen"),
+                        CrewTheme.TEAL_400, new View.OnClickListener() {
+                            @Override public void onClick(View v) {
+                                DeckRepository.openDeck(deckId);
+                                startActivity(new Intent(MainActivity.this, DeckActivity.class));
+                            }
+                        }));
+                }
+            }
+        } catch (Exception ignored) {}
+
+        addFooter(pageContent, false);
+    }
+
+    private void renderSettingsPage() {
+        addPageHeading("⚙️", I18n.get(this, "設定與偏好", "Settings & Preferences"),
+            I18n.get(this, "語音音色、自訂人設、權限與連線管理。", "Voice persona, custom prompts, permissions, and connection mode."));
+
+        // ── 1. Voice & Persona ──
+        addSectionTitle(pageContent, I18n.get(this, "🤖 語音與人設", "VOICE & PERSONA"));
+
+        String customPromptSummary = AppConfig.getCustomSystemPrompt(this).isEmpty()
+            ? I18n.get(this, "預設官方設定（點擊自訂專屬人設與口吻）", "Default prompt (Tap to customize)")
+            : I18n.get(this, "已啟用自訂人設 Prompt（點擊編輯）", "Custom prompt active (Tap to edit)");
+        pageContent.addView(makeActionCard("🧠", I18n.get(this, "語音模型 Prompt 設定", "Voice Model Prompt"),
+            customPromptSummary, CrewTheme.AMBER_400, new View.OnClickListener() {
+                @Override public void onClick(View v) { showCustomPromptDialog(); }
+            }));
+
+        pageContent.addView(makeActionCard("🗣️", I18n.cardVoicePersonaTitle(this),
+            I18n.get(this, "目前音色：", "Current voice: ") + AppConfig.getVoiceName(this), CrewTheme.TEAL_400, new View.OnClickListener() {
+                @Override public void onClick(View v) { showVoicePersonaDialog(); }
+            }));
+
+        // ── 2. System & Permissions ──
+        addSectionTitle(pageContent, I18n.get(this, "📱 手機操作與權限", "PHONE CONTROL & PERMISSIONS"));
+
+        String accSummary = CrewAccessibilityService.isServiceRunning()
+            ? I18n.get(this, "狀態：🟢 已啟用（螢幕操作感知正常）", "Status: 🟢 Active (Screen perception ready)")
+            : I18n.get(this, "狀態：🔴 未啟用（點擊授權無障礙服務）", "Status: 🔴 Inactive (Tap to grant permission)");
+        pageContent.addView(makeActionCard("🛡️", I18n.cardAccessibilityTitle(this), accSummary, CrewTheme.INDIGO_500, new View.OnClickListener() {
+            @Override public void onClick(View v) { showAccessibilityDisclosureDialog(); }
+        }));
+
+        pageContent.addView(makeActionCard("📸", I18n.cardCameraTitle(this), I18n.cardCameraDesc(this), CrewTheme.AMBER_400, new View.OnClickListener() {
+            @Override public void onClick(View v) { requestCameraPermission(); }
+        }));
+
         pageContent.addView(makeActionCard("☀️", I18n.cardKeepAwakeTitle(this),
             I18n.cardKeepAwakeDesc(this, FloatingBubbleManager.isKeepAwakeActive()), CrewTheme.AMBER_400, new View.OnClickListener() {
                 @Override public void onClick(View v) {
                     boolean active = FloatingBubbleManager.toggleKeepAwake(MainActivity.this);
                     Toast.makeText(MainActivity.this, active ? "☀️ " + I18n.get(MainActivity.this, "螢幕常亮已開啟", "Screen Keep Awake ON") : "🌙 " + I18n.get(MainActivity.this, "螢幕常亮已關閉", "Screen Keep Awake OFF"), Toast.LENGTH_SHORT).show();
-                    renderTab(1);
+                    renderSettingsPage();
                 }
             }));
-        pageContent.addView(makeActionCard("🗣️", I18n.get(this, "語音角色", "Voice Persona"),
-            AppConfig.getVoiceName(this), CrewTheme.TEAL_400, new View.OnClickListener() {
-                @Override public void onClick(View v) { showVoicePersonaDialog(); }
-            }));
-    }
 
-    private void renderAutomationPage() {
-        addPageHeading("⚙️", I18n.get(this, "自動化", "Automation"),
-            I18n.get(this, "管理跨 App 協助、懸浮控制與裝置感知權限。", "Manage cross-app assistance, floating controls, and device permissions."));
-        pageContent.addView(makeActionCard("🛡️", I18n.cardAccessibilityTitle(this), I18n.cardAccessibilityDesc(this), CrewTheme.INDIGO_500, new View.OnClickListener() {
-            @Override public void onClick(View v) { showAccessibilityDisclosureDialog(); }
-        }));
-        pageContent.addView(makeActionCard("🫧", I18n.cardBubbleTitle(this), I18n.cardBubbleDesc(this), CrewTheme.TEAL_400, new View.OnClickListener() {
-            @Override public void onClick(View v) { enableBubble(); }
-        }));
-        pageContent.addView(makeActionCard("📸", I18n.cardCameraTitle(this), I18n.cardCameraDesc(this), CrewTheme.AMBER_400, new View.OnClickListener() {
-            @Override public void onClick(View v) { requestCameraPermission(); }
-        }));
-    }
+        // ── 3. System Preferences ──
+        addSectionTitle(pageContent, I18n.get(this, "🌐 系統與連線", "SYSTEM & CONNECTION"));
 
-    private void renderSettingsPage() {
-        addPageHeading("⚙️", I18n.get(this, "設定", "Settings"),
-            I18n.get(this, "帳號、連線、語音與偏好設定。", "Connection, voice, and app preferences."));
         boolean isStandalone = AppConfig.isStandaloneMode(this);
         String currentServer = AppConfig.getServerUrl(this);
         String modeSummary = isStandalone
-            ? I18n.get(this, "模式：☁️ 純獨立雲端模式 (直連 Gemini Live)", "Mode: ☁️ Standalone Cloud (Gemini Live)")
-            : I18n.get(this, "模式：🔗 Crew Pocket 連線 (" + currentServer + ")", "Mode: 🔗 Connected Server (" + currentServer + ")");
+            ? I18n.get(this, "模式：☁️ Gemini 雲端直連模式", "Mode: ☁️ Direct Gemini Cloud")
+            : I18n.get(this, "模式：🔗 Crew Pocket 伺服器 (" + currentServer + ")", "Mode: 🔗 Crew Pocket (" + currentServer + ")");
 
         pageContent.addView(makeActionCard("🔐", I18n.cardSettingsTitle(this), modeSummary, CrewTheme.CYAN_400, new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                showSettingsDialog();
-            }
+            @Override public void onClick(View v) { showSettingsDialog(); }
         }));
 
-        pageContent.addView(makeActionCard("🗣️", I18n.cardVoicePersonaTitle(this), AppConfig.getVoiceName(this), CrewTheme.TEAL_400, new View.OnClickListener() {
-            @Override public void onClick(View v) { showVoicePersonaDialog(); }
-        }));
-        String customPromptSummary = AppConfig.getCustomSystemPrompt(this).isEmpty()
-            ? I18n.get(this, "預設官方設定（點擊自訂專屬人設與口吻）", "Default prompt (Tap to customize)")
-            : I18n.get(this, "已啟用自訂人設 Prompt", "Custom prompt active");
-        pageContent.addView(makeActionCard("🧠", I18n.get(this, "語音模型 Prompt 設定", "Voice Model Prompt"), customPromptSummary, CrewTheme.AMBER_400, new View.OnClickListener() {
-            @Override public void onClick(View v) { showCustomPromptDialog(); }
-        }));
         pageContent.addView(makeActionCard("🌐", I18n.cardLanguageTitle(this), I18n.cardLanguageDesc(this), CrewTheme.INDIGO_400, new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                showLanguageDialog();
-            }
+            @Override public void onClick(View v) { showLanguageDialog(); }
         }));
 
-        pageContent.addView(makeActionCard("⌘", I18n.get(this, "診斷資訊", "Diagnostics"),
+        pageContent.addView(makeActionCard("⌘", I18n.get(this, "診斷資訊與版本", "Diagnostics & Version"),
             I18n.get(this, "服務狀態、版本與本機 Bridge", "Service status, version, and local bridge"), CrewTheme.TEXT_MUTED, new View.OnClickListener() {
                 @Override public void onClick(View v) { showDiagnosticsDialog(); }
             }));
+
         addFooter(pageContent, true);
     }
 
@@ -305,10 +352,10 @@ public class MainActivity extends Activity {
         LinearLayout footer = new LinearLayout(this);
         footer.setOrientation(LinearLayout.VERTICAL);
         footer.setGravity(Gravity.CENTER);
-        footer.setPadding(0, dp(28), 0, dp(8));
+        footer.setPadding(0, dp(24), 0, dp(8));
 
         TextView footerBrand = new TextView(this);
-        footerBrand.setText("CREW POCKET · TACTICAL COMPANION");
+        footerBrand.setText("CREW HELPER · TACTICAL COMPANION");
         footerBrand.setTextSize(10);
         footerBrand.setTypeface(Typeface.MONOSPACE);
         footerBrand.setTextColor(CrewTheme.TEXT_MUTED);
@@ -325,37 +372,35 @@ public class MainActivity extends Activity {
         }
 
         root.addView(footer);
-
     }
 
     private View buildBottomNavigation() {
         LinearLayout nav = new LinearLayout(this);
         nav.setOrientation(LinearLayout.HORIZONTAL);
         nav.setGravity(Gravity.CENTER);
-        nav.setPadding(dp(8), dp(8), dp(8), dp(10));
+        nav.setPadding(dp(8), dp(6), dp(8), dp(8));
         nav.setBackground(CrewTheme.createCard(this, CrewTheme.BG_SURFACE, CrewTheme.BORDER_SUBTLE, 0));
-        // Deliberately icon-only: compact, consistent, and easier to scan one-handed.
-        String[] icons = new String[]{"⌂", "◉", "✦", "⚙"};
-        String[] descriptions = new String[]{
-            I18n.get(this, "首頁", "Home"), "Live",
-            I18n.get(this, "自動化", "Automation"), I18n.get(this, "設定", "Settings")
+
+        String[] labels = new String[]{
+            I18n.get(this, "🎙️ 助理", "🎙️ Assistant"),
+            I18n.get(this, "▣ 簡報", "▣ Decks"),
+            I18n.get(this, "⚙️ 設定", "⚙️ Settings")
         };
-        for (int i = 0; i < icons.length; i++) {
+        for (int i = 0; i < labels.length; i++) {
             final int index = i;
             Button button = new Button(this);
-            button.setText(icons[i]);
-            button.setContentDescription(descriptions[i]);
-            button.setTextSize(24);
-            button.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
+            button.setText(labels[i]);
+            button.setTextSize(13);
+            button.setTypeface(Typeface.DEFAULT_BOLD);
             button.setGravity(Gravity.CENTER);
             button.setAllCaps(false);
             button.setPadding(0, 0, 0, 0);
-            button.setMinHeight(dp(48));
+            button.setMinHeight(dp(44));
             button.setOnClickListener(new View.OnClickListener() {
                 @Override public void onClick(View v) { renderTab(index); }
             });
             navButtons[i] = button;
-            nav.addView(button, new LinearLayout.LayoutParams(0, dp(52), 1f));
+            nav.addView(button, new LinearLayout.LayoutParams(0, dp(48), 1f));
         }
         return nav;
     }
@@ -366,7 +411,6 @@ public class MainActivity extends Activity {
             if (button == null) continue;
             boolean selected = i == activeTab;
             button.setTextColor(selected ? CrewTheme.TEAL_300 : CrewTheme.TEXT_MUTED);
-            button.setTypeface(selected ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
             button.setBackground(CrewTheme.createCard(this,
                 selected ? Color.argb(35, 45, 212, 191) : Color.TRANSPARENT,
                 selected ? CrewTheme.BORDER_TEAL : Color.TRANSPARENT, 12));
@@ -417,23 +461,6 @@ public class MainActivity extends Activity {
         lp.setMargins(0, 0, 0, dp(12));
         button.setLayoutParams(lp);
         return button;
-    }
-
-    private void updateAssistantToggleButton() {
-        if (assistantToggleButton == null) return;
-        FloatingBubbleManager manager = FloatingBubbleManager.getInstance(this);
-        setAssistantToggleButton(manager.isBubbleShowing());
-    }
-
-    private void setAssistantToggleButton(boolean showing) {
-        if (assistantToggleButton == null) return;
-        assistantToggleButton.setText(showing
-            ? ("❌ " + I18n.get(this, "隱藏隨行助理", "Hide Floating Assistant"))
-            : ("🫧 " + I18n.get(this, "啟動隨行助理", "Launch Floating Assistant")));
-        assistantToggleButton.setTextColor(showing ? CrewTheme.ROSE_400 : Color.WHITE);
-        assistantToggleButton.setBackground(showing
-            ? CrewTheme.createCard(this, Color.parseColor("#4C0519"), Color.parseColor("#E11D48"), 16)
-            : CrewTheme.createGradientButton(this, CrewTheme.TEAL_500, CrewTheme.INDIGO_500, 16));
     }
 
     private boolean enableBubble() {
@@ -1029,6 +1056,21 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == 741 && resultCode == RESULT_OK && data != null && data.getData() != null) {
+            Toast.makeText(this, I18n.get(this, "正在匯入 Deck…", "Importing Deck..."), Toast.LENGTH_SHORT).show();
+            org.json.JSONObject res = DeckRepository.importDeckTree(this, data.getData());
+            if (res.optBoolean("success", false)) {
+                Toast.makeText(this, "✅ " + res.optString("message"), Toast.LENGTH_LONG).show();
+                if (activeTab == 1) renderDecksPage();
+            } else {
+                Toast.makeText(this, "❌ " + res.optString("error"), Toast.LENGTH_LONG).show();
+            }
+        }
+    }
+
+    @Override
     protected void onDestroy() {
         super.onDestroy();
         if (previewTts != null) {
@@ -1043,26 +1085,26 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        refreshServiceStatus();
-        updateAssistantToggleButton();
+        if (activeTab == 0) renderHomePage();
+        else refreshServiceStatus();
     }
 
     private void refreshServiceStatus() {
         if (statusDot == null || statusText == null || statusDetail == null || statusCard == null || activeTab != 0) return;
         if (CrewAccessibilityService.isServiceRunning()) {
             statusDot.setTextColor(CrewTheme.EMERALD_400);
-            statusText.setText(I18n.serviceRunningTitle(this));
+            statusText.setText(I18n.get(this, "🟢 隨身助理已就緒", "🟢 Floating Assistant Ready"));
             statusText.setTextColor(CrewTheme.EMERALD_400);
-            statusDetail.setText(I18n.serviceRunningDetail(this));
+            statusDetail.setText(I18n.get(this, "螢幕操作感知正常連線中 · 隨時可為您服務", "Screen awareness & automation active · Ready to assist"));
             statusDetail.setTextColor(CrewTheme.TEXT_SECONDARY);
             statusCard.setBackground(CrewTheme.createCard(this, Color.parseColor("#14064E3B"), Color.parseColor("#33059669"), 16));
         } else {
-            statusDot.setTextColor(CrewTheme.ROSE_500);
-            statusText.setText(I18n.serviceStoppedTitle(this));
-            statusText.setTextColor(CrewTheme.ROSE_400);
-            statusDetail.setText(I18n.serviceStoppedDetail(this));
+            statusDot.setTextColor(CrewTheme.AMBER_400);
+            statusText.setText(I18n.get(this, "⚠️ 尚未開啟螢幕操作授權", "⚠️ Accessibility Service Inactive"));
+            statusText.setTextColor(CrewTheme.AMBER_400);
+            statusDetail.setText(I18n.get(this, "點此授權無障礙服務，讓 AI 具備辨識畫面與操作手機能力。", "Tap to grant accessibility so AI can perceive & operate screens."));
             statusDetail.setTextColor(CrewTheme.TEXT_SECONDARY);
-            statusCard.setBackground(CrewTheme.createCard(this, Color.parseColor("#144C0519"), Color.parseColor("#33BE123C"), 16));
+            statusCard.setBackground(CrewTheme.createCard(this, Color.parseColor("#1A78350F"), Color.parseColor("#4DF59E0B"), 16));
         }
     }
 }
