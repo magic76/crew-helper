@@ -20,6 +20,7 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.Locale;
 import java.util.Set;
 import java.util.ArrayList;
 import java.util.concurrent.BlockingQueue;
@@ -99,6 +100,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private final Handler agentWatchdogHandler = new Handler(Looper.getMainLooper());
     private Runnable agentResponseWatchdog;
     private String customPrompt = "";
+    private final ArrayList<JSONObject> lastCandidateApps = new ArrayList<JSONObject>();
 
     NativeGeminiLiveClient(String apiKey, Listener listener) { this(apiKey, "", AppConfig.DEFAULT_VOICE, "auto", 35, "warm", "", 55, "call", listener); }
     NativeGeminiLiveClient(String apiKey, String serverUrl, Listener listener) { this(apiKey, serverUrl, AppConfig.DEFAULT_VOICE, "auto", 35, "warm", "", 55, "call", listener); }
@@ -538,7 +540,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 + "【工具邊界與授權】只有使用者本輪最新一句明確口令要求操作手機時，才可呼叫手機工具；過去對話、推測或一般問題絕不可授權操作。一般問題直接回答。"
                 + "【安全防護】絕對禁止刪除、付款、購買、修改帳戶、輸入密碼、OTP、簡訊驗證碼；遇到此類敏感操作一律停止並語音提示使用者自行操作。"
                 + "【手機操作三層架構】"
-                + "1. 第一層（系統原生優先）：開啟 App（如『打開幣安』『開 Chrome』）一律呼叫 launch_app(app='...') 直接啟動，絕不在桌面滑動翻頁找圖示。系統按鍵（首頁、返回、多工、通知列、快捷設定）一律呼叫 press_key。"
+                + "1. 第一層（系統原生優先）：開啟 App（如『打開幣安』『開 Chrome』）一律呼叫 launch_app(app='...') 直接啟動，絕不在桌面滑動翻頁找圖示。若找到多個相近 App，系統會列出候選清單（如 1. 幣安 2. 幣安合約），請簡短詢問使用者要開哪一個；當使用者回答『第一個』、『第2個』或特定名稱時，直接呼叫 launch_app(index=1) 或 launch_app(app='第一個') 啟動。系統按鍵（首頁、返回、多工、通知列、快捷設定）一律呼叫 press_key。"
                 + "2. 第二層（Accessibility 語意執行）：一律以語意操作為主。點擊按鈕呼叫 tap_screen(label='...' 或 id='...')；滑動呼叫 swipe_screen(direction='up'|'down'|'left'|'right', distance='short'|'normal'|'long')；輸入呼叫 type_text(text='...', target='...')；判斷畫面呼叫 inspect_ui。"
                 + "【傳送訊息操作指引】發送訊息時：先 type_text 輸入文字；再 inspect_ui。若送出鍵是圖示、沒有文字，直接呼叫 tap_screen(label='send')；原生層會識別 Send、發送、送出、composer_send、arrow_upward 與輸入框右側送出圖示。不可因找不到文字按鈕就結束操作。"
                 + "3. 第三層（Vision 視覺兜底）：只有在 inspect_ui 完全取不到有效節點（例如 Canvas 畫布、遊戲自訂 UI）時，才呼叫 take_screenshot 截圖並以座標點擊。"
@@ -573,7 +575,12 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
     private JSONArray buildToolDeclarations() throws Exception {
         JSONArray tools = new JSONArray();
-        tools.put(new JSONObject().put("name", "launch_app").put("description", "Open an installed Android app directly by name (e.g. 'Binance', 'LINE', 'Chrome', 'Settings'). Always use this instead of looking for icons on launcher.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("app", new JSONObject().put("type", "STRING").put("description", "Visible app name, for example Binance, Chrome, Settings"))).put("required", new JSONArray().put("app"))));
+        JSONObject launchProperties = new JSONObject()
+                .put("app", new JSONObject().put("type", "STRING").put("description", "Visible app name, for example Binance, Chrome, Settings, or ordinal like '第一個', '1'"))
+                .put("index", new JSONObject().put("type", "INTEGER").put("description", "Optional 1-based index (e.g. 1 for 第一個, 2 for 第二個) if user selected from previously listed matches"))
+                .put("package_name", new JSONObject().put("type", "STRING").put("description", "Optional exact package name if known from previous candidate list"));
+        tools.put(new JSONObject().put("name", "launch_app").put("description", "Open an installed Android app directly by name (e.g. 'Binance', 'LINE', 'Chrome', 'Settings') or by ordinal index (e.g. 第一個/1). Always use this instead of looking for icons on launcher.")
+                .put("parameters", new JSONObject().put("type", "OBJECT").put("properties", launchProperties)));
         tools.put(new JSONObject().put("name", "press_key").put("description", "Trigger an Android system key or action.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("key", new JSONObject().put("type", "STRING").put("enum", new JSONArray().put("HOME").put("BACK").put("RECENTS").put("NOTIFICATIONS").put("QUICK_SETTINGS").put("POWER_DIALOG")))).put("required", new JSONArray().put("key"))));
         tools.put(new JSONObject().put("name", "inspect_ui").put("description", "Read the current Android accessibility UI tree before and after every phone action. Returns visible labels, descriptions, clickable states, and bounds."));
         tools.put(new JSONObject().put("name", "tap_screen").put("description", "Tap a button or UI element using its semantic label, description, resource viewId, or coordinates. Prefer label or id over coordinates.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("label", new JSONObject().put("type", "STRING").put("description", "The button, app icon, or text label to tap")).put("id", new JSONObject().put("type", "STRING").put("description", "Optional resource viewId (e.g. 'send_btn')")).put("x", new JSONObject().put("type", "NUMBER").put("description", "Optional X coordinate for vision fallback")).put("y", new JSONObject().put("type", "NUMBER").put("description", "Optional Y coordinate for vision fallback")).put("coordinate_space", new JSONObject().put("type", "STRING").put("enum", new JSONArray().put("image").put("normalized_1000").put("screen"))))));
@@ -1101,24 +1108,117 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
     private JSONObject launchApp(JSONObject args) throws Exception {
         String app = args.optString("app", "").trim();
-        if (app.isEmpty()) return new JSONObject().put("success", false).put("error", "App 名稱不可為空");
-        JSONObject found = helperPost("/apps", new JSONObject().put("query", app));
-        JSONArray matches = found.optJSONArray("matches");
-        if (matches == null || matches.length() == 0) return new JSONObject().put("success", false).put("error", "找不到已安裝的 App：" + app);
-        JSONObject selected = null;
-        String query = app.toLowerCase();
-        for (int i = 0; i < matches.length(); i++) {
-            JSONObject candidate = matches.optJSONObject(i);
-            if (candidate != null && candidate.optString("label", "").toLowerCase().startsWith(query)) {
-                if (selected != null) return new JSONObject().put("success", false).put("error", "找到多個相近 App，請說得更完整");
-                selected = candidate;
+        int explicitIndex = args.optInt("index", -1);
+        String explicitPkg = args.optString("package_name", "").trim();
+
+        // 1. If explicit package name provided
+        if (!explicitPkg.isEmpty()) {
+            JSONObject reply = helperPost("/launch", new JSONObject().put("package", explicitPkg));
+            if (reply.optBoolean("success")) {
+                lastCandidateApps.clear();
+                reply.put("app", app.isEmpty() ? explicitPkg : app).put("message", "已啟動 App，請立刻 inspect_ui 驗證。");
+            }
+            return reply;
+        }
+
+        // 2. Check if the input is an ordinal referencing previous candidates (e.g. "第一個", "第1個", "1", "one")
+        int selectedIndex = parseOrdinalIndex(app);
+        if (selectedIndex < 0 && explicitIndex > 0) {
+            selectedIndex = explicitIndex - 1;
+        }
+        if (selectedIndex >= 0 && !lastCandidateApps.isEmpty()) {
+            if (selectedIndex < lastCandidateApps.size()) {
+                JSONObject chosen = lastCandidateApps.get(selectedIndex);
+                lastCandidateApps.clear();
+                JSONObject reply = helperPost("/launch", new JSONObject().put("package", chosen.optString("package", "")));
+                if (reply.optBoolean("success")) {
+                    reply.put("app", chosen.optString("label", "App")).put("message", "已為您啟動「" + chosen.optString("label", "App") + "」，請立刻 inspect_ui 驗證。");
+                }
+                return reply;
             }
         }
-        if (selected == null && matches.length() == 1) selected = matches.optJSONObject(0);
-        if (selected == null) return new JSONObject().put("success", false).put("error", "找到多個 App，請說得更完整");
-        JSONObject reply = helperPost("/launch", new JSONObject().put("package", selected.optString("package", "")));
-        if (reply.optBoolean("success")) reply.put("app", selected.optString("label", app)).put("message", "已啟動 App，請立刻 inspect_ui 驗證。");
-        return reply;
+
+        if (app.isEmpty()) {
+            return new JSONObject().put("success", false).put("error", "App 名稱不可為空");
+        }
+
+        // 3. Query installed apps from local bridge
+        JSONObject found = helperPost("/apps", new JSONObject().put("query", app));
+        JSONArray matches = found.optJSONArray("matches");
+        if (matches == null || matches.length() == 0) {
+            return new JSONObject().put("success", false).put("error", "找不到已安裝的 App：" + app);
+        }
+
+        // 4. Exact match check
+        String query = app.toLowerCase(Locale.ROOT);
+        JSONObject exactMatch = null;
+        ArrayList<JSONObject> candidates = new ArrayList<JSONObject>();
+        for (int i = 0; i < matches.length(); i++) {
+            JSONObject candidate = matches.optJSONObject(i);
+            if (candidate == null) continue;
+            candidates.add(candidate);
+            String label = candidate.optString("label", "").toLowerCase(Locale.ROOT);
+            String pkg = candidate.optString("package", "").toLowerCase(Locale.ROOT);
+            if (label.equals(query) || pkg.equals(query)) {
+                exactMatch = candidate;
+                break;
+            }
+        }
+
+        if (exactMatch != null) {
+            lastCandidateApps.clear();
+            JSONObject reply = helperPost("/launch", new JSONObject().put("package", exactMatch.optString("package", "")));
+            if (reply.optBoolean("success")) {
+                reply.put("app", exactMatch.optString("label", app)).put("message", "已啟動 App，請立刻 inspect_ui 驗證。");
+            }
+            return reply;
+        }
+
+        // 5. If only 1 match found, launch directly
+        if (matches.length() == 1) {
+            lastCandidateApps.clear();
+            JSONObject candidate = matches.optJSONObject(0);
+            JSONObject reply = helperPost("/launch", new JSONObject().put("package", candidate.optString("package", "")));
+            if (reply.optBoolean("success")) {
+                reply.put("app", candidate.optString("label", app)).put("message", "已啟動 App，請立刻 inspect_ui 驗證。");
+            }
+            return reply;
+        }
+
+        // 6. Multiple matches: Cache candidates and return clear list for user selection
+        lastCandidateApps.clear();
+        JSONArray list = new JSONArray();
+        StringBuilder promptBuilder = new StringBuilder("找到多個相近 App，請說第幾個：\n");
+        for (int i = 0; i < matches.length(); i++) {
+            JSONObject c = matches.optJSONObject(i);
+            if (c != null) {
+                lastCandidateApps.add(c);
+                list.put(new JSONObject().put("index", i + 1).put("label", c.optString("label")).put("package", c.optString("package")));
+                promptBuilder.append(i + 1).append(". ").append(c.optString("label")).append("\n");
+            }
+        }
+
+        JSONObject multipleReply = new JSONObject();
+        multipleReply.put("success", false);
+        multipleReply.put("status", "MULTIPLE_MATCHES");
+        multipleReply.put("candidates", list);
+        multipleReply.put("error", promptBuilder.toString().trim());
+        multipleReply.put("instruction", "請詢問使用者要開啟哪一個（例如『請問要開啟 1. " + lastCandidateApps.get(0).optString("label") + " 還是 2. " + (lastCandidateApps.size() > 1 ? lastCandidateApps.get(1).optString("label") : "") + "？』），使用者回答後呼叫 launch_app(index=...) 或 launch_app(app='第一個')。");
+        return multipleReply;
+    }
+
+    private int parseOrdinalIndex(String input) {
+        if (input == null) return -1;
+        String s = input.trim().toLowerCase(Locale.ROOT);
+        if (s.equals("第一個") || s.equals("第1個") || s.equals("第 1 個") || s.equals("1") || s.equals("first") || s.equals("one") || s.equals("前一個")) return 0;
+        if (s.equals("第二個") || s.equals("第2個") || s.equals("第 2 個") || s.equals("2") || s.equals("second") || s.equals("two")) return 1;
+        if (s.equals("第三個") || s.equals("第3個") || s.equals("第 3 個") || s.equals("3") || s.equals("third") || s.equals("three")) return 2;
+        if (s.equals("第四個") || s.equals("第4個") || s.equals("第 4 個") || s.equals("4") || s.equals("fourth") || s.equals("four")) return 3;
+        if (s.equals("第五個") || s.equals("第5個") || s.equals("第 5 個") || s.equals("5") || s.equals("fifth") || s.equals("five")) return 4;
+        if (s.equals("最後一個") || s.equals("最後") || s.equals("last")) {
+            return lastCandidateApps.isEmpty() ? -1 : lastCandidateApps.size() - 1;
+        }
+        return -1;
     }
 
     private String loadVoiceSkillPlaybook() {
