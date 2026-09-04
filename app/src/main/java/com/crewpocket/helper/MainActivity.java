@@ -71,7 +71,6 @@ public class MainActivity extends Activity {
 
     private void renderTab(int tab) {
         activeTab = tab;
-        pageContent.removeAllViews();
         if (tab == 0) renderHomePage();
         else if (tab == 1) renderDecksPage();
         else renderSettingsPage();
@@ -81,6 +80,7 @@ public class MainActivity extends Activity {
 
     private void renderHomePage() {
         LinearLayout root = pageContent;
+        root.removeAllViews();
 
         // ── 1. Tactical Brand Header ──
         LinearLayout headerRow = new LinearLayout(this);
@@ -235,6 +235,7 @@ public class MainActivity extends Activity {
     }
 
     private void renderDecksPage() {
+        pageContent.removeAllViews();
         addPageHeading("▣", I18n.get(this, "Live Deck 簡報中心", "Live Deck Center"),
             I18n.get(this, "AI 語音自動翻頁、資料卡片與圖表生動講解。", "AI voice auto-advance, interactive cards, and data presentations."));
 
@@ -281,6 +282,7 @@ public class MainActivity extends Activity {
     }
 
     private void renderSettingsPage() {
+        pageContent.removeAllViews();
         addPageHeading("⚙️", I18n.get(this, "設定與偏好", "Settings & Preferences"),
             I18n.get(this, "語音音色、自訂人設、權限與連線管理。", "Voice persona, custom prompts, permissions, and connection mode."));
 
