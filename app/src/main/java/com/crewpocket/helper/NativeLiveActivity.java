@@ -977,7 +977,22 @@ public class NativeLiveActivity extends Activity {
         if (existing.startsWith("（通話中的")) existing = "";
         boolean sameSpeaker = role.equals(lastTranscriptRole) && !existing.isEmpty();
         String prefix = sameSpeaker ? "" : (existing.isEmpty() ? "" : "\n") + (role.equalsIgnoreCase("user") ? "🧑 我：" : "🤖 Gemini：");
-        String next = existing + prefix + text.trim();
+        String fragment = text.trim();
+        boolean needSpace = false;
+        if (sameSpeaker && !existing.isEmpty() && !fragment.isEmpty()) {
+            char lastC = existing.charAt(existing.length() - 1);
+            char firstC = fragment.charAt(0);
+            boolean lastIsAlpha = Character.isLetterOrDigit(lastC);
+            boolean firstIsAlpha = Character.isLetterOrDigit(firstC);
+            boolean lastIsPunct = (lastC == '.' || lastC == ',' || lastC == '!' || lastC == '?' || lastC == ';' || lastC == ':');
+            boolean lastIsCjk = (lastC >= 0x4E00 && lastC <= 0x9FFF) || (lastC >= 0x3400 && lastC <= 0x4DBF);
+            boolean firstIsCjk = (firstC >= 0x4E00 && firstC <= 0x9FFF) || (firstC >= 0x3400 && firstC <= 0x4DBF);
+
+            if (!lastIsCjk && !firstIsCjk && (lastIsAlpha || lastIsPunct) && firstIsAlpha) {
+                needSpace = true;
+            }
+        }
+        String next = existing + prefix + (needSpace ? " " : "") + fragment;
         if (next.length() > 12000) next = next.substring(next.length() - 12000);
         transcript.setText(next);
         lastTranscriptRole = role;

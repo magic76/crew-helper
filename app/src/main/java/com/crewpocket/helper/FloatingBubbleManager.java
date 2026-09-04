@@ -730,13 +730,27 @@ public class FloatingBubbleManager {
                     String prefix = speaker + "：";
                     String existing = latestLiveTranscript.startsWith(prefix)
                             ? latestLiveTranscript.substring(prefix.length()) : latestLiveTranscript;
-                    // Input/output transcription can be cumulative, whereas
-                    // modelTurn text is token-like.  Cover both without
-                    // duplicating the same words.
                     if (fragment.startsWith(existing)) {
                         latestLiveTranscript = prefix + fragment;
-                    } else if (!existing.endsWith(fragment)) {
-                        latestLiveTranscript = prefix + existing + fragment;
+                    } else if (existing.endsWith(fragment)) {
+                        // Duplicate fragment, do nothing
+                    } else {
+                        // Check if boundary needs a space (e.g. between English words/alphanumeric)
+                        boolean needSpace = false;
+                        if (!existing.isEmpty() && !fragment.isEmpty()) {
+                            char lastC = existing.charAt(existing.length() - 1);
+                            char firstC = fragment.charAt(0);
+                            boolean lastIsAlpha = Character.isLetterOrDigit(lastC);
+                            boolean firstIsAlpha = Character.isLetterOrDigit(firstC);
+                            boolean lastIsPunct = (lastC == '.' || lastC == ',' || lastC == '!' || lastC == '?' || lastC == ';' || lastC == ':');
+                            boolean lastIsCjk = (lastC >= 0x4E00 && lastC <= 0x9FFF) || (lastC >= 0x3400 && lastC <= 0x4DBF);
+                            boolean firstIsCjk = (firstC >= 0x4E00 && firstC <= 0x9FFF) || (firstC >= 0x3400 && firstC <= 0x4DBF);
+
+                            if (!lastIsCjk && !firstIsCjk && (lastIsAlpha || lastIsPunct) && firstIsAlpha) {
+                                needSpace = true;
+                            }
+                        }
+                        latestLiveTranscript = prefix + existing + (needSpace ? " " : "") + fragment;
                     }
                 }
                 if (latestLiveTranscript.length() > 180) {
