@@ -176,6 +176,8 @@ final class DeckRepository {
                             .put("speakerNotes", clip(input.optString("speakerNotes", input.optString("speaker_notes")), 700))
                             .put("facts", normalizeStrings(input.optJSONArray("facts"), 8, 140))
                             .put("items", normalizeStrings(input.optJSONArray("items"), 8, 180));
+                    if (input.has("image")) card.put("image", clip(input.optString("image"), 500));
+                    if (input.has("imageCaption") || input.has("image_caption")) card.put("imageCaption", clip(input.optString("imageCaption", input.optString("image_caption")), 160));
                     if ("metric".equals(type)) card.put("metrics", normalizeMetrics(input.optJSONArray("metrics")));
                     JSONArray next = new JSONArray(); if (i + 1 < requestedCards.length()) next.put("card-" + (i + 2)); card.put("next", next);
                     cards.put(card);
@@ -283,6 +285,8 @@ final class DeckRepository {
                 if (patch.has("facts")) card.put("facts", normalizeStrings(patch.optJSONArray("facts"), 8, 140));
                 if (patch.has("items")) card.put("items", normalizeStrings(patch.optJSONArray("items"), 8, 180));
                 if (patch.has("metrics")) card.put("metrics", normalizeMetrics(patch.optJSONArray("metrics")));
+                if (patch.has("image")) card.put("image", clip(patch.optString("image"), 500));
+                if (patch.has("imageCaption") || patch.has("image_caption")) card.put("imageCaption", clip(patch.optString("imageCaption", patch.optString("image_caption")), 160));
                 DeckActivity.showActiveCard();
                 return new JSONObject().put("success", true).put("cardId", cardId).put("message", "已更新後續卡片；目前頁保持不變");
             } catch (Exception error) { return failure("無法更新卡片：" + error.getMessage()); }
@@ -327,6 +331,8 @@ final class DeckRepository {
                 .put("subtitle", clip(input.optString("subtitle"), 180)).put("body", clip(input.optString("body"), 1200))
                 .put("speakerNotes", clip(input.optString("speakerNotes", input.optString("speaker_notes")), 700))
                 .put("facts", normalizeStrings(input.optJSONArray("facts"), 8, 140)).put("items", normalizeStrings(input.optJSONArray("items"), 8, 180));
+        if (input.has("image")) card.put("image", clip(input.optString("image"), 500));
+        if (input.has("imageCaption") || input.has("image_caption")) card.put("imageCaption", clip(input.optString("imageCaption", input.optString("image_caption")), 160));
         if ("metric".equals(type)) card.put("metrics", normalizeMetrics(input.optJSONArray("metrics")));
         return card;
     }

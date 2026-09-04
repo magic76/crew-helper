@@ -27,6 +27,8 @@ import java.lang.ref.WeakReference;
 public class DeckActivity extends Activity {
     private static final int REQUEST_IMPORT_DECK = 741;
     private static WeakReference<DeckActivity> visible = new WeakReference<DeckActivity>(null);
+    private static final android.util.LruCache<String, Bitmap> imageCache = new android.util.LruCache<String, Bitmap>(30);
+    private static final java.util.concurrent.ExecutorService imageExecutor = java.util.concurrent.Executors.newFixedThreadPool(2);
     private final Handler ui = new Handler(Looper.getMainLooper());
     private LinearLayout cardHost;
     private TextView position;
@@ -131,17 +133,63 @@ public class DeckActivity extends Activity {
         }
     }
 
-    private void addImageIfPresent(LinearLayout host, DeckRepository.Deck deck, String relative, String caption) {
-        if (relative == null || relative.trim().isEmpty() || deck == null) return;
-        try {
-            File file = new File(deck.directory, relative).getCanonicalFile();
-            if (!file.getPath().startsWith(deck.directory.getCanonicalPath() + File.separator) || !file.isFile()) return;
-            Bitmap bitmap = BitmapFactory.decodeFile(file.getPath()); if (bitmap == null) return;
-            ImageView image = new ImageView(this); image.setImageBitmap(bitmap); image.setScaleType(ImageView.ScaleType.CENTER_CROP);
-            image.setBackground(CrewTheme.createCard(this, CrewTheme.BG_ELEVATED, Color.TRANSPARENT, 18));
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(190)); lp.setMargins(0, 0, 0, dp(20)); host.addView(image, lp);
-            if (caption != null && !caption.trim().isEmpty()) { TextView label = text(caption, 11, CrewTheme.TEXT_MUTED, false); label.setPadding(0, 0, 0, dp(14)); host.addView(label); }
-        } catch (Exception ignored) {}
+    private void addImageIfPresent(LinearLayout host, DeckRepository.Deck deck, final String relativeOrUrl, String caption) {
+        if (relativeOrUrl == null || relativeOrUrl.trim().isEmpty()) return;
+        final String path = relativeOrUrl.trim();
+        final ImageView image = new ImageView(this);
+        image.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        image.setBackground(CrewTheme.createCard(this, CrewTheme.BG_ELEVATED, Color.TRANSPARENT, 18));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(190));
+        lp.setMargins(0, 0, 0, dp(16));
+        host.addView(image, lp);
+
+        if (caption != null && !caption.trim().isEmpty()) {
+            TextView label = text(caption, 11, CrewTheme.TEXT_MUTED, false);
+            label.setPadding(0, 0, 0, dp(14));
+            host.addView(label);
+        }
+
+        if (path.startsWith("http://") || path.startsWith("https://")) {
+            Bitmap cached = imageCache.get(path);
+            if (cached != null) {
+                image.setImageBitmap(cached);
+                return;
+            }
+            image.setTag(path);
+            imageExecutor.submit(new Runnable() {
+                @Override public void run() {
+                    try {
+                        java.net.HttpURLConnection conn = (java.net.HttpURLConnection) new java.net.URL(path).openConnection();
+                        conn.setConnectTimeout(6000);
+                        conn.setReadTimeout(10000);
+                        conn.setInstanceFollowRedirects(true);
+                        conn.setRequestProperty("User-Agent", "CrewHelper/1.0");
+                        java.io.InputStream in = conn.getInputStream();
+                        final Bitmap bmp = BitmapFactory.decodeStream(in);
+                        in.close();
+                        conn.disconnect();
+                        if (bmp != null) {
+                            imageCache.put(path, bmp);
+                            ui.post(new Runnable() {
+                                @Override public void run() {
+                                    if (path.equals(image.getTag())) image.setImageBitmap(bmp);
+                                }
+                            });
+                        }
+                    } catch (Exception error) {
+                        android.util.Log.w("CrewDeck", "無法載入網路圖片：" + path + " - " + error.getMessage());
+                    }
+                }
+            });
+        } else if (deck != null && deck.directory != null) {
+            try {
+                File file = new File(deck.directory, path).getCanonicalFile();
+                if (file.getPath().startsWith(deck.directory.getCanonicalPath() + File.separator) && file.isFile()) {
+                    Bitmap bitmap = BitmapFactory.decodeFile(file.getPath());
+                    if (bitmap != null) image.setImageBitmap(bitmap);
+                }
+            } catch (Exception ignored) {}
+        }
     }
 
     private void addMetrics(LinearLayout host, JSONArray metrics) {
