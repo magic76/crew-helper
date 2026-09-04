@@ -54,8 +54,11 @@ public class NativeLiveActivity extends Activity {
     private Button promptButton;
     private SeekBar noiseSlider;
     private SeekBar interruptionSlider;
+    private SeekBar agentStepsSlider;
     private TextView noiseLevelText;
     private TextView interruptionLevelText;
+    private TextView agentStepsText;
+    private Button stopAgentButton;
     private TextView microphoneMeterText;
     private Button diagnosticButton;
     private TextView diagnosticText;
@@ -86,6 +89,7 @@ public class NativeLiveActivity extends Activity {
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        DeckRepository.initialize(this);
         activeInstance = this;
 
         // 🌌 Immersive Dark Bar
@@ -364,6 +368,36 @@ public class NativeLiveActivity extends Activity {
         interruptionRow.addView(interruptionLevelText, new LinearLayout.LayoutParams(dp(34), dp(36)));
         controlCard.addView(interruptionRow);
 
+        LinearLayout agentRow = new LinearLayout(this);
+        agentRow.setOrientation(LinearLayout.HORIZONTAL);
+        agentRow.setGravity(Gravity.CENTER_VERTICAL);
+        agentRow.setPadding(0, dp(6), 0, 0);
+        TextView agentLabel = new TextView(this);
+        agentLabel.setText(I18n.get(this, "自動步數", "Agent steps"));
+        agentLabel.setTextSize(10);
+        agentLabel.setTextColor(CrewTheme.TEXT_SECONDARY);
+        agentRow.addView(agentLabel, new LinearLayout.LayoutParams(dp(58), ViewGroup.LayoutParams.WRAP_CONTENT));
+        agentStepsSlider = new SeekBar(this);
+        agentStepsSlider.setMax(99);
+        agentStepsSlider.setProgress(AppConfig.getAgentMaxSteps(this) - 1);
+        agentStepsSlider.setContentDescription(I18n.get(this, "Agent 自動執行步數，範圍 1 到 100", "Agent automatic execution steps, 1 to 100"));
+        agentRow.addView(agentStepsSlider, new LinearLayout.LayoutParams(0, dp(36), 1f));
+        agentStepsText = new TextView(this);
+        agentStepsText.setTextSize(10);
+        agentStepsText.setTextColor(CrewTheme.CYAN_400);
+        agentStepsText.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        agentRow.addView(agentStepsText, new LinearLayout.LayoutParams(dp(40), dp(36)));
+        controlCard.addView(agentRow);
+
+        stopAgentButton = makeControlButton();
+        stopAgentButton.setText(I18n.get(this, "■ 停止任務", "■ Stop task"));
+        stopAgentButton.setTextSize(11);
+        stopAgentButton.setTextColor(CrewTheme.ROSE_400);
+        setButtonCard(stopAgentButton, Color.parseColor("#450A0A"), CrewTheme.ROSE_500, 10);
+        LinearLayout.LayoutParams stopAgentLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(40));
+        stopAgentLp.setMargins(0, dp(6), 0, 0);
+        controlCard.addView(stopAgentButton, stopAgentLp);
+
         microphoneMeterText = new TextView(this);
         microphoneMeterText.setText(I18n.get(this, "收音：等待通話開始", "Mic: waiting for call"));
         microphoneMeterText.setTextSize(10);
@@ -528,6 +562,24 @@ public class NativeLiveActivity extends Activity {
                 Toast.makeText(NativeLiveActivity.this, I18n.get(NativeLiveActivity.this, "插話靈敏度已調整", "Barge-in sensitivity adjusted"), Toast.LENGTH_SHORT).show();
             }
         });
+        agentStepsSlider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar bar, int progress, boolean fromUser) {
+                int steps = progress + 1;
+                AppConfig.setAgentMaxSteps(NativeLiveActivity.this, steps);
+                if (client != null) client.setAgentMaxSteps(steps);
+                updateAgentSteps(steps);
+            }
+            @Override public void onStartTrackingTouch(SeekBar bar) {}
+            @Override public void onStopTrackingTouch(SeekBar bar) {}
+        });
+        stopAgentButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                boolean stopped = client != null && client.cancelAgentTask("使用者按下停止任務");
+                if (stopped) updateStatus(CrewTheme.AMBER_400, I18n.get(NativeLiveActivity.this, "Agent 任務已停止", "Agent task stopped"));
+                else Toast.makeText(NativeLiveActivity.this, I18n.get(NativeLiveActivity.this, "目前沒有執行中的 Agent 任務", "No Agent task is running"), Toast.LENGTH_SHORT).show();
+                refreshAssistantControls();
+            }
+        });
         micButton.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 if (!isCallActive()) return;
@@ -621,6 +673,13 @@ public class NativeLiveActivity extends Activity {
         int sensitivity = client != null ? client.getInterruptionSensitivity() : AppConfig.getInterruptionSensitivity(this);
         if (interruptionSlider != null && interruptionSlider.getProgress() != sensitivity) interruptionSlider.setProgress(sensitivity);
         updateInterruptionLevel(sensitivity);
+        int agentSteps = client != null ? client.getAgentMaxSteps() : AppConfig.getAgentMaxSteps(this);
+        if (agentStepsSlider != null && agentStepsSlider.getProgress() != agentSteps - 1) agentStepsSlider.setProgress(agentSteps - 1);
+        updateAgentSteps(agentSteps);
+        if (stopAgentButton != null) {
+            boolean activeTask = active && client != null && client.hasActiveAgentTask();
+            stopAgentButton.setVisibility(activeTask ? View.VISIBLE : View.GONE);
+        }
         cameraButton.setText(I18n.get(this, "📷 拍照", "📷 Camera"));
         screenButton.setText(I18n.get(this, "▣ 看螢幕", "▣ Screen"));
         boolean muted = active && client.isAgentMuted();
@@ -655,6 +714,10 @@ public class NativeLiveActivity extends Activity {
     private void updateInterruptionLevel(int value) {
         if (interruptionLevelText == null) return;
         interruptionLevelText.setText(value < 35 ? I18n.get(this, "低", "Low") : (value > 70 ? I18n.get(this, "高", "High") : I18n.get(this, "中", "Med")));
+    }
+
+    private void updateAgentSteps(int steps) {
+        if (agentStepsText != null) agentStepsText.setText(String.valueOf(Math.max(1, Math.min(100, steps))));
     }
 
     private String voicePresetLabel(String preset) {
@@ -785,6 +848,7 @@ public class NativeLiveActivity extends Activity {
             @Override public void run() {
                 if (statusDot != null) statusDot.setTextColor(color);
                 if (statusText != null) statusText.setText(text);
+                refreshAssistantControls();
             }
         });
     }
@@ -894,6 +958,7 @@ public class NativeLiveActivity extends Activity {
                 });
             }
         });
+        client.setAgentMaxSteps(AppConfig.getAgentMaxSteps(this));
         client.start();
         handler.removeCallbacks(connectionWatchdog);
         handler.postDelayed(connectionWatchdog, 18000);

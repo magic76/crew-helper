@@ -208,6 +208,7 @@ public class FloatingBubbleManager {
     private TextView voiceOutputButton = null;
     private TextView voiceSettingsToggleButton = null;
     private LinearLayout voiceSettingsPanel = null;
+    private TextView voiceStopAgentButton = null;
     private LinearLayout voiceSettingsChoices = null;
     private TextView voiceStatusText = null;
     private TextView voiceMeterText = null;
@@ -771,6 +772,10 @@ public class FloatingBubbleManager {
             String state = !NativeLiveService.isActive() ? "等待通話" : (latestMicSending ? "正在送出" : "靜音中");
             voiceMeterText.setText("🎙 收音 " + db + " dB · " + state);
         }
+        if (voiceStopAgentButton != null) {
+            boolean activeTask = NativeLiveService.hasActiveAgentTask();
+            voiceStopAgentButton.setVisibility(activeTask ? View.VISIBLE : View.GONE);
+        }
     }
 
     private void updateVoiceTranscriptUi() {
@@ -943,6 +948,20 @@ public class FloatingBubbleManager {
                     voiceSettingsPanel.addView(voiceSettingsChoices);
                     dock.addView(voiceSettingsPanel);
 
+                    voiceStopAgentButton = makeVoiceSettingButton();
+                    voiceStopAgentButton.setText("■ 停止任務");
+                    voiceStopAgentButton.setTextColor(Color.parseColor("#FDA4AF"));
+                    voiceStopAgentButton.setOnClickListener(new View.OnClickListener() {
+                        @Override public void onClick(View v) {
+                            if (NativeLiveService.stopAgentTask()) Toast.makeText(context, "Agent 任務已停止", Toast.LENGTH_SHORT).show();
+                            else Toast.makeText(context, "目前沒有執行中的 Agent 任務", Toast.LENGTH_SHORT).show();
+                            refreshVoiceControls();
+                        }
+                    });
+                    LinearLayout.LayoutParams stopTaskLp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(38));
+                    stopTaskLp.setMargins(0, 0, 0, dp(5));
+                    dock.addView(voiceStopAgentButton, stopTaskLp);
+
                     // 📱 Ergonomic Bottom Dock matching Web UI:
                     // Layout: [Camera Icon] [Screen Icon] [Center Large Mute/Interrupt Icon] [Hangup/Call Icon]
                     LinearLayout row = new LinearLayout(context);
@@ -1053,6 +1072,7 @@ public class FloatingBubbleManager {
                 voiceOutputButton = null;
                 voiceSettingsToggleButton = null;
                 voiceSettingsPanel = null;
+                voiceStopAgentButton = null;
                 voiceSettingsChoices = null;
                 voiceStatusText = null;
                 voiceMeterText = null;

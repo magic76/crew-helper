@@ -82,6 +82,14 @@ public class NativeLiveService extends Service {
         return instance != null && instance.client != null && instance.client.isAgentMuted();
     }
 
+    static boolean stopAgentTask() {
+        return instance != null && instance.client != null && instance.client.cancelAgentTask("使用者按下停止任務");
+    }
+
+    static boolean hasActiveAgentTask() {
+        return instance != null && instance.client != null && instance.client.hasActiveAgentTask();
+    }
+
     static boolean isAiSpeaking() {
         return instance != null && instance.client != null && instance.client.isAiSpeaking();
     }
@@ -102,6 +110,7 @@ public class NativeLiveService extends Service {
     @Override public void onCreate() {
         super.onCreate();
         instance = this;
+        DeckRepository.initialize(this);
         createChannel();
     }
 
@@ -170,6 +179,7 @@ public class NativeLiveService extends Service {
                 FloatingBubbleManager.getInstance(NativeLiveService.this).updateLiveMicrophoneLevel(dbfs, sending);
             }
         });
+        client.setAgentMaxSteps(AppConfig.getAgentMaxSteps(this));
         client.start();
     }
 

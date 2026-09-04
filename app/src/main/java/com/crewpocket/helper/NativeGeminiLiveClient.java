@@ -80,6 +80,24 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private volatile int lastScreenWidth = 1;
     private volatile int lastScreenHeight = 1;
     private final Set<String> handledToolCalls = new HashSet<String>();
+    // One serialized worker keeps tool-result → next-model-turn ordering deterministic.
+    // Audio and WebSocket callbacks stay independent of this queue.
+    private static final long AGENT_TASK_TIMEOUT_MS = 90_000L;
+    private static final long AGENT_FINAL_RESPONSE_WAIT_MS = 8_000L;
+    private static final int AGENT_MAX_TOOL_RUNS = 3;
+    // Navigation is deliberately repeatable during a presentation. All other
+    // tools keep the conservative 3-run default safety limit.
+    private static final int AGENT_DECK_NAV_MAX_RUNS = 16;
+    private final Object agentLock = new Object();
+    private final ArrayList<JSONObject> pendingToolCalls = new ArrayList<JSONObject>();
+    private final ArrayList<AgentTaskRecord> agentHistory = new ArrayList<AgentTaskRecord>();
+    private volatile boolean toolWorkerRunning;
+    private volatile Thread activeToolThread;
+    private volatile HttpURLConnection activeToolConnection;
+    private volatile int agentMaxSteps = 20;
+    private AgentTaskRecord activeAgentTask;
+    private final Handler agentWatchdogHandler = new Handler(Looper.getMainLooper());
+    private Runnable agentResponseWatchdog;
     private String customPrompt = "";
 
     NativeGeminiLiveClient(String apiKey, Listener listener) { this(apiKey, "", AppConfig.DEFAULT_VOICE, "auto", 35, "warm", "", 55, "call", listener); }
@@ -109,6 +127,41 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     String getStage() { return stage; }
     String getAudioOutputBackend() { return audioOutputBackend; }
     boolean canSendVisualFrame() { return running && System.currentTimeMillis() >= visualHoldUntil; }
+    void setAgentMaxSteps(int steps) { agentMaxSteps = Math.max(1, Math.min(100, steps)); }
+    int getAgentMaxSteps() { return agentMaxSteps; }
+    boolean hasActiveAgentTask() { synchronized (agentLock) { return activeAgentTask != null && !activeAgentTask.finished; } }
+    String getAgentTaskStatus() { synchronized (agentLock) { return activeAgentTask == null ? "" : activeAgentTask.status; } }
+    JSONArray getAgentTaskHistory() {
+        synchronized (agentLock) {
+            JSONArray records = new JSONArray();
+            for (AgentTaskRecord task : agentHistory) records.put(task.toJson());
+            if (activeAgentTask != null) records.put(activeAgentTask.toJson());
+            return records;
+        }
+    }
+
+    /** Cancels queued work and disconnects the currently blocking local bridge request. */
+    boolean cancelAgentTask(String reason) {
+        AgentTaskRecord task;
+        synchronized (agentLock) {
+            task = activeAgentTask;
+            if (task == null || task.finished) return false;
+            task.cancelled = true;
+            task.finished = true;
+            task.endReason = reason == null ? "使用者取消" : reason;
+            task.status = "Agent 任務已停止";
+            pendingToolCalls.clear();
+            clearAgentResponseWatchdogLocked();
+            agentHistory.add(task);
+            activeAgentTask = null;
+        }
+        HttpURLConnection connection = activeToolConnection;
+        if (connection != null) try { connection.disconnect(); } catch (Exception ignored) {}
+        Thread worker = activeToolThread;
+        if (worker != null) worker.interrupt();
+        reportStage("Agent 任務已停止：" + task.endReason);
+        return true;
+    }
 
     boolean sendText(String text) {
         if (!running || webSocket == null || text == null || text.trim().isEmpty()) return false;
@@ -270,6 +323,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
     void stop() {
         boolean wasRunning = running;
+        cancelAgentTask("通話已結束");
         running = false;
         setupReady = false;
         interruptionHandler.removeCallbacks(clearInterruptedFallback);
@@ -345,7 +399,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if (toolCall != null) {
             JSONArray calls = toolCall.optJSONArray("functionCalls");
             if (calls == null) calls = toolCall.optJSONArray("function_calls");
-            if (calls != null) for (int i = 0; i < calls.length(); i++) executeToolAsync(calls.getJSONObject(i));
+            if (calls != null) {
+                clearAgentResponseWatchdog();
+                for (int i = 0; i < calls.length(); i++) executeToolAsync(calls.getJSONObject(i));
+            }
         }
         JSONObject server = response.optJSONObject("serverContent");
         if (server == null) server = response.optJSONObject("server_content");
@@ -364,13 +421,18 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         }
         JSONObject inputTranscript = server.optJSONObject("inputTranscription");
         if (inputTranscript == null) inputTranscript = server.optJSONObject("input_transcription");
-        if (inputTranscript != null && !inputTranscript.optString("text").isEmpty()) listener.onTranscript("你", inputTranscript.optString("text"));
+        if (inputTranscript != null && !inputTranscript.optString("text").isEmpty()) {
+            String inputText = inputTranscript.optString("text");
+            listener.onTranscript("你", inputText);
+            if (isStopAgentTaskPhrase(inputText)) cancelAgentTask("使用者語音停止任務");
+        }
         JSONObject outputTranscript = server.optJSONObject("outputTranscription");
         if (outputTranscript == null) outputTranscript = server.optJSONObject("output_transcription");
         if (outputTranscript != null && !outputTranscript.optString("text").isEmpty()) listener.onTranscript("Gemini", outputTranscript.optString("text"));
         JSONObject turn = server.optJSONObject("modelTurn");
         if (turn == null) turn = server.optJSONObject("model_turn");
         if (turn != null) {
+            markAgentModelResponse();
             // Continuous camera/screen frames must not arrive while Gemini is
             // producing this answer, otherwise they can trigger a duplicate turn.
             visualHoldUntil = System.currentTimeMillis() + 1800;
@@ -385,11 +447,18 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                     JSONObject inline = part.optJSONObject("inlineData");
                     if (inline == null) inline = part.optJSONObject("inline_data");
                     if (inline != null && inline.optString("data").length() > 0) enqueueAudio(Base64.decode(inline.getString("data"), Base64.DEFAULT));
-                    if (part.optString("text").length() > 0) listener.onTranscript("Gemini", part.optString("text"));
+                    if (part.optString("text").length() > 0) {
+                        String modelText = part.optString("text");
+                        appendAgentFinalText(modelText);
+                        listener.onTranscript("Gemini", modelText);
+                    }
                 }
             }
         }
         if (server.optBoolean("turnComplete", server.optBoolean("turn_complete", false))) {
+            // Match agy-web AudioWorklet's `turn-complete`: a final short
+            // PCM phrase must not remain below the normal pre-roll threshold.
+            if (usingOboeOutput) NativeOboeOutput.finishTurn();
             visualHoldUntil = System.currentTimeMillis() + 1000;
             interruptedCurrentTurn = false;
             interruptionHandler.removeCallbacks(clearInterruptedFallback);
@@ -397,7 +466,13 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 aiSpeaking = false;
                 listener.onSpeakingChanged(false);
             }
+            finishAgentTaskIfAwaitingModel();
         }
+    }
+
+    private boolean isStopAgentTaskPhrase(String text) {
+        String clean = text == null ? "" : text.replaceAll("\\s+", "");
+        return clean.contains("停止任務") || clean.contains("取消任務") || clean.contains("停止執行") || clean.contains("停止 agent");
     }
 
     private static String mapToSupportedVoice(String name) {
@@ -449,11 +524,15 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 + "【手機操作三層架構】"
                 + "1. 第一層（系統原生優先）：開啟 App（如『打開幣安』『開 Chrome』）一律呼叫 launch_app(app='...') 直接啟動，絕不在桌面滑動翻頁找圖示。系統按鍵（首頁、返回、多工、通知列、快捷設定）一律呼叫 press_key。"
                 + "2. 第二層（Accessibility 語意執行）：一律以語意操作為主。點擊按鈕呼叫 tap_screen(label='...' 或 id='...')；滑動呼叫 swipe_screen(direction='up'|'down'|'left'|'right', distance='short'|'normal'|'long')；輸入呼叫 type_text(text='...', target='...')；判斷畫面呼叫 inspect_ui。"
-                + "【傳送訊息操作指引】發送訊息時：先 type_text 輸入文字；若需送出，可呼叫 inspect_ui 觀察輸入框旁的發送按鈕（通常為最右側可點擊圖示或帶有 send 描述/ID），並呼叫 tap_screen(id='...' 或 label='...' 或座標) 精準送出。"
+                + "【傳送訊息操作指引】發送訊息時：先 type_text 輸入文字；再 inspect_ui。若送出鍵是圖示、沒有文字，直接呼叫 tap_screen(label='send')；原生層會識別 Send、發送、送出、composer_send、arrow_upward 與輸入框右側送出圖示。不可因找不到文字按鈕就結束操作。"
                 + "3. 第三層（Vision 視覺兜底）：只有在 inspect_ui 完全取不到有效節點（例如 Canvas 畫布、遊戲自訂 UI）時，才呼叫 take_screenshot 截圖並以座標點擊。"
                 + "【結束通話】當使用者說『關閉』、『掛斷』、『結束通話』、『退下』、『先這樣』或『再見』時，先簡短道別一句（如『好的，先為您關閉，隨時喊我！』），並一律呼叫 end_voice_session 工具以自動掛斷連線。"
                 + "【定時提醒與畫面巡檢】當使用者要求計時（如『5分鐘後叫我』）呼叫 schedule_reminder；週期性檢查畫面（如『每分鐘看一次畫面跟我說』）或等待條件（如『等出現已送達時叫我』）呼叫 start_screen_monitor；查詢目前排程呼叫 list_active_schedules；取消排程呼叫 cancel_schedule。"
-                + "【動作執行迴圈】遵守『inspect_ui 觀察 → 決策語意動作 → 執行動作 → 再次 inspect_ui 驗證結果 → 推進下一步（最多5步）』。"
+                + "【Live Deck 簡報】使用者要求從資料卡片講故事、教學或簡報時，先呼叫 list_decks，確認 deckId 後呼叫 open_deck。每一頁都必須先切換並確認畫面已顯示，再開始介紹；講完後自行 advance_deck 前往下一頁，不必逐頁等待使用者確認。每次以 get_deck_card 的 speakerNotes、facts 與 allowedNext 作為內容邊界，但不可逐字朗讀講稿；應依聽眾問題、時間、語氣與理解狀態，靈活改成摘要、教學、故事或正式簡報。使用者插話時優先回答，可跳到相關 cardId 或調整詳略。不得杜撰不存在的卡片、數字或圖片，也不要把內部 JSON 念給使用者。"
+                + "【Deck 動態調整】播報中使用者要求補充、簡化、重排或增加圖片時，只能改目前頁之後的卡片：用 update_deck_card 改後續內容、insert_deck_card 加入補充、remove_future_deck_card 移除重複。先 list_deck_images，僅從回傳的 assetId 使用 attach_deck_image 加入匯入圖片；不得捏造圖片、URL 或來源。修改後要簡短告知已調整後續內容，接著依新卡片繼續。"
+                + "【即席 Deck】若使用者要求介紹一般主題、但未指定已匯入資料 Deck，先用 create_ephemeral_deck 建立 3–8 張簡潔卡片，再逐頁同步顯示與語音介紹。即席 Deck 僅基於既有知識與本輪對話，必須在需要時清楚說明它不是即時查證資料；不可偽稱最新、引用來源或精確統計。"
+                + "【Agent 自動迴圈】若任務需要多步工具操作，請在取得每次工具結果後自行決定下一步；除非任務已完成、需要使用者澄清、觸及既有安全確認、工具失敗無替代方案，否則不要提前結束。每次工具結果都必須作為下一步判斷依據，不可假設工具已成功。系統會自動限制本次步數、逾時與重複呼叫；收到限制訊息時不可再呼叫工具，必須以目前已知結果作結論。"
+                + "【動作執行迴圈】遵守『inspect_ui 觀察 → 決策語意動作 → 執行動作 → 再次 inspect_ui 驗證結果 → 推進下一步』。"
                 + "【語氣模式】" + liveToneInstruction();
 
         if (customPrompt != null && !customPrompt.trim().isEmpty()) {
@@ -491,80 +570,270 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         tools.put(new JSONObject().put("name", "take_screenshot").put("description", "Capture the phone screen ONLY when inspect_ui has no nodes (e.g. Canvas, Unity, WebGL, custom game UI) or user explicitly requests it."));
         tools.put(new JSONObject().put("name", "end_voice_session").put("description", "End or hang up the voice call immediately when the user asks to close, exit, hang up, or says goodbye (e.g. 關閉, 掛斷, 結束通話, 退下, 再見, 先這樣)."));
         tools.put(new JSONObject().put("name", "save_to_main_chat").put("description", "Save a concise result or note to Crew Pocket main chat ONLY when the user explicitly asks to save, record, or send it there. Never use this for ordinary conversation.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("message", new JSONObject().put("type", "STRING").put("description", "The exact concise note to save"))).put("required", new JSONArray().put("message"))));
+        tools.put(new JSONObject().put("name", "list_decks").put("description", "List trusted locally installed Live Decks available for a presentation, story, or teaching flow. Call before opening a deck when its ID is unknown."));
+        tools.put(new JSONObject().put("name", "open_deck").put("description", "Open a trusted Live Deck by deckId and show its first card full-screen. Returns that card's concise presentation data.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("deck_id", new JSONObject().put("type", "STRING").put("description", "ID returned by list_decks"))).put("required", new JSONArray().put("deck_id"))));
+        tools.put(new JSONObject().put("name", "get_deck_card").put("description", "Read concise, structured information for one card in the currently open Deck. Use its facts, speakerNotes, and allowedNext to decide the next presentation action.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("card_id", new JSONObject().put("type", "STRING").put("description", "Card ID from allowedNext; omit only to reread the visible card")))));
+        tools.put(new JSONObject().put("name", "present_deck_card").put("description", "Show a selected card from the currently open Deck full-screen. Only use a card ID supplied by get_deck_card or list_decks results.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("card_id", new JSONObject().put("type", "STRING").put("description", "Card ID to display; omit to refresh current card")))));
+        tools.put(new JSONObject().put("name", "advance_deck").put("description", "Advance to the next card in the currently open Deck after the current card has been explained. Read the returned card data before speaking about it."));
+        JSONObject metricProperties = new JSONObject().put("label", new JSONObject().put("type", "STRING"))
+                .put("value", new JSONObject().put("type", "STRING"));
+        JSONObject cardProperties = new JSONObject()
+                .put("type", new JSONObject().put("type", "STRING").put("enum", new JSONArray().put("cover").put("content").put("metric").put("timeline").put("compare")))
+                .put("title", new JSONObject().put("type", "STRING"))
+                .put("subtitle", new JSONObject().put("type", "STRING"))
+                .put("body", new JSONObject().put("type", "STRING"))
+                .put("speakerNotes", new JSONObject().put("type", "STRING"))
+                .put("facts", new JSONObject().put("type", "ARRAY").put("items", new JSONObject().put("type", "STRING")))
+                .put("items", new JSONObject().put("type", "ARRAY").put("items", new JSONObject().put("type", "STRING")))
+                .put("metrics", new JSONObject().put("type", "ARRAY").put("items", new JSONObject().put("type", "OBJECT").put("properties", metricProperties)));
+        JSONObject ephemeralProperties = new JSONObject().put("title", new JSONObject().put("type", "STRING").put("description", "Presentation title"))
+                .put("cards", new JSONObject().put("type", "ARRAY").put("description", "3–8 cards in speaking order")
+                        .put("items", new JSONObject().put("type", "OBJECT").put("properties", cardProperties)));
+        tools.put(new JSONObject().put("name", "create_ephemeral_deck").put("description", "Create a temporary, session-only Deck for explaining a general topic when the user did not select an imported Deck. Use 3–8 concise cards based only on known information; do not claim current research or sources. The first card is displayed immediately.")
+                .put("parameters", new JSONObject().put("type", "OBJECT").put("properties", ephemeralProperties).put("required", new JSONArray().put("title").put("cards"))));
+        tools.put(new JSONObject().put("name", "list_deck_images").put("description", "List images bundled inside the currently imported Deck. Returns safe assetId values; call before attaching an image. Session-only decks do not have imported images."));
+        tools.put(new JSONObject().put("name", "attach_deck_image").put("description", "Attach a listed imported image to a future Deck card. Current and already presented cards are locked to avoid visual disruption.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject()
+                .put("card_id", new JSONObject().put("type", "STRING"))
+                .put("asset_id", new JSONObject().put("type", "STRING"))
+                .put("caption", new JSONObject().put("type", "STRING"))).put("required", new JSONArray().put("card_id").put("asset_id"))));
+        JSONObject stringArraySchema = new JSONObject().put("type", "ARRAY").put("items", new JSONObject().put("type", "STRING"));
+        JSONObject editProperties = new JSONObject().put("title", new JSONObject().put("type", "STRING")).put("subtitle", new JSONObject().put("type", "STRING"))
+                .put("body", new JSONObject().put("type", "STRING")).put("speakerNotes", new JSONObject().put("type", "STRING"))
+                .put("facts", stringArraySchema).put("items", stringArraySchema);
+        tools.put(new JSONObject().put("name", "update_deck_card").put("description", "Rewrite only a future card to adapt the remaining presentation after a user request. The current card is locked.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("card_id", new JSONObject().put("type", "STRING")).put("patch", new JSONObject().put("type", "OBJECT").put("properties", editProperties))).put("required", new JSONArray().put("card_id").put("patch"))));
+        JSONObject insertedCardProperties = new JSONObject().put("type", new JSONObject().put("type", "STRING")).put("title", new JSONObject().put("type", "STRING"))
+                .put("subtitle", new JSONObject().put("type", "STRING")).put("body", new JSONObject().put("type", "STRING")).put("speakerNotes", new JSONObject().put("type", "STRING"))
+                .put("facts", stringArraySchema).put("items", stringArraySchema);
+        tools.put(new JSONObject().put("name", "insert_deck_card").put("description", "Insert one supplementary card after the current or another future card when the user asks for a missing explanation. The inserted card becomes part of the remaining presentation.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("after_card_id", new JSONObject().put("type", "STRING")).put("card", new JSONObject().put("type", "OBJECT").put("properties", insertedCardProperties))).put("required", new JSONArray().put("after_card_id").put("card"))));
+        tools.put(new JSONObject().put("name", "remove_future_deck_card").put("description", "Remove a not-yet-presented card that is now redundant. Current and already presented cards are locked.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("card_id", new JSONObject().put("type", "STRING"))).put("required", new JSONArray().put("card_id"))));
         return tools;
     }
 
     private void executeToolAsync(final JSONObject call) {
         final String id = call.optString("id", "tool_" + System.nanoTime());
         synchronized (handledToolCalls) { if (!handledToolCalls.add(id)) return; }
+        synchronized (agentLock) { pendingToolCalls.add(call); }
+        drainToolQueue();
+    }
+
+    private void drainToolQueue() {
+        final JSONObject call;
+        synchronized (agentLock) {
+            if (toolWorkerRunning || pendingToolCalls.isEmpty()) return;
+            toolWorkerRunning = true;
+            call = pendingToolCalls.remove(0);
+        }
         new Thread(new Runnable() {
             @Override public void run() {
-                JSONObject result = new JSONObject();
                 try {
-                    String name = call.getString("name");
-                    JSONObject args = call.optJSONObject("args");
-                    if (args == null) args = new JSONObject();
-                    if ("take_screenshot".equals(name)) result = captureAndSendScreen();
-                    else if ("inspect_ui".equals(name)) result = inspectUi();
-                    else if ("launch_app".equals(name)) result = launchApp(args);
-                    else if ("swipe_screen".equals(name)) result = swipe(args);
-                    else if ("tap_screen".equals(name)) result = tap(args);
-                    else if ("type_text".equals(name)) result = typeText(args);
-                    else if ("press_key".equals(name)) result = pressKey(args);
-                    else if ("schedule_reminder".equals(name)) {
-                        int delay = (int) args.optDouble("delay_seconds", 60);
-                        String msg = args.optString("message", args.optString("label", "時間到了"));
-                        String lbl = args.optString("label", delay + "秒後提醒");
-                        ScheduledTaskManager mgr = ScheduledTaskManager.getInstance(CrewAccessibilityService.getInstance() != null ? CrewAccessibilityService.getInstance() : MainActivity.class.cast(null));
-                        ScheduledTaskManager.ScheduledTask task = mgr.scheduleReminder(lbl, delay, msg);
-                        result.put("success", true).put("task", task.toJson()).put("message", "已設定計時器：" + lbl);
-                    }
-                    else if ("start_screen_monitor".equals(name)) {
-                        int interval = (int) args.optDouble("interval_seconds", 60);
-                        int duration = (int) args.optDouble("duration_minutes", 10);
-                        String cond = args.optString("target_condition", "");
-                        String lbl = args.optString("label", "畫面巡檢");
-                        ScheduledTaskManager mgr = ScheduledTaskManager.getInstance(CrewAccessibilityService.getInstance() != null ? CrewAccessibilityService.getInstance() : MainActivity.class.cast(null));
-                        ScheduledTaskManager.ScheduledTask task = mgr.startScreenMonitor(lbl, interval, duration, cond, true);
-                        result.put("success", true).put("task", task.toJson()).put("message", "已啟動畫面監控：" + lbl);
-                    }
-                    else if ("list_active_schedules".equals(name)) {
-                        ScheduledTaskManager mgr = ScheduledTaskManager.getInstance(CrewAccessibilityService.getInstance() != null ? CrewAccessibilityService.getInstance() : MainActivity.class.cast(null));
-                        result.put("success", true).put("tasks", mgr.getActiveTasksJson()).put("summary", mgr.getActiveTasksSummaryText());
-                    }
-                    else if ("cancel_schedule".equals(name)) {
-                        boolean all = args.optBoolean("cancel_all", false);
-                        String taskId = args.optString("task_id", args.optString("label_hint", ""));
-                        ScheduledTaskManager mgr = ScheduledTaskManager.getInstance(CrewAccessibilityService.getInstance() != null ? CrewAccessibilityService.getInstance() : MainActivity.class.cast(null));
-                        if (all) {
-                            int cnt = mgr.cancelAllTasks();
-                            result.put("success", true).put("cancelledCount", cnt).put("message", "已取消所有計時器與畫面巡檢");
-                        } else {
-                            boolean ok = mgr.cancelTask(taskId);
-                            result.put("success", ok).put("message", ok ? "已成功取消該計時器" : "找不到指定計時器或巡檢任務");
-                        }
-                    }
-                    else if ("end_voice_session".equals(name)) {
-                        result.put("success", true).put("message", "語音通話即將結束");
-                        sendToolResponse(id, name, result);
-                        new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(new Runnable() {
-                            @Override public void run() {
-                                stop();
-                            }
-                        }, 1200);
-                        return;
-                    }
-                    else if ("save_to_main_chat".equals(name) || "send_to_main_chat".equals(name)) result = sendToMainChat(args);
-                    else result.put("success", false).put("error", "不支援的原生工具：" + name);
-                    sendToolResponse(id, name, result);
-                } catch (Exception error) {
-                    try {
-                        result.put("success", false).put("error", error.getMessage() == null ? "工具執行失敗" : error.getMessage());
-                        sendToolResponse(id, call.optString("name", "unknown"), result);
-                    } catch (Exception ignored) {}
+                    executeSingleTool(call);
+                } finally {
+                    activeToolThread = null;
+                    synchronized (agentLock) { toolWorkerRunning = false; }
+                    drainToolQueue();
                 }
             }
-        }, "crew-native-live-tool").start();
+        }, "crew-native-live-agent-tool").start();
+    }
+
+    private void executeSingleTool(final JSONObject call) {
+        final String id = call.optString("id", "tool_" + System.nanoTime());
+        final String name = call.optString("name", "unknown");
+        final JSONObject args = call.optJSONObject("args") == null ? new JSONObject() : call.optJSONObject("args");
+        final AgentTaskRecord task = beginAgentStep(name, args);
+        if (task == null) {
+            sendBlockedToolResponse(id, name, "Agent 任務已停止，請以目前資訊作結論。");
+            return;
+        }
+        if (task.blockedReason != null) {
+            sendBlockedToolResponse(id, name, task.blockedReason);
+            requestAgentConclusion(task, task.blockedReason);
+            return;
+        }
+        JSONObject result = new JSONObject();
+        activeToolThread = Thread.currentThread();
+        try {
+            if ("take_screenshot".equals(name)) result = captureAndSendScreen();
+            else if ("inspect_ui".equals(name)) result = inspectUi();
+            else if ("launch_app".equals(name)) result = launchApp(args);
+            else if ("swipe_screen".equals(name)) result = swipe(args);
+            else if ("tap_screen".equals(name)) result = tap(args);
+            else if ("type_text".equals(name)) result = typeText(args);
+            else if ("press_key".equals(name)) result = pressKey(args);
+            else if ("schedule_reminder".equals(name)) result = scheduleReminder(args);
+            else if ("start_screen_monitor".equals(name)) result = startScreenMonitor(args);
+            else if ("list_active_schedules".equals(name)) result = listSchedules();
+            else if ("cancel_schedule".equals(name)) result = cancelSchedule(args);
+            else if ("end_voice_session".equals(name)) {
+                result.put("success", true).put("message", "語音通話即將結束");
+                sendToolResponse(id, name, result);
+                finishAgentTask(task, "通話結束", "");
+                new Handler(Looper.getMainLooper()).postDelayed(new Runnable() { @Override public void run() { stop(); } }, 1200);
+                return;
+            } else if ("save_to_main_chat".equals(name) || "send_to_main_chat".equals(name)) result = sendToMainChat(args);
+            else if ("list_decks".equals(name)) result = DeckRepository.listDecks();
+            else if ("open_deck".equals(name)) result = DeckRepository.openDeck(args.optString("deck_id"));
+            else if ("get_deck_card".equals(name)) result = DeckRepository.getCard(args.optString("card_id"));
+            else if ("present_deck_card".equals(name)) result = DeckRepository.presentCard(args.optString("card_id"));
+            else if ("advance_deck".equals(name)) result = DeckRepository.advance();
+            else if ("create_ephemeral_deck".equals(name)) result = DeckRepository.createEphemeralDeck(args.optString("title"), args.optJSONArray("cards"));
+            else if ("list_deck_images".equals(name)) result = DeckRepository.listDeckImages();
+            else if ("attach_deck_image".equals(name)) result = DeckRepository.attachImageToFutureCard(args.optString("card_id"), args.optString("asset_id"), args.optString("caption"));
+            else if ("update_deck_card".equals(name)) result = DeckRepository.updateFutureCard(args.optString("card_id"), args.optJSONObject("patch"));
+            else if ("insert_deck_card".equals(name)) result = DeckRepository.insertFutureCard(args.optString("after_card_id"), args.optJSONObject("card"));
+            else if ("remove_future_deck_card".equals(name)) result = DeckRepository.removeFutureCard(args.optString("card_id"));
+            else result.put("success", false).put("error", "不支援的原生工具：" + name);
+        } catch (Exception error) {
+            try { result.put("success", false).put("error", error.getMessage() == null ? "工具執行失敗" : error.getMessage()); } catch (Exception ignored) {}
+        } finally { activeToolConnection = null; }
+        try {
+            if (task.cancelled) result = new JSONObject().put("success", false).put("cancelled", true).put("error", "使用者已停止任務");
+            task.addStep(name, result);
+            sendToolResponse(id, name, result);
+            task.awaitingModel = true;
+            scheduleAgentResponseWatchdog(task);
+            reportStage("Agent 第 " + task.steps + " / " + agentMaxSteps + " 步：已取得「" + name + "」結果，正在決定下一步");
+        } catch (Exception error) { reportStage("Agent 工具結果回灌失敗：" + error.getMessage()); }
+    }
+
+    private AgentTaskRecord beginAgentStep(String name, JSONObject args) {
+        synchronized (agentLock) {
+            if (activeAgentTask == null || activeAgentTask.finished) {
+                activeAgentTask = new AgentTaskRecord("agent_" + System.currentTimeMillis());
+                reportStage("Agent 任務開始：" + activeAgentTask.taskId);
+            }
+            AgentTaskRecord task = activeAgentTask;
+            clearAgentResponseWatchdogLocked();
+            String signature = buildAgentSignature(name, args);
+            if (task.cancelled) return null;
+            if (System.currentTimeMillis() - task.startedAt > AGENT_TASK_TIMEOUT_MS) task.blockedReason = "本次 Agent 任務已逾時（90 秒），請以目前已知結果作結論。";
+            else if (task.steps >= agentMaxSteps) task.blockedReason = "已達本次自動執行步數上限（" + agentMaxSteps + " 步），請以目前已知結果作結論。";
+            else if (signature.equals(task.lastSignature)) task.blockedReason = "偵測到相同工具與參數連續重複呼叫兩次，已停止迴圈；請說明目前結果。";
+            else if (task.getToolCount(name) >= maxRunsForTool(name)) task.blockedReason = "工具「" + name + "」已達本次任務最多 " + maxRunsForTool(name) + " 次執行限制，請改用替代方案或作結論。";
+            if (task.blockedReason == null) {
+                task.steps++;
+                task.lastSignature = signature;
+                task.incrementTool(name);
+                task.awaitingModel = false;
+                task.status = "Agent 第 " + task.steps + " / " + agentMaxSteps + " 步：正在執行「" + name + "」";
+                reportStage(task.status);
+            }
+            return task;
+        }
+    }
+
+    private int maxRunsForTool(String name) { return "advance_deck".equals(name) || "present_deck_card".equals(name) ? AGENT_DECK_NAV_MAX_RUNS : AGENT_MAX_TOOL_RUNS; }
+    private String buildAgentSignature(String name, JSONObject args) {
+        // Each advance has a different logical position, so it is not a model loop.
+        if ("advance_deck".equals(name)) return name + ":" + args.toString() + ":at=" + DeckRepository.activeIndex();
+        return name + ":" + args.toString();
+    }
+
+    private void sendBlockedToolResponse(String id, String name, String reason) {
+        try { sendToolResponse(id, name, new JSONObject().put("success", false).put("agentStopped", true).put("error", reason)); }
+        catch (Exception ignored) {}
+    }
+
+    private void requestAgentConclusion(AgentTaskRecord task, String reason) {
+        task.awaitingModel = true;
+        task.status = reason;
+        reportStage(reason);
+        sendInternalAgentDirective("【Agent 系統狀態】" + reason + " 不要再呼叫工具；請以目前已知的工具結果，向使用者給出清楚、簡短的最終結論。");
+    }
+
+    private void scheduleAgentResponseWatchdog(final AgentTaskRecord task) {
+        synchronized (agentLock) {
+            clearAgentResponseWatchdogLocked();
+            agentResponseWatchdog = new Runnable() {
+                @Override public void run() {
+                    boolean shouldPrompt = false;
+                    synchronized (agentLock) {
+                        if (activeAgentTask == task && task.awaitingModel && !task.finished && !task.cancelled && !task.watchdogPrompted) {
+                            task.watchdogPrompted = true;
+                            shouldPrompt = true;
+                        }
+                    }
+                    if (shouldPrompt) {
+                        String reason = "工具結果已回傳，但 8 秒未收到下一步或語音回覆；請立即以語音說明目前結果。";
+                        requestAgentConclusion(task, reason);
+                    }
+                }
+            };
+            agentWatchdogHandler.postDelayed(agentResponseWatchdog, AGENT_FINAL_RESPONSE_WAIT_MS);
+        }
+    }
+
+    private void markAgentModelResponse() { clearAgentResponseWatchdog(); }
+    private void clearAgentResponseWatchdog() { synchronized (agentLock) { clearAgentResponseWatchdogLocked(); } }
+    private void clearAgentResponseWatchdogLocked() {
+        if (agentResponseWatchdog != null) agentWatchdogHandler.removeCallbacks(agentResponseWatchdog);
+        agentResponseWatchdog = null;
+    }
+
+    /** Internal control turn: do not pollute the user-facing live transcript. */
+    private void sendInternalAgentDirective(String text) {
+        try {
+            if (webSocket == null) return;
+            JSONObject part = new JSONObject().put("text", text);
+            JSONObject turn = new JSONObject().put("role", "user").put("parts", new JSONArray().put(part));
+            webSocket.send(new JSONObject().put("clientContent", new JSONObject().put("turns", new JSONArray().put(turn)).put("turnComplete", true)).toString());
+        } catch (Exception error) { Log.w(TAG, "Agent 結論指令傳送失敗：" + error.getMessage()); }
+    }
+
+    private void appendAgentFinalText(String text) {
+        synchronized (agentLock) { if (activeAgentTask != null && activeAgentTask.awaitingModel) activeAgentTask.finalReply += text; }
+    }
+
+    private void finishAgentTaskIfAwaitingModel() {
+        AgentTaskRecord task;
+        synchronized (agentLock) { task = activeAgentTask; }
+        if (task != null && task.awaitingModel && !task.finished) finishAgentTask(task, task.blockedReason == null ? "任務完成" : task.blockedReason, task.finalReply);
+    }
+
+    private void finishAgentTask(AgentTaskRecord task, String reason, String finalReply) {
+        synchronized (agentLock) {
+            if (task.finished) return;
+            task.finished = true;
+            clearAgentResponseWatchdogLocked();
+            task.endReason = reason;
+            task.finalReply = finalReply == null ? task.finalReply : finalReply;
+            task.status = "Agent 任務結束：" + reason;
+            agentHistory.add(task);
+            if (agentHistory.size() > 20) agentHistory.remove(0);
+            if (activeAgentTask == task) activeAgentTask = null;
+        }
+        reportStage(task.status);
+    }
+
+    private JSONObject scheduleReminder(JSONObject args) throws Exception {
+        int delay = (int) args.optDouble("delay_seconds", 60);
+        String msg = args.optString("message", args.optString("label", "時間到了"));
+        String lbl = args.optString("label", delay + "秒後提醒");
+        ScheduledTaskManager mgr = ScheduledTaskManager.getInstance(CrewAccessibilityService.getInstance() != null ? CrewAccessibilityService.getInstance() : MainActivity.class.cast(null));
+        ScheduledTaskManager.ScheduledTask task = mgr.scheduleReminder(lbl, delay, msg);
+        return new JSONObject().put("success", true).put("task", task.toJson()).put("message", "已設定計時器：" + lbl);
+    }
+
+    private JSONObject startScreenMonitor(JSONObject args) throws Exception {
+        int interval = (int) args.optDouble("interval_seconds", 60), duration = (int) args.optDouble("duration_minutes", 10);
+        String cond = args.optString("target_condition", ""), lbl = args.optString("label", "畫面巡檢");
+        ScheduledTaskManager mgr = ScheduledTaskManager.getInstance(CrewAccessibilityService.getInstance() != null ? CrewAccessibilityService.getInstance() : MainActivity.class.cast(null));
+        ScheduledTaskManager.ScheduledTask task = mgr.startScreenMonitor(lbl, interval, duration, cond, true);
+        return new JSONObject().put("success", true).put("task", task.toJson()).put("message", "已啟動畫面監控：" + lbl);
+    }
+
+    private JSONObject listSchedules() throws Exception {
+        ScheduledTaskManager mgr = ScheduledTaskManager.getInstance(CrewAccessibilityService.getInstance() != null ? CrewAccessibilityService.getInstance() : MainActivity.class.cast(null));
+        return new JSONObject().put("success", true).put("tasks", mgr.getActiveTasksJson()).put("summary", mgr.getActiveTasksSummaryText());
+    }
+
+    private JSONObject cancelSchedule(JSONObject args) throws Exception {
+        boolean all = args.optBoolean("cancel_all", false);
+        String taskId = args.optString("task_id", args.optString("label_hint", ""));
+        ScheduledTaskManager mgr = ScheduledTaskManager.getInstance(CrewAccessibilityService.getInstance() != null ? CrewAccessibilityService.getInstance() : MainActivity.class.cast(null));
+        if (all) return new JSONObject().put("success", true).put("cancelledCount", mgr.cancelAllTasks()).put("message", "已取消所有計時器與畫面巡檢");
+        boolean ok = mgr.cancelTask(taskId);
+        return new JSONObject().put("success", ok).put("message", ok ? "已成功取消該計時器" : "找不到指定計時器或巡檢任務");
     }
 
     private JSONObject swipe(JSONObject args) throws Exception {
@@ -805,6 +1074,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         HttpURLConnection connection = null;
         try {
             connection = (HttpURLConnection) new URL("http://127.0.0.1:8766" + endpoint).openConnection();
+            activeToolConnection = connection;
             connection.setRequestMethod("GET");
             connection.setConnectTimeout(3000); connection.setReadTimeout(5000);
             int code = connection.getResponseCode();
@@ -813,7 +1083,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             while ((line = reader.readLine()) != null) text.append(line);
             reader.close();
             return text.length() == 0 ? new JSONObject() : new JSONObject(text.toString());
-        } finally { if (connection != null) connection.disconnect(); }
+        } finally { if (connection != null) connection.disconnect(); if (activeToolConnection == connection) activeToolConnection = null; }
     }
 
     private JSONObject typeText(JSONObject args) throws Exception {
@@ -926,6 +1196,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         HttpURLConnection connection = null;
         try {
             connection = (HttpURLConnection) new URL("http://127.0.0.1:8766" + endpoint).openConnection();
+            activeToolConnection = connection;
             connection.setRequestMethod("POST"); connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
             connection.setDoOutput(true); connection.setConnectTimeout(3500); connection.setReadTimeout(7000);
             byte[] body = payload.toString().getBytes("UTF-8");
@@ -939,7 +1210,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             JSONObject response = text.length() == 0 ? new JSONObject() : new JSONObject(text.toString());
             if (!response.has("success")) response.put("success", code >= 200 && code < 300);
             return response;
-        } finally { if (connection != null) connection.disconnect(); }
+        } finally { if (connection != null) connection.disconnect(); if (activeToolConnection == connection) activeToolConnection = null; }
     }
 
     private void sendToolResponse(String id, String name, JSONObject result) throws Exception {
@@ -1230,6 +1501,41 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             if (!audioQueue.offer(pcm)) Log.w(TAG, "音訊佇列已滿，略過過期語音片段");
         }
     }
+
+    /** Compact in-memory audit record. Raw payloads deliberately never enter transcripts. */
+    private static final class AgentTaskRecord {
+        final String taskId;
+        final long startedAt = System.currentTimeMillis();
+        final ArrayList<String> stepsSummary = new ArrayList<String>();
+        final java.util.HashMap<String, Integer> toolCounts = new java.util.HashMap<String, Integer>();
+        int steps;
+        String lastSignature = "";
+        String status = "";
+        String blockedReason;
+        String endReason = "";
+        String finalReply = "";
+        boolean awaitingModel;
+        boolean watchdogPrompted;
+        boolean cancelled;
+        boolean finished;
+        AgentTaskRecord(String id) { taskId = id; }
+        int getToolCount(String name) { Integer value = toolCounts.get(name); return value == null ? 0 : value; }
+        void incrementTool(String name) { toolCounts.put(name, getToolCount(name) + 1); }
+        void addStep(String name, JSONObject result) {
+            String outcome = result.optBoolean("success") ? "成功" : (result.optBoolean("cancelled") ? "已取消" : "失敗");
+            String detail = result.optString("message", result.optString("error", ""));
+            stepsSummary.add(name + "：" + outcome + (detail.isEmpty() ? "" : "（" + detail + "）"));
+        }
+        JSONObject toJson() {
+            JSONObject json = new JSONObject();
+            try {
+                json.put("taskId", taskId).put("startedAt", startedAt).put("steps", new JSONArray(stepsSummary))
+                        .put("stepCount", steps).put("endReason", endReason).put("finalReply", finalReply).put("status", status);
+            } catch (Exception ignored) {}
+            return json;
+        }
+    }
+
     private void reportStage(String text) { stage = text; listener.onStatus(text); Log.d(TAG, text); }
     private synchronized void fail(String message, Throwable error) {
         if (!running) return;

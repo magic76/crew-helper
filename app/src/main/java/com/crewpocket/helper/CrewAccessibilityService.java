@@ -883,14 +883,19 @@ public class CrewAccessibilityService extends AccessibilityService {
             if (target == null && label != null && !label.trim().isEmpty()) {
                 target = findMatchingClickableNode(root, label.trim(), true);
                 if (target == null) target = findMatchingClickableNode(root, label.trim(), false);
+                // ChatGPT and many modern composers expose only an icon.  When
+                // the model clearly asks to send, rank the composer-side icons
+                // instead of giving up because there is no visible text.
+                if (target == null && isSendIntent(label, id)) target = findLikelySendButton(root);
             }
             if (target == null) return false;
             try {
                 Rect bounds = new Rect();
                 target.getBoundsInScreen(bounds);
                 boolean clicked = target.performAction(AccessibilityNodeInfo.ACTION_CLICK);
-                // Physical tap fallback ensures custom views and touch listeners receive click
-                if (bounds.width() > 0 && bounds.height() > 0) {
+                // Only fall back when semantic click was rejected.  Tapping
+                // unconditionally after ACTION_CLICK can double-send a message.
+                if (!clicked && bounds.width() > 0 && bounds.height() > 0) {
                     performTap(bounds.centerX(), bounds.centerY());
                     return true;
                 }
@@ -991,10 +996,10 @@ public class CrewAccessibilityService extends AccessibilityService {
                 : (text.toLowerCase(Locale.ROOT).contains(query) || desc.toLowerCase(Locale.ROOT).contains(query) || viewId.toLowerCase(Locale.ROOT).contains(query));
 
         if (!matched && !exact) {
-            boolean isSendQuery = query.contains("發送") || query.contains("送出") || query.contains("傳送") || query.contains("send");
+            boolean isSendQuery = isSendIntent(label, "");
             if (isSendQuery) {
                 String combined = (text + " " + desc + " " + viewId).toLowerCase(Locale.ROOT);
-                if (combined.contains("發送") || combined.contains("送出") || combined.contains("傳送") || combined.contains("send") || combined.contains("send-btn")) {
+                if (hasSendMarker(combined)) {
                     matched = true;
                 }
             }
@@ -1017,6 +1022,56 @@ public class CrewAccessibilityService extends AccessibilityService {
             }
         }
         return null;
+    }
+
+    private boolean isSendIntent(String label, String id) {
+        String query = ((label == null ? "" : label) + " " + (id == null ? "" : id)).toLowerCase(Locale.ROOT);
+        return query.contains("發送") || query.contains("送出") || query.contains("傳送") || query.contains("send")
+                || query.contains("提交") || query.contains("傳訊") || query.contains("reply");
+    }
+
+    private boolean hasSendMarker(String value) {
+        return value.contains("發送") || value.contains("送出") || value.contains("傳送") || value.contains("提交")
+                || value.contains("send") || value.contains("send-btn") || value.contains("send_button")
+                || value.contains("composer_send") || value.contains("message_send") || value.contains("action_send")
+                || value.contains("reply") || value.contains("arrow_upward") || value.contains("up_arrow");
+    }
+
+    /** Finds an unlabeled composer send icon using metadata first, then its position beside the edit box. */
+    private AccessibilityNodeInfo findLikelySendButton(AccessibilityNodeInfo root) {
+        AccessibilityNodeInfo input = findActiveEditText(root);
+        Rect inputBounds = new Rect();
+        if (input != null) input.getBoundsInScreen(inputBounds);
+        List<AccessibilityNodeInfo> nodes = new ArrayList<AccessibilityNodeInfo>();
+        collectClickableNodes(root, nodes);
+        AccessibilityNodeInfo best = null;
+        int bestScore = 0;
+        Rect rootBounds = new Rect(); root.getBoundsInScreen(rootBounds);
+        for (AccessibilityNodeInfo node : nodes) {
+            try {
+                Rect b = new Rect(); node.getBoundsInScreen(b);
+                String text = node.getText() == null ? "" : node.getText().toString();
+                String desc = node.getContentDescription() == null ? "" : node.getContentDescription().toString();
+                String viewId = node.getViewIdResourceName() == null ? "" : node.getViewIdResourceName().toString();
+                String cls = node.getClassName() == null ? "" : node.getClassName().toString();
+                String combined = (text + " " + desc + " " + viewId).toLowerCase(Locale.ROOT);
+                int score = hasSendMarker(combined) ? 120 : 0;
+                if (cls.toLowerCase(Locale.ROOT).contains("imagebutton")) score += 6;
+                if (input != null && b.centerY() >= inputBounds.top - 120 && b.centerY() <= inputBounds.bottom + 120
+                        && b.centerX() >= inputBounds.centerX()) score += 35;
+                if (b.centerX() >= rootBounds.left + rootBounds.width() * 0.65f && b.centerY() >= rootBounds.top + rootBounds.height() * 0.55f) score += 8;
+                if (score > bestScore) {
+                    if (best != null) best.recycle();
+                    best = AccessibilityNodeInfo.obtain(node);
+                    bestScore = score;
+                }
+            } finally { node.recycle(); }
+        }
+        if (input != null) input.recycle();
+        // Positional fallback needs strong composer evidence; it must never turn
+        // a generic "send" request into a random navigation or attachment tap.
+        if (bestScore < 35) { if (best != null) best.recycle(); return null; }
+        return best;
     }
 
     // ── Native Background Wake Word Engine ──

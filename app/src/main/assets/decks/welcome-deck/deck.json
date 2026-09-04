@@ -1,0 +1,40 @@
+{
+  "deckId": "welcome-deck",
+  "title": "Crew Helper Deck 範例",
+  "theme": "dark-tech",
+  "cards": [
+    {
+      "id": "cover",
+      "type": "cover",
+      "title": "讓語音帶領簡報",
+      "subtitle": "Crew Helper Live Deck",
+      "body": "語音模型負責說明與選頁；App 安全、穩定地呈現卡片。",
+      "speakerNotes": "歡迎使用 Live Deck。先說明語音與卡片如何同步。",
+      "facts": ["JSON 資料包", "原生卡片", "Agent loop"],
+      "next": ["workflow"]
+    },
+    {
+      "id": "workflow",
+      "type": "timeline",
+      "title": "三段式流程",
+      "body": "資料包 → 受控工具 → 原生 Deck 顯示。",
+      "items": ["載入 deck.json", "模型取得卡片摘要", "切換卡片並語音說明"],
+      "speakerNotes": "模型不直接讀任意檔案，也不任意產生介面。",
+      "facts": ["安全白名單", "可中斷", "支援多步 Agent"],
+      "next": ["result"]
+    },
+    {
+      "id": "result",
+      "type": "metric",
+      "title": "同一份資料，多種用途",
+      "body": "同樣的 Deck 可以變成故事、教學、產品簡報或工作報告。",
+      "metrics": [
+        {"label": "卡片模板", "value": "6+"},
+        {"label": "可用 Agent 步數", "value": "20–100"}
+      ],
+      "speakerNotes": "以這張做結論，邀請使用者準備自己的 deck.json。",
+      "facts": ["可攜 JSON", "Live 語音導覽"],
+      "next": []
+    }
+  ]
+}

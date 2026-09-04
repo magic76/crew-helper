@@ -200,6 +200,11 @@ public class MainActivity extends Activity {
                 @Override public void onClick(View v) { startActivity(new Intent(MainActivity.this, NativeLiveActivity.class)); }
             }));
 
+        root.addView(makeActionCard("▣", I18n.get(this, "Deck 簡報", "Live Decks"),
+            I18n.get(this, "開啟範例、匯入卡片資料夾或交給語音助理導覽", "Open examples, import a Deck folder, or let Live guide it"), CrewTheme.TEAL_400, new View.OnClickListener() {
+                @Override public void onClick(View v) { startActivity(new Intent(MainActivity.this, DeckActivity.class)); }
+            }));
+
         // ── Service shortcuts ──
         TextView sectionTitle = new TextView(this);
         sectionTitle.setText(I18n.get(this, "服務與權限", "SERVICES & PERMISSIONS"));
@@ -225,6 +230,10 @@ public class MainActivity extends Activity {
         pageContent.addView(makePrimaryButton("🎙️ " + I18n.get(this, "開始 Live 通話", "Start Live Call"), new View.OnClickListener() {
             @Override public void onClick(View v) { startActivity(new Intent(MainActivity.this, NativeLiveActivity.class)); }
         }));
+        pageContent.addView(makeActionCard("▣", I18n.get(this, "Deck 簡報", "Live Decks"),
+            I18n.get(this, "先預覽或匯入卡片；開始通話後可由語音自動導覽", "Preview or import cards; Live can guide them after the call starts"), CrewTheme.TEAL_400, new View.OnClickListener() {
+                @Override public void onClick(View v) { startActivity(new Intent(MainActivity.this, DeckActivity.class)); }
+            }));
         pageContent.addView(makeActionCard("☀️", I18n.cardKeepAwakeTitle(this),
             I18n.cardKeepAwakeDesc(this, FloatingBubbleManager.isKeepAwakeActive()), CrewTheme.AMBER_400, new View.OnClickListener() {
                 @Override public void onClick(View v) {

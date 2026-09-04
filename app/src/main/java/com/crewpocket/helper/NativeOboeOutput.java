@@ -12,6 +12,8 @@ final class NativeOboeOutput {
     }
     static void stop() { if (available) nativeStop(); }
     static void flush() { if (available) nativeFlush(); }
+    /** Gemini marked its turn complete: play a short final PCM fragment now. */
+    static void finishTurn() { if (available) nativeFinishTurn(); }
     static void write(byte[] pcm) { if (available && pcm != null && pcm.length > 0) nativeWrite(pcm, pcm.length); }
     static String getInfo() {
         try { return available ? nativeGetInfo() : null; }
@@ -20,6 +22,7 @@ final class NativeOboeOutput {
     private static native boolean nativeStart(boolean mediaOutput);
     private static native void nativeStop();
     private static native void nativeFlush();
+    private static native void nativeFinishTurn();
     private static native void nativeWrite(byte[] pcm, int length);
     private static native String nativeGetInfo();
 }

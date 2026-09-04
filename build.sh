@@ -29,6 +29,12 @@ d8 --output bin/ bin/classes/com/crewpocket/helper/*.class app/libs/*.jar
 
 echo "4. Packaging APK..."
 aapt package -f -M app/src/main/AndroidManifest.xml -S app/src/main/res -I "$FRAMEWORK_RES" -F bin/unsigned.apk
+# Keep local, data-driven features (such as Live Deck manifests) in the APK.
+# aapt package does not include src/main/assets automatically in this lightweight build.
+if [ -d app/src/main/assets ]; then
+  mkdir -p bin/assets
+  cp -R app/src/main/assets/. bin/assets/
+fi
 
 echo "4.5 Building Oboe native audio output (arm64-v8a)..."
 mkdir -p bin/lib/arm64-v8a bin/oboe-obj
@@ -48,6 +54,9 @@ cd bin
 aapt add unsigned.apk classes.dex
 aapt add unsigned.apk lib/arm64-v8a/libcrewaudio.so
 aapt add unsigned.apk lib/arm64-v8a/libc++_shared.so
+if [ -d assets ]; then
+  find assets -type f -print0 | xargs -0 -r aapt add unsigned.apk
+fi
 cd "$SCRIPT_DIR"
 
 echo "5. Signing APK..."

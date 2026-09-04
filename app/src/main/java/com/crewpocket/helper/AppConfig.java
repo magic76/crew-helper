@@ -15,6 +15,8 @@ public class AppConfig {
     public static final String KEY_INTERRUPTION_SENSITIVITY = "interruption_sensitivity";
     public static final String KEY_AUDIO_OUTPUT = "audio_output";
     public static final String KEY_VOICE_PRESET = "voice_preset";
+    /** Maximum automatic Gemini tool-result cycles in one Live agent task. */
+    public static final String KEY_AGENT_MAX_STEPS = "agent_max_steps";
 
     public static final String DEFAULT_VOICE = "Kore";
     public static final String DEFAULT_SERVER = "http://127.0.0.1:8000";
@@ -151,12 +153,23 @@ public class AppConfig {
                 .putString(KEY_LIVE_TONE, isLiveTone(tone) ? tone : "warm").apply();
     }
 
+    // ── 8. Live Agent loop ──
+    public static int getAgentMaxSteps(Context context) {
+        if (context == null) return 20;
+        return Math.max(1, Math.min(100, getPrefs(context).getInt(KEY_AGENT_MAX_STEPS, 20)));
+    }
+
+    public static void setAgentMaxSteps(Context context, int steps) {
+        if (context == null) return;
+        getPrefs(context).edit().putInt(KEY_AGENT_MAX_STEPS, Math.max(1, Math.min(100, steps))).apply();
+    }
+
     private static boolean isLiveTone(String tone) {
         return "natural".equals(tone) || "warm".equals(tone) || "lively".equals(tone)
                 || "professional".equals(tone) || "calm".equals(tone) || "urgent".equals(tone);
     }
 
-    // ── 8. App Language (Bilingual: "auto", "zh", "en") ──
+    // ── 9. App Language (Bilingual: "auto", "zh", "en") ──
     public static final String KEY_LANGUAGE = "app_language";
 
     public static String getLanguage(Context context) {
@@ -169,7 +182,7 @@ public class AppConfig {
         getPrefs(context).edit().putString(KEY_LANGUAGE, lang == null ? "auto" : lang.trim()).apply();
     }
 
-    // ── 9. User-defined Custom System Prompt ──
+    // ── 10. User-defined Custom System Prompt ──
     public static final String KEY_CUSTOM_PROMPT = "custom_system_prompt";
 
     public static String getCustomSystemPrompt(Context context) {
