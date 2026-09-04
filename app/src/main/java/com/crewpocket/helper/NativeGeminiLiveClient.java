@@ -251,6 +251,16 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         }
     };
     private volatile boolean allowVoiceInterruption = true; // 🎙️ 語音插話：預設開啟（隨時自由說話打斷 AI；若關閉則為防插話保護模式）
+    private final Handler deckAdvanceHandler = new Handler(Looper.getMainLooper());
+    private volatile boolean deckAutoAdvanceActive = false;
+    private final Runnable deckAdvanceRunnable = new Runnable() {
+        @Override public void run() {
+            triggerDeckAutoAdvance();
+        }
+    };
+
+    boolean isDeckAutoAdvanceActive() { return deckAutoAdvanceActive; }
+    void setDeckAutoAdvanceActive(boolean active) { this.deckAutoAdvanceActive = active; if (!active) cancelDeckAutoAdvance(); }
 
     boolean isAgentMuted() { return agentMuted; }
     boolean isAiSpeaking() { return aiSpeaking; }
@@ -317,6 +327,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
     private void markCurrentTurnInterrupted() {
         interruptedCurrentTurn = true;
+        deckAdvanceHandler.removeCallbacks(deckAdvanceRunnable);
         interruptionHandler.removeCallbacks(clearInterruptedFallback);
         interruptionHandler.postDelayed(clearInterruptedFallback, 1800);
     }
@@ -324,6 +335,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     void stop() {
         boolean wasRunning = running;
         cancelAgentTask("通話已結束");
+        cancelDeckAutoAdvance();
         running = false;
         setupReady = false;
         interruptionHandler.removeCallbacks(clearInterruptedFallback);
@@ -467,12 +479,16 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 listener.onSpeakingChanged(false);
             }
             finishAgentTaskIfAwaitingModel();
+            if (deckAutoAdvanceActive && DeckRepository.hasActiveDeck() && !interruptedCurrentTurn && !agentMuted) {
+                scheduleDeckAutoAdvance();
+            }
         }
     }
 
     private boolean isStopAgentTaskPhrase(String text) {
         String clean = text == null ? "" : text.replaceAll("\\s+", "");
-        return clean.contains("停止任務") || clean.contains("取消任務") || clean.contains("停止執行") || clean.contains("停止 agent");
+        return clean.contains("停止任務") || clean.contains("取消任務") || clean.contains("停止執行") || clean.contains("停止agent")
+                || clean.contains("停止簡報") || clean.contains("暫停簡報") || clean.contains("不要翻頁") || clean.contains("先別翻頁") || clean.contains("關閉簡報");
     }
 
     private static String mapToSupportedVoice(String name) {
@@ -528,7 +544,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 + "3. 第三層（Vision 視覺兜底）：只有在 inspect_ui 完全取不到有效節點（例如 Canvas 畫布、遊戲自訂 UI）時，才呼叫 take_screenshot 截圖並以座標點擊。"
                 + "【結束通話】當使用者說『關閉』、『掛斷』、『結束通話』、『退下』、『先這樣』或『再見』時，先簡短道別一句（如『好的，先為您關閉，隨時喊我！』），並一律呼叫 end_voice_session 工具以自動掛斷連線。"
                 + "【定時提醒與畫面巡檢】當使用者要求計時（如『5分鐘後叫我』）呼叫 schedule_reminder；週期性檢查畫面（如『每分鐘看一次畫面跟我說』）或等待條件（如『等出現已送達時叫我』）呼叫 start_screen_monitor；查詢目前排程呼叫 list_active_schedules；取消排程呼叫 cancel_schedule。"
-                + "【Live Deck 簡報】使用者要求從資料卡片講故事、教學或簡報時，先呼叫 list_decks，確認 deckId 後呼叫 open_deck。每一頁都必須先切換並確認畫面已顯示，再開始介紹；講完後自行 advance_deck 前往下一頁，不必逐頁等待使用者確認。每次以 get_deck_card 的 speakerNotes、facts 與 allowedNext 作為內容邊界，但不可逐字朗讀講稿；應依聽眾問題、時間、語氣與理解狀態，靈活改成摘要、教學、故事或正式簡報。使用者插話時優先回答，可跳到相關 cardId 或調整詳略。不得杜撰不存在的卡片、數字或圖片，也不要把內部 JSON 念給使用者。"
+                + "【Live Deck 簡報與自動導播】使用者要求講故事、教學或簡報時，先呼叫 list_decks，確認 deckId 後呼叫 open_deck。系統配備『自動簡報導播機制』：每一頁切換顯示並生動介紹；語音播報播放完畢後，系統會自動在適當時機回饋翻頁指示，請直接呼叫 advance_deck 繼續下一頁，抵達最後一頁時請作結。每次以 get_deck_card 的 speakerNotes、facts 與 allowedNext 作為內容邊界，但不可逐字死板朗讀；應依聽眾反應、時間、語氣與理解狀態靈活講解。使用者插話時優先回答，可跳到相關 cardId 或調整詳略。不得杜撰不存在的卡片、數字或圖片，也不要把內部 JSON 念給使用者。"
                 + "【Deck 動態調整】播報中使用者要求補充、簡化、重排或增加圖片時，只能改目前頁之後的卡片：用 update_deck_card 改後續內容、insert_deck_card 加入補充、remove_future_deck_card 移除重複。先 list_deck_images，僅從回傳的 assetId 使用 attach_deck_image 加入匯入圖片；不得捏造圖片、URL 或來源。修改後要簡短告知已調整後續內容，接著依新卡片繼續。"
                 + "【即席 Deck】若使用者要求介紹一般主題、但未指定已匯入資料 Deck，先用 create_ephemeral_deck 建立 3–8 張簡潔卡片，再逐頁同步顯示與語音介紹。即席 Deck 僅基於既有知識與本輪對話，必須在需要時清楚說明它不是即時查證資料；不可偽稱最新、引用來源或精確統計。"
                 + "【Agent 自動迴圈】若任務需要多步工具操作，請在取得每次工具結果後自行決定下一步；除非任務已完成、需要使用者澄清、觸及既有安全確認、工具失敗無替代方案，否則不要提前結束。每次工具結果都必須作為下一步判斷依據，不可假設工具已成功。系統會自動限制本次步數、逾時與重複呼叫；收到限制訊息時不可再呼叫工具，必須以目前已知結果作結論。"
@@ -672,11 +688,23 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 return;
             } else if ("save_to_main_chat".equals(name) || "send_to_main_chat".equals(name)) result = sendToMainChat(args);
             else if ("list_decks".equals(name)) result = DeckRepository.listDecks();
-            else if ("open_deck".equals(name)) result = DeckRepository.openDeck(args.optString("deck_id"));
+            else if ("open_deck".equals(name)) {
+                result = DeckRepository.openDeck(args.optString("deck_id"));
+                if (result.optBoolean("success", false)) deckAutoAdvanceActive = true;
+            }
             else if ("get_deck_card".equals(name)) result = DeckRepository.getCard(args.optString("card_id"));
-            else if ("present_deck_card".equals(name)) result = DeckRepository.presentCard(args.optString("card_id"));
-            else if ("advance_deck".equals(name)) result = DeckRepository.advance();
-            else if ("create_ephemeral_deck".equals(name)) result = DeckRepository.createEphemeralDeck(args.optString("title"), args.optJSONArray("cards"));
+            else if ("present_deck_card".equals(name)) {
+                result = DeckRepository.presentCard(args.optString("card_id"));
+                if (result.optBoolean("success", false)) deckAutoAdvanceActive = true;
+            }
+            else if ("advance_deck".equals(name)) {
+                result = DeckRepository.advance();
+                if (result.optBoolean("success", false)) deckAutoAdvanceActive = true;
+            }
+            else if ("create_ephemeral_deck".equals(name)) {
+                result = DeckRepository.createEphemeralDeck(args.optString("title"), args.optJSONArray("cards"));
+                if (result.optBoolean("success", false)) deckAutoAdvanceActive = true;
+            }
             else if ("list_deck_images".equals(name)) result = DeckRepository.listDeckImages();
             else if ("attach_deck_image".equals(name)) result = DeckRepository.attachImageToFutureCard(args.optString("card_id"), args.optString("asset_id"), args.optString("caption"));
             else if ("update_deck_card".equals(name)) result = DeckRepository.updateFutureCard(args.optString("card_id"), args.optJSONObject("patch"));
@@ -778,6 +806,50 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             JSONObject turn = new JSONObject().put("role", "user").put("parts", new JSONArray().put(part));
             webSocket.send(new JSONObject().put("clientContent", new JSONObject().put("turns", new JSONArray().put(turn)).put("turnComplete", true)).toString());
         } catch (Exception error) { Log.w(TAG, "Agent 結論指令傳送失敗：" + error.getMessage()); }
+    }
+
+    private void scheduleDeckAutoAdvance() {
+        if (!running || webSocket == null || !deckAutoAdvanceActive || interruptedCurrentTurn || agentMuted) return;
+        if (!DeckRepository.hasActiveDeck()) {
+            deckAutoAdvanceActive = false;
+            return;
+        }
+        long remaining = Math.max(0, lastPlaybackActiveAt - System.currentTimeMillis());
+        long delay = remaining + 650; // 等待音訊緩衝清空 + 650ms 自然對話停頓
+        deckAdvanceHandler.removeCallbacks(deckAdvanceRunnable);
+        deckAdvanceHandler.postDelayed(deckAdvanceRunnable, delay);
+        Log.d(TAG, "排程簡報自動翻頁：" + delay + "ms 後觸發下一頁導播");
+    }
+
+    private void triggerDeckAutoAdvance() {
+        if (!running || webSocket == null || !deckAutoAdvanceActive || interruptedCurrentTurn || agentMuted) return;
+        if (!DeckRepository.hasActiveDeck()) {
+            deckAutoAdvanceActive = false;
+            return;
+        }
+        long remaining = lastPlaybackActiveAt - System.currentTimeMillis();
+        if (remaining > 100) {
+            deckAdvanceHandler.removeCallbacks(deckAdvanceRunnable);
+            deckAdvanceHandler.postDelayed(deckAdvanceRunnable, remaining + 450);
+            return;
+        }
+        if (DeckRepository.hasNext()) {
+            int nextCardNum = DeckRepository.activeIndex() + 2;
+            int total = DeckRepository.totalCards();
+            Log.d(TAG, "自動簡報導播：本頁語音播報完畢，驅動模型翻至第 " + nextCardNum + "/" + total + " 頁");
+            reportStage("簡報導播：第 " + (nextCardNum - 1) + " 頁講解完畢，自動進入第 " + nextCardNum + " 頁…");
+            sendInternalAgentDirective("【簡報導播系統】第 " + (nextCardNum - 1) + " 頁語音播報已播放完畢。請翻到下一頁（呼叫 advance_deck 工具）並繼續為使用者講解第 " + nextCardNum + " 頁（共 " + total + " 頁）。");
+        } else {
+            Log.d(TAG, "自動簡報導播：已抵達最後一張卡片，驅動模型總結作結");
+            reportStage("簡報導播：全部卡片播報完畢，進行總結…");
+            sendInternalAgentDirective("【簡報導播系統】簡報所有卡片已播報完畢。請對整份簡報進行簡短總結並禮貌作結。");
+            deckAutoAdvanceActive = false;
+        }
+    }
+
+    private void cancelDeckAutoAdvance() {
+        deckAdvanceHandler.removeCallbacks(deckAdvanceRunnable);
+        deckAutoAdvanceActive = false;
     }
 
     private void appendAgentFinalText(String text) {
@@ -1127,37 +1199,38 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             targetUrl = AppConfig.DEFAULT_SERVER;
         }
         HttpURLConnection connection = null;
+        String endpoint = targetUrl.replaceAll("/+$", "") + "/api/inbound/messages";
         try {
-            String endpoint = targetUrl.replaceAll("/+$", "") + "/api/inbound/messages";
             connection = (HttpURLConnection) new URL(endpoint).openConnection();
             connection.setRequestMethod("POST");
             connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
             connection.setDoOutput(true);
             connection.setConnectTimeout(2500);
             connection.setReadTimeout(5000);
-            byte[] body = new JSONObject().put("message", message).put("source", "NativeGeminiLive").toString().getBytes("UTF-8");
+            byte[] body = new JSONObject().put("message", message).put("source", "CrewHelper").toString().getBytes("UTF-8");
             connection.setFixedLengthStreamingMode(body.length);
             OutputStream out = connection.getOutputStream();
             out.write(body);
             out.close();
             int code = connection.getResponseCode();
-            if (code >= 200 && code < 300) {
-                BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream(), "UTF-8"));
-                StringBuilder raw = new StringBuilder();
-                String line;
-                while ((line = reader.readLine()) != null) raw.append(line);
-                reader.close();
-                JSONObject reply = raw.length() == 0 ? new JSONObject() : new JSONObject(raw.toString());
-                reply.put("success", true);
-                reply.put("message", "已儲存至 Crew Pocket 主對話。");
-                return reply;
-            }
+            BufferedReader reader = new BufferedReader(new InputStreamReader(code >= 200 && code < 300 ? connection.getInputStream() : connection.getErrorStream(), "UTF-8"));
+            StringBuilder raw = new StringBuilder(); String line;
+            while ((line = reader.readLine()) != null) raw.append(line);
+            reader.close();
+            JSONObject reply = raw.length() == 0 ? new JSONObject() : new JSONObject(raw.toString());
+            if (code < 200 || code >= 300) return new JSONObject().put("success", false).put("httpStatus", code)
+                    .put("error", reply.optString("error", "Crew Pocket 主聊天拒絕接收訊息"));
+            boolean delivered = reply.optBoolean("delivered", false);
+            int pending = reply.optInt("pending", 0);
+            reply.put("success", true).put("deliveryStatus", delivered ? "delivered" : "queued")
+                    .put("message", delivered ? "已送到 Crew Pocket 主聊天。" : "主聊天目前未連線；訊息已排隊（待送 " + pending + " 則），開啟 Crew Pocket 主頁後才會送出。");
+            return reply;
         } catch (Exception e) {
             Log.w(TAG, "sendToMainChat error: " + e.getMessage());
+            return new JSONObject().put("success", false).put("error", "無法連線 Crew Pocket 主聊天橋接：" + (e.getMessage() == null ? endpoint : e.getMessage()));
         } finally {
             if (connection != null) connection.disconnect();
         }
-        return new JSONObject().put("success", true).put("message", "目前為獨立雲端模式，訊息已由語音助理即時紀錄並回答。");
     }
 
     private JSONObject captureAndSendScreen() throws Exception {

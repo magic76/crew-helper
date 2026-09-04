@@ -99,6 +99,11 @@ public class DeckActivity extends Activity {
         if (activity != null) activity.ui.post(new Runnable() { @Override public void run() { activity.renderCurrent(); } });
     }
 
+    static void closeDeck() {
+        final DeckActivity activity = visible.get();
+        if (activity != null) activity.ui.post(new Runnable() { @Override public void run() { activity.finish(); } });
+    }
+
     private void renderCurrent() {
         if (cardHost == null) return;
         DeckRepository.Deck deck = DeckRepository.activeDeck(); int index = DeckRepository.activeIndex();

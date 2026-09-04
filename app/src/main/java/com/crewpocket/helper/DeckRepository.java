@@ -347,8 +347,19 @@ final class DeckRepository {
         }
     }
 
+    static boolean hasActiveDeck() { synchronized (LOCK) { return activeDeck != null; } }
+    static boolean hasNext() { synchronized (LOCK) { return activeDeck != null && activeIndex < activeDeck.cards.length() - 1; } }
+    static int totalCards() { synchronized (LOCK) { return activeDeck == null ? 0 : activeDeck.cards.length(); } }
     static Deck activeDeck() { synchronized (LOCK) { return activeDeck; } }
     static int activeIndex() { synchronized (LOCK) { return activeIndex; } }
+
+    static void closeActiveDeck() {
+        synchronized (LOCK) {
+            activeDeck = null;
+            activeIndex = 0;
+            DeckActivity.closeDeck();
+        }
+    }
 
     /** Direct UI entry opens the bundled example without requiring a voice tool call first. */
     static void ensureActiveDeck() {
