@@ -408,8 +408,7 @@ public class FloatingBubbleManager {
         int bSize = bubbleParams.width > 0 ? bubbleParams.width : dp(40);
 
         final int startX = bubbleParams.x;
-        // Slide 58% off-screen, leaving 42% (approx 17dp) as a sleek glowing edge tab
-        final int endX = (startX < screenWidth / 2) ? - (bSize * 58 / 100) : (screenWidth - (bSize * 42 / 100));
+        final int endX = (startX < screenWidth / 2) ? - (bSize * 55 / 100) : (screenWidth - (bSize * 45 / 100));
 
         if (dockAnimator != null && dockAnimator.isRunning()) {
             dockAnimator.cancel();
@@ -424,7 +423,7 @@ public class FloatingBubbleManager {
                 float frac = (float) animation.getAnimatedValue();
                 if (bubbleView == null || bubbleParams == null) return;
                 bubbleParams.x = (int) (startX + (endX - startX) * frac);
-                bubbleView.setAlpha(1.0f - 0.65f * frac); // Smoothly fades from 1.0 to 0.35 (Ghost Mode)
+                bubbleView.setAlpha(1.0f - 0.60f * frac); // Smoothly fades from 1.0 to 0.40 (Ghost Mode)
                 try { windowManager.updateViewLayout(bubbleView, bubbleParams); } catch (Exception ignored) {}
             }
         });
@@ -458,7 +457,7 @@ public class FloatingBubbleManager {
                     bubbleParams = new WindowManager.LayoutParams(
                         size, size,
                         overlayType,
-                        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                         PixelFormat.TRANSLUCENT
                     );
                     bubbleParams.gravity = Gravity.TOP | Gravity.START;
@@ -1962,7 +1961,10 @@ public class FloatingBubbleManager {
         }
 
         public void setNativeVoiceState(int state) {
-            nativeVoiceState = state;
+            this.nativeVoiceState = state;
+            if (continuousRotator != null) {
+                continuousRotator.setDuration(state == 2 ? 1500 : (state == 1 ? 2500 : 4000));
+            }
             invalidate();
         }
 
