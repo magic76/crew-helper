@@ -21,6 +21,7 @@ import android.content.ContentUris;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.util.Log;
+import org.json.JSONArray;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -541,6 +542,12 @@ public class CrewAccessibilityService extends AccessibilityService {
                     }
                 } catch (Exception e) {}
 
+                PolicyEngine.Result tapPolicy = evaluateTapPolicy(x, y);
+                if (tapPolicy.blocked()) {
+                    writeJsonAndClose(socket, policyBlockJson(tapPolicy));
+                    return;
+                }
+
                 final float fx = x, fy = y;
                 mainHandler.post(new Runnable() {
                     @Override
@@ -552,6 +559,11 @@ public class CrewAccessibilityService extends AccessibilityService {
             } else if (path.startsWith("/click")) {
                 final String label = getJsonString(body, "label");
                 final String id = getJsonString(body, "id");
+                PolicyEngine.Result policy = PolicyEngine.evaluate("click", label, id, false);
+                if (policy.blocked()) {
+                    writeJsonAndClose(socket, policyBlockJson(policy));
+                    return;
+                }
                 final boolean[] clickSuccess = new boolean[]{false};
                 final Object clickLock = new Object();
                 mainHandler.post(new Runnable() {
@@ -626,6 +638,11 @@ public class CrewAccessibilityService extends AccessibilityService {
                     } catch (Exception ignored) {}
                 }
                 final String fText = textToType == null ? "" : textToType;
+                PolicyEngine.Result policy = PolicyEngine.evaluate("type", "", "", isActiveInputSensitive());
+                if (policy.blocked()) {
+                    writeJsonAndClose(socket, policyBlockJson(policy));
+                    return;
+                }
                 final boolean[] typeSuccess = new boolean[]{false};
                 final Object typeLock = new Object();
                 mainHandler.post(new Runnable() {
@@ -772,6 +789,29 @@ public class CrewAccessibilityService extends AccessibilityService {
                 } catch (Exception ignored) {}
                 apps.append("]}");
                 responseJson = apps.toString();
+            } else if (path.startsWith("/screen_state")) {
+                AccessibilityNodeInfo root = getRootInActiveWindow();
+                if (root != null) {
+                    try {
+                        CharSequence pkg = root.getPackageName();
+                        android.util.DisplayMetrics metrics = getResources().getDisplayMetrics();
+                        JSONArray actions = ActionRegistry.build(root);
+                        StringBuilder sb = new StringBuilder();
+                        sb.append("{\"success\":true,\"package\":\"")
+                                .append(pkg != null ? jsonEscape(pkg.toString()) : "").append("\",");
+                        sb.append("\"screenWidth\":").append(metrics.widthPixels)
+                                .append(",\"screenHeight\":").append(metrics.heightPixels).append(",");
+                        sb.append("\"nodes\":[");
+                        dumpNodesJson(root, sb);
+                        if (sb.charAt(sb.length() - 1) == ',') sb.deleteCharAt(sb.length() - 1);
+                        sb.append("],\"actions\":").append(actions.toString()).append("}");
+                        responseJson = sb.toString();
+                    } finally {
+                        root.recycle();
+                    }
+                } else {
+                    responseJson = "{\"success\":false,\"error\":\"No active window found\"}";
+                }
             } else if (path.startsWith("/nodes") || path.startsWith("/screen_info")) {
                 AccessibilityNodeInfo root = getRootInActiveWindow();
                 if (root != null) {
@@ -1187,6 +1227,10 @@ public class CrewAccessibilityService extends AccessibilityService {
                 target = findEditableNode(root);
             }
             if (target != null) {
+                if (SensitiveDataGuard.isSensitiveNode(target)) {
+                    target.recycle();
+                    return false;
+                }
                 target.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
                 android.os.Bundle args = new android.os.Bundle();
                 args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text);
@@ -1309,14 +1353,16 @@ public class CrewAccessibilityService extends AccessibilityService {
         boolean clickable = node.isClickable();
         boolean scrollable = node.isScrollable();
         boolean editable = node.isEditable();
+        boolean sensitive = SensitiveDataGuard.isSensitiveNode(node);
 
         boolean hasContent = (text != null && text.length() > 0) || (desc != null && desc.length() > 0) || (viewId != null && viewId.length() > 0);
         if (hasContent || clickable || scrollable || editable) {
             sb.append("{");
             sb.append("\"class\":\"").append(cls != null ? cls.toString() : "").append("\",");
-            sb.append("\"text\":\"").append(text != null ? jsonEscape(text.toString()) : "").append("\",");
-            sb.append("\"desc\":\"").append(desc != null ? jsonEscape(desc.toString()) : "").append("\",");
+            sb.append("\"text\":\"").append(sensitive ? SensitiveDataGuard.REDACTED : (text != null ? jsonEscape(text.toString()) : "")).append("\",");
+            sb.append("\"desc\":\"").append(sensitive ? SensitiveDataGuard.REDACTED : (desc != null ? jsonEscape(desc.toString()) : "")).append("\",");
             sb.append("\"id\":\"").append(viewId != null ? jsonEscape(viewId.toString()) : "").append("\",");
+            if (sensitive) sb.append("\"sensitive\":true,");
             sb.append("\"clickable\":").append(clickable).append(",");
             sb.append("\"scrollable\":").append(scrollable).append(",");
             sb.append("\"editable\":").append(editable).append(",");
@@ -1333,5 +1379,83 @@ public class CrewAccessibilityService extends AccessibilityService {
                 child.recycle();
             }
         }
+    }
+
+    private boolean isActiveInputSensitive() {
+        AccessibilityNodeInfo root = getRootInActiveWindow();
+        if (root == null) return false;
+        try {
+            AccessibilityNodeInfo target = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
+            if (target == null) target = findEditableNode(root);
+            if (target == null) return false;
+            try {
+                return SensitiveDataGuard.isSensitiveNode(target);
+            } finally {
+                target.recycle();
+            }
+        } catch (Exception ignored) {
+            return false;
+        } finally {
+            root.recycle();
+        }
+    }
+
+    private PolicyEngine.Result evaluateTapPolicy(float x, float y) {
+        AccessibilityNodeInfo root = getRootInActiveWindow();
+        if (root == null) return PolicyEngine.evaluate("click", "", "", false);
+        try {
+            AccessibilityNodeInfo target = findActionNodeAtPoint(root, Math.round(x), Math.round(y));
+            if (target == null) return PolicyEngine.evaluate("click", "", "", false);
+            try {
+                String text = target.getText() == null ? "" : target.getText().toString();
+                String desc = target.getContentDescription() == null ? "" : target.getContentDescription().toString();
+                String id = target.getViewIdResourceName() == null ? "" : target.getViewIdResourceName().toString();
+                String label = !text.trim().isEmpty() ? text : desc;
+                return PolicyEngine.evaluate("click", label, id, SensitiveDataGuard.isSensitiveNode(target));
+            } finally {
+                target.recycle();
+            }
+        } catch (Exception ignored) {
+            return PolicyEngine.evaluate("click", "", "", false);
+        } finally {
+            root.recycle();
+        }
+    }
+
+    private AccessibilityNodeInfo findActionNodeAtPoint(AccessibilityNodeInfo node, int x, int y) {
+        if (node == null) return null;
+        Rect bounds = new Rect();
+        node.getBoundsInScreen(bounds);
+        if (!bounds.contains(x, y)) return null;
+
+        int count = node.getChildCount();
+        for (int i = 0; i < count; i++) {
+            AccessibilityNodeInfo child = node.getChild(i);
+            if (child == null) continue;
+            try {
+                AccessibilityNodeInfo nested = findActionNodeAtPoint(child, x, y);
+                if (nested != null) return nested;
+            } finally {
+                child.recycle();
+            }
+        }
+        return node.isClickable() ? AccessibilityNodeInfo.obtain(node) : null;
+    }
+
+    private String policyBlockJson(PolicyEngine.Result result) {
+        return "{\"success\":false,\"policy\":\"BLOCK\",\"error\":\""
+                + jsonEscape(result.reason) + "\"}";
+    }
+
+    private void writeJsonAndClose(Socket socket, String responseJson) throws Exception {
+        byte[] responseBytes = responseJson.getBytes(StandardCharsets.UTF_8);
+        OutputStream out = socket.getOutputStream();
+        out.write("HTTP/1.1 200 OK\r\n".getBytes(StandardCharsets.UTF_8));
+        out.write("Content-Type: application/json; charset=utf-8\r\n".getBytes(StandardCharsets.UTF_8));
+        out.write(("Content-Length: " + responseBytes.length + "\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write("\r\n".getBytes(StandardCharsets.UTF_8));
+        out.write(responseBytes);
+        out.flush();
+        socket.close();
     }
 }
