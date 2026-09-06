@@ -81,11 +81,13 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private volatile int lastScreenWidth = 1;
     private volatile int lastScreenHeight = 1;
     private final Set<String> handledToolCalls = new HashSet<String>();
-    // One serialized worker keeps tool-result → next-model-turn ordering deterministic.
-    // Audio and WebSocket callbacks stay independent of this queue.
-    private static final long AGENT_TASK_TIMEOUT_MS = 90_000L;
-    private static final long AGENT_FINAL_RESPONSE_WAIT_MS = 8_000L;
-    private static final int AGENT_MAX_TOOL_RUNS = 3;
+    // Phone tasks routinely need several semantic actions plus model turns.
+    // Observation/verification calls do not consume the mutation-action budget.
+    private static final long AGENT_TASK_TIMEOUT_MS = 180_000L;
+    private static final long AGENT_FINAL_RESPONSE_WAIT_MS = 12_000L;
+    private static final int AGENT_MAX_TOOL_RUNS = 8;
+    private static final int AGENT_MAX_MUTATION_ACTIONS = 15;
+    private static final int AGENT_MAX_SCREENSHOTS = 3;
     // Navigation is deliberately repeatable during a presentation. All other
     // tools keep the conservative 3-run default safety limit.
     private static final int AGENT_DECK_NAV_MAX_RUNS = 16;
@@ -95,7 +97,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private volatile boolean toolWorkerRunning;
     private volatile Thread activeToolThread;
     private volatile HttpURLConnection activeToolConnection;
-    private volatile int agentMaxSteps = 20;
+    private volatile int agentMaxSteps = 30;
     private AgentTaskRecord activeAgentTask;
     private final Handler agentWatchdogHandler = new Handler(Looper.getMainLooper());
     private Runnable agentResponseWatchdog;
@@ -560,7 +562,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 + "【Live Deck 簡報與自動導播】使用者要求講故事、教學或簡報時，先呼叫 list_decks，確認 deckId 後呼叫 open_deck。系統配備『自動簡報導播機制』：每一頁切換顯示並生動介紹；語音播報播放完畢後，系統會自動在適當時機回饋翻頁指示，請直接呼叫 advance_deck 繼續下一頁，抵達最後一頁時請作結。每次以 get_deck_card 的 speakerNotes、facts 與 allowedNext 作為內容邊界，但不可逐字死板朗讀；應依聽眾反應、時間、語氣與理解狀態靈活講解。使用者插話時優先回答，可跳到相關 cardId 或調整詳略。不得杜撰不存在的卡片、數字或圖片，也不要把內部 JSON 念給使用者。"
                 + "【Deck 動態調整】播報中使用者要求補充、簡化、重排或增加圖片時，只能改目前頁之後的卡片：用 update_deck_card 改後續內容、insert_deck_card 加入補充、remove_future_deck_card 移除重複。先 list_deck_images，僅從回傳的 assetId 使用 attach_deck_image 加入匯入圖片；不得捏造圖片、URL 或來源。修改後要簡短告知已調整後續內容，接著依新卡片繼續。"
                 + "【即席 Deck 與圖片】若使用者要求介紹一般主題、但未指定已匯入資料 Deck，先用 create_ephemeral_deck 建立 3–8 張簡潔卡片（卡片可包含合適的 HTTPS 圖片網址以豐富視覺），再逐頁同步顯示與語音介紹。即席 Deck 僅基於既有知識與本輪對話，必須在需要時清楚說明它不是即時查證資料；不可偽稱最新、引用來源或精確統計。"
-                + "【Agent 自動迴圈與事後自我檢查 (Mandatory Verification)】若任務需要多步工具操作，請在取得每次工具結果後自行決定下一步；除非任務已完成、需要使用者澄清、觸及既有安全確認、工具失敗無替代方案，否則不要提前結束。每次工具結果都必須作為下一步判斷依據，不可假設工具已成功。"
+                + "【Agent 自動迴圈與事後自我檢查】若任務需要多步工具操作，請在取得每次工具結果後自行決定下一步；除非任務已完成、需要使用者澄清、觸及既有安全確認、工具失敗無替代方案，否則不要提前結束。每次工具結果都必須作為下一步判斷依據，不可假設工具已成功。"
+                + "【驗證去重】tap/type/launch/swipe/press_key 成功後，原生 runtime 會在同一個 tool result 內附上 progress、verifiedNodes、verifiedActions 與 fingerprint。若這些 verified 欄位已存在且足以決定下一步，不要立刻再呼叫 inspect_ui；直接使用 verifiedActions 繼續。只有 progress=UNKNOWN、UNCHANGED、verifiedNodes/actions 不足，或你需要重新規劃時才額外 inspect_ui。"
                 + "【ActionRegistry 優先】inspect_ui 若回傳 actions，下一步必須優先從 actions 中挑選 CLICK/TYPE/SCROLL；除非 actions 無法完成目標，否則不得自行猜 resource id、按鈕文字或座標。"
                 + "【失敗恢復】任何 tap/type/swipe/launch 執行後若結果 success=false，或再次 inspect_ui 後畫面沒有朝目標改變，不得立刻原樣重複同一動作。先重新 inspect_ui，改用另一個 action、返回上一層、重新聚焦輸入框或改用其他語意路徑。連續兩次無進展就停止並向使用者說明卡在哪裡。"
                 + "【輸入與送出】一般訊息、搜尋文字、表單文字可正常使用 type_text。只有真正 Android password input 禁止自動輸入；不要把一般文字輸入框誤判成敏感欄位。輸入成功後必須 inspect_ui 確認內容/狀態已改變，再找 send/submit action。"
@@ -768,20 +771,41 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             clearAgentResponseWatchdogLocked();
             String signature = buildAgentSignature(name, args);
             if (task.cancelled) return null;
-            if (System.currentTimeMillis() - task.startedAt > AGENT_TASK_TIMEOUT_MS) task.blockedReason = "本次 Agent 任務已逾時（90 秒），請以目前已知結果作結論。";
+            boolean observation = isObservationTool(name);
+            boolean mutation = isMutationTool(name);
+            if (System.currentTimeMillis() - task.startedAt > AGENT_TASK_TIMEOUT_MS) task.blockedReason = "本次 Agent 任務已逾時（180 秒），請以目前已知結果作結論。";
             else if (task.steps >= agentMaxSteps) task.blockedReason = "已達本次自動執行步數上限（" + agentMaxSteps + " 步），請以目前已知結果作結論。";
-            else if (signature.equals(task.lastSignature)) task.blockedReason = "偵測到相同工具與參數連續重複呼叫兩次，已停止迴圈；請說明目前結果。";
-            else if (task.getToolCount(name) >= maxRunsForTool(name)) task.blockedReason = "工具「" + name + "」已達本次任務最多 " + maxRunsForTool(name) + " 次執行限制，請改用替代方案或作結論。";
+            else if (!observation && signature.equals(task.lastSignature)) task.blockedReason = "偵測到相同動作與參數連續重複呼叫，請先重新觀察畫面並改用替代方案。";
+            else if ("take_screenshot".equals(name) && task.getToolCount(name) >= AGENT_MAX_SCREENSHOTS) task.blockedReason = "截圖已達本次任務上限，請改用 Accessibility 畫面狀態或作結論。";
+            else if (!observation && task.getToolCount(name) >= maxRunsForTool(name)) task.blockedReason = "工具「" + name + "」已達本次任務最多 " + maxRunsForTool(name) + " 次執行限制，請改用替代方案或作結論。";
+            else if (mutation && task.mutationActions >= AGENT_MAX_MUTATION_ACTIONS) task.blockedReason = "已達本次任務實際操作上限（" + AGENT_MAX_MUTATION_ACTIONS + " 次），請以目前結果作結論。";
             if (task.blockedReason == null) {
                 task.steps++;
                 task.lastSignature = signature;
                 task.incrementTool(name);
+                if (mutation) task.mutationActions++;
                 task.awaitingModel = false;
                 task.status = "Agent 第 " + task.steps + " / " + agentMaxSteps + " 步：正在執行「" + name + "」";
                 reportStage(task.status);
             }
             return task;
         }
+    }
+
+    private boolean isObservationTool(String name) {
+        return "inspect_ui".equals(name)
+                || "list_active_schedules".equals(name)
+                || "list_decks".equals(name)
+                || "get_deck_card".equals(name)
+                || "list_deck_images".equals(name);
+    }
+
+    private boolean isMutationTool(String name) {
+        return "launch_app".equals(name)
+                || "swipe_screen".equals(name)
+                || "tap_screen".equals(name)
+                || "type_text".equals(name)
+                || "press_key".equals(name);
     }
 
     private int maxRunsForTool(String name) { return "advance_deck".equals(name) || "present_deck_card".equals(name) ? AGENT_DECK_NAV_MAX_RUNS : AGENT_MAX_TOOL_RUNS; }
@@ -816,8 +840,13 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                         }
                     }
                     if (shouldPrompt) {
-                        String reason = "工具結果已回傳，但 8 秒未收到下一步或語音回覆；請立即以語音說明目前結果。";
-                        requestAgentConclusion(task, reason);
+                        String reason = "工具結果已回傳，但 12 秒未收到模型下一步。";
+                        // A delayed model turn should not immediately terminate a
+                        // still-healthy phone task. Prompt it once to continue.
+                        task.awaitingModel = true;
+                        task.status = reason;
+                        reportStage(reason);
+                        sendInternalAgentDirective("【Agent 系統狀態】上一個工具結果已回傳。若任務尚未完成，請直接根據工具回傳的 verifiedNodes、verifiedActions、progress 與 recoveryHint 決定下一步；只有真的完成或無替代方案時才作結論。");
                     }
                 }
             };
@@ -1783,6 +1812,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         final ArrayList<String> stepsSummary = new ArrayList<String>();
         final java.util.HashMap<String, Integer> toolCounts = new java.util.HashMap<String, Integer>();
         int steps;
+        int mutationActions;
         String lastSignature = "";
         String status = "";
         String blockedReason;
@@ -1804,7 +1834,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             JSONObject json = new JSONObject();
             try {
                 json.put("taskId", taskId).put("startedAt", startedAt).put("steps", new JSONArray(stepsSummary))
-                        .put("stepCount", steps).put("endReason", endReason).put("finalReply", finalReply).put("status", status);
+                        .put("stepCount", steps).put("mutationActions", mutationActions)
+                        .put("endReason", endReason).put("finalReply", finalReply).put("status", status);
             } catch (Exception ignored) {}
             return json;
         }
