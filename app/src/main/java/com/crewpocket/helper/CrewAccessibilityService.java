@@ -20,6 +20,7 @@ import android.database.Cursor;
 import android.content.ContentUris;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityWindowInfo;
 import android.util.Log;
 import org.json.JSONArray;
 
@@ -1248,6 +1249,40 @@ public class CrewAccessibilityService extends AccessibilityService {
         }
     }
 
+    private AccessibilityNodeInfo getUnderlyingAppRootForTeach() {
+        AccessibilityNodeInfo active = getRootInActiveWindow();
+        if (isUsableTeachRoot(active)) return active;
+        if (active != null) active.recycle();
+
+        // Fallback: inspect accessibility windows and choose the top-most
+        // non-Crew-Helper application window.
+        try {
+            List<AccessibilityWindowInfo> windows = getWindows();
+            if (windows != null) {
+                for (int i = windows.size() - 1; i >= 0; i--) {
+                    AccessibilityWindowInfo w = windows.get(i);
+                    if (w == null) continue;
+                    AccessibilityNodeInfo root = null;
+                    try {
+                        root = w.getRoot();
+                        if (isUsableTeachRoot(root)) return root;
+                    } catch (Exception ignored) {}
+                    if (root != null) root.recycle();
+                }
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    private boolean isUsableTeachRoot(AccessibilityNodeInfo root) {
+        if (root == null) return false;
+        CharSequence pkgCs = root.getPackageName();
+        String pkg = pkgCs == null ? "" : pkgCs.toString();
+        if (pkg.isEmpty()) return false;
+        // Never learn against our own teaching/control UI.
+        return !getPackageName().equals(pkg);
+    }
+
     private AccessibilityNodeInfo pendingTeachAnchor;
 
     private void clearPendingTeachAnchor() {
@@ -1268,10 +1303,10 @@ public class CrewAccessibilityService extends AccessibilityService {
             new UiTeachOverlay.Callback() {
                 @Override
                 public void onPicked(int screenX, int screenY) {
-                    AccessibilityNodeInfo root = getRootInActiveWindow();
+                    AccessibilityNodeInfo root = getUnderlyingAppRootForTeach();
                     if (root == null) {
                         FloatingBubbleManager fb = FloatingBubbleManager.getInstance();
-                        if (fb != null) fb.showCompactStatus("找不到畫面，請重試", "");
+                        if (fb != null) fb.showCompactStatus("找不到底層 App 畫面，請再試一次", "");
                         clearPendingTeachAnchor();
                         return;
                     }
@@ -1309,7 +1344,7 @@ public class CrewAccessibilityService extends AccessibilityService {
             new UiTeachOverlay.Callback() {
                 @Override
                 public void onPicked(int screenX, int screenY) {
-                    AccessibilityNodeInfo root = getRootInActiveWindow();
+                    AccessibilityNodeInfo root = getUnderlyingAppRootForTeach();
                     AccessibilityNodeInfo hit = root != null ? UiNodeHitTester.findBest(root, screenX, screenY) : null;
                     if (root == null || hit == null || pendingTeachAnchor == null) {
                         FloatingBubbleManager fb = FloatingBubbleManager.getInstance();
@@ -1374,7 +1409,7 @@ public class CrewAccessibilityService extends AccessibilityService {
             new UiTeachOverlay.Callback() {
                 @Override
                 public void onPicked(int screenX, int screenY) {
-                    AccessibilityNodeInfo root = getRootInActiveWindow();
+                    AccessibilityNodeInfo root = getUnderlyingAppRootForTeach();
                     if (root == null) return;
                     AccessibilityNodeInfo picked = null;
                     AccessibilityNodeInfo composer = null;

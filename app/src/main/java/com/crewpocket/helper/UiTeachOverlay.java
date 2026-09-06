@@ -5,6 +5,8 @@ import android.graphics.Color;
 import android.graphics.PixelFormat;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -24,6 +26,11 @@ import android.widget.TextView;
  * - Cancel never forwards the tap to the underlying app
  */
 final class UiTeachOverlay {
+    // 0023: Teach taps must be delivered only AFTER the overlay window has
+    // actually been removed, otherwise getRootInActiveWindow() can resolve
+    // Crew Helper's own overlay instead of the underlying app.
+    private static final long UNDERLYING_WINDOW_SETTLE_MS = 120L;
+
     interface Callback {
         void onPicked(int screenX, int screenY);
         void onCancelled();
@@ -31,6 +38,7 @@ final class UiTeachOverlay {
 
     private final Context context;
     private final WindowManager windowManager;
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private View overlay;
 
     UiTeachOverlay(Context context) {
@@ -102,17 +110,21 @@ final class UiTeachOverlay {
         cancel.setOnTouchListener((v, event) -> {
             if (event.getActionMasked() == MotionEvent.ACTION_UP) {
                 dismiss();
-                if (callback != null) callback.onCancelled();
+                if (callback != null) {
+                    mainHandler.postDelayed(callback::onCancelled, 32L);
+                }
             }
             return true;
         });
 
         root.setOnTouchListener((v, event) -> {
             if (event.getActionMasked() != MotionEvent.ACTION_UP) return true;
-            int x = Math.round(event.getRawX());
-            int y = Math.round(event.getRawY());
+            final int x = Math.round(event.getRawX());
+            final int y = Math.round(event.getRawY());
             dismiss();
-            if (callback != null) callback.onPicked(x, y);
+            if (callback != null) {
+                mainHandler.postDelayed(() -> callback.onPicked(x, y), UNDERLYING_WINDOW_SETTLE_MS);
+            }
             return true;
         });
 
