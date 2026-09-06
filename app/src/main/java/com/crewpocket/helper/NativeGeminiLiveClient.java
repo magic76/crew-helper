@@ -701,10 +701,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 + "【Live Deck 簡報與自動導播】使用者要求講故事、教學或簡報時，先呼叫 list_decks，確認 deckId 後呼叫 open_deck。系統配備『自動簡報導播機制』：每一頁切換顯示並生動介紹；語音播報播放完畢後，系統會自動在適當時機回饋翻頁指示，請直接呼叫 advance_deck 繼續下一頁，抵達最後一頁時請作結。每次以 get_deck_card 的 speakerNotes、facts 與 allowedNext 作為內容邊界，但不可逐字死板朗讀；應依聽眾反應、時間、語氣與理解狀態靈活講解。使用者插話時優先回答，可跳到相關 cardId 或調整詳略。不得杜撰不存在的卡片、數字或圖片，也不要把內部 JSON 念給使用者。"
                 + "【Deck 動態調整】播報中使用者要求補充、簡化、重排或增加圖片時，只能改目前頁之後的卡片：用 update_deck_card 改後續內容、insert_deck_card 加入補充、remove_future_deck_card 移除重複。先 list_deck_images，僅從回傳的 assetId 使用 attach_deck_image 加入匯入圖片；不得捏造圖片、URL 或來源。修改後要簡短告知已調整後續內容，接著依新卡片繼續。"
                 + "【即席 Deck 與圖片】若使用者要求介紹一般主題、但未指定已匯入資料 Deck，先用 create_ephemeral_deck 建立 3–8 張簡潔卡片（卡片可包含合適的 HTTPS 圖片網址以豐富視覺），再逐頁同步顯示與語音介紹。即席 Deck 僅基於既有知識與本輪對話，必須在需要時清楚說明它不是即時查證資料；不可偽稱最新、引用來源或精確統計。"
-                + "【Agent 自動迴圈與事後自我檢查】若任務需要多步工具操作，請在取得每次工具結果後自行決定下一步；除非任務已完成、需要使用者澄清、觸及既有安全確認、工具失敗無替代方案，否則不要提前結束。每次工具結果都必須作為下一步判斷依據，不可假設工具已成功。"
-                + "【驗證去重】tap/type/launch/swipe/press_key 成功後，原生 runtime 會在同一個 tool result 內附上 progress、verifiedNodes、verifiedActions 與 fingerprint。若這些 verified 欄位已存在且足以決定下一步，不要立刻再呼叫 inspect_ui；直接使用 verifiedActions 繼續。只有 progress=UNKNOWN、UNCHANGED、verifiedNodes/actions 不足，或你需要重新規劃時才額外 inspect_ui。"
+                + "【Runtime 結果權威】對 tap/type/launch/swipe/press_key 等 mutation，原生 Runtime 會在操作後重新觀察，並把最終結果收斂為 stepResult。STEP_OK 表示這一步已生效；STEP_FAILED 表示這一步未確認生效。不要自行重新解讀 Android API 的原始回傳，也不要因舊 error、progress 或預期畫面推翻 stepResult。"
+                + "【Agent 自動迴圈】收到 STEP_OK 後，只根據 after 最新畫面決定下一步；若整體任務尚未完成就繼續。收到 STEP_FAILED 才換方法，禁止原樣重複同一動作。"
                 + "【ActionRegistry 優先】inspect_ui 若回傳 actions，下一步必須優先從 actions 中挑選 CLICK/TYPE/SCROLL；除非 actions 無法完成目標，否則不得自行猜 resource id、按鈕文字或座標。"
-                + "【失敗恢復】任何 tap/type/swipe/launch 執行後若結果 success=false，或再次 inspect_ui 後畫面沒有朝目標改變，不得立刻原樣重複同一動作。先重新 inspect_ui，改用另一個 action、返回上一層、重新聚焦輸入框或改用其他語意路徑。連續兩次無進展就停止並向使用者說明卡在哪裡。"
+                + "【失敗恢復】mutation 若回傳 stepResult=STEP_FAILED，不得立刻原樣重複同一動作。先看 after 最新畫面，必要時再 inspect_ui，改用另一個 action、返回上一層、重新聚焦或改用其他語意路徑。連續兩次無進展就停止並向使用者說明卡在哪裡。"
                 + "【輸入與送出】一般訊息、搜尋文字、表單文字可正常使用 type_text。只有真正 Android password input 禁止自動輸入；不要把一般文字輸入框誤判成敏感欄位。輸入成功後必須 inspect_ui 確認內容/狀態已改變，再找 send/submit action。"
                 + "【Composer Send Resolver】輸入訊息後 inspect_ui 若 actions 中存在 role='COMPOSER_SEND' 或 label='send' 的 CLICK action，直接使用該 action；這是 Crew Helper 根據目前輸入框與按鈕幾何位置解析出的送出鍵，不要再自行猜其他圖示。"
                 + "【送出鍵安全規則】沒有 role='COMPOSER_SEND' 或明確 send/發送/送出 metadata 時，禁止只因為某個按鈕位於輸入框最右側就把它當送出；右側按鈕可能是清除 X、關閉、附件或語音。若沒有高可信度 send action，先 inspect_ui 重新確認；Accessibility 仍無法辨識時才用 screenshot/vision 判斷。"
@@ -1008,7 +1008,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                         task.awaitingModel = true;
                         task.status = reason;
                         reportStage(reason);
-                        sendInternalAgentDirective("【Agent 系統狀態】上一個工具結果已回傳。若任務尚未完成，請直接根據工具回傳的 verifiedNodes、verifiedActions、progress 與 recoveryHint 決定下一步；只有真的完成或無替代方案時才作結論。");
+                        sendInternalAgentDirective("【Agent 系統狀態】上一個工具結果已回傳。若 stepResult=STEP_OK，請直接根據 after 最新畫面繼續尚未完成的任務；若 stepResult=STEP_FAILED，請換方法且不要重複同一動作。只有真的完成或無替代方案時才作結論。");
                     }
                 }
             };
@@ -1252,7 +1252,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 JSONObject nodeClick = helperPost("/click", new JSONObject().put("label", label).put("id", id));
                 if (nodeClick.optBoolean("success")) {
                     nodeClick.put("resolvedFrom", "ui_node_action");
-                    return nodeClick;
+                    workingContext.recordAction("tap_screen", "submitted");
+                    return autoObserveAfterMutation(nodeClick, "tap_screen");
                 }
                 JSONObject nodesResp = helperGet("/nodes");
                 if (nodesResp.optBoolean("success")) {
@@ -1305,7 +1306,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         JSONObject reply = helperPost("/tap", new JSONObject().put("x", Math.round(targetX)).put("y", Math.round(targetY)));
         reply.put("resolvedFrom", resolvedFromNode ? "ui_node" : (coordinateSpace.isEmpty() ? "legacy" : coordinateSpace));
         reply.put("visionSize", lastVisionWidth + "x" + lastVisionHeight).put("screenSize", lastScreenWidth + "x" + lastScreenHeight);
-        autoVerifyUiSnapshot(reply, 350);
         workingContext.recordAction("tap_screen", reply.optBoolean("success", false) ? "submitted" : "failed");
         return autoObserveAfterMutation(reply, "tap_screen");
     }
@@ -1399,28 +1399,136 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         return false;
     }
 
+    private long mutationSettleDelayMs(String actionName) {
+        if ("launch_app".equals(actionName)) return 650L;
+        if ("press_key".equals(actionName)) return 320L;
+        if ("type_text".equals(actionName)) return 260L;
+        if ("swipe_screen".equals(actionName)) return 220L;
+        return 220L;
+    }
+
+    /**
+     * Some Android Accessibility / gesture APIs can report false even though the
+     * requested UI transition actually happened. Do not make Gemini reason about
+     * that contradiction. Runtime reconciles the raw execution result against the
+     * immediate semantic screen and returns one authoritative STEP_OK/STEP_FAILED.
+     *
+     * This is intentionally conservative:
+     * - raw success is never downgraded merely because the fingerprint is unchanged;
+     * - raw failure is upgraded only when a real post-action screen change is seen;
+     * - validation/policy/not-found/cancelled failures are never upgraded.
+     */
+    private boolean blocksOutcomeReconciliation(JSONObject result) {
+        if (result == null) return false;
+        if (result.optBoolean("cancelled", false) || result.optBoolean("agentStopped", false)) return true;
+        String error = result.optString("error", "").trim().toUpperCase(Locale.ROOT);
+        if (error.isEmpty()) return false;
+        return error.contains("MISSING")
+                || error.contains("NOT_FOUND")
+                || error.contains("INVALID")
+                || error.contains("UNSUPPORTED")
+                || error.contains("POLICY")
+                || error.contains("BLOCKED")
+                || error.contains("DENIED")
+                || error.contains("SENSITIVE")
+                || error.contains("找不到")
+                || error.contains("不可為空")
+                || error.contains("不支援")
+                || error.contains("禁止")
+                || error.contains("使用者已停止");
+    }
+
+    private JSONObject readSemanticScreenQuietly() {
+        try {
+            return helperGet("/semantic_screen");
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private boolean semanticScreenChanged(JSONObject after, String beforeFingerprint) {
+        if (after == null || !after.optBoolean("success", false)) return false;
+        String afterFingerprint = after.optString("fingerprint", "");
+        return !beforeFingerprint.isEmpty()
+                && !afterFingerprint.isEmpty()
+                && !beforeFingerprint.equals(afterFingerprint);
+    }
+
     private JSONObject autoObserveAfterMutation(JSONObject actionResult, String actionName) {
         if (actionResult == null) actionResult = new JSONObject();
-        if (!actionResult.optBoolean("success", false)) return actionResult;
-        try { Thread.sleep(180L); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
-        JSONObject after = null;
+
+        final boolean executionSuccess = actionResult.optBoolean("success", false);
+        final boolean reconciliationBlocked = blocksOutcomeReconciliation(actionResult);
+        final String beforeFingerprint = latestSemanticFingerprint;
+
         try {
-            after = helperGet("/semantic_screen");
-        } catch (Exception ignored) {}
+            Thread.sleep(mutationSettleDelayMs(actionName));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+
+        JSONObject after = readSemanticScreenQuietly();
+        boolean changed = semanticScreenChanged(after, beforeFingerprint);
+
+        // A false-negative Android result can race the actual UI transition.
+        // Retry observation once, but only for a potentially recoverable raw failure.
+        if (!executionSuccess && !reconciliationBlocked && !changed && !Thread.currentThread().isInterrupted()) {
+            try {
+                Thread.sleep(240L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            JSONObject retry = readSemanticScreenQuietly();
+            if (retry != null && retry.optBoolean("success", false)) {
+                after = retry;
+                changed = semanticScreenChanged(after, beforeFingerprint);
+            }
+        }
+
+        final boolean finalSuccess = executionSuccess || (!reconciliationBlocked && changed);
+
         if (after != null && after.optBoolean("success", false)) {
             String fp = after.optString("fingerprint", "");
-            boolean changed = !fp.isEmpty() && !fp.equals(latestSemanticFingerprint);
             latestSemanticFingerprint = fp;
             semanticObserveRequired = false;
             workingContext.observe(after.optString("package", ""), fp);
-            try {
-                actionResult.put("after", after)
-                        .put("screenChanged", changed)
-                        .put("workingContext", workingContext.toJson());
-            } catch (Exception ignored) {}
         } else {
             semanticObserveRequired = true;
         }
+
+        // Keep the model-facing contract deliberately small and authoritative.
+        try {
+            actionResult.put("success", finalSuccess)
+                    .put("stepResult", finalSuccess ? "STEP_OK" : "STEP_FAILED")
+                    .put("screenChanged", changed);
+
+            if (after != null && after.optBoolean("success", false)) {
+                actionResult.put("after", after);
+            }
+
+            // Remove legacy verification fields that can contradict the reconciled result
+            // and make a weaker Live model second-guess Runtime.
+            actionResult.remove("progress");
+            actionResult.remove("noProgressCount");
+            actionResult.remove("recoveryHint");
+            actionResult.remove("autoVerification");
+            actionResult.remove("verification");
+            actionResult.remove("fingerprint");
+
+            if (finalSuccess) {
+                actionResult.remove("error");
+                if (!executionSuccess) {
+                    actionResult.put("message", "操作已生效。");
+                    Log.i(TAG, "Reconciled false-negative mutation as STEP_OK: " + actionName);
+                }
+            } else {
+                actionResult.put("message", "這一步未確認生效，請依最新畫面改用其他方法，不要重複相同操作。");
+            }
+
+            workingContext.updateLastResult(finalSuccess ? "STEP_OK" : "STEP_FAILED");
+            actionResult.put("workingContext", workingContext.toJson());
+        } catch (Exception ignored) {}
+
         return actionResult;
     }
 
@@ -1532,7 +1640,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             if (reply.optBoolean("success")) {
                 lastCandidateApps.clear();
                 reply.put("app", app.isEmpty() ? explicitPkg : app).put("message", "已啟動 App，以下為啟動後的最新畫面。");
-                autoVerifyUiSnapshot(reply, 800);
             }
             workingContext.recordAction("launch:" + explicitPkg, reply.optBoolean("success", false) ? "submitted" : "failed");
             return autoObserveAfterMutation(reply, "launch_app");
@@ -1550,8 +1657,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 JSONObject reply = helperPost("/launch", new JSONObject().put("package", chosen.optString("package", "")));
                 if (reply.optBoolean("success")) {
                     reply.put("app", chosen.optString("label", "App")).put("message", "已為您啟動「" + chosen.optString("label", "App") + "」，以下為啟動後的最新畫面。");
-                    autoVerifyUiSnapshot(reply, 800);
-                }
+                    }
                 workingContext.recordAction("launch:" + chosen.optString("package", ""), reply.optBoolean("success", false) ? "submitted" : "failed");
                 return autoObserveAfterMutation(reply, "launch_app");
             }
@@ -1589,7 +1695,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             JSONObject reply = helperPost("/launch", new JSONObject().put("package", exactMatch.optString("package", "")));
             if (reply.optBoolean("success")) {
                 reply.put("app", exactMatch.optString("label", app)).put("message", "已啟動 App，以下為啟動後的最新畫面。");
-                autoVerifyUiSnapshot(reply, 800);
             }
             workingContext.recordAction("launch:" + exactMatch.optString("package", ""), reply.optBoolean("success", false) ? "submitted" : "failed");
             return autoObserveAfterMutation(reply, "launch_app");
@@ -1602,7 +1707,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             JSONObject reply = helperPost("/launch", new JSONObject().put("package", candidate.optString("package", "")));
             if (reply.optBoolean("success")) {
                 reply.put("app", candidate.optString("label", app)).put("message", "已啟動 App，以下為啟動後的最新畫面。");
-                autoVerifyUiSnapshot(reply, 800);
             }
             workingContext.recordAction("launch:" + candidate.optString("package", ""), reply.optBoolean("success", false) ? "submitted" : "failed");
             return autoObserveAfterMutation(reply, "launch_app");
@@ -1706,11 +1810,12 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             } catch (Exception ignored) {}
         }
 
-        // 2. Send text to Accessibility Service
+        // 2. Send text to Accessibility Service.
+        // Preserve the bridge result; Runtime reconciliation below decides the final outcome.
         JSONObject reply = helperPost("/type", new JSONObject().put("text", text));
-        reply.put("success", true);
-        reply.put("message", "已在輸入框輸入文字");
-        autoVerifyUiSnapshot(reply, 350);
+        if (reply.optBoolean("success", false)) {
+            reply.put("message", "已在輸入框輸入文字");
+        }
         workingContext.recordAction("type", reply.optBoolean("success", false) ? "submitted" : "failed");
         return autoObserveAfterMutation(reply, "type_text");
     }
@@ -1733,7 +1838,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         String key = args.optString("key", "").toUpperCase();
         if (!("HOME".equals(key) || "BACK".equals(key) || "RECENTS".equals(key) || "NOTIFICATIONS".equals(key) || "QUICK_SETTINGS".equals(key) || "POWER_DIALOG".equals(key))) return new JSONObject().put("success", false).put("error", "不支援的系統按鍵");
         JSONObject reply = helperPost("/key", new JSONObject().put("key", key));
-        autoVerifyUiSnapshot(reply, 400);
         workingContext.recordAction("key:" + key, reply.optBoolean("success", false) ? "submitted" : "failed");
         return autoObserveAfterMutation(reply, "press_key");
     }

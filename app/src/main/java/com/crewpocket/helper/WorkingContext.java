@@ -26,6 +26,7 @@ final class WorkingContext {
 
     synchronized void setGoalHint(String value) { userGoal = safe(value); }
     synchronized void setPendingTask(String value) { pendingTask = safe(value); }
+    synchronized void updateLastResult(String value) { lastResult = safe(value); }
 
     synchronized void recordAction(String action, String result) {
         action = safe(action);
