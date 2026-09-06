@@ -61,15 +61,9 @@ final class LearnedUiResolver {
         // Structural match succeeded — use it.
         if (best != null && !best.coordinateFallback) return best;
 
-        // Structural match failed. Fall back to the most recently learned
-        // coordinate for the matching role if the rule has a stored position.
-        // This handles buttons with no stable viewId or contentDescription
-        // (e.g. Wea's ↑ icon send button).
-        for (LearnedUiMappingStore.Rule rule : rules) {
-            if (rule.hasCoordinate()) {
-                return new Match(rule);   // coordinate-only fallback
-            }
-        }
+        // 0020: NEVER execute a learned Send from absolute coordinates alone.
+        // Coordinates remain supporting evidence only. If structural resolution
+        // fails, let the caller fall back to strict semantic resolver / Vision.
         return null;
     }
 
@@ -109,8 +103,41 @@ final class LearnedUiResolver {
             else score -= 10;
         }
 
-        // Rules learned without a stable viewId need at least two other signals.
-        if (rule.viewId.isEmpty() && score < 80) return Integer.MIN_VALUE;
+        // Coordinates are supporting evidence only. Never enough on their own.
+        if (rule.hasCoordinate()) {
+            Rect b = new Rect();
+            node.getBoundsInScreen(b);
+            if (!b.isEmpty()) {
+                int dx = Math.abs(b.centerX() - rule.centerX);
+                int dy = Math.abs(b.centerY() - rule.centerY);
+                if (dx <= 96 && dy <= 96) score += 18;
+                else if (dx <= 180 && dy <= 180) score += 8;
+                else score -= 8;
+            }
+        }
+
+        // Rules learned without a stable viewId need at least two strong
+        // structural signals. Geometry alone is insufficient.
+        if (rule.viewId.isEmpty()) {
+            int strongSignals = 0;
+            if (!rule.className.isEmpty() && rule.className.equals(cls)) strongSignals++;
+            if (!rule.contentDescription.isEmpty() && rule.contentDescription.equals(desc)) strongSignals++;
+            if (!rule.parentClassName.isEmpty()) {
+                AccessibilityNodeInfo p = node.getParent();
+                if (p != null) {
+                    try {
+                        if (rule.parentClassName.equals(safe(p.getClassName()))) strongSignals++;
+                    } finally {
+                        p.recycle();
+                    }
+                }
+            }
+            if (!rule.relativePosition.isEmpty() && referenceNode != null
+                    && rule.relativePosition.equals(relativePosition(node, referenceNode))) {
+                strongSignals++;
+            }
+            if (strongSignals < 2 || score < 80) return Integer.MIN_VALUE;
+        }
         return score;
     }
 

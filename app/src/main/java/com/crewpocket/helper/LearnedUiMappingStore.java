@@ -152,11 +152,18 @@ final class LearnedUiMappingStore {
             if (!normalizedRole.equals(r.role)) continue;
             // Exact screen signature first, but allow package-level fallback when
             // a rule was intentionally learned with an empty signature.
-            if (!r.screenSignature.isEmpty() && !sig.equals(r.screenSignature)) continue;
-            if (r.failureCount >= 3 && r.successCount == 0) continue;
+            // 0020: bad Send memories should retire quickly. A rule that has
+            // never succeeded is disabled after 2 observed failures.
+            if (r.failureCount >= 2 && r.successCount == 0) continue;
+            // Also suppress repeatedly unreliable rules even if they once worked.
+            if (r.failureCount >= 4 && r.failureCount > r.successCount) continue;
             result.add(r);
         }
         return result;
+    }
+
+    synchronized void recordResultByIdentity(Rule target, boolean success) {
+        recordResult(target, success);
     }
 
     synchronized void recordResult(Rule target, boolean success) {

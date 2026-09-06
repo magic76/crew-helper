@@ -1177,9 +1177,16 @@ public class CrewAccessibilityService extends AccessibilityService {
                 || value.contains("reply") || value.contains("arrow_upward") || value.contains("up_arrow");
     }
 
+    private LearnedUiResolver.Match lastLearnedSendMatch = null;
+
     /** Finds an unlabeled composer send icon using learned mappings first, then strict metadata/heuristics. */
     private AccessibilityNodeInfo findLikelySendButton(AccessibilityNodeInfo root) {
         if (root == null) return null;
+
+        if (lastLearnedSendMatch != null && lastLearnedSendMatch.node != null) {
+            try { lastLearnedSendMatch.node.recycle(); } catch (Exception ignored) {}
+        }
+        lastLearnedSendMatch = null;
 
         if (learnedUiMappingStore != null) {
             try {
@@ -1194,19 +1201,9 @@ public class CrewAccessibilityService extends AccessibilityService {
                         LearnedUiResolver.resolve(root, learnedRules, composer);
                 if (composer != null) composer.recycle();
 
-                if (learned != null) {
-                    if (learned.coordinateFallback) {
-                        // No structural node matched, but we have a learned coordinate.
-                        // Tap the remembered position directly.
-                        // This is the correct path for icon-only buttons (e.g. Wea ↑ button)
-                        // that have no stable viewId or contentDescription.
-                        performTap(learned.rule.centerX, learned.rule.centerY);
-                        // Return a placeholder so the caller treats this as a success
-                        // rather than falling through to other (potentially wrong) resolvers.
-                        return AccessibilityNodeInfo.obtain(root);
-                    }
-                    // learned.node is already obtained; caller owns recycle().
-                    return learned.node;
+                if (learned != null && learned.node != null) {
+                    lastLearnedSendMatch = learned;
+                    return AccessibilityNodeInfo.obtain(learned.node);
                 }
             } catch (Exception ignored) {}
         }
@@ -1219,6 +1216,22 @@ public class CrewAccessibilityService extends AccessibilityService {
         // resolver has no confident send target, return null and let the agent
         // inspect/replan or use vision fallback explicitly.
         return null;
+    }
+
+    void recordLastLearnedSendResult(boolean success) {
+        LearnedUiResolver.Match match = lastLearnedSendMatch;
+        lastLearnedSendMatch = null;
+        if (match == null) return;
+        try {
+            if (learnedUiMappingStore != null && match.rule != null) {
+                learnedUiMappingStore.recordResultByIdentity(match.rule, success);
+            }
+        } catch (Exception ignored) {
+        } finally {
+            if (match.node != null) {
+                try { match.node.recycle(); } catch (Exception ignored) {}
+            }
+        }
     }
 
     public boolean beginTeachElement(String role) {
@@ -1396,6 +1409,11 @@ public class CrewAccessibilityService extends AccessibilityService {
                         // Current implementation already resolves learned
                         // COMPOSER_SEND first, then strict semantic resolver.
                         return findLikelySendButton(root);
+                    }
+
+                    @Override
+                    public void recordSendResolutionResult(boolean success) {
+                        recordLastLearnedSendResult(success);
                     }
                 });
         return transaction.execute(text);

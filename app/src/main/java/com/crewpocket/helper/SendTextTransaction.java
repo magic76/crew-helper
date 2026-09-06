@@ -17,6 +17,7 @@ final class SendTextTransaction {
         AccessibilityNodeInfo currentRoot();
         AccessibilityNodeInfo resolveComposer(AccessibilityNodeInfo root);
         AccessibilityNodeInfo resolveSendButton(AccessibilityNodeInfo root);
+        void recordSendResolutionResult(boolean success);
     }
 
     static final class Result {
@@ -115,18 +116,23 @@ final class SendTextTransaction {
             AccessibilityNodeInfo send = null;
             try {
                 send = environment.resolveSendButton(root);
-
-                // Learned mapping + strict semantic resolver are preferred.
-                if (send != null && send.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
-                    result.submitted = true;
-                    result.submitMethod = "SEMANTIC_SEND";
-                }
-                // IME enter is a fallback, never an unconditional first choice.
-                // This avoids turning a multiline composer into an accidental
-                // newline when a reliable learned/semantic Send exists.
-                else if (tryImeEnter(composer)) {
-                    result.submitted = true;
-                    result.submitMethod = "IME_ENTER";
+                if (send != null) {
+                    // 0020: if a semantic/learned Send target exists, attempt it ONCE.
+                    // Do not immediately fall back to IME merely because ACTION_CLICK
+                    // returned false; some apps can execute while returning false.
+                    try {
+                        send.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                        result.submitted = true;
+                        result.submitMethod = "SEMANTIC_SEND";
+                    } finally {
+                        recycle(send);
+                        send = null;
+                    }
+                } else {
+                    if (tryImeEnter(composer)) {
+                        result.submitted = true;
+                        result.submitMethod = "IME_ENTER";
+                    }
                 }
             } finally {
                 recycle(send);
@@ -149,8 +155,12 @@ final class SendTextTransaction {
             }
 
             result.verification = verification;
+            boolean verifiedOrLikely = verification.state == SendVerification.State.VERIFIED
+                    || verification.state == SendVerification.State.LIKELY;
+            environment.recordSendResolutionResult(verifiedOrLikely);
+
             result.verified = verification.state == SendVerification.State.VERIFIED;
-            result.success = verification.state != SendVerification.State.UNVERIFIED;
+            result.success = verifiedOrLikely;
 
             if (!result.success) {
                 result.error = "SEND_NOT_VERIFIED";
