@@ -113,6 +113,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private final java.util.concurrent.atomic.AtomicBoolean screenCaptureInProgress = new java.util.concurrent.atomic.AtomicBoolean(false);
     private volatile String lastObservedScreenFingerprint = "";
     private volatile int consecutiveNoProgress = 0;
+    private volatile boolean semanticObserveRequired = false;
+    private volatile String latestSemanticFingerprint = "";
+    private final WorkingContext workingContext = new WorkingContext();
+    private volatile PendingCondition pendingCondition = null;
 
     NativeGeminiLiveClient(String apiKey, Listener listener) { this(apiKey, "", AppConfig.DEFAULT_VOICE, "auto", 35, "warm", "", 55, "call", listener); }
     NativeGeminiLiveClient(String apiKey, String serverUrl, Listener listener) { this(apiKey, serverUrl, AppConfig.DEFAULT_VOICE, "auto", 35, "warm", "", 55, "call", listener); }
@@ -472,6 +476,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         correctionTaskHint = "";
         correctionContextPendingInjection = false;
         resetConversationGoal();
+        pendingCondition = null;
+        semanticObserveRequired = false;
+        latestSemanticFingerprint = "";
+        workingContext.clear();
         cancelAgentTask("通話已結束");
         cancelDeckAutoAdvance();
         running = false;
@@ -677,11 +685,15 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 + "【少廢話規則】不要對控制事件、打斷、等待、工具取消、UI 展開/收合做口頭確認。禁止無資訊量的『好的』『了解』『沒問題』『你繼續』。只有使用者真正提出內容、需要最小澄清、或任務有最終結果時才開口。"
                 + "【Interrupt + Correction】打斷本身是本地控制事件，不是對話事件。當之後收到 Deferred Correction Context 時，直接處理最新使用者意圖，不要確認『你剛剛打斷我』。省略式修正應承接最近目標；完整且不相關的新命令視為新目標。"
                 + "【Goal 與 Task】一次 Live 通話可包含多個 Conversation Goal；一個 Goal 可包含多個 Agent execution task、follow-up 與 correction。工具安全 budget（timeout、max steps、mutation 上限、screenshot 上限）一律針對單一 execution task 重新計算，不是整通電話共用。不要因為同一 Goal 的 follow-up 就沿用上一個 task 已消耗的 budget，也不要因為 budget 重置而重做上一個已完成/已取消的 mutation。"
+                + "【Semantic Agent Loop】手機操作必須遵守 Observe → one Action → Observe → Verify → Next。每次 mutation 後先取得新的 semantic screen，再決定下一步；禁止一次規劃十個 tap/swipe 並盲跑。優先使用 Accessibility semantic element（文字、contentDescription、role、resource id、clickable、列表結構）；能 tap element 就不要猜座標。"
+                + "【等待與 continuation】如果使用者說『打字後等等』『等結果』『等它載入』『看看會不會出現』，不能把 type/tap 成功視為整個任務完成。應建立 pending condition，讓 runtime 等待畫面變化或 element 出現，再把最新 observe 交回 planner。wait 不是單純 sleep，而是 condition wait。"
+                + "【Icon】沒有文字不代表沒有語意。先使用 contentDescription、viewId、role、hierarchy、Learned UI Mapping；仍不足才使用 Vision。只有 semantic screen 回報 visionRecommended=true，或 canvas/custom UI 無法由 Accessibility 表達時，才 screenshot/vision。"
+                + "【Working Context】只維護短期 goal/current app/current screen/last actions/last result/pending task，用來理解『繼續』『上一個』『不是這個』『回去剛才那頁』；不得把它當成新的操作授權。"
                 + "【工具邊界與授權】只有使用者本輪最新一句明確口令要求操作手機時，才可呼叫手機工具；過去對話、推測或一般問題絕不可授權操作。一般問題直接回答。"
                 + "【安全防護】絕對禁止刪除、付款、購買、修改帳戶、輸入密碼、OTP、簡訊驗證碼；遇到此類敏感操作一律停止並語音提示使用者自行操作。"
                 + "【手機操作三層架構】"
                 + "1. 第一層（系統原生優先）：開啟 App（如『打開幣安』『開 Chrome』）一律呼叫 launch_app(app='...') 直接啟動，絕不在桌面滑動翻頁找圖示。若找到多個相近 App，系統會列出候選清單（如 1. 幣安 2. 幣安合約），請簡短詢問使用者要開哪一個；當使用者回答『第一個』、『第2個』或特定名稱時，直接呼叫 launch_app(index=1) 或 launch_app(app='第一個') 啟動。系統按鍵（首頁、返回、多工、通知列、快捷設定）一律呼叫 press_key。"
-                + "2. 第二層（Accessibility 語意執行）：一律以語意操作為主。點擊按鈕呼叫 tap_screen(label='...' 或 id='...')；滑動呼叫 swipe_screen(direction='up'|'down'|'left'|'right', distance='short'|'normal'|'long')；一般輸入但不提交時呼叫 type_text(text='...', target='...')；判斷畫面呼叫 inspect_ui。"
+                + "2. 第二層（Accessibility 語意執行）：一律以語意操作為主。點擊按鈕呼叫 tap_element(element_id='...') 或 tap_screen(label='...' 或 id='...')；滑動呼叫 swipe_screen(direction='up'|'down'|'left'|'right', distance='short'|'normal'|'long')；一般輸入但不提交時呼叫 type_text(text='...', target='...')；判斷畫面呼叫 inspect_ui；等待結果呼叫 wait。"
                 + "【原子化傳送】只要使用者明確要求『傳送/送出/回覆一段文字』，且目前已在可輸入的聊天/留言 composer 畫面，優先只呼叫 send_text(text='...')。send_text 會由 Android runtime 完成輸入、選擇 learned/semantic Send、一次性提交及本地驗證；不要再自行拆成 type_text → inspect_ui → tap send。只有 send_text 回傳 COMPOSER_NOT_FOUND / SUBMIT_TARGET_NOT_FOUND 時，才重新 inspect/replan；若 SEND_NOT_VERIFIED，不可再次送出，以免重複訊息。"
                 + "3. 第三層（Vision 視覺兜底）：只有在 inspect_ui 完全取不到有效節點（例如 Canvas 畫布、遊戲自訂 UI）時，才呼叫 take_screenshot 截圖並以座標點擊。"
                 + "【結束通話】當使用者說『關閉』、『掛斷』、『結束通話』、『退下』、『先這樣』或『再見』時，先簡短道別一句（如『好的，先為您關閉，隨時喊我！』），並一律呼叫 end_voice_session 工具以自動掛斷連線。"
@@ -698,7 +710,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 + "【送出鍵安全規則】沒有 role='COMPOSER_SEND' 或明確 send/發送/送出 metadata 時，禁止只因為某個按鈕位於輸入框最右側就把它當送出；右側按鈕可能是清除 X、關閉、附件或語音。若沒有高可信度 send action，先 inspect_ui 重新確認；Accessibility 仍無法辨識時才用 screenshot/vision 判斷。"
                 + "【UI 學習機制 (Teach UI)】若多次無法在畫面中找到送出或其他重要按鈕，或使用者表示要教助理按哪裡時，呼叫 teach_ui_element(role='COMPOSER_SEND' 等) 啟動教學遮罩，並語音引導使用者在畫面上點擊該按鈕進行學習。"
                 + "【嚴禁憑空臆測與幻決回報】執行操作（例如打開 App、點擊按鈕、輸入搜尋、切換頁面等）後，絕不可憑空想像或提前告訴使用者畫面會呈現什麼內容；必須先呼叫 inspect_ui（或 take_screenshot）親自讀取當前真實畫面，確認畫面內容與操作狀態符合預期後，才能向使用者報告實際看到的結果與結論！"
-                + "【動作執行迴圈】遵守標準闭環：『1. inspect_ui 觀察當前畫面 → 2. 決策語意動作並執行 (tap/type/launch/swipe) → 3. 再次 inspect_ui 自我驗證實際畫面 → 4. 確認已達成目標才向使用者語音回報真實內容』。"
+                + "【動作執行迴圈】遵守標準闭環：『1. inspect_ui 觀察當前畫面 → 2. 決策語意動作並執行 (tap_element/tap/type/launch/swipe) → 3. 檢查自動回傳之 after 畫面或再次 inspect_ui 自我驗證 → 4. 確認已達成目標才向使用者語音回報真實內容』。"
                 + "【語氣模式】" + liveToneInstruction();
 
         if (customPrompt != null && !customPrompt.trim().isEmpty()) {
@@ -735,9 +747,15 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         tools.put(new JSONObject().put("name", "press_key").put("description", "Trigger an Android system key or action.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("key", new JSONObject().put("type", "STRING").put("enum", new JSONArray().put("HOME").put("BACK").put("RECENTS").put("NOTIFICATIONS").put("QUICK_SETTINGS").put("POWER_DIALOG")))).put("required", new JSONArray().put("key"))));
         tools.put(new JSONObject().put("name", "inspect_ui").put("description",
                 "Read the current Android screen state before and after phone actions. "
-                + "Returns visible UI plus semantic actions currently available. "
-                + "Use returned CLICK/TYPE/SCROLL actions instead of guessing labels or coordinates."));
-        tools.put(new JSONObject().put("name", "tap_screen").put("description", "Tap a button or UI element using its semantic label, description, resource viewId, or coordinates. Prefer label or id over coordinates.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("label", new JSONObject().put("type", "STRING").put("description", "The button, app icon, or text label to tap")).put("id", new JSONObject().put("type", "STRING").put("description", "Optional resource viewId (e.g. 'send_btn')")).put("x", new JSONObject().put("type", "NUMBER").put("description", "Optional X coordinate for vision fallback")).put("y", new JSONObject().put("type", "NUMBER").put("description", "Optional Y coordinate for vision fallback")).put("coordinate_space", new JSONObject().put("type", "STRING").put("enum", new JSONArray().put("image").put("normalized_1000").put("screen"))))));
+                + "Returns visible UI plus semantic elements and actions currently available. "
+                + "Use returned elements and CLICK/TYPE/SCROLL actions instead of guessing labels or coordinates."));
+        tools.put(new JSONObject().put("name", "tap_element").put("description", "Tap a semantic UI element by its element id (e.g. 'e_1a2b3c'). Always prefer this over coordinate or label guessing.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("element_id", new JSONObject().put("type", "STRING").put("description", "The element ID returned from inspect_ui or auto-observe"))).put("required", new JSONArray().put("element_id"))));
+        tools.put(new JSONObject().put("name", "wait").put("description", "Wait for screen condition to be met (e.g. screen_change, element_appears, element_disappears). Runtime polls automatically and returns the latest screen state.")
+                .put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject()
+                        .put("condition", new JSONObject().put("type", "STRING").put("enum", new JSONArray().put("screen_change").put("element_appears").put("element_disappears")).put("description", "Condition to wait for (default screen_change)"))
+                        .put("element_id", new JSONObject().put("type", "STRING").put("description", "Optional element id when waiting for element_appears / element_disappears"))
+                        .put("timeout_ms", new JSONObject().put("type", "INTEGER").put("description", "Maximum wait time in milliseconds (default 5000, max 15000)")))));
+        tools.put(new JSONObject().put("name", "tap_screen").put("description", "Tap a button or UI element using its semantic label, description, resource viewId, or coordinates. Prefer tap_element over tap_screen.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("label", new JSONObject().put("type", "STRING").put("description", "The button, app icon, or text label to tap")).put("id", new JSONObject().put("type", "STRING").put("description", "Optional resource viewId (e.g. 'send_btn')")).put("x", new JSONObject().put("type", "NUMBER").put("description", "Optional X coordinate for vision fallback")).put("y", new JSONObject().put("type", "NUMBER").put("description", "Optional Y coordinate for vision fallback")).put("coordinate_space", new JSONObject().put("type", "STRING").put("enum", new JSONArray().put("image").put("normalized_1000").put("screen"))))));
         tools.put(new JSONObject().put("name", "swipe_screen").put("description", "Scroll or swipe the phone screen. Direction: up (scroll down), down (scroll up), left, right. Distance: short, normal, long.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("direction", new JSONObject().put("type", "STRING").put("enum", new JSONArray().put("up").put("down").put("left").put("right"))).put("distance", new JSONObject().put("type", "STRING").put("enum", new JSONArray().put("short").put("normal").put("long").put("page")))).put("required", new JSONArray().put("direction"))));
         tools.put(new JSONObject().put("name", "type_text").put("description", "Type text into an input field or search bar.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("target", new JSONObject().put("type", "STRING").put("description", "Input field hint or label")).put("text", new JSONObject().put("type", "STRING").put("description", "The text to type"))).put("required", new JSONArray().put("text"))));
         tools.put(new JSONObject().put("name", "send_text").put("description", "Atomically type, submit exactly once, and locally verify a message/reply in the currently open composer. Prefer this over type_text + tap_screen when the user explicitly wants to send text.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("text", new JSONObject().put("type", "STRING").put("description", "Exact message text to send"))).put("required", new JSONArray().put("text"))));
@@ -838,7 +856,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         activeToolThread = Thread.currentThread();
         try {
             if ("take_screenshot".equals(name)) result = captureAndSendScreen();
-            else if ("inspect_ui".equals(name)) result = inspectUi();
+            else if ("inspect_ui".equals(name)) result = inspectUi(args);
+            else if ("tap_element".equals(name)) result = tapSemanticElement(args);
+            else if ("wait".equals(name)) result = waitForCondition(args);
             else if ("launch_app".equals(name)) result = launchApp(args);
             else if ("swipe_screen".equals(name)) result = swipe(args);
             else if ("tap_screen".equals(name)) result = tap(args);
@@ -931,6 +951,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
     private boolean isObservationTool(String name) {
         return "inspect_ui".equals(name)
+                || "wait".equals(name)
                 || "teach_ui_element".equals(name)
                 || "list_active_schedules".equals(name)
                 || "list_decks".equals(name)
@@ -941,6 +962,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private boolean isMutationTool(String name) {
         return "launch_app".equals(name)
                 || "swipe_screen".equals(name)
+                || "tap_element".equals(name)
                 || "tap_screen".equals(name)
                 || "type_text".equals(name)
                 || "send_text".equals(name)
@@ -1192,7 +1214,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 : (visual.optBoolean("success")
                     ? "文字節點未變，但最新螢幕影格已送達；請依畫面判斷是否已滑動"
                     : "UI 節點與最新螢幕影格皆無法確認變化，請改用另一方向或尋找按鈕"));
-        return reply;
+        workingContext.recordAction("swipe:" + direction, reply.optBoolean("success", false) ? "submitted" : "failed");
+        return autoObserveAfterMutation(reply, "swipe_screen");
     }
 
     private String nodeSignature(JSONObject response) {
@@ -1282,12 +1305,137 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         reply.put("resolvedFrom", resolvedFromNode ? "ui_node" : (coordinateSpace.isEmpty() ? "legacy" : coordinateSpace));
         reply.put("visionSize", lastVisionWidth + "x" + lastVisionHeight).put("screenSize", lastScreenWidth + "x" + lastScreenHeight);
         autoVerifyUiSnapshot(reply, 350);
+        workingContext.recordAction("tap_screen", reply.optBoolean("success", false) ? "submitted" : "failed");
+        return autoObserveAfterMutation(reply, "tap_screen");
+    }
+
+    private JSONObject tapSemanticElement(JSONObject args) throws Exception {
+        String elementId = args == null ? "" : args.optString("element_id", "").trim();
+        if (elementId.isEmpty()) return new JSONObject().put("success", false).put("error", "MISSING_ELEMENT_ID");
+        JSONObject reply = null;
+        try {
+            reply = helperPost("/semantic_tap", new JSONObject().put("elementId", elementId));
+        } catch (Exception e) {
+            reply = new JSONObject().put("success", false).put("error", e.getMessage() == null ? "tap failed" : e.getMessage());
+        }
+        if (reply == null) reply = new JSONObject();
+        workingContext.recordAction("tap:" + elementId,
+                reply.optBoolean("success", false) ? "submitted"
+                        : reply.optString("error", "failed"));
+        return autoObserveAfterMutation(reply, "tap_element");
+    }
+
+    private JSONObject waitForCondition(JSONObject args) throws Exception {
+        String condition = args == null ? "" : args.optString("condition", "screen_change").trim();
+        String elementId = args == null ? "" : args.optString("element_id", "").trim();
+        long timeoutMs = args == null ? 5000L : args.optLong("timeout_ms", 5000L);
+
+        PendingCondition.Type type = PendingCondition.Type.SCREEN_CHANGE;
+        if ("element_appears".equals(condition)) type = PendingCondition.Type.ELEMENT_APPEARS;
+        else if ("element_disappears".equals(condition)) type = PendingCondition.Type.ELEMENT_DISAPPEARS;
+
+        pendingCondition = new PendingCondition(type, elementId, latestSemanticFingerprint, timeoutMs);
+        workingContext.setPendingTask("WAIT_" + type.name());
+
+        long deadline = System.currentTimeMillis() + pendingCondition.timeoutMs;
+        JSONObject last = null;
+        while (System.currentTimeMillis() < deadline
+                && pendingCondition != null
+                && !Thread.currentThread().isInterrupted()) {
+            try { Thread.sleep(450L); } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+            try {
+                last = helperGet("/semantic_screen");
+            } catch (Exception ignored) {}
+            if (last == null || !last.optBoolean("success", false)) continue;
+
+            String fp = last.optString("fingerprint", "");
+            boolean met = false;
+            if (type == PendingCondition.Type.SCREEN_CHANGE) {
+                met = !fp.isEmpty() && !fp.equals(pendingCondition.baselineFingerprint);
+            } else if (type == PendingCondition.Type.ELEMENT_APPEARS) {
+                met = containsElement(last.optJSONArray("elements"), elementId);
+            } else if (type == PendingCondition.Type.ELEMENT_DISAPPEARS) {
+                met = !containsElement(last.optJSONArray("elements"), elementId);
+            }
+
+            if (met) {
+                latestSemanticFingerprint = fp;
+                semanticObserveRequired = false;
+                workingContext.observe(last.optString("package", ""), fp);
+                workingContext.setPendingTask("");
+                pendingCondition = null;
+                try {
+                    last.put("conditionMet", true)
+                        .put("condition", type.name())
+                        .put("workingContext", workingContext.toJson());
+                } catch (Exception ignored) {}
+                return last;
+            }
+        }
+
+        JSONObject out = last == null ? new JSONObject() : last;
+        try {
+            out.put("success", true)
+               .put("conditionMet", false)
+               .put("condition", type.name())
+               .put("timeout", true)
+               .put("workingContext", workingContext.toJson());
+        } catch (Exception ignored) {}
+        pendingCondition = null;
+        workingContext.setPendingTask("");
+        return out;
+    }
+
+    private boolean containsElement(JSONArray elements, String elementId) {
+        if (elements == null || elementId == null || elementId.isEmpty()) return false;
+        for (int i = 0; i < elements.length(); i++) {
+            JSONObject e = elements.optJSONObject(i);
+            if (e != null && elementId.equals(e.optString("id", ""))) return true;
+        }
+        return false;
+    }
+
+    private JSONObject autoObserveAfterMutation(JSONObject actionResult, String actionName) {
+        if (actionResult == null) actionResult = new JSONObject();
+        if (!actionResult.optBoolean("success", false)) return actionResult;
+        try { Thread.sleep(180L); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+        JSONObject after = null;
+        try {
+            after = helperGet("/semantic_screen");
+        } catch (Exception ignored) {}
+        if (after != null && after.optBoolean("success", false)) {
+            String fp = after.optString("fingerprint", "");
+            boolean changed = !fp.isEmpty() && !fp.equals(latestSemanticFingerprint);
+            latestSemanticFingerprint = fp;
+            semanticObserveRequired = false;
+            workingContext.observe(after.optString("package", ""), fp);
+            try {
+                actionResult.put("after", after)
+                        .put("screenChanged", changed)
+                        .put("workingContext", workingContext.toJson());
+            } catch (Exception ignored) {}
+        } else {
+            semanticObserveRequired = true;
+        }
+        return actionResult;
+    }
+
+    private JSONObject inspectUi(JSONObject args) throws Exception {
+        JSONObject reply = helperGet("/semantic_screen");
+        if (reply == null) reply = new JSONObject();
+        if (reply.optBoolean("success", false)) {
+            latestSemanticFingerprint = reply.optString("fingerprint", "");
+            semanticObserveRequired = false;
+            workingContext.observe(reply.optString("package", ""), latestSemanticFingerprint);
+            try { reply.put("workingContext", workingContext.toJson()); } catch (Exception ignored) {}
+        }
         return reply;
     }
 
-    private JSONObject inspectUi() throws Exception {
-        // /screen_state is backward-compatible with /nodes but also includes
-        // Crew Helper's semantic ActionRegistry output.
+    private JSONObject inspectUiLegacy() throws Exception {
         JSONObject raw = helperGet("/screen_state");
         if (!raw.optBoolean("success")) return raw;
         String fingerprint = raw.optString("fingerprint", "");
@@ -1385,7 +1533,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 reply.put("app", app.isEmpty() ? explicitPkg : app).put("message", "已啟動 App，以下為啟動後的最新畫面。");
                 autoVerifyUiSnapshot(reply, 800);
             }
-            return reply;
+            workingContext.recordAction("launch:" + explicitPkg, reply.optBoolean("success", false) ? "submitted" : "failed");
+            return autoObserveAfterMutation(reply, "launch_app");
         }
 
         // 2. Check if the input is an ordinal referencing previous candidates (e.g. "第一個", "第1個", "1", "one")
@@ -1402,7 +1551,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                     reply.put("app", chosen.optString("label", "App")).put("message", "已為您啟動「" + chosen.optString("label", "App") + "」，以下為啟動後的最新畫面。");
                     autoVerifyUiSnapshot(reply, 800);
                 }
-                return reply;
+                workingContext.recordAction("launch:" + chosen.optString("package", ""), reply.optBoolean("success", false) ? "submitted" : "failed");
+                return autoObserveAfterMutation(reply, "launch_app");
             }
         }
 
@@ -1440,7 +1590,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 reply.put("app", exactMatch.optString("label", app)).put("message", "已啟動 App，以下為啟動後的最新畫面。");
                 autoVerifyUiSnapshot(reply, 800);
             }
-            return reply;
+            workingContext.recordAction("launch:" + exactMatch.optString("package", ""), reply.optBoolean("success", false) ? "submitted" : "failed");
+            return autoObserveAfterMutation(reply, "launch_app");
         }
 
         // 5. If only 1 match found, launch directly
@@ -1452,7 +1603,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 reply.put("app", candidate.optString("label", app)).put("message", "已啟動 App，以下為啟動後的最新畫面。");
                 autoVerifyUiSnapshot(reply, 800);
             }
-            return reply;
+            workingContext.recordAction("launch:" + candidate.optString("package", ""), reply.optBoolean("success", false) ? "submitted" : "failed");
+            return autoObserveAfterMutation(reply, "launch_app");
         }
 
         // 6. Multiple matches: Cache candidates and return clear list for user selection
@@ -1558,7 +1710,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         reply.put("success", true);
         reply.put("message", "已在輸入框輸入文字");
         autoVerifyUiSnapshot(reply, 350);
-        return reply;
+        workingContext.recordAction("type", reply.optBoolean("success", false) ? "submitted" : "failed");
+        return autoObserveAfterMutation(reply, "type_text");
     }
 
     private JSONObject sendTextToPhone(JSONObject args) throws Exception {
@@ -1571,6 +1724,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 new JSONObject().put("text", text));
         // Runtime deliberately does not echo plaintext back to Gemini.
         reply.put("textLength", text.length());
+        workingContext.recordAction("send_text", reply.optBoolean("success", false) ? "submitted" : "failed");
         return reply;
     }
 
@@ -1579,7 +1733,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if (!("HOME".equals(key) || "BACK".equals(key) || "RECENTS".equals(key) || "NOTIFICATIONS".equals(key) || "QUICK_SETTINGS".equals(key) || "POWER_DIALOG".equals(key))) return new JSONObject().put("success", false).put("error", "不支援的系統按鍵");
         JSONObject reply = helperPost("/key", new JSONObject().put("key", key));
         autoVerifyUiSnapshot(reply, 400);
-        return reply;
+        workingContext.recordAction("key:" + key, reply.optBoolean("success", false) ? "submitted" : "failed");
+        return autoObserveAfterMutation(reply, "press_key");
     }
 
     private JSONObject sendToMainChat(JSONObject args) throws Exception {

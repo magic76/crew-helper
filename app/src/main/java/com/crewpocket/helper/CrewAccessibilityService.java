@@ -855,6 +855,62 @@ public class CrewAccessibilityService extends AccessibilityService {
                 } else {
                     responseJson = "{\"success\":false,\"error\":\"No active window found\"}";
                 }
+            } else if (path.startsWith("/semantic_screen")) {
+                AccessibilityNodeInfo root = getRootInActiveWindow();
+                try {
+                    responseJson = SemanticScreenState.capture(root).toString();
+                } finally {
+                    if (root != null) root.recycle();
+                }
+            } else if (path.startsWith("/semantic_tap")) {
+                final String elementId = getJsonString(body, "elementId");
+                if (elementId == null || elementId.trim().isEmpty()) {
+                    responseJson = "{\"success\":false,\"error\":\"MISSING_ELEMENT_ID\"}";
+                } else {
+                    final Object lock = new Object();
+                    final boolean[] ok = new boolean[]{false};
+                    final String[] error = new String[]{""};
+                    mainHandler.post(new Runnable() {
+                        @Override public void run() {
+                            AccessibilityNodeInfo root = getRootInActiveWindow();
+                            AccessibilityNodeInfo resolved = null;
+                            AccessibilityNodeInfo clickable = null;
+                            try {
+                                resolved = SemanticElementResolver.resolve(root, elementId);
+                                if (resolved == null) {
+                                    error[0] = "ELEMENT_STALE_OR_NOT_FOUND";
+                                    return;
+                                }
+                                if (SensitiveDataGuard.isHardBlockedInput(resolved)) {
+                                    error[0] = "SENSITIVE_TARGET_BLOCKED";
+                                    return;
+                                }
+                                clickable = SemanticElementResolver.nearestClickable(resolved);
+                                if (clickable == null) {
+                                    error[0] = "ELEMENT_NOT_CLICKABLE";
+                                    return;
+                                }
+                                ok[0] = clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                                if (!ok[0]) error[0] = "SEMANTIC_CLICK_REJECTED";
+                            } catch (Exception e) {
+                                error[0] = "SEMANTIC_CLICK_FAILED";
+                            } finally {
+                                if (clickable != null) clickable.recycle();
+                                if (resolved != null) resolved.recycle();
+                                if (root != null) root.recycle();
+                                synchronized (lock) { lock.notify(); }
+                            }
+                        }
+                    });
+                    synchronized (lock) {
+                        try { lock.wait(2500); } catch (Exception ignored) {}
+                    }
+                    responseJson = "{\"success\":" + ok[0]
+                            + ",\"action\":\"SEMANTIC_TAP\",\"elementId\":\""
+                            + jsonEscape(elementId) + "\""
+                            + (error[0].isEmpty() ? "" : ",\"error\":\"" + jsonEscape(error[0]) + "\"")
+                            + "}";
+                }
             } else if (path.startsWith("/nodes") || path.startsWith("/screen_info")) {
                 AccessibilityNodeInfo root = getRootInActiveWindow();
                 if (root != null) {
