@@ -36,7 +36,7 @@ final class ActionRegistry {
                     .put("label", "send")
                     .put("id", id)
                     .put("role", "COMPOSER_SEND")
-                    .put("confidence", ComposerSendResolver.hasSendMarker(send) ? "HIGH" : "MEDIUM")
+                    .put("confidence", "HIGH")
                     .put("bounds", bounds);
             actions.put(action);
         } catch (Exception ignored) {

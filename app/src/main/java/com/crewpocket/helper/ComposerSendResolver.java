@@ -11,6 +11,8 @@ import java.util.Locale;
  * Metadata wins; geometry near the active editable composer is the fallback.
  */
 final class ComposerSendResolver {
+    private static final int MIN_SEND_SCORE = 115;
+
     private ComposerSendResolver() {}
 
     static AccessibilityNodeInfo find(AccessibilityNodeInfo root) {
@@ -42,6 +44,11 @@ final class ComposerSendResolver {
                 String cls = node.getClassName() == null ? "" : node.getClassName().toString();
                 String meta = (text + " " + desc + " " + id).toLowerCase(Locale.ROOT);
 
+                // Strong negative semantics always win over geometry. Search bars
+                // commonly expose a clear-text X at the exact position where a
+                // chat composer exposes Send.
+                if (hasRejectMarker(meta)) continue;
+
                 int score = markerScore(meta);
                 if (cls.toLowerCase(Locale.ROOT).contains("imagebutton")) score += 12;
                 if (cls.toLowerCase(Locale.ROOT).contains("button")) score += 8;
@@ -59,6 +66,10 @@ final class ComposerSendResolver {
                 if (b.width() > Math.max(360, inputBounds.width())) score -= 80;
                 if (b.centerX() < inputBounds.left) score -= 60;
 
+                // Geometry is supporting evidence only. Never synthesize Send
+                // from position alone.
+                if (markerScore(meta) == 0) score = Math.min(score, MIN_SEND_SCORE - 1);
+
                 if (score > bestScore) {
                     if (best != null) best.recycle();
                     best = AccessibilityNodeInfo.obtain(node);
@@ -70,9 +81,7 @@ final class ComposerSendResolver {
         }
         input.recycle();
 
-        // Metadata-only candidate can pass at 70. Pure geometric fallback needs
-        // strong composer proximity so attachment/navigation icons are less likely.
-        if (bestScore < 75) {
+        if (bestScore < MIN_SEND_SCORE) {
             if (best != null) best.recycle();
             return null;
         }
@@ -89,6 +98,7 @@ final class ComposerSendResolver {
 
     private static int markerScore(String value) {
         if (value == null) return 0;
+        if (hasRejectMarker(value)) return 0;
         if (value.contains("send") || value.contains("發送") || value.contains("送出")
                 || value.contains("傳送") || value.contains("提交")) return 140;
         if (value.contains("composer_send") || value.contains("message_send")
@@ -97,6 +107,29 @@ final class ComposerSendResolver {
         if (value.contains("arrow_upward") || value.contains("up_arrow")
                 || value.contains("paper_plane")) return 110;
         return 0;
+    }
+
+    private static boolean hasRejectMarker(String value) {
+        if (value == null) return false;
+        String v = value.toLowerCase(Locale.ROOT);
+        return v.contains("clear")
+                || v.contains("clear_text")
+                || v.contains("clear_query")
+                || v.contains("close")
+                || v.contains("cancel")
+                || v.contains("dismiss")
+                || v.contains("reset")
+                || v.contains("erase")
+                || v.contains("delete")
+                || v.contains("remove")
+                || v.contains("cross")
+                || v.contains("times")
+                || v.contains("清除")
+                || v.contains("取消")
+                || v.contains("關閉")
+                || v.contains("关闭")
+                || v.contains("刪除")
+                || v.contains("删除");
     }
 
     private static AccessibilityNodeInfo findActiveEditable(AccessibilityNodeInfo root) {

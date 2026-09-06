@@ -1085,41 +1085,11 @@ public class CrewAccessibilityService extends AccessibilityService {
         AccessibilityNodeInfo resolved = ComposerSendResolver.find(root);
         if (resolved != null) return resolved;
 
-        // Keep the legacy resolver below as a compatibility fallback for apps
-        // whose Accessibility hierarchy is unusual.
-        AccessibilityNodeInfo input = findActiveEditText(root);
-        Rect inputBounds = new Rect();
-        if (input != null) input.getBoundsInScreen(inputBounds);
-        List<AccessibilityNodeInfo> nodes = new ArrayList<AccessibilityNodeInfo>();
-        collectClickableNodes(root, nodes);
-        AccessibilityNodeInfo best = null;
-        int bestScore = 0;
-        Rect rootBounds = new Rect(); root.getBoundsInScreen(rootBounds);
-        for (AccessibilityNodeInfo node : nodes) {
-            try {
-                Rect b = new Rect(); node.getBoundsInScreen(b);
-                String text = node.getText() == null ? "" : node.getText().toString();
-                String desc = node.getContentDescription() == null ? "" : node.getContentDescription().toString();
-                String viewId = node.getViewIdResourceName() == null ? "" : node.getViewIdResourceName().toString();
-                String cls = node.getClassName() == null ? "" : node.getClassName().toString();
-                String combined = (text + " " + desc + " " + viewId).toLowerCase(Locale.ROOT);
-                int score = hasSendMarker(combined) ? 120 : 0;
-                if (cls.toLowerCase(Locale.ROOT).contains("imagebutton")) score += 6;
-                if (input != null && b.centerY() >= inputBounds.top - 120 && b.centerY() <= inputBounds.bottom + 120
-                        && b.centerX() >= inputBounds.centerX()) score += 35;
-                if (b.centerX() >= rootBounds.left + rootBounds.width() * 0.65f && b.centerY() >= rootBounds.top + rootBounds.height() * 0.55f) score += 8;
-                if (score > bestScore) {
-                    if (best != null) best.recycle();
-                    best = AccessibilityNodeInfo.obtain(node);
-                    bestScore = score;
-                }
-            } finally { node.recycle(); }
-        }
-        if (input != null) input.recycle();
-        // Positional fallback needs strong composer evidence; it must never turn
-        // a generic "send" request into a random navigation or attachment tap.
-        if (bestScore < 35) { if (best != null) best.recycle(); return null; }
-        return best;
+        // Do NOT use a pure "right side of edit box" compatibility fallback.
+        // It can click clear-text X / close / attachment controls. If the strict
+        // resolver has no confident send target, return null and let the agent
+        // inspect/replan or use vision fallback explicitly.
+        return null;
     }
 
     // ── Native Background Wake Word Engine ──
