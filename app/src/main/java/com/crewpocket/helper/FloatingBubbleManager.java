@@ -671,12 +671,32 @@ public class FloatingBubbleManager {
         } catch (Exception ignored) {}
     }
 
+    private void ensureShortcutRoomBelow(int bubbleSize) {
+        if (bubbleView == null || bubbleParams == null) return;
+        try {
+            int screenHeight = windowManager.getDefaultDisplay().getHeight();
+            // 0017: vertical rail is taller: 2 icons when idle, 3 during Live.
+            int itemCount = NativeLiveService.isActive() ? 3 : 2;
+            int shortcutHeight = dp(12) + itemCount * dp(42);
+            int requiredBottom =
+                    bubbleParams.y + bubbleSize + dp(6) + shortcutHeight + dp(18);
+            if (requiredBottom <= screenHeight) return;
+            int delta = requiredBottom - screenHeight;
+            int topLimit = getStatusBarHeight() + dp(4);
+            bubbleParams.y = Math.max(topLimit, bubbleParams.y - delta);
+            windowManager.updateViewLayout(bubbleView, bubbleParams);
+        } catch (Exception ignored) {}
+    }
+
     private void toggleBubbleActionStrip() {
         if (bubbleView == null || bubbleParams == null) return;
         if (bubbleActionStrip == null) {
             bubbleActionStrip = new BubbleActionStripOverlay(context);
         }
         int size = bubbleParams.width > 0 ? bubbleParams.width : dp(40);
+        if (!bubbleActionStrip.isShowing()) {
+            ensureShortcutRoomBelow(size);
+        }
         bubbleActionStrip.toggle(
                 bubbleParams.x,
                 bubbleParams.y,
@@ -814,6 +834,7 @@ public class FloatingBubbleManager {
                 if (bubbleActionStrip != null && bubbleActionStrip.isShowing()
                         && bubbleParams != null) {
                     int size = bubbleParams.width > 0 ? bubbleParams.width : dp(40);
+                    ensureShortcutRoomBelow(size);
                     bubbleActionStrip.refresh(
                             bubbleParams.x,
                             bubbleParams.y,

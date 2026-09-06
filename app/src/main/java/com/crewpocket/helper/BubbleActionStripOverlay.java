@@ -70,10 +70,11 @@ final class BubbleActionStripOverlay {
 
         final boolean live = NativeLiveService.isActive();
 
+        // 0017: actions are a vertical rail directly below the bubble.
         LinearLayout row = new LinearLayout(context);
-        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setOrientation(LinearLayout.VERTICAL);
         row.setGravity(Gravity.CENTER);
-        row.setPadding(dp(6), dp(5), dp(6), dp(5));
+        row.setPadding(dp(5), dp(6), dp(5), dp(6));
 
         GradientDrawable bg = new GradientDrawable();
         bg.setColor(Color.argb(244, 15, 23, 42));
@@ -109,11 +110,12 @@ final class BubbleActionStripOverlay {
         }
 
         int itemCount = live ? 3 : 2;
-        int stripWidth = dp(12) + itemCount * dp(42);
+        int stripWidth = dp(50);
+        int stripHeight = dp(12) + itemCount * dp(42);
 
         WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
                 stripWidth,
-                dp(50),
+                stripHeight,
                 Build.VERSION.SDK_INT >= 26
                         ? 2038
                         : WindowManager.LayoutParams.TYPE_PHONE,
@@ -127,15 +129,10 @@ final class BubbleActionStripOverlay {
         int screenW = context.getResources().getDisplayMetrics().widthPixels;
         int screenH = context.getResources().getDisplayMetrics().heightPixels;
 
-        // Prefer directly below bubble. Clamp horizontally if bubble is near edge.
+        // Center the vertical rail directly under the bubble.
         int centeredX = bubbleX + bubbleSize / 2 - stripWidth / 2;
         lp.x = Math.max(dp(6), Math.min(screenW - stripWidth - dp(6), centeredX));
         lp.y = bubbleY + bubbleSize + dp(6);
-
-        // If there is no room below, place it above.
-        if (lp.y + dp(50) > screenH - dp(20)) {
-            lp.y = Math.max(dp(20), bubbleY - dp(56));
-        }
 
         try {
             windowManager.addView(row, lp);
@@ -157,7 +154,7 @@ final class BubbleActionStripOverlay {
     private LinearLayout.LayoutParams itemParams() {
         LinearLayout.LayoutParams lp =
                 new LinearLayout.LayoutParams(dp(38), dp(38));
-        lp.setMargins(dp(2), 0, dp(2), 0);
+        lp.setMargins(0, dp(2), 0, dp(2));
         return lp;
     }
 
