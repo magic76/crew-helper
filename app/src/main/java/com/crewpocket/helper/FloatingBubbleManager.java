@@ -62,6 +62,10 @@ public class FloatingBubbleManager {
     private View compactStatusView = null;
     private WindowManager.LayoutParams compactStatusParams = null;
     private FloatingPanelController compactStatusController = null;
+    private BubbleQuickActionsOverlay bubbleQuickActions = null;
+    private Runnable compactStatusAutoHideRunnable = null;
+    private static final long MINI_STATUS_AUTO_HIDE_MS = 1800L;
+    private static final long DOUBLE_TAP_WINDOW_MS = 260L;
     private static class DockIconButton extends View {
         public static final int ICON_CAMERA = 1;
         public static final int ICON_SCREEN = 2;
@@ -262,6 +266,9 @@ public class FloatingBubbleManager {
             @Override
             public void run() {
                 if (!canDrawOverlays()) return;
+                if (compactStatusAutoHideRunnable != null) {
+                    mainHandler.removeCallbacks(compactStatusAutoHideRunnable);
+                }
 
                 if (compactStatusView == null) {
                     final CompactStatusCard card = new CompactStatusCard(context);
@@ -315,6 +322,12 @@ public class FloatingBubbleManager {
                 if (compactStatusView instanceof CompactStatusCard) {
                     ((CompactStatusCard) compactStatusView).setContent(title, detail);
                 }
+                compactStatusAutoHideRunnable = new Runnable() {
+                    @Override public void run() {
+                        hideCompactStatus();
+                    }
+                };
+                mainHandler.postDelayed(compactStatusAutoHideRunnable, MINI_STATUS_AUTO_HIDE_MS);
             }
         });
     }
@@ -323,6 +336,10 @@ public class FloatingBubbleManager {
         mainHandler.post(new Runnable() {
             @Override
             public void run() {
+                if (compactStatusAutoHideRunnable != null) {
+                    mainHandler.removeCallbacks(compactStatusAutoHideRunnable);
+                    compactStatusAutoHideRunnable = null;
+                }
                 try {
                     if (compactStatusView != null) windowManager.removeViewImmediate(compactStatusView);
                 } catch (Exception ignored) {}
@@ -481,7 +498,8 @@ public class FloatingBubbleManager {
 
     public void autoDockBubble() {
         if (bubbleView == null || bubbleParams == null || isDocked) return;
-        if (NativeLiveService.isActive() || nativeLiveRequested) return;
+        // 0015: Live calls may also use Edge Pill mode. The exposed half-bubble
+        // remains touchable for instant interruption while taking much less space.
 
         int screenWidth = windowManager.getDefaultDisplay().getWidth();
         int bSize = bubbleParams.width > 0 ? bubbleParams.width : dp(40);
@@ -553,12 +571,13 @@ public class FloatingBubbleManager {
                         private int initialX, initialY;
                         private float initialTouchX, initialTouchY;
                         private long touchStartTime;
+                        private long lastTapAt = 0L;
                         private boolean longPressTriggered = false;
                         private final Runnable longPressRunnable = new Runnable() {
                             @Override public void run() {
                                 longPressTriggered = true;
                                 vibrateSuccess();
-                                toggleNativeLive();
+                                showBubbleQuickActions();
                             }
                         };
 
@@ -610,7 +629,32 @@ public class FloatingBubbleManager {
                                         long duration = System.currentTimeMillis() - touchStartTime;
                                         if (dx < 18 && dy < 18 && duration < 450) {
                                             vibrateShort();
-                                            toggleVoiceControls();
+                                            long now = System.currentTimeMillis();
+                                            if (NativeLiveService.isAiSpeaking()) {
+                                                // Fastest possible path: no panel, no double-tap delay.
+                                                if (NativeLiveService.interruptAiSpeech()) {
+                                                    showCompactStatus("已打斷", "可以直接繼續說");
+                                                }
+                                                lastTapAt = 0L;
+                                            } else if (now - lastTapAt <= DOUBLE_TAP_WINDOW_MS) {
+                                                lastTapAt = 0L;
+                                                toggleVoiceControls();
+                                            } else {
+                                                lastTapAt = now;
+                                                final long tapToken = now;
+                                                mainHandler.postDelayed(new Runnable() {
+                                                    @Override public void run() {
+                                                        if (lastTapAt != tapToken) return;
+                                                        lastTapAt = 0L;
+                                                        // Normal single-tap never opens the large dock.
+                                                        String status = NativeLiveService.isActive()
+                                                                ? latestLiveStatus : "待命";
+                                                        showCompactStatus(
+                                                                NativeLiveService.isActive() ? "Live" : "Crew Helper",
+                                                                status);
+                                                    }
+                                                }, DOUBLE_TAP_WINDOW_MS + 20L);
+                                            }
                                         }
                                     }
                                     snapBubbleToEdge();
@@ -655,6 +699,46 @@ public class FloatingBubbleManager {
             bubbleParams.y = Math.max(topLimit, Math.min(bottomLimit, bubbleParams.y));
             windowManager.updateViewLayout(bubbleView, bubbleParams);
         } catch (Exception ignored) {}
+    }
+
+    private void showBubbleQuickActions() {
+        if (bubbleParams == null) return;
+        if (bubbleQuickActions == null) {
+            bubbleQuickActions = new BubbleQuickActionsOverlay(context);
+        }
+        final int x = bubbleParams.x < windowManager.getDefaultDisplay().getWidth() / 2
+                ? bubbleParams.x + dp(48)
+                : bubbleParams.x - dp(162);
+        final int y = bubbleParams.y;
+        bubbleQuickActions.show(x, y, new BubbleQuickActionsOverlay.Actions() {
+            @Override public void onInterrupt() {
+                if (NativeLiveService.interruptAiSpeech()) {
+                    showCompactStatus("已打斷", "可以直接繼續說");
+                }
+                refreshVoiceControls();
+            }
+
+            @Override public void onToggleMute() {
+                if (NativeLiveService.isActive()) {
+                    NativeLiveService.toggleAgentMute();
+                    showCompactStatus(
+                            NativeLiveService.isAgentMuted() ? "麥克風已靜音" : "麥克風已開啟",
+                            "");
+                }
+                refreshVoiceControls();
+            }
+
+            @Override public void onOpenControls() {
+                showVoiceControls();
+            }
+
+            @Override public void onHangup() {
+                if (NativeLiveService.isActive() || nativeLiveRequested) {
+                    toggleNativeLive();
+                    showCompactStatus("正在結束通話", "");
+                }
+            }
+        });
     }
 
     // 🌊 Set Water Flow / Thinking State
@@ -1184,11 +1268,11 @@ public class FloatingBubbleManager {
                         wakeBubbleFromDock();
                         bubbleView.setNativeVoiceState(3);
                     } else if (isAiSpeaking) {
-                        wakeBubbleFromDock();
                         bubbleView.setNativeVoiceState(2); // Amber = AI speaking
+                        scheduleAutoDock();
                     } else if (isLiveActive) {
-                        wakeBubbleFromDock();
                         bubbleView.setNativeVoiceState(1); // Red = Live call active
+                        scheduleAutoDock();
                     } else {
                         bubbleView.setNativeVoiceState(0); // Idle
                         scheduleAutoDock();

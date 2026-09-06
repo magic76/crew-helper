@@ -65,6 +65,15 @@ public class NativeLiveService extends Service {
         return instance != null && instance.client != null && instance.client.toggleAgentMute();
     }
 
+    /** Bubble fast-path: interrupt only. Never toggles mute when AI is not speaking. */
+    static boolean interruptAiSpeech() {
+        if (instance == null || instance.client == null || !instance.client.isAiSpeaking()) {
+            return false;
+        }
+        instance.client.toggleAgentMute();
+        return true;
+    }
+
     static boolean toggleVoiceInterruption() {
         if (instance != null && instance.client != null) {
             boolean current = instance.client.isVoiceInterruptionAllowed();
