@@ -99,6 +99,13 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private volatile HttpURLConnection activeToolConnection;
     private volatile int agentMaxSteps = 30;
     private AgentTaskRecord activeAgentTask;
+    // 0018: a goal can span several execution tasks/follow-ups inside one Live session.
+    // Safety/tool budgets remain per AgentTaskRecord; they are NOT shared for the whole call.
+    private static final long CONVERSATION_GOAL_IDLE_MS = 45_000L;
+    private String conversationGoalId = "";
+    private long conversationGoalTouchedAt = 0L;
+    private int conversationGoalTaskIndex = 0;
+    private String conversationGoalHint = "";
     private final Handler agentWatchdogHandler = new Handler(Looper.getMainLooper());
     private Runnable agentResponseWatchdog;
     private String customPrompt = "";
@@ -159,6 +166,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     boolean beginCorrectionWindow() {
         if (!running) return false;
 
+        // IMPORTANT: interrupt is a LOCAL CONTROL EVENT, not a conversation turn.
+        // Do not call sendInternalAgentDirective() here. Doing so can make Gemini
+        // acknowledge the interruption with "好的/了解/你繼續", which is unwanted.
         if (aiSpeaking) {
             triggerLocalInterruption();
         } else {
@@ -183,35 +193,61 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         correctionWindowActive = true;
         correctionWindowUntil = System.currentTimeMillis() + CORRECTION_WINDOW_MS;
         correctionTaskHint = hint;
+        correctionContextPendingInjection = true;
         correctionHandler.removeCallbacks(clearCorrectionWindow);
         correctionHandler.postDelayed(clearCorrectionWindow, CORRECTION_WINDOW_MS);
-
-        String taskContext = hint.isEmpty()
-                ? "上一個語音回覆或最近任務"
-                : hint;
-
-        sendInternalAgentDirective(
-                "【Interrupt + Correction 狀態】使用者剛主動按下打斷。"
-                + "立即停止延續上一個回覆，也不要重做剛才的工具操作。"
-                + "接下來約 12 秒內，如果下一句是『不是這個』『改成…』『上一個』"
-                + "『等等』『不要這樣』等省略式修正，優先理解為對剛才任務/答案的修正。"
-                + "如果下一句是完整且明顯不相關的新命令，就當成新任務。"
-                + "若修正資訊不足，只問完成修正所需的最小問題。"
-                + "現在不要回覆、不要呼叫工具，等待使用者下一句。"
-                + "最近任務提示：" + taskContext);
+        reportStage("已打斷，等待使用者修正");
         return true;
     }
 
-    private void consumeCorrectionWindowOnUserSpeech() {
-        if (!correctionWindowActive) return;
+    private void consumeCorrectionWindowOnUserSpeech(String inputText) {
+        if (!correctionWindowActive || inputText == null || inputText.trim().isEmpty()) return;
         if (System.currentTimeMillis() > correctionWindowUntil) {
             clearCorrectionWindow.run();
             return;
         }
+
+        if (correctionContextPendingInjection) {
+            String taskContext = correctionTaskHint == null || correctionTaskHint.isEmpty()
+                    ? "最近被打斷的語音回覆或 Agent 任務"
+                    : correctionTaskHint;
+            // Deferred injection: only now, after a real next utterance exists.
+            // Explicitly prohibit acknowledging the mechanics of interruption.
+            sendInternalAgentDirective(
+                    "【Deferred Correction Context】使用者上一輪曾主動打斷。"
+                    + "請把剛收到的最新使用者語句視為主要輸入。若它是『不是這個』『改成…』"
+                    + "『上一個』『等等』『不要這樣』等省略式語句，優先承接最近任務做修正；"
+                    + "若它是完整且明顯不相關的新命令，視為新目標。"
+                    + "不要說『好的』『了解』『你繼續』『你是說…』來確認打斷本身，"
+                    + "直接執行修正後的意圖或直接回答；只有缺少必要資訊時才問最小澄清問題。"
+                    + "不得自動重試已取消的 mutation。最近任務提示：" + taskContext);
+        }
+
         correctionHandler.removeCallbacks(clearCorrectionWindow);
         correctionWindowActive = false;
         correctionWindowUntil = 0L;
         correctionTaskHint = "";
+        correctionContextPendingInjection = false;
+    }
+
+    private void touchConversationGoal(String safeHint) {
+        long now = System.currentTimeMillis();
+        if (conversationGoalId.isEmpty() || now - conversationGoalTouchedAt > CONVERSATION_GOAL_IDLE_MS) {
+            conversationGoalId = "goal_" + now;
+            conversationGoalTaskIndex = 0;
+            conversationGoalHint = "";
+        }
+        conversationGoalTouchedAt = now;
+        if (safeHint != null && !safeHint.trim().isEmpty()) {
+            conversationGoalHint = safeHint.trim();
+        }
+    }
+
+    private void resetConversationGoal() {
+        conversationGoalId = "";
+        conversationGoalTouchedAt = 0L;
+        conversationGoalTaskIndex = 0;
+        conversationGoalHint = "";
     }
 
     /** Cancels queued work and disconnects the currently blocking local bridge request. */
@@ -329,12 +365,14 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private volatile boolean correctionWindowActive = false;
     private volatile long correctionWindowUntil = 0L;
     private volatile String correctionTaskHint = "";
+    private volatile boolean correctionContextPendingInjection = false;
     private final Handler correctionHandler = new Handler(Looper.getMainLooper());
     private final Runnable clearCorrectionWindow = new Runnable() {
         @Override public void run() {
             correctionWindowActive = false;
             correctionWindowUntil = 0L;
             correctionTaskHint = "";
+            correctionContextPendingInjection = false;
         }
     };
     private final Runnable clearInterruptedFallback = new Runnable() {
@@ -432,6 +470,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         correctionWindowActive = false;
         correctionWindowUntil = 0L;
         correctionTaskHint = "";
+        correctionContextPendingInjection = false;
+        resetConversationGoal();
         cancelAgentTask("通話已結束");
         cancelDeckAutoAdvance();
         running = false;
@@ -535,7 +575,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             String inputText = inputTranscript.optString("text");
             listener.onTranscript("你", inputText);
             if (isStopAgentTaskPhrase(inputText)) cancelAgentTask("使用者語音停止任務");
-            consumeCorrectionWindowOnUserSpeech();
+            consumeCorrectionWindowOnUserSpeech(inputText);
         }
         JSONObject outputTranscript = server.optJSONObject("outputTranscription");
         if (outputTranscript == null) outputTranscript = server.optJSONObject("output_transcription");
@@ -634,7 +674,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         setup.put("tools", new JSONArray().put(new JSONObject().put("functionDeclarations", buildToolDeclarations())));
         String customPrompt = this.customPrompt;
         String baseInstruction = "你是 Crew Helper 的原生即時語音助理。你的定位是高階『規劃者 (Planner) 與意圖解讀者』。自然、準確、極簡地回應；最終回答一律以 AUDIO 語音說出。"
-                + "【Interrupt + Correction】當系統告知使用者剛主動打斷你時，不得延續或重做上一輪動作。下一句若是『不是這個』『改成…』『上一個』『等等』『不要這樣』等省略語句，應優先承接最近任務上下文做修正；若是完整且明顯不相關的新命令，視為新任務。修正資訊不足時，只問最小必要問題，不要要求使用者從頭重講。"
+                + "【少廢話規則】不要對控制事件、打斷、等待、工具取消、UI 展開/收合做口頭確認。禁止無資訊量的『好的』『了解』『沒問題』『你繼續』。只有使用者真正提出內容、需要最小澄清、或任務有最終結果時才開口。"
+                + "【Interrupt + Correction】打斷本身是本地控制事件，不是對話事件。當之後收到 Deferred Correction Context 時，直接處理最新使用者意圖，不要確認『你剛剛打斷我』。省略式修正應承接最近目標；完整且不相關的新命令視為新目標。"
+                + "【Goal 與 Task】一次 Live 通話可包含多個 Conversation Goal；一個 Goal 可包含多個 Agent execution task、follow-up 與 correction。工具安全 budget（timeout、max steps、mutation 上限、screenshot 上限）一律針對單一 execution task 重新計算，不是整通電話共用。不要因為同一 Goal 的 follow-up 就沿用上一個 task 已消耗的 budget，也不要因為 budget 重置而重做上一個已完成/已取消的 mutation。"
                 + "【工具邊界與授權】只有使用者本輪最新一句明確口令要求操作手機時，才可呼叫手機工具；過去對話、推測或一般問題絕不可授權操作。一般問題直接回答。"
                 + "【安全防護】絕對禁止刪除、付款、購買、修改帳戶、輸入密碼、OTP、簡訊驗證碼；遇到此類敏感操作一律停止並語音提示使用者自行操作。"
                 + "【手機操作三層架構】"
@@ -855,7 +897,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private AgentTaskRecord beginAgentStep(String name, JSONObject args) {
         synchronized (agentLock) {
             if (activeAgentTask == null || activeAgentTask.finished) {
+                touchConversationGoal("最近工具：" + name);
+                conversationGoalTaskIndex++;
                 activeAgentTask = new AgentTaskRecord("agent_" + System.currentTimeMillis());
+                activeAgentTask.goalId = conversationGoalId;
+                activeAgentTask.goalTaskIndex = conversationGoalTaskIndex;
                 reportStage("Agent 任務開始：" + activeAgentTask.taskId);
             }
             AgentTaskRecord task = activeAgentTask;
@@ -1029,6 +1075,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             agentHistory.add(task);
             if (agentHistory.size() > 20) agentHistory.remove(0);
             if (activeAgentTask == task) activeAgentTask = null;
+            conversationGoalTouchedAt = System.currentTimeMillis();
         }
         reportStage(task.status);
     }
@@ -1922,6 +1969,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     /** Compact in-memory audit record. Raw payloads deliberately never enter transcripts. */
     private static final class AgentTaskRecord {
         final String taskId;
+        String goalId = "";
+        int goalTaskIndex = 0;
         final long startedAt = System.currentTimeMillis();
         final ArrayList<String> stepsSummary = new ArrayList<String>();
         final java.util.HashMap<String, Integer> toolCounts = new java.util.HashMap<String, Integer>();
@@ -1947,7 +1996,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         JSONObject toJson() {
             JSONObject json = new JSONObject();
             try {
-                json.put("taskId", taskId).put("startedAt", startedAt).put("steps", new JSONArray(stepsSummary))
+                json.put("taskId", taskId).put("goalId", goalId).put("goalTaskIndex", goalTaskIndex)
+                        .put("startedAt", startedAt).put("steps", new JSONArray(stepsSummary))
                         .put("stepCount", steps).put("mutationActions", mutationActions)
                         .put("endReason", endReason).put("finalReply", finalReply).put("status", status);
             } catch (Exception ignored) {}
