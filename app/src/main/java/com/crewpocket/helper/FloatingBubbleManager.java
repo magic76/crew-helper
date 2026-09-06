@@ -59,13 +59,13 @@ public class FloatingBubbleManager {
     private View voiceControlView = null;
     private boolean voiceControlsOpening = false;
     private WindowManager.LayoutParams voiceControlParams = null;
+    private FloatingPanelController voiceControlController = null;
+    private BubbleActionStripOverlay bubbleActionStrip = null;
     private View compactStatusView = null;
     private WindowManager.LayoutParams compactStatusParams = null;
     private FloatingPanelController compactStatusController = null;
-    private BubbleQuickActionsOverlay bubbleQuickActions = null;
     private Runnable compactStatusAutoHideRunnable = null;
     private static final long MINI_STATUS_AUTO_HIDE_MS = 1800L;
-    private static final long DOUBLE_TAP_WINDOW_MS = 260L;
     private static class DockIconButton extends View {
         public static final int ICON_CAMERA = 1;
         public static final int ICON_SCREEN = 2;
@@ -498,8 +498,8 @@ public class FloatingBubbleManager {
 
     public void autoDockBubble() {
         if (bubbleView == null || bubbleParams == null || isDocked) return;
-        // 0015: Live calls may also use Edge Pill mode. The exposed half-bubble
-        // remains touchable for instant interruption while taking much less space.
+        // Revised 0015: never half-hide during an active/requested Live call.
+        if (NativeLiveService.isActive() || nativeLiveRequested) return;
 
         int screenWidth = windowManager.getDefaultDisplay().getWidth();
         int bSize = bubbleParams.width > 0 ? bubbleParams.width : dp(40);
@@ -571,15 +571,7 @@ public class FloatingBubbleManager {
                         private int initialX, initialY;
                         private float initialTouchX, initialTouchY;
                         private long touchStartTime;
-                        private long lastTapAt = 0L;
-                        private boolean longPressTriggered = false;
-                        private final Runnable longPressRunnable = new Runnable() {
-                            @Override public void run() {
-                                longPressTriggered = true;
-                                vibrateSuccess();
-                                showBubbleQuickActions();
-                            }
-                        };
+                        private boolean moved = false;
 
                         @Override
                         public boolean onTouch(View v, MotionEvent event) {
@@ -597,8 +589,7 @@ public class FloatingBubbleManager {
                                     initialTouchX = event.getRawX();
                                     initialTouchY = event.getRawY();
                                     touchStartTime = System.currentTimeMillis();
-                                    longPressTriggered = false;
-                                    mainHandler.postDelayed(longPressRunnable, 450);
+                                    moved = false;
                                     if (isDocked) {
                                         wakeBubbleFromDock();
                                     } else {
@@ -607,9 +598,14 @@ public class FloatingBubbleManager {
                                     return true;
 
                                 case MotionEvent.ACTION_MOVE:
-                                    float moveDist = (float) Math.hypot(event.getRawX() - initialTouchX, event.getRawY() - initialTouchY);
+                                    float moveDist = (float) Math.hypot(
+                                            event.getRawX() - initialTouchX,
+                                            event.getRawY() - initialTouchY);
                                     if (moveDist > 18) {
-                                        mainHandler.removeCallbacks(longPressRunnable);
+                                        moved = true;
+                                        if (bubbleActionStrip != null) {
+                                            bubbleActionStrip.dismiss();
+                                        }
                                     }
                                     int targetX = initialX + (int) (event.getRawX() - initialTouchX);
                                     int targetY = initialY + (int) (event.getRawY() - initialTouchY);
@@ -622,39 +618,13 @@ public class FloatingBubbleManager {
 
                                 case MotionEvent.ACTION_UP:
                                 case MotionEvent.ACTION_CANCEL:
-                                    mainHandler.removeCallbacks(longPressRunnable);
-                                    if (!longPressTriggered) {
+                                    if (!moved) {
                                         float dx = Math.abs(event.getRawX() - initialTouchX);
                                         float dy = Math.abs(event.getRawY() - initialTouchY);
                                         long duration = System.currentTimeMillis() - touchStartTime;
                                         if (dx < 18 && dy < 18 && duration < 450) {
                                             vibrateShort();
-                                            long now = System.currentTimeMillis();
-                                            if (NativeLiveService.isAiSpeaking()) {
-                                                // Fastest possible path: no panel, no double-tap delay.
-                                                if (NativeLiveService.interruptAiSpeech()) {
-                                                    showCompactStatus("已打斷", "可以直接繼續說");
-                                                }
-                                                lastTapAt = 0L;
-                                            } else if (now - lastTapAt <= DOUBLE_TAP_WINDOW_MS) {
-                                                lastTapAt = 0L;
-                                                toggleVoiceControls();
-                                            } else {
-                                                lastTapAt = now;
-                                                final long tapToken = now;
-                                                mainHandler.postDelayed(new Runnable() {
-                                                    @Override public void run() {
-                                                        if (lastTapAt != tapToken) return;
-                                                        lastTapAt = 0L;
-                                                        // Normal single-tap never opens the large dock.
-                                                        String status = NativeLiveService.isActive()
-                                                                ? latestLiveStatus : "待命";
-                                                        showCompactStatus(
-                                                                NativeLiveService.isActive() ? "Live" : "Crew Helper",
-                                                                status);
-                                                    }
-                                                }, DOUBLE_TAP_WINDOW_MS + 20L);
-                                            }
+                                            toggleBubbleActionStrip();
                                         }
                                     }
                                     snapBubbleToEdge();
@@ -701,44 +671,31 @@ public class FloatingBubbleManager {
         } catch (Exception ignored) {}
     }
 
-    private void showBubbleQuickActions() {
-        if (bubbleParams == null) return;
-        if (bubbleQuickActions == null) {
-            bubbleQuickActions = new BubbleQuickActionsOverlay(context);
+    private void toggleBubbleActionStrip() {
+        if (bubbleView == null || bubbleParams == null) return;
+        if (bubbleActionStrip == null) {
+            bubbleActionStrip = new BubbleActionStripOverlay(context);
         }
-        final int x = bubbleParams.x < windowManager.getDefaultDisplay().getWidth() / 2
-                ? bubbleParams.x + dp(48)
-                : bubbleParams.x - dp(162);
-        final int y = bubbleParams.y;
-        bubbleQuickActions.show(x, y, new BubbleQuickActionsOverlay.Actions() {
-            @Override public void onInterrupt() {
-                if (NativeLiveService.interruptAiSpeech()) {
-                    showCompactStatus("已打斷", "可以直接繼續說");
-                }
-                refreshVoiceControls();
-            }
+        int size = bubbleParams.width > 0 ? bubbleParams.width : dp(40);
+        bubbleActionStrip.toggle(
+                bubbleParams.x,
+                bubbleParams.y,
+                size,
+                new BubbleActionStripOverlay.Actions() {
+                    @Override public void onToggleCall() {
+                        toggleNativeLive();
+                        refreshVoiceControls();
+                    }
 
-            @Override public void onToggleMute() {
-                if (NativeLiveService.isActive()) {
-                    NativeLiveService.toggleAgentMute();
-                    showCompactStatus(
-                            NativeLiveService.isAgentMuted() ? "麥克風已靜音" : "麥克風已開啟",
-                            "");
-                }
-                refreshVoiceControls();
-            }
+                    @Override public void onOpenConsole() {
+                        showVoiceControls();
+                    }
 
-            @Override public void onOpenControls() {
-                showVoiceControls();
-            }
-
-            @Override public void onHangup() {
-                if (NativeLiveService.isActive() || nativeLiveRequested) {
-                    toggleNativeLive();
-                    showCompactStatus("正在結束通話", "");
-                }
-            }
-        });
+                    @Override public void onInterrupt() {
+                        NativeLiveService.interruptAiSpeech();
+                        refreshVoiceControls();
+                    }
+                });
     }
 
     // 🌊 Set Water Flow / Thinking State
@@ -838,13 +795,7 @@ public class FloatingBubbleManager {
                 // Give immediate visual feedback; the service will replace it
                 // with its real connection status moments later.
                 updateNativeLiveStatus("正在連線 Gemini Live", true);
-                // A new call must explain itself: reveal the controls once so
-                // users do not have to infer that a lone bubble is listening.
-                mainHandler.postDelayed(new Runnable() {
-                    @Override public void run() {
-                        if (nativeLiveRequested || NativeLiveService.isActive()) showVoiceControls();
-                    }
-                }, 280);
+                // Revised 0015: do not auto-open the full console.
             }
         } catch (Exception error) {
         }
@@ -857,7 +808,29 @@ public class FloatingBubbleManager {
                 nativeLiveRequested = active;
                 latestLiveStatus = text == null || text.trim().isEmpty() ? (active ? "語音通話中" : "待命") : text.trim();
                 if (bubbleView != null) {
-                    bubbleView.setNativeVoiceState(isLiveError(latestLiveStatus) ? 3 : (active ? 1 : 0));
+                    bubbleView.setNativeVoiceState(
+                            isLiveError(latestLiveStatus) ? 3 : (active ? 1 : 0));
+                }
+                if (bubbleActionStrip != null && bubbleActionStrip.isShowing()
+                        && bubbleParams != null) {
+                    int size = bubbleParams.width > 0 ? bubbleParams.width : dp(40);
+                    bubbleActionStrip.refresh(
+                            bubbleParams.x,
+                            bubbleParams.y,
+                            size,
+                            new BubbleActionStripOverlay.Actions() {
+                                @Override public void onToggleCall() {
+                                    toggleNativeLive();
+                                    refreshVoiceControls();
+                                }
+                                @Override public void onOpenConsole() {
+                                    showVoiceControls();
+                                }
+                                @Override public void onInterrupt() {
+                                    NativeLiveService.interruptAiSpeech();
+                                    refreshVoiceControls();
+                                }
+                            });
                 }
                 refreshVoiceControls();
             }
@@ -987,11 +960,20 @@ public class FloatingBubbleManager {
                             dockWidth,
                             WindowManager.LayoutParams.WRAP_CONTENT,
                             overlayType,
-                            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                                    | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
                             PixelFormat.TRANSLUCENT
                     );
-                    voiceControlParams.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
-                    voiceControlParams.y = dp(42); // Elevated above navigation bar / gesture bar
+                    // Revised 0015: normalize to TOP|START so the existing
+                    // FloatingPanelController can drag + persist position.
+                    voiceControlParams.gravity = Gravity.TOP | Gravity.START;
+                    voiceControlParams.x = Math.max(
+                            dp(12),
+                            (screenWidth - dockWidth) / 2);
+                    voiceControlParams.y = Math.max(
+                            getStatusBarHeight() + dp(18),
+                            windowManager.getDefaultDisplay().getHeight()
+                                    - dp(430));
 
                     LinearLayout dock = new LinearLayout(context);
                     dock.setOrientation(LinearLayout.VERTICAL);
@@ -1217,6 +1199,14 @@ public class FloatingBubbleManager {
                     dock.addView(voiceTranscriptText, new LinearLayout.LayoutParams(
                             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
                     voiceControlView = dock;
+                    voiceControlController = new FloatingPanelController(
+                            context,
+                            "voice_control_console",
+                            windowManager,
+                            dock,
+                            voiceControlParams);
+                    voiceControlController.restorePosition();
+                    voiceControlController.attachDragHandle(title);
                     windowManager.addView(dock, voiceControlParams);
                     refreshVoiceControls();
                     updateVoiceTelemetryUi();
@@ -1238,6 +1228,7 @@ public class FloatingBubbleManager {
                     if (voiceControlView != null) windowManager.removeViewImmediate(voiceControlView);
                 } catch (Exception ignored) {}
                 voiceControlView = null;
+                voiceControlController = null;
                 voiceCallButton = null;
                 voiceCameraButton = null;
                 voiceScreenButton = null;
@@ -1268,13 +1259,13 @@ public class FloatingBubbleManager {
                         wakeBubbleFromDock();
                         bubbleView.setNativeVoiceState(3);
                     } else if (isAiSpeaking) {
-                        bubbleView.setNativeVoiceState(2); // Amber = AI speaking
-                        scheduleAutoDock();
+                        wakeBubbleFromDock();
+                        bubbleView.setNativeVoiceState(2);
                     } else if (isLiveActive) {
-                        bubbleView.setNativeVoiceState(1); // Red = Live call active
-                        scheduleAutoDock();
+                        wakeBubbleFromDock();
+                        bubbleView.setNativeVoiceState(1);
                     } else {
-                        bubbleView.setNativeVoiceState(0); // Idle
+                        bubbleView.setNativeVoiceState(0);
                         scheduleAutoDock();
                     }
                 }
