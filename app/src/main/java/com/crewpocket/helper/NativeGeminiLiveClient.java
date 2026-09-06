@@ -554,8 +554,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 + "【安全防護】絕對禁止刪除、付款、購買、修改帳戶、輸入密碼、OTP、簡訊驗證碼；遇到此類敏感操作一律停止並語音提示使用者自行操作。"
                 + "【手機操作三層架構】"
                 + "1. 第一層（系統原生優先）：開啟 App（如『打開幣安』『開 Chrome』）一律呼叫 launch_app(app='...') 直接啟動，絕不在桌面滑動翻頁找圖示。若找到多個相近 App，系統會列出候選清單（如 1. 幣安 2. 幣安合約），請簡短詢問使用者要開哪一個；當使用者回答『第一個』、『第2個』或特定名稱時，直接呼叫 launch_app(index=1) 或 launch_app(app='第一個') 啟動。系統按鍵（首頁、返回、多工、通知列、快捷設定）一律呼叫 press_key。"
-                + "2. 第二層（Accessibility 語意執行）：一律以語意操作為主。點擊按鈕呼叫 tap_screen(label='...' 或 id='...')；滑動呼叫 swipe_screen(direction='up'|'down'|'left'|'right', distance='short'|'normal'|'long')；輸入呼叫 type_text(text='...', target='...')；判斷畫面呼叫 inspect_ui。"
-                + "【傳送訊息操作指引】發送訊息時：先 type_text 輸入文字；再 inspect_ui。若送出鍵是圖示、沒有文字，直接呼叫 tap_screen(label='send')；原生層會識別 Send、發送、送出、composer_send、arrow_upward 與輸入框右側送出圖示。不可因找不到文字按鈕就結束操作。"
+                + "2. 第二層（Accessibility 語意執行）：一律以語意操作為主。點擊按鈕呼叫 tap_screen(label='...' 或 id='...')；滑動呼叫 swipe_screen(direction='up'|'down'|'left'|'right', distance='short'|'normal'|'long')；一般輸入但不提交時呼叫 type_text(text='...', target='...')；判斷畫面呼叫 inspect_ui。"
+                + "【原子化傳送】只要使用者明確要求『傳送/送出/回覆一段文字』，且目前已在可輸入的聊天/留言 composer 畫面，優先只呼叫 send_text(text='...')。send_text 會由 Android runtime 完成輸入、選擇 learned/semantic Send、一次性提交及本地驗證；不要再自行拆成 type_text → inspect_ui → tap send。只有 send_text 回傳 COMPOSER_NOT_FOUND / SUBMIT_TARGET_NOT_FOUND 時，才重新 inspect/replan；若 SEND_NOT_VERIFIED，不可再次送出，以免重複訊息。"
                 + "3. 第三層（Vision 視覺兜底）：只有在 inspect_ui 完全取不到有效節點（例如 Canvas 畫布、遊戲自訂 UI）時，才呼叫 take_screenshot 截圖並以座標點擊。"
                 + "【結束通話】當使用者說『關閉』、『掛斷』、『結束通話』、『退下』、『先這樣』或『再見』時，先簡短道別一句（如『好的，先為您關閉，隨時喊我！』），並一律呼叫 end_voice_session 工具以自動掛斷連線。"
                 + "【定時提醒與畫面巡檢】當使用者要求計時（如『5分鐘後叫我』）呼叫 schedule_reminder；週期性檢查畫面（如『每分鐘看一次畫面跟我說』）或等待條件（如『等出現已送達時叫我』）呼叫 start_screen_monitor；查詢目前排程呼叫 list_active_schedules；取消排程呼叫 cancel_schedule。"
@@ -613,6 +613,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         tools.put(new JSONObject().put("name", "tap_screen").put("description", "Tap a button or UI element using its semantic label, description, resource viewId, or coordinates. Prefer label or id over coordinates.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("label", new JSONObject().put("type", "STRING").put("description", "The button, app icon, or text label to tap")).put("id", new JSONObject().put("type", "STRING").put("description", "Optional resource viewId (e.g. 'send_btn')")).put("x", new JSONObject().put("type", "NUMBER").put("description", "Optional X coordinate for vision fallback")).put("y", new JSONObject().put("type", "NUMBER").put("description", "Optional Y coordinate for vision fallback")).put("coordinate_space", new JSONObject().put("type", "STRING").put("enum", new JSONArray().put("image").put("normalized_1000").put("screen"))))));
         tools.put(new JSONObject().put("name", "swipe_screen").put("description", "Scroll or swipe the phone screen. Direction: up (scroll down), down (scroll up), left, right. Distance: short, normal, long.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("direction", new JSONObject().put("type", "STRING").put("enum", new JSONArray().put("up").put("down").put("left").put("right"))).put("distance", new JSONObject().put("type", "STRING").put("enum", new JSONArray().put("short").put("normal").put("long").put("page")))).put("required", new JSONArray().put("direction"))));
         tools.put(new JSONObject().put("name", "type_text").put("description", "Type text into an input field or search bar.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("target", new JSONObject().put("type", "STRING").put("description", "Input field hint or label")).put("text", new JSONObject().put("type", "STRING").put("description", "The text to type"))).put("required", new JSONArray().put("text"))));
+        tools.put(new JSONObject().put("name", "send_text").put("description", "Atomically type, submit exactly once, and locally verify a message/reply in the currently open composer. Prefer this over type_text + tap_screen when the user explicitly wants to send text.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("text", new JSONObject().put("type", "STRING").put("description", "Exact message text to send"))).put("required", new JSONArray().put("text"))));
         tools.put(new JSONObject().put("name", "teach_ui_element").put("description", "Enter interactive UI teaching mode so user can tap and teach an unlabeled button (e.g. COMPOSER_SEND, SEARCH_SUBMIT, CONFIRM).").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("role", new JSONObject().put("type", "STRING").put("description", "The semantic role to teach, e.g. 'COMPOSER_SEND', 'SEARCH_SUBMIT', 'CONFIRM', 'NEXT'"))).put("required", new JSONArray().put("role"))));
         tools.put(new JSONObject().put("name", "schedule_reminder").put("description", "Set a countdown timer / reminder in seconds. When time is up, the assistant vibrates and announces the message.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("delay_seconds", new JSONObject().put("type", "NUMBER").put("description", "Delay in seconds, e.g. 300 for 5 minutes")).put("message", new JSONObject().put("type", "STRING").put("description", "Reminder text to speak when timer expires")).put("label", new JSONObject().put("type", "STRING").put("description", "Short label for the timer"))).put("required", new JSONArray().put("delay_seconds"))));
         tools.put(new JSONObject().put("name", "start_screen_monitor").put("description", "Start periodic background screen checks or wait until a specific condition/text appears on screen.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("interval_seconds", new JSONObject().put("type", "NUMBER").put("description", "Interval between checks in seconds (e.g. 60)")).put("duration_minutes", new JSONObject().put("type", "NUMBER").put("description", "Total monitoring duration in minutes (default 10)")).put("target_condition", new JSONObject().put("type", "STRING").put("description", "Optional text/word to look for on screen (e.g. '已送達', '完成')")).put("label", new JSONObject().put("type", "STRING").put("description", "Short task name"))).put("required", new JSONArray().put("interval_seconds"))));
@@ -715,6 +716,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             else if ("swipe_screen".equals(name)) result = swipe(args);
             else if ("tap_screen".equals(name)) result = tap(args);
             else if ("type_text".equals(name)) result = typeText(args);
+            else if ("send_text".equals(name)) result = sendTextToPhone(args);
             else if ("press_key".equals(name)) result = pressKey(args);
             else if ("teach_ui_element".equals(name)) result = teachUiElement(args);
             else if ("schedule_reminder".equals(name)) result = scheduleReminder(args);
@@ -810,6 +812,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 || "swipe_screen".equals(name)
                 || "tap_screen".equals(name)
                 || "type_text".equals(name)
+                || "send_text".equals(name)
                 || "press_key".equals(name);
     }
 
@@ -1421,8 +1424,21 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         // 2. Send text to Accessibility Service
         JSONObject reply = helperPost("/type", new JSONObject().put("text", text));
         reply.put("success", true);
-        reply.put("message", "已在輸入框輸入：「" + text + "」");
+        reply.put("message", "已在輸入框輸入文字");
         autoVerifyUiSnapshot(reply, 350);
+        return reply;
+    }
+
+    private JSONObject sendTextToPhone(JSONObject args) throws Exception {
+        String text = args.optString("text", "");
+        if (text.isEmpty()) {
+            return new JSONObject().put("success", false).put("error", "EMPTY_TEXT");
+        }
+        JSONObject reply = helperPost(
+                "/send_text",
+                new JSONObject().put("text", text));
+        // Runtime deliberately does not echo plaintext back to Gemini.
+        reply.put("textLength", text.length());
         return reply;
     }
 

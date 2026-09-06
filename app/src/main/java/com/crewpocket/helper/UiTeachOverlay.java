@@ -3,7 +3,6 @@ package com.crewpocket.helper;
 import android.content.Context;
 import android.graphics.Color;
 import android.graphics.PixelFormat;
-import android.graphics.Rect;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.provider.Settings;
@@ -18,6 +17,11 @@ import android.widget.TextView;
  *
  * It consumes the user's tap, reports raw screen coordinates and removes itself,
  * so teaching a destructive/submit button does not actually execute that button.
+ *
+ * 0012-0014 integration update:
+ * - always shows an explicit Cancel button
+ * - Cancel consumes the touch and closes only the overlay
+ * - Cancel never forwards the tap to the underlying app
  */
 final class UiTeachOverlay {
     interface Callback {
@@ -64,6 +68,40 @@ final class UiTeachOverlay {
         cp.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
         cp.topMargin = dp(64);
         root.addView(chip, cp);
+
+        // Explicit escape hatch. This prevents accidental Teach/Settings entry
+        // from trapping the user in a full-screen overlay.
+        TextView cancel = new TextView(context);
+        cancel.setText("取消");
+        cancel.setTextColor(Color.WHITE);
+        cancel.setTextSize(14);
+        cancel.setGravity(Gravity.CENTER);
+        cancel.setPadding(dp(14), dp(8), dp(14), dp(8));
+
+        GradientDrawable cancelBg = new GradientDrawable();
+        cancelBg.setColor(Color.argb(238, 30, 41, 59));
+        cancelBg.setCornerRadius(dp(16));
+        cancelBg.setStroke(dp(1), Color.argb(210, 248, 113, 113));
+        cancel.setBackground(cancelBg);
+
+        android.widget.FrameLayout.LayoutParams cancelParams =
+                new android.widget.FrameLayout.LayoutParams(
+                        WindowManager.LayoutParams.WRAP_CONTENT,
+                        WindowManager.LayoutParams.WRAP_CONTENT);
+        cancelParams.gravity = Gravity.TOP | Gravity.END;
+        cancelParams.topMargin = dp(56);
+        cancelParams.rightMargin = dp(16);
+        root.addView(cancel, cancelParams);
+
+        // IMPORTANT: consume cancel touch here so root's generic teaching tap
+        // handler cannot treat the Cancel button itself as the taught element.
+        cancel.setOnTouchListener((v, event) -> {
+            if (event.getActionMasked() == MotionEvent.ACTION_UP) {
+                dismiss();
+                if (callback != null) callback.onCancelled();
+            }
+            return true;
+        });
 
         root.setOnTouchListener((v, event) -> {
             if (event.getActionMasked() != MotionEvent.ACTION_UP) return true;

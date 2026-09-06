@@ -682,7 +682,24 @@ public class CrewAccessibilityService extends AccessibilityService {
                 synchronized (typeLock) {
                     try { typeLock.wait(1500); } catch (Exception ignored) {}
                 }
-                responseJson = "{\"success\":" + typeSuccess[0] + ",\"action\":\"TYPE\",\"text\":\"" + fText.replace("\"", "\\\"") + "\"}";
+                // Never echo user-entered text back into the model/tool result.
+                responseJson = "{\"success\":" + typeSuccess[0]
+                        + ",\"action\":\"TYPE\",\"textLength\":" + fText.length() + "}";
+            } else if (path.startsWith("/send_text")) {
+                final String textToSend = getJsonString(body, "text");
+                if (textToSend == null || textToSend.length() == 0) {
+                    responseJson = "{\"success\":false,\"error\":\"EMPTY_TEXT\"}";
+                } else {
+                    PolicyEngine.Result policy =
+                            PolicyEngine.evaluate("type", "", "", isActiveInputHardBlocked());
+                    if (policy.blocked()) {
+                        writeJsonAndClose(socket, policyBlockJson(policy));
+                        return;
+                    }
+                    SendTextTransaction.Result sendResult =
+                            performSendTextTransaction(textToSend);
+                    responseJson = sendResult.toJson().toString();
+                }
             } else if (path.startsWith("/schedule/create")) {
                 String type = getJsonString(body, "type");
                 String label = getJsonString(body, "label");
@@ -1293,6 +1310,29 @@ public class CrewAccessibilityService extends AccessibilityService {
             current = parent;
         }
         return null;
+    }
+
+    private SendTextTransaction.Result performSendTextTransaction(String text) {
+        SendTextTransaction transaction = new SendTextTransaction(
+                new SendTextTransaction.Environment() {
+                    @Override
+                    public AccessibilityNodeInfo currentRoot() {
+                        return getRootInActiveWindow();
+                    }
+
+                    @Override
+                    public AccessibilityNodeInfo resolveComposer(AccessibilityNodeInfo root) {
+                        return findActiveEditText(root);
+                    }
+
+                    @Override
+                    public AccessibilityNodeInfo resolveSendButton(AccessibilityNodeInfo root) {
+                        // Current implementation already resolves learned
+                        // COMPOSER_SEND first, then strict semantic resolver.
+                        return findLikelySendButton(root);
+                    }
+                });
+        return transaction.execute(text);
     }
 
     private boolean performSetText(String text) {
