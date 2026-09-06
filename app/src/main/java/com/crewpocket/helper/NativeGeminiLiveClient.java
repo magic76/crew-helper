@@ -102,6 +102,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private String customPrompt = "";
     private final ArrayList<JSONObject> lastCandidateApps = new ArrayList<JSONObject>();
     private final java.util.concurrent.atomic.AtomicBoolean screenCaptureInProgress = new java.util.concurrent.atomic.AtomicBoolean(false);
+    private volatile String lastObservedScreenFingerprint = "";
+    private volatile int consecutiveNoProgress = 0;
 
     NativeGeminiLiveClient(String apiKey, Listener listener) { this(apiKey, "", AppConfig.DEFAULT_VOICE, "auto", 35, "warm", "", 55, "call", listener); }
     NativeGeminiLiveClient(String apiKey, String serverUrl, Listener listener) { this(apiKey, serverUrl, AppConfig.DEFAULT_VOICE, "auto", 35, "warm", "", 55, "call", listener); }
@@ -559,6 +561,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 + "【Deck 動態調整】播報中使用者要求補充、簡化、重排或增加圖片時，只能改目前頁之後的卡片：用 update_deck_card 改後續內容、insert_deck_card 加入補充、remove_future_deck_card 移除重複。先 list_deck_images，僅從回傳的 assetId 使用 attach_deck_image 加入匯入圖片；不得捏造圖片、URL 或來源。修改後要簡短告知已調整後續內容，接著依新卡片繼續。"
                 + "【即席 Deck 與圖片】若使用者要求介紹一般主題、但未指定已匯入資料 Deck，先用 create_ephemeral_deck 建立 3–8 張簡潔卡片（卡片可包含合適的 HTTPS 圖片網址以豐富視覺），再逐頁同步顯示與語音介紹。即席 Deck 僅基於既有知識與本輪對話，必須在需要時清楚說明它不是即時查證資料；不可偽稱最新、引用來源或精確統計。"
                 + "【Agent 自動迴圈與事後自我檢查 (Mandatory Verification)】若任務需要多步工具操作，請在取得每次工具結果後自行決定下一步；除非任務已完成、需要使用者澄清、觸及既有安全確認、工具失敗無替代方案，否則不要提前結束。每次工具結果都必須作為下一步判斷依據，不可假設工具已成功。"
+                + "【ActionRegistry 優先】inspect_ui 若回傳 actions，下一步必須優先從 actions 中挑選 CLICK/TYPE/SCROLL；除非 actions 無法完成目標，否則不得自行猜 resource id、按鈕文字或座標。"
+                + "【失敗恢復】任何 tap/type/swipe/launch 執行後若結果 success=false，或再次 inspect_ui 後畫面沒有朝目標改變，不得立刻原樣重複同一動作。先重新 inspect_ui，改用另一個 action、返回上一層、重新聚焦輸入框或改用其他語意路徑。連續兩次無進展就停止並向使用者說明卡在哪裡。"
+                + "【輸入與送出】一般訊息、搜尋文字、表單文字可正常使用 type_text。只有真正 Android password input 禁止自動輸入；不要把一般文字輸入框誤判成敏感欄位。輸入成功後必須 inspect_ui 確認內容/狀態已改變，再找 send/submit action。"
+                + "【Composer Send Resolver】輸入訊息後 inspect_ui 若 actions 中存在 role='COMPOSER_SEND' 或 label='send' 的 CLICK action，直接使用該 action；這是 Crew Helper 根據目前輸入框與按鈕幾何位置解析出的送出鍵，不要再自行猜其他圖示。"
                 + "【嚴禁憑空臆測與幻覺回報】執行操作（例如打開 App、點擊按鈕、輸入搜尋、切換頁面等）後，絕不可憑空想像或提前告訴使用者畫面會呈現什麼內容；必須先呼叫 inspect_ui（或 take_screenshot）親自讀取當前真實畫面，確認畫面內容與操作狀態符合預期後，才能向使用者報告實際看到的結果與結論！"
                 + "【動作執行迴圈】遵守標準闭環：『1. inspect_ui 觀察當前畫面 → 2. 決策語意動作並執行 (tap/type/launch/swipe) → 3. 再次 inspect_ui 自我驗證實際畫面 → 4. 確認已達成目標才向使用者語音回報真實內容』。"
                 + "【語氣模式】" + liveToneInstruction();
@@ -595,7 +601,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         tools.put(new JSONObject().put("name", "launch_app").put("description", "Open an installed Android app directly by name (e.g. 'Binance', 'LINE', 'Chrome', 'Settings') or by ordinal index (e.g. 第一個/1). Always use this instead of looking for icons on launcher.")
                 .put("parameters", new JSONObject().put("type", "OBJECT").put("properties", launchProperties)));
         tools.put(new JSONObject().put("name", "press_key").put("description", "Trigger an Android system key or action.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("key", new JSONObject().put("type", "STRING").put("enum", new JSONArray().put("HOME").put("BACK").put("RECENTS").put("NOTIFICATIONS").put("QUICK_SETTINGS").put("POWER_DIALOG")))).put("required", new JSONArray().put("key"))));
-        tools.put(new JSONObject().put("name", "inspect_ui").put("description", "Read the current Android accessibility UI tree before and after every phone action. Returns visible labels, descriptions, clickable states, and bounds."));
+        tools.put(new JSONObject().put("name", "inspect_ui").put("description",
+                "Read the current Android screen state before and after phone actions. "
+                + "Returns visible UI plus semantic actions currently available. "
+                + "Use returned CLICK/TYPE/SCROLL actions instead of guessing labels or coordinates."));
         tools.put(new JSONObject().put("name", "tap_screen").put("description", "Tap a button or UI element using its semantic label, description, resource viewId, or coordinates. Prefer label or id over coordinates.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("label", new JSONObject().put("type", "STRING").put("description", "The button, app icon, or text label to tap")).put("id", new JSONObject().put("type", "STRING").put("description", "Optional resource viewId (e.g. 'send_btn')")).put("x", new JSONObject().put("type", "NUMBER").put("description", "Optional X coordinate for vision fallback")).put("y", new JSONObject().put("type", "NUMBER").put("description", "Optional Y coordinate for vision fallback")).put("coordinate_space", new JSONObject().put("type", "STRING").put("enum", new JSONArray().put("image").put("normalized_1000").put("screen"))))));
         tools.put(new JSONObject().put("name", "swipe_screen").put("description", "Scroll or swipe the phone screen. Direction: up (scroll down), down (scroll up), left, right. Distance: short, normal, long.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("direction", new JSONObject().put("type", "STRING").put("enum", new JSONArray().put("up").put("down").put("left").put("right"))).put("distance", new JSONObject().put("type", "STRING").put("enum", new JSONArray().put("short").put("normal").put("long").put("page")))).put("required", new JSONArray().put("direction"))));
         tools.put(new JSONObject().put("name", "type_text").put("description", "Type text into an input field or search bar.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("target", new JSONObject().put("type", "STRING").put("description", "Input field hint or label")).put("text", new JSONObject().put("type", "STRING").put("description", "The text to type"))).put("required", new JSONArray().put("text"))));
@@ -1100,9 +1109,14 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     }
 
     private JSONObject inspectUi() throws Exception {
-        JSONObject raw = helperGet("/nodes");
+        // /screen_state is backward-compatible with /nodes but also includes
+        // Crew Helper's semantic ActionRegistry output.
+        JSONObject raw = helperGet("/screen_state");
         if (!raw.optBoolean("success")) return raw;
+        String fingerprint = raw.optString("fingerprint", "");
+        if (!fingerprint.isEmpty()) lastObservedScreenFingerprint = fingerprint;
         JSONArray nodes = raw.optJSONArray("nodes");
+        JSONArray actions = raw.optJSONArray("actions");
         JSONArray visible = new JSONArray();
         if (nodes != null) {
             for (int i = 0; i < nodes.length() && visible.length() < 80; i++) {
@@ -1116,8 +1130,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 visible.put(item);
             }
         }
-        return new JSONObject().put("success", true).put("nodeCount", nodes == null ? 0 : nodes.length()).put("visible", visible)
+        JSONObject result = new JSONObject().put("success", true).put("nodeCount", nodes == null ? 0 : nodes.length()).put("visible", visible)
                 .put("message", "已讀取目前真實 UI 節點；請務必只根據此 visible 內容向使用者作答，切勿自行腦補。");
+        if (actions != null) result.put("actions", actions);
+        if (!fingerprint.isEmpty()) result.put("fingerprint", fingerprint);
+        return result;
     }
 
     /**
@@ -1129,11 +1146,33 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private void autoVerifyUiSnapshot(JSONObject response, int waitDelayMs) {
         if (response == null || !response.optBoolean("success", false)) return;
         try {
+            String beforeFingerprint = lastObservedScreenFingerprint;
             if (waitDelayMs > 0) Thread.sleep(waitDelayMs);
-            JSONObject raw = helperGet("/nodes");
+            JSONObject raw = helperGet("/screen_state");
             if (raw.optBoolean("success")) {
                 String currentPkg = raw.optString("package", "");
+                String afterFingerprint = raw.optString("fingerprint", "");
+                String progress = "UNKNOWN";
+                if (!beforeFingerprint.isEmpty() && !afterFingerprint.isEmpty()) {
+                    progress = beforeFingerprint.equals(afterFingerprint) ? "UNCHANGED" : "PROGRESSED";
+                    if ("UNCHANGED".equals(progress)) {
+                        consecutiveNoProgress++;
+                    } else {
+                        consecutiveNoProgress = 0;
+                    }
+                }
+                if (!afterFingerprint.isEmpty()) lastObservedScreenFingerprint = afterFingerprint;
+                response.put("progress", progress);
+                response.put("noProgressCount", consecutiveNoProgress);
+                response.put("fingerprint", afterFingerprint);
+                if ("UNCHANGED".equals(progress)) {
+                    response.put("recoveryHint",
+                            consecutiveNoProgress >= 2
+                                    ? "畫面連續沒有進展：停止重複同一動作，改用返回、重新聚焦、另一個 semantic action，或向使用者說明卡點。"
+                                    : "畫面沒有改變：重新 inspect_ui，下一步不可原樣重複剛才動作。");
+                }
                 JSONArray nodes = raw.optJSONArray("nodes");
+                JSONArray actions = raw.optJSONArray("actions");
                 JSONArray visible = new JSONArray();
                 if (nodes != null) {
                     for (int i = 0; i < nodes.length() && visible.length() < 30; i++) {
@@ -1149,6 +1188,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 verification.put("currentPackage", currentPkg);
                 verification.put("verifiedNodeCount", nodes == null ? 0 : nodes.length());
                 verification.put("actualVisibleContent", visible);
+                if (actions != null) verification.put("verifiedActions", actions);
                 verification.put("instruction", "【系統真實校驗結果】以上為動作執行後的真實畫面內容。請直接根據 actualVisibleContent 向使用者報告實際看見的狀態，絕對不可捏造尚未出現的內容！");
                 response.put("autoVerification", verification);
             }

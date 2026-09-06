@@ -54,9 +54,18 @@ final class SensitiveDataGuard {
                 || variation == (InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
     }
 
+    /**
+     * Hard-blocking typing must be narrower than inspection redaction.
+     * OTP/PIN/CVV-like fields can remain redacted from model inspection without
+     * accidentally disabling ordinary message/search/composer input.
+     */
+    static boolean isHardBlockedInput(AccessibilityNodeInfo node) {
+        return node != null && (node.isPassword() || isPasswordInputType(node.getInputType()));
+    }
+
     static boolean isSensitiveNode(AccessibilityNodeInfo node) {
         if (node == null) return false;
-        if (node.isPassword() || isPasswordInputType(node.getInputType())) return true;
+        if (isHardBlockedInput(node)) return true;
 
         String viewId = node.getViewIdResourceName() == null ? "" : node.getViewIdResourceName().toString();
         String desc = node.getContentDescription() == null ? "" : node.getContentDescription().toString();

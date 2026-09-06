@@ -638,7 +638,7 @@ public class CrewAccessibilityService extends AccessibilityService {
                     } catch (Exception ignored) {}
                 }
                 final String fText = textToType == null ? "" : textToType;
-                PolicyEngine.Result policy = PolicyEngine.evaluate("type", "", "", isActiveInputSensitive());
+                PolicyEngine.Result policy = PolicyEngine.evaluate("type", "", "", isActiveInputHardBlocked());
                 if (policy.blocked()) {
                     writeJsonAndClose(socket, policyBlockJson(policy));
                     return;
@@ -796,11 +796,13 @@ public class CrewAccessibilityService extends AccessibilityService {
                         CharSequence pkg = root.getPackageName();
                         android.util.DisplayMetrics metrics = getResources().getDisplayMetrics();
                         JSONArray actions = ActionRegistry.build(root);
+                        String fingerprint = ScreenFingerprint.create(root);
                         StringBuilder sb = new StringBuilder();
                         sb.append("{\"success\":true,\"package\":\"")
                                 .append(pkg != null ? jsonEscape(pkg.toString()) : "").append("\",");
                         sb.append("\"screenWidth\":").append(metrics.widthPixels)
                                 .append(",\"screenHeight\":").append(metrics.heightPixels).append(",");
+                        sb.append("\"fingerprint\":\"").append(jsonEscape(fingerprint)).append("\",");
                         sb.append("\"nodes\":[");
                         dumpNodesJson(root, sb);
                         if (sb.charAt(sb.length() - 1) == ',') sb.deleteCharAt(sb.length() - 1);
@@ -1080,6 +1082,11 @@ public class CrewAccessibilityService extends AccessibilityService {
 
     /** Finds an unlabeled composer send icon using metadata first, then its position beside the edit box. */
     private AccessibilityNodeInfo findLikelySendButton(AccessibilityNodeInfo root) {
+        AccessibilityNodeInfo resolved = ComposerSendResolver.find(root);
+        if (resolved != null) return resolved;
+
+        // Keep the legacy resolver below as a compatibility fallback for apps
+        // whose Accessibility hierarchy is unusual.
         AccessibilityNodeInfo input = findActiveEditText(root);
         Rect inputBounds = new Rect();
         if (input != null) input.getBoundsInScreen(inputBounds);
@@ -1227,7 +1234,7 @@ public class CrewAccessibilityService extends AccessibilityService {
                 target = findEditableNode(root);
             }
             if (target != null) {
-                if (SensitiveDataGuard.isSensitiveNode(target)) {
+                if (SensitiveDataGuard.isHardBlockedInput(target)) {
                     target.recycle();
                     return false;
                 }
@@ -1381,7 +1388,7 @@ public class CrewAccessibilityService extends AccessibilityService {
         }
     }
 
-    private boolean isActiveInputSensitive() {
+    private boolean isActiveInputHardBlocked() {
         AccessibilityNodeInfo root = getRootInActiveWindow();
         if (root == null) return false;
         try {
@@ -1389,7 +1396,7 @@ public class CrewAccessibilityService extends AccessibilityService {
             if (target == null) target = findEditableNode(root);
             if (target == null) return false;
             try {
-                return SensitiveDataGuard.isSensitiveNode(target);
+                return SensitiveDataGuard.isHardBlockedInput(target);
             } finally {
                 target.recycle();
             }

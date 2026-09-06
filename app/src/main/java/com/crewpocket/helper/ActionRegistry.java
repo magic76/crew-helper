@@ -18,7 +18,31 @@ final class ActionRegistry {
     static JSONArray build(AccessibilityNodeInfo root) {
         JSONArray actions = new JSONArray();
         collect(root, actions);
+        appendComposerSendAction(root, actions);
         return actions;
+    }
+
+    private static void appendComposerSendAction(AccessibilityNodeInfo root, JSONArray actions) {
+        AccessibilityNodeInfo send = ComposerSendResolver.find(root);
+        if (send == null) return;
+        try {
+            Rect b = new Rect();
+            send.getBoundsInScreen(b);
+            String id = send.getViewIdResourceName() == null ? "" : send.getViewIdResourceName().toString();
+            JSONObject bounds = new JSONObject();
+            bounds.put("left", b.left).put("top", b.top).put("right", b.right).put("bottom", b.bottom);
+            JSONObject action = new JSONObject()
+                    .put("type", "CLICK")
+                    .put("label", "send")
+                    .put("id", id)
+                    .put("role", "COMPOSER_SEND")
+                    .put("confidence", ComposerSendResolver.hasSendMarker(send) ? "HIGH" : "MEDIUM")
+                    .put("bounds", bounds);
+            actions.put(action);
+        } catch (Exception ignored) {
+        } finally {
+            send.recycle();
+        }
     }
 
     private static void collect(AccessibilityNodeInfo node, JSONArray actions) {
