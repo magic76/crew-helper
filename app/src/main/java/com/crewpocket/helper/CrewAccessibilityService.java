@@ -1191,14 +1191,20 @@ public class CrewAccessibilityService extends AccessibilityService {
         if (learnedUiMappingStore != null) {
             try {
                 AccessibilityNodeInfo composer = findActiveEditText(root);
+                if (composer != null
+                        && !"HAS_TEXT".equals(LearnedUiMappingStore.composerState(composer))) {
+                    composer.recycle();
+                    composer = null;
+                }
                 String pkg = root.getPackageName() == null ? "" : root.getPackageName().toString();
                 String sig = ScreenFingerprint.create(root);
 
                 java.util.List<LearnedUiMappingStore.Rule> learnedRules =
                         learnedUiMappingStore.findRules(pkg, sig, "COMPOSER_SEND");
 
-                LearnedUiResolver.Match learned =
-                        LearnedUiResolver.resolve(root, learnedRules, composer);
+                LearnedUiResolver.Match learned = composer == null
+                        ? null
+                        : LearnedUiResolver.resolve(root, learnedRules, composer);
                 if (composer != null) composer.recycle();
 
                 if (learned != null && learned.node != null) {
@@ -1235,8 +1241,24 @@ public class CrewAccessibilityService extends AccessibilityService {
     }
 
     public boolean beginTeachElement(String role) {
-        if (uiTeachOverlay == null) uiTeachOverlay = new UiTeachOverlay(this);
         final String requestedRole = role == null ? "" : role.trim().toUpperCase(java.util.Locale.ROOT);
+        AccessibilityNodeInfo root = getRootInActiveWindow();
+        AccessibilityNodeInfo activeComposer = root != null ? findActiveEditText(root) : null;
+        if ("COMPOSER_SEND".equalsIgnoreCase(requestedRole)
+                && activeComposer != null
+                && "EMPTY".equals(LearnedUiMappingStore.composerState(activeComposer))) {
+            if (root != null) root.recycle();
+            activeComposer.recycle();
+            FloatingBubbleManager fb = FloatingBubbleManager.getInstance();
+            if (fb != null) {
+                fb.showCompactStatus("請先在輸入框輸入任意文字，讓真正的送出按鈕出現，再點教學。", "");
+            }
+            return false;
+        }
+        if (activeComposer != null) activeComposer.recycle();
+        if (root != null) root.recycle();
+
+        if (uiTeachOverlay == null) uiTeachOverlay = new UiTeachOverlay(this);
 
         return uiTeachOverlay.show(
             "請點一下「" + requestedRole + "」按鈕",
@@ -1272,10 +1294,11 @@ public class CrewAccessibilityService extends AccessibilityService {
 
                         FloatingBubbleManager fb = FloatingBubbleManager.getInstance();
                         if (fb != null) {
-                            fb.showCompactStatus(
-                                "已學習 " + requestedRole,
-                                packageName
-                            );
+                            if ("COMPOSER_SEND".equalsIgnoreCase(requestedRole)) {
+                                fb.showCompactStatus("已記住送出按鈕（有文字狀態）", packageName);
+                            } else {
+                                fb.showCompactStatus("已記住 " + requestedRole, packageName);
+                            }
                         }
                     } finally {
                         if (composer != null) composer.recycle();

@@ -45,6 +45,7 @@ final class LearnedUiResolver {
         Match best = null;
         try {
             for (LearnedUiMappingStore.Rule rule : rules) {
+                if (!composerStateCompatible(rule, referenceNode)) continue;
                 for (AccessibilityNodeInfo node : nodes) {
                     int score = score(node, rule, referenceNode);
                     if (score < 80) continue;
@@ -65,6 +66,15 @@ final class LearnedUiResolver {
         // Coordinates remain supporting evidence only. If structural resolution
         // fails, let the caller fall back to strict semantic resolver / Vision.
         return null;
+    }
+
+    private static boolean composerStateCompatible(
+            LearnedUiMappingStore.Rule rule,
+            AccessibilityNodeInfo composer) {
+        if (rule == null) return false;
+        String learned = safe(rule.composerState).trim();
+        if (learned.isEmpty() || "UNKNOWN".equals(learned)) return true;
+        return learned.equals(LearnedUiMappingStore.composerState(composer));
     }
 
     private static int score(AccessibilityNodeInfo node,
@@ -101,6 +111,17 @@ final class LearnedUiResolver {
             String actual = relativePosition(node, referenceNode);
             if (rule.relativePosition.equals(actual)) score += 25;
             else score -= 10;
+        }
+
+        if (referenceNode != null) {
+            if (!rule.composerClassName.isEmpty()
+                    && rule.composerClassName.equals(safe(referenceNode.getClassName()))) {
+                score += 12;
+            }
+            if (!rule.composerViewId.isEmpty()
+                    && rule.composerViewId.equals(safe(referenceNode.getViewIdResourceName()))) {
+                score += 24;
+            }
         }
 
         // Coordinates are supporting evidence only. Never enough on their own.

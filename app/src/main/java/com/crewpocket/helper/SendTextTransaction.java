@@ -107,6 +107,15 @@ final class SendTextTransaction {
                 return result;
             }
 
+            // 0021: Send resolution must happen only after the composer has text.
+            // Many apps replace microphone/plus/sticker controls with Send only
+            // after text is entered.
+            if (!"HAS_TEXT".equals(LearnedUiMappingStore.composerState(composer))) {
+                result.error = "COMPOSER_NOT_READY_FOR_SEND";
+                result.stage = "COMPOSER_EMPTY_AFTER_TYPE";
+                return result;
+            }
+
             // Snapshot immediately before submission, after exact input has been
             // locally verified.
             SendVerification.Snapshot before =
