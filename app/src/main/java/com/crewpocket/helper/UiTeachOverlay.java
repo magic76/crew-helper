@@ -71,26 +71,30 @@ final class UiTeachOverlay {
 
         // Explicit escape hatch. This prevents accidental Teach/Settings entry
         // from trapping the user in a full-screen overlay.
+        // IMPORTANT: Cancel is placed at BOTTOM CENTER, not top-right.
+        // Reason: in chat apps (e.g. Wea), the send button is at bottom-right.
+        // Having Cancel at top-right caused users to accidentally tap it when
+        // trying to teach the send button, recording the wrong top-right coordinate.
         TextView cancel = new TextView(context);
-        cancel.setText("取消");
+        cancel.setText("❌  取消教學");
         cancel.setTextColor(Color.WHITE);
-        cancel.setTextSize(14);
+        cancel.setTextSize(15);
         cancel.setGravity(Gravity.CENTER);
-        cancel.setPadding(dp(14), dp(8), dp(14), dp(8));
+        cancel.setPadding(dp(28), dp(12), dp(28), dp(12));
 
         GradientDrawable cancelBg = new GradientDrawable();
         cancelBg.setColor(Color.argb(238, 30, 41, 59));
-        cancelBg.setCornerRadius(dp(16));
-        cancelBg.setStroke(dp(1), Color.argb(210, 248, 113, 113));
+        cancelBg.setCornerRadius(dp(24));
+        cancelBg.setStroke(dp(2), Color.argb(210, 248, 113, 113));
         cancel.setBackground(cancelBg);
 
         android.widget.FrameLayout.LayoutParams cancelParams =
                 new android.widget.FrameLayout.LayoutParams(
                         WindowManager.LayoutParams.WRAP_CONTENT,
                         WindowManager.LayoutParams.WRAP_CONTENT);
-        cancelParams.gravity = Gravity.TOP | Gravity.END;
-        cancelParams.topMargin = dp(56);
-        cancelParams.rightMargin = dp(16);
+        // Bottom-center: far from typical send/submit button positions in chat apps
+        cancelParams.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
+        cancelParams.bottomMargin = dp(64);
         root.addView(cancel, cancelParams);
 
         // IMPORTANT: consume cancel touch here so root's generic teaching tap

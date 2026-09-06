@@ -34,6 +34,8 @@ final class LearnedUiMappingStore {
         String contentDescription = "";
         String parentClassName = "";
         String relativePosition = "";
+        int centerX = -1;   // absolute screen X of the tapped node center
+        int centerY = -1;   // absolute screen Y of the tapped node center
         long learnedAt = 0L;
         long lastVerifiedAt = 0L;
         int successCount = 0;
@@ -46,6 +48,9 @@ final class LearnedUiMappingStore {
             return Math.max(0.20d, Math.min(0.99d, observed));
         }
 
+        /** Returns true if this rule has a reliable coordinate fallback. */
+        boolean hasCoordinate() { return centerX >= 0 && centerY >= 0; }
+
         JSONObject toJson() {
             JSONObject o = new JSONObject();
             try {
@@ -57,6 +62,8 @@ final class LearnedUiMappingStore {
                 o.put("contentDescription", contentDescription);
                 o.put("parentClassName", parentClassName);
                 o.put("relativePosition", relativePosition);
+                o.put("centerX", centerX);
+                o.put("centerY", centerY);
                 o.put("learnedAt", learnedAt);
                 o.put("lastVerifiedAt", lastVerifiedAt);
                 o.put("successCount", successCount);
@@ -76,6 +83,8 @@ final class LearnedUiMappingStore {
             r.contentDescription = o.optString("contentDescription", "");
             r.parentClassName = o.optString("parentClassName", "");
             r.relativePosition = o.optString("relativePosition", "");
+            r.centerX = o.optInt("centerX", -1);
+            r.centerY = o.optInt("centerY", -1);
             r.learnedAt = o.optLong("learnedAt", 0L);
             r.lastVerifiedAt = o.optLong("lastVerifiedAt", 0L);
             r.successCount = o.optInt("successCount", 0);
@@ -110,6 +119,15 @@ final class LearnedUiMappingStore {
             finally { parent.recycle(); }
         }
         rule.relativePosition = relativePosition(node, referenceNode);
+        // Always persist the screen center of the tapped node.
+        // This is the coordinate fallback for apps where the send button has
+        // no stable viewId or contentDescription (e.g. Wea's ↑ icon button).
+        android.graphics.Rect bounds = new android.graphics.Rect();
+        node.getBoundsInScreen(bounds);
+        if (!bounds.isEmpty()) {
+            rule.centerX = bounds.centerX();
+            rule.centerY = bounds.centerY();
+        }
         rule.learnedAt = System.currentTimeMillis();
         rule.lastVerifiedAt = rule.learnedAt;
 

@@ -1139,6 +1139,16 @@ public class CrewAccessibilityService extends AccessibilityService {
                 if (composer != null) composer.recycle();
 
                 if (learned != null) {
+                    if (learned.coordinateFallback) {
+                        // No structural node matched, but we have a learned coordinate.
+                        // Tap the remembered position directly.
+                        // This is the correct path for icon-only buttons (e.g. Wea ↑ button)
+                        // that have no stable viewId or contentDescription.
+                        performTap(learned.rule.centerX, learned.rule.centerY);
+                        // Return a placeholder so the caller treats this as a success
+                        // rather than falling through to other (potentially wrong) resolvers.
+                        return AccessibilityNodeInfo.obtain(root);
+                    }
                     // learned.node is already obtained; caller owns recycle().
                     return learned.node;
                 }

@@ -12,14 +12,24 @@ import java.util.List;
  */
 final class LearnedUiResolver {
     static final class Match {
-        final AccessibilityNodeInfo node;
+        final AccessibilityNodeInfo node;  // null when coordinate-only
         final LearnedUiMappingStore.Rule rule;
         final int score;
+        /** True when this match is coordinate-based (no reliable node found). */
+        final boolean coordinateFallback;
 
         Match(AccessibilityNodeInfo node, LearnedUiMappingStore.Rule rule, int score) {
             this.node = node;
             this.rule = rule;
             this.score = score;
+            this.coordinateFallback = false;
+        }
+
+        Match(LearnedUiMappingStore.Rule rule) {
+            this.node = null;
+            this.rule = rule;
+            this.score = 0;
+            this.coordinateFallback = true;
         }
     }
 
@@ -38,7 +48,7 @@ final class LearnedUiResolver {
                 for (AccessibilityNodeInfo node : nodes) {
                     int score = score(node, rule, referenceNode);
                     if (score < 80) continue;
-                    if (best == null || score > best.score) {
+                    if (best == null || (!best.coordinateFallback && score > best.score)) {
                         if (best != null && best.node != null) best.node.recycle();
                         best = new Match(AccessibilityNodeInfo.obtain(node), rule, score);
                     }
@@ -47,7 +57,20 @@ final class LearnedUiResolver {
         } finally {
             for (AccessibilityNodeInfo node : nodes) node.recycle();
         }
-        return best;
+
+        // Structural match succeeded — use it.
+        if (best != null && !best.coordinateFallback) return best;
+
+        // Structural match failed. Fall back to the most recently learned
+        // coordinate for the matching role if the rule has a stored position.
+        // This handles buttons with no stable viewId or contentDescription
+        // (e.g. Wea's ↑ icon send button).
+        for (LearnedUiMappingStore.Rule rule : rules) {
+            if (rule.hasCoordinate()) {
+                return new Match(rule);   // coordinate-only fallback
+            }
+        }
+        return null;
     }
 
     private static int score(AccessibilityNodeInfo node,
