@@ -59,6 +59,9 @@ public class FloatingBubbleManager {
     private View voiceControlView = null;
     private boolean voiceControlsOpening = false;
     private WindowManager.LayoutParams voiceControlParams = null;
+    private View compactStatusView = null;
+    private WindowManager.LayoutParams compactStatusParams = null;
+    private FloatingPanelController compactStatusController = null;
     private static class DockIconButton extends View {
         public static final int ICON_CAMERA = 1;
         public static final int ICON_SCREEN = 2;
@@ -252,6 +255,82 @@ public class FloatingBubbleManager {
 
     public static synchronized FloatingBubbleManager getInstance() {
         return instance;
+    }
+
+    public void showCompactStatus(final String title, final String detail) {
+        mainHandler.post(new Runnable() {
+            @Override
+            public void run() {
+                if (!canDrawOverlays()) return;
+
+                if (compactStatusView == null) {
+                    final CompactStatusCard card = new CompactStatusCard(context);
+
+                    final WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
+                            dp(260),
+                            WindowManager.LayoutParams.WRAP_CONTENT,
+                            Build.VERSION.SDK_INT >= 26
+                                    ? 2038
+                                    : WindowManager.LayoutParams.TYPE_PHONE,
+                            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                                    | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                            PixelFormat.TRANSLUCENT
+                    );
+                    lp.gravity = Gravity.TOP | Gravity.START;
+                    lp.x = dp(16);
+                    lp.y = dp(96);
+
+                    final FloatingPanelController controller =
+                            new FloatingPanelController(
+                                    context,
+                                    "compact_status",
+                                    windowManager,
+                                    card,
+                                    lp
+                            );
+                    controller.restorePosition();
+                    controller.attachDragHandle(card.dragHandle());
+
+                    card.setCollapsed(controller.isCompact());
+                    card.setOnCollapseClickListener(new View.OnClickListener() {
+                        @Override
+                        public void onClick(View v) {
+                            boolean next = !controller.isCompact();
+                            controller.setCompact(next);
+                            card.setCollapsed(next);
+                            try { windowManager.updateViewLayout(card, lp); } catch (Exception ignored) {}
+                        }
+                    });
+
+                    try {
+                        windowManager.addView(card, lp);
+                        compactStatusView = card;
+                        compactStatusParams = lp;
+                        compactStatusController = controller;
+                    } catch (Exception ignored) {
+                        return;
+                    }
+                }
+
+                if (compactStatusView instanceof CompactStatusCard) {
+                    ((CompactStatusCard) compactStatusView).setContent(title, detail);
+                }
+            }
+        });
+    }
+
+    public void hideCompactStatus() {
+        mainHandler.post(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    if (compactStatusView != null) windowManager.removeViewImmediate(compactStatusView);
+                } catch (Exception ignored) {}
+                compactStatusView = null;
+                compactStatusParams = null;
+                compactStatusController = null;
+            }
+        });
     }
 
     private static android.os.PowerManager.WakeLock appWakeLock = null;

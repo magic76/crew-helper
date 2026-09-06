@@ -54,10 +54,16 @@ public class CrewAccessibilityService extends AccessibilityService {
     private android.speech.SpeechRecognizer wakeRecognizer;
     private Intent wakeRecognizerIntent;
     private boolean wakeWordActive = false;
+    private LearnedUiMappingStore learnedUiMappingStore;
+    private UiTeachOverlay uiTeachOverlay;
 
     public static boolean isServiceRunning() { return instance != null; }
     public static CrewAccessibilityService getInstance() {
         return instance;
+    }
+    public LearnedUiMappingStore getLearnedUiMappingStore() {
+        if (learnedUiMappingStore == null) learnedUiMappingStore = new LearnedUiMappingStore(this);
+        return learnedUiMappingStore;
     }
 
     @Override
@@ -66,6 +72,8 @@ public class CrewAccessibilityService extends AccessibilityService {
         instance = this;
         mainHandler = new Handler(Looper.getMainLooper());
         isRunning = true;
+        learnedUiMappingStore = new LearnedUiMappingStore(this);
+        uiTeachOverlay = new UiTeachOverlay(this);
         startLocalServer();
 
         // The floating bubble stays opt-in; no notification-bar control is used.
@@ -83,6 +91,8 @@ public class CrewAccessibilityService extends AccessibilityService {
     protected void onServiceConnected() {
         super.onServiceConnected();
         instance = this;
+        if (learnedUiMappingStore == null) learnedUiMappingStore = new LearnedUiMappingStore(this);
+        if (uiTeachOverlay == null) uiTeachOverlay = new UiTeachOverlay(this);
         try {
             AccessibilityServiceInfo info = getServiceInfo();
             if (info == null) {
@@ -531,6 +541,20 @@ public class CrewAccessibilityService extends AccessibilityService {
                     @Override public void run() { FloatingBubbleManager.getInstance(CrewAccessibilityService.this).showBubble(); }
                 });
                 responseJson = "{\"success\":true,\"action\":\"BUBBLE_SHOWN\"}";
+            } else if (path.startsWith("/teach_ui")) {
+                String role = "COMPOSER_SEND";
+                try {
+                    String parsed = getJsonString(body, "role");
+                    if (parsed != null && !parsed.isEmpty()) role = parsed;
+                } catch (Exception ignored) {}
+                final String fRole = role;
+                final boolean[] started = new boolean[]{false};
+                mainHandler.post(new Runnable() {
+                    @Override public void run() {
+                        started[0] = beginTeachElement(fRole);
+                    }
+                });
+                responseJson = "{\"success\":true,\"message\":\"已開啟 UI 教導模式，請點選目標元件\",\"role\":\"" + role + "\"}";
             } else if (path.startsWith("/tap")) {
                 float x = 0, y = 0;
                 try {
@@ -971,7 +995,7 @@ public class CrewAccessibilityService extends AccessibilityService {
         }
     }
 
-    private AccessibilityNodeInfo findActiveEditText(AccessibilityNodeInfo root) {
+    AccessibilityNodeInfo findActiveEditText(AccessibilityNodeInfo root) {
         if (root == null) return null;
         List<AccessibilityNodeInfo> editList = new ArrayList<AccessibilityNodeInfo>();
         collectEditableNodes(root, editList);
@@ -1080,8 +1104,30 @@ public class CrewAccessibilityService extends AccessibilityService {
                 || value.contains("reply") || value.contains("arrow_upward") || value.contains("up_arrow");
     }
 
-    /** Finds an unlabeled composer send icon using metadata first, then its position beside the edit box. */
+    /** Finds an unlabeled composer send icon using learned mappings first, then strict metadata/heuristics. */
     private AccessibilityNodeInfo findLikelySendButton(AccessibilityNodeInfo root) {
+        if (root == null) return null;
+
+        if (learnedUiMappingStore != null) {
+            try {
+                AccessibilityNodeInfo composer = findActiveEditText(root);
+                String pkg = root.getPackageName() == null ? "" : root.getPackageName().toString();
+                String sig = ScreenFingerprint.create(root);
+
+                java.util.List<LearnedUiMappingStore.Rule> learnedRules =
+                        learnedUiMappingStore.findRules(pkg, sig, "COMPOSER_SEND");
+
+                LearnedUiResolver.Match learned =
+                        LearnedUiResolver.resolve(root, learnedRules, composer);
+                if (composer != null) composer.recycle();
+
+                if (learned != null) {
+                    // learned.node is already obtained; caller owns recycle().
+                    return learned.node;
+                }
+            } catch (Exception ignored) {}
+        }
+
         AccessibilityNodeInfo resolved = ComposerSendResolver.find(root);
         if (resolved != null) return resolved;
 
@@ -1090,6 +1136,62 @@ public class CrewAccessibilityService extends AccessibilityService {
         // resolver has no confident send target, return null and let the agent
         // inspect/replan or use vision fallback explicitly.
         return null;
+    }
+
+    public boolean beginTeachElement(String role) {
+        if (uiTeachOverlay == null) uiTeachOverlay = new UiTeachOverlay(this);
+        final String requestedRole = role == null ? "" : role.trim().toUpperCase(java.util.Locale.ROOT);
+
+        return uiTeachOverlay.show(
+            "請點一下「" + requestedRole + "」按鈕",
+            new UiTeachOverlay.Callback() {
+                @Override
+                public void onPicked(int screenX, int screenY) {
+                    AccessibilityNodeInfo root = getRootInActiveWindow();
+                    if (root == null) return;
+                    AccessibilityNodeInfo picked = null;
+                    AccessibilityNodeInfo composer = null;
+                    try {
+                        picked = UiNodeHitTester.findBest(root, screenX, screenY);
+                        if (picked == null) return;
+
+                        String packageName = root.getPackageName() == null
+                            ? ""
+                            : root.getPackageName().toString();
+
+                        String screenSignature = ScreenFingerprint.create(root);
+
+                        if ("COMPOSER_SEND".equals(requestedRole)) {
+                            composer = findActiveEditText(root);
+                        }
+
+                        if (learnedUiMappingStore == null) learnedUiMappingStore = new LearnedUiMappingStore(CrewAccessibilityService.this);
+                        LearnedUiMappingStore.Rule rule = learnedUiMappingStore.learn(
+                            packageName,
+                            screenSignature,
+                            requestedRole,
+                            picked,
+                            composer
+                        );
+
+                        FloatingBubbleManager fb = FloatingBubbleManager.getInstance();
+                        if (fb != null) {
+                            fb.showCompactStatus(
+                                "已學習 " + requestedRole,
+                                packageName
+                            );
+                        }
+                    } finally {
+                        if (composer != null) composer.recycle();
+                        if (picked != null) picked.recycle();
+                        root.recycle();
+                    }
+                }
+
+                @Override
+                public void onCancelled() {}
+            }
+        );
     }
 
     // ── Native Background Wake Word Engine ──

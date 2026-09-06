@@ -23,7 +23,21 @@ final class ActionRegistry {
     }
 
     private static void appendComposerSendAction(AccessibilityNodeInfo root, JSONArray actions) {
-        AccessibilityNodeInfo send = ComposerSendResolver.find(root);
+        AccessibilityNodeInfo send = null;
+        CrewAccessibilityService service = CrewAccessibilityService.getInstance();
+        if (service != null && service.getLearnedUiMappingStore() != null) {
+            try {
+                AccessibilityNodeInfo composer = service.findActiveEditText(root);
+                String pkg = root.getPackageName() == null ? "" : root.getPackageName().toString();
+                String sig = ScreenFingerprint.create(root);
+                java.util.List<LearnedUiMappingStore.Rule> learnedRules =
+                        service.getLearnedUiMappingStore().findRules(pkg, sig, "COMPOSER_SEND");
+                LearnedUiResolver.Match learned = LearnedUiResolver.resolve(root, learnedRules, composer);
+                if (composer != null) composer.recycle();
+                if (learned != null) send = learned.node;
+            } catch (Exception ignored) {}
+        }
+        if (send == null) send = ComposerSendResolver.find(root);
         if (send == null) return;
         try {
             Rect b = new Rect();

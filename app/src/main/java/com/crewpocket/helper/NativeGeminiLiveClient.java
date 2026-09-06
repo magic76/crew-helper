@@ -569,7 +569,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 + "【輸入與送出】一般訊息、搜尋文字、表單文字可正常使用 type_text。只有真正 Android password input 禁止自動輸入；不要把一般文字輸入框誤判成敏感欄位。輸入成功後必須 inspect_ui 確認內容/狀態已改變，再找 send/submit action。"
                 + "【Composer Send Resolver】輸入訊息後 inspect_ui 若 actions 中存在 role='COMPOSER_SEND' 或 label='send' 的 CLICK action，直接使用該 action；這是 Crew Helper 根據目前輸入框與按鈕幾何位置解析出的送出鍵，不要再自行猜其他圖示。"
                 + "【送出鍵安全規則】沒有 role='COMPOSER_SEND' 或明確 send/發送/送出 metadata 時，禁止只因為某個按鈕位於輸入框最右側就把它當送出；右側按鈕可能是清除 X、關閉、附件或語音。若沒有高可信度 send action，先 inspect_ui 重新確認；Accessibility 仍無法辨識時才用 screenshot/vision 判斷。"
-                + "【嚴禁憑空臆測與幻覺回報】執行操作（例如打開 App、點擊按鈕、輸入搜尋、切換頁面等）後，絕不可憑空想像或提前告訴使用者畫面會呈現什麼內容；必須先呼叫 inspect_ui（或 take_screenshot）親自讀取當前真實畫面，確認畫面內容與操作狀態符合預期後，才能向使用者報告實際看到的結果與結論！"
+                + "【UI 學習機制 (Teach UI)】若多次無法在畫面中找到送出或其他重要按鈕，或使用者表示要教助理按哪裡時，呼叫 teach_ui_element(role='COMPOSER_SEND' 等) 啟動教學遮罩，並語音引導使用者在畫面上點擊該按鈕進行學習。"
+                + "【嚴禁憑空臆測與幻決回報】執行操作（例如打開 App、點擊按鈕、輸入搜尋、切換頁面等）後，絕不可憑空想像或提前告訴使用者畫面會呈現什麼內容；必須先呼叫 inspect_ui（或 take_screenshot）親自讀取當前真實畫面，確認畫面內容與操作狀態符合預期後，才能向使用者報告實際看到的結果與結論！"
                 + "【動作執行迴圈】遵守標準闭環：『1. inspect_ui 觀察當前畫面 → 2. 決策語意動作並執行 (tap/type/launch/swipe) → 3. 再次 inspect_ui 自我驗證實際畫面 → 4. 確認已達成目標才向使用者語音回報真實內容』。"
                 + "【語氣模式】" + liveToneInstruction();
 
@@ -612,6 +613,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         tools.put(new JSONObject().put("name", "tap_screen").put("description", "Tap a button or UI element using its semantic label, description, resource viewId, or coordinates. Prefer label or id over coordinates.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("label", new JSONObject().put("type", "STRING").put("description", "The button, app icon, or text label to tap")).put("id", new JSONObject().put("type", "STRING").put("description", "Optional resource viewId (e.g. 'send_btn')")).put("x", new JSONObject().put("type", "NUMBER").put("description", "Optional X coordinate for vision fallback")).put("y", new JSONObject().put("type", "NUMBER").put("description", "Optional Y coordinate for vision fallback")).put("coordinate_space", new JSONObject().put("type", "STRING").put("enum", new JSONArray().put("image").put("normalized_1000").put("screen"))))));
         tools.put(new JSONObject().put("name", "swipe_screen").put("description", "Scroll or swipe the phone screen. Direction: up (scroll down), down (scroll up), left, right. Distance: short, normal, long.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("direction", new JSONObject().put("type", "STRING").put("enum", new JSONArray().put("up").put("down").put("left").put("right"))).put("distance", new JSONObject().put("type", "STRING").put("enum", new JSONArray().put("short").put("normal").put("long").put("page")))).put("required", new JSONArray().put("direction"))));
         tools.put(new JSONObject().put("name", "type_text").put("description", "Type text into an input field or search bar.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("target", new JSONObject().put("type", "STRING").put("description", "Input field hint or label")).put("text", new JSONObject().put("type", "STRING").put("description", "The text to type"))).put("required", new JSONArray().put("text"))));
+        tools.put(new JSONObject().put("name", "teach_ui_element").put("description", "Enter interactive UI teaching mode so user can tap and teach an unlabeled button (e.g. COMPOSER_SEND, SEARCH_SUBMIT, CONFIRM).").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("role", new JSONObject().put("type", "STRING").put("description", "The semantic role to teach, e.g. 'COMPOSER_SEND', 'SEARCH_SUBMIT', 'CONFIRM', 'NEXT'"))).put("required", new JSONArray().put("role"))));
         tools.put(new JSONObject().put("name", "schedule_reminder").put("description", "Set a countdown timer / reminder in seconds. When time is up, the assistant vibrates and announces the message.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("delay_seconds", new JSONObject().put("type", "NUMBER").put("description", "Delay in seconds, e.g. 300 for 5 minutes")).put("message", new JSONObject().put("type", "STRING").put("description", "Reminder text to speak when timer expires")).put("label", new JSONObject().put("type", "STRING").put("description", "Short label for the timer"))).put("required", new JSONArray().put("delay_seconds"))));
         tools.put(new JSONObject().put("name", "start_screen_monitor").put("description", "Start periodic background screen checks or wait until a specific condition/text appears on screen.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("interval_seconds", new JSONObject().put("type", "NUMBER").put("description", "Interval between checks in seconds (e.g. 60)")).put("duration_minutes", new JSONObject().put("type", "NUMBER").put("description", "Total monitoring duration in minutes (default 10)")).put("target_condition", new JSONObject().put("type", "STRING").put("description", "Optional text/word to look for on screen (e.g. '已送達', '完成')")).put("label", new JSONObject().put("type", "STRING").put("description", "Short task name"))).put("required", new JSONArray().put("interval_seconds"))));
         tools.put(new JSONObject().put("name", "list_active_schedules").put("description", "List all currently active timers, background screen monitors, and countdowns with their remaining time.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject())));
@@ -714,6 +716,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             else if ("tap_screen".equals(name)) result = tap(args);
             else if ("type_text".equals(name)) result = typeText(args);
             else if ("press_key".equals(name)) result = pressKey(args);
+            else if ("teach_ui_element".equals(name)) result = teachUiElement(args);
             else if ("schedule_reminder".equals(name)) result = scheduleReminder(args);
             else if ("start_screen_monitor".equals(name)) result = startScreenMonitor(args);
             else if ("list_active_schedules".equals(name)) result = listSchedules();
@@ -795,6 +798,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
     private boolean isObservationTool(String name) {
         return "inspect_ui".equals(name)
+                || "teach_ui_element".equals(name)
                 || "list_active_schedules".equals(name)
                 || "list_decks".equals(name)
                 || "get_deck_card".equals(name)
@@ -939,6 +943,14 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             if (activeAgentTask == task) activeAgentTask = null;
         }
         reportStage(task.status);
+    }
+
+    private JSONObject teachUiElement(JSONObject args) throws Exception {
+        String role = args.optString("role", "COMPOSER_SEND").trim().toUpperCase(Locale.ROOT);
+        JSONObject reply = helperPost("/teach_ui", new JSONObject().put("role", role));
+        reply.put("role", role);
+        reply.put("instruction", "已啟動畫面教導遮罩。請以語音引導使用者直接在螢幕上點擊該「" + role + "」按鈕以完成學習。");
+        return reply;
     }
 
     private JSONObject scheduleReminder(JSONObject args) throws Exception {
