@@ -147,6 +147,73 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         }
     }
 
+    /**
+     * Interrupt + Correction.
+     *
+     * - stop playback immediately
+     * - cancel/freeze unfinished phone-agent work
+     * - retain only a non-sensitive task hint
+     * - open a short window in which an elliptical utterance is interpreted
+     *   as a correction to the interrupted/recent task
+     */
+    boolean beginCorrectionWindow() {
+        if (!running) return false;
+
+        if (aiSpeaking) {
+            triggerLocalInterruption();
+        } else {
+            stopPlayback();
+        }
+
+        String hint = "";
+        boolean hadTask = false;
+        synchronized (agentLock) {
+            if (activeAgentTask != null && !activeAgentTask.finished) {
+                hadTask = true;
+                // Do not retain tool args, typed text, message bodies, or other
+                // potentially sensitive content.
+                hint = activeAgentTask.taskId + " · " + activeAgentTask.status;
+            }
+        }
+
+        if (hadTask) {
+            cancelAgentTask("使用者打斷，等待修正");
+        }
+
+        correctionWindowActive = true;
+        correctionWindowUntil = System.currentTimeMillis() + CORRECTION_WINDOW_MS;
+        correctionTaskHint = hint;
+        correctionHandler.removeCallbacks(clearCorrectionWindow);
+        correctionHandler.postDelayed(clearCorrectionWindow, CORRECTION_WINDOW_MS);
+
+        String taskContext = hint.isEmpty()
+                ? "上一個語音回覆或最近任務"
+                : hint;
+
+        sendInternalAgentDirective(
+                "【Interrupt + Correction 狀態】使用者剛主動按下打斷。"
+                + "立即停止延續上一個回覆，也不要重做剛才的工具操作。"
+                + "接下來約 12 秒內，如果下一句是『不是這個』『改成…』『上一個』"
+                + "『等等』『不要這樣』等省略式修正，優先理解為對剛才任務/答案的修正。"
+                + "如果下一句是完整且明顯不相關的新命令，就當成新任務。"
+                + "若修正資訊不足，只問完成修正所需的最小問題。"
+                + "現在不要回覆、不要呼叫工具，等待使用者下一句。"
+                + "最近任務提示：" + taskContext);
+        return true;
+    }
+
+    private void consumeCorrectionWindowOnUserSpeech() {
+        if (!correctionWindowActive) return;
+        if (System.currentTimeMillis() > correctionWindowUntil) {
+            clearCorrectionWindow.run();
+            return;
+        }
+        correctionHandler.removeCallbacks(clearCorrectionWindow);
+        correctionWindowActive = false;
+        correctionWindowUntil = 0L;
+        correctionTaskHint = "";
+    }
+
     /** Cancels queued work and disconnects the currently blocking local bridge request. */
     boolean cancelAgentTask(String reason) {
         AgentTaskRecord task;
@@ -258,6 +325,18 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private volatile boolean aiSpeaking = false;
     private volatile boolean interruptedCurrentTurn = false;
     private final Handler interruptionHandler = new Handler(Looper.getMainLooper());
+    private static final long CORRECTION_WINDOW_MS = 12_000L;
+    private volatile boolean correctionWindowActive = false;
+    private volatile long correctionWindowUntil = 0L;
+    private volatile String correctionTaskHint = "";
+    private final Handler correctionHandler = new Handler(Looper.getMainLooper());
+    private final Runnable clearCorrectionWindow = new Runnable() {
+        @Override public void run() {
+            correctionWindowActive = false;
+            correctionWindowUntil = 0L;
+            correctionTaskHint = "";
+        }
+    };
     private final Runnable clearInterruptedFallback = new Runnable() {
         @Override public void run() {
             // Some interrupted turns never carry turnComplete.  Never let a
@@ -349,6 +428,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
     void stop() {
         boolean wasRunning = running;
+        correctionHandler.removeCallbacks(clearCorrectionWindow);
+        correctionWindowActive = false;
+        correctionWindowUntil = 0L;
+        correctionTaskHint = "";
         cancelAgentTask("通話已結束");
         cancelDeckAutoAdvance();
         running = false;
@@ -452,6 +535,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             String inputText = inputTranscript.optString("text");
             listener.onTranscript("你", inputText);
             if (isStopAgentTaskPhrase(inputText)) cancelAgentTask("使用者語音停止任務");
+            consumeCorrectionWindowOnUserSpeech();
         }
         JSONObject outputTranscript = server.optJSONObject("outputTranscription");
         if (outputTranscript == null) outputTranscript = server.optJSONObject("output_transcription");
@@ -550,6 +634,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         setup.put("tools", new JSONArray().put(new JSONObject().put("functionDeclarations", buildToolDeclarations())));
         String customPrompt = this.customPrompt;
         String baseInstruction = "你是 Crew Helper 的原生即時語音助理。你的定位是高階『規劃者 (Planner) 與意圖解讀者』。自然、準確、極簡地回應；最終回答一律以 AUDIO 語音說出。"
+                + "【Interrupt + Correction】當系統告知使用者剛主動打斷你時，不得延續或重做上一輪動作。下一句若是『不是這個』『改成…』『上一個』『等等』『不要這樣』等省略語句，應優先承接最近任務上下文做修正；若是完整且明顯不相關的新命令，視為新任務。修正資訊不足時，只問最小必要問題，不要要求使用者從頭重講。"
                 + "【工具邊界與授權】只有使用者本輪最新一句明確口令要求操作手機時，才可呼叫手機工具；過去對話、推測或一般問題絕不可授權操作。一般問題直接回答。"
                 + "【安全防護】絕對禁止刪除、付款、購買、修改帳戶、輸入密碼、OTP、簡訊驗證碼；遇到此類敏感操作一律停止並語音提示使用者自行操作。"
                 + "【手機操作三層架構】"

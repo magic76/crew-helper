@@ -65,13 +65,20 @@ public class NativeLiveService extends Service {
         return instance != null && instance.client != null && instance.client.toggleAgentMute();
     }
 
-    /** Bubble fast-path: interrupt only. Never toggles mute when AI is not speaking. */
+    /**
+     * 0016: stop current speech and open a short correction window.
+     * If an Agent task is still running, it is frozen/cancelled first so stale
+     * actions cannot race the user's correction.
+     */
+    static boolean interruptForCorrection() {
+        return instance != null
+                && instance.client != null
+                && instance.client.beginCorrectionWindow();
+    }
+
+    /** Compatibility alias for existing callers. */
     static boolean interruptAiSpeech() {
-        if (instance == null || instance.client == null || !instance.client.isAiSpeaking()) {
-            return false;
-        }
-        instance.client.toggleAgentMute();
-        return true;
+        return interruptForCorrection();
     }
 
     static boolean toggleVoiceInterruption() {

@@ -692,7 +692,7 @@ public class FloatingBubbleManager {
                     }
 
                     @Override public void onInterrupt() {
-                        NativeLiveService.interruptAiSpeech();
+                        NativeLiveService.interruptForCorrection();
                         refreshVoiceControls();
                     }
                 });
@@ -827,7 +827,7 @@ public class FloatingBubbleManager {
                                     showVoiceControls();
                                 }
                                 @Override public void onInterrupt() {
-                                    NativeLiveService.interruptAiSpeech();
+                                    NativeLiveService.interruptForCorrection();
                                     refreshVoiceControls();
                                 }
                             });
