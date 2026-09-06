@@ -709,6 +709,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 + "【Composer Send Resolver】輸入訊息後 inspect_ui 若 actions 中存在 role='COMPOSER_SEND' 或 label='send' 的 CLICK action，直接使用該 action；這是 Crew Helper 根據目前輸入框與按鈕幾何位置解析出的送出鍵，不要再自行猜其他圖示。"
                 + "【送出鍵安全規則】沒有 role='COMPOSER_SEND' 或明確 send/發送/送出 metadata 時，禁止只因為某個按鈕位於輸入框最右側就把它當送出；右側按鈕可能是清除 X、關閉、附件或語音。若沒有高可信度 send action，先 inspect_ui 重新確認；Accessibility 仍無法辨識時才用 screenshot/vision 判斷。"
                 + "【UI 學習機制 (Teach UI)】若多次無法在畫面中找到送出或其他重要按鈕，或使用者表示要教助理按哪裡時，呼叫 teach_ui_element(role='COMPOSER_SEND' 等) 啟動教學遮罩。教學送出按鈕時，如果輸入框仍為空白，系統會引導使用者先輸入任意文字讓真正 Send 出現，不可把 EMPTY 狀態下的麥克風/加號誤記成 COMPOSER_SEND。"
+                + "【雙點 Send 教學】COMPOSER_SEND 使用 two-point anchored learning：第一點是基準點（通常輸入框），第二點是真正 Send。執行時必須先在目前 UI 找到基準 node，再用相對 offset 尋找附近真實 clickable target；禁止直接點教學時的舊絕對座標。"
                 + "【嚴禁憑空臆測與幻決回報】執行操作（例如打開 App、點擊按鈕、輸入搜尋、切換頁面等）後，絕不可憑空想像或提前告訴使用者畫面會呈現什麼內容；必須先呼叫 inspect_ui（或 take_screenshot）親自讀取當前真實畫面，確認畫面內容與操作狀態符合預期後，才能向使用者報告實際看到的結果與結論！"
                 + "【動作執行迴圈】遵守標準闭環：『1. inspect_ui 觀察當前畫面 → 2. 決策語意動作並執行 (tap_element/tap/type/launch/swipe) → 3. 檢查自動回傳之 after 畫面或再次 inspect_ui 自我驗證 → 4. 確認已達成目標才向使用者語音回報真實內容』。"
                 + "【語氣模式】" + liveToneInstruction();

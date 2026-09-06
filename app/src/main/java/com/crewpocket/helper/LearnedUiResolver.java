@@ -11,6 +11,8 @@ import java.util.List;
  * Strong metadata must match; geometry is only a tie-breaker.
  */
 final class LearnedUiResolver {
+    private static final int ANCHORED_TARGET_RADIUS_PX = 110;
+
     static final class Match {
         final AccessibilityNodeInfo node;  // null when coordinate-only
         final LearnedUiMappingStore.Rule rule;
@@ -66,6 +68,81 @@ final class LearnedUiResolver {
         // Coordinates remain supporting evidence only. If structural resolution
         // fails, let the caller fall back to strict semantic resolver / Vision.
         return null;
+    }
+
+    /**
+     * 0022: resolve an anchored rule against the CURRENT accessibility tree.
+     * Never taps the remembered absolute coordinate. The live anchor is first
+     * resolved, then the expected target point is projected from that anchor.
+     * A real clickable node must exist near that projected point.
+     */
+    static Match resolveAnchored(AccessibilityNodeInfo root,
+                                 List<LearnedUiMappingStore.Rule> rules) {
+        if (root == null || rules == null) return null;
+        ArrayList<AccessibilityNodeInfo> nodes = new ArrayList<>();
+        collect(root, nodes);
+        try {
+            Match best = null;
+            int bestDistance = Integer.MAX_VALUE;
+            for (LearnedUiMappingStore.Rule rule : rules) {
+                if (rule == null || !rule.anchored) continue;
+                AccessibilityNodeInfo anchor = findAnchor(nodes, rule);
+                if (anchor == null) continue;
+                Rect ab = new Rect();
+                anchor.getBoundsInScreen(ab);
+                int expectedX = ab.centerX() + rule.targetOffsetX;
+                int expectedY = ab.centerY() + rule.targetOffsetY;
+                for (AccessibilityNodeInfo node : nodes) {
+                    if (node == null || !node.isClickable()) continue;
+                    Rect b = new Rect();
+                    node.getBoundsInScreen(b);
+                    if (b.isEmpty()) continue;
+                    int dx = b.centerX() - expectedX;
+                    int dy = b.centerY() - expectedY;
+                    int distance = (int)Math.sqrt((double)dx * dx + (double)dy * dy);
+                    if (distance > ANCHORED_TARGET_RADIUS_PX) continue;
+                    // Target still needs structural compatibility with the
+                    // learned target. Position is not enough by itself.
+                    int structural = score(node, rule, anchor);
+                    if (structural == Integer.MIN_VALUE) continue;
+                    if (distance < bestDistance) {
+                        bestDistance = distance;
+                        if (best != null && best.node != null) best.node.recycle();
+                        best = new Match(AccessibilityNodeInfo.obtain(node), rule,
+                                structural + Math.max(0, 40 - distance / 3));
+                    }
+                }
+                anchor.recycle();
+            }
+            return best;
+        } finally {
+            for (AccessibilityNodeInfo n : nodes) n.recycle();
+        }
+    }
+
+    private static AccessibilityNodeInfo findAnchor(
+            List<AccessibilityNodeInfo> nodes,
+            LearnedUiMappingStore.Rule rule) {
+        AccessibilityNodeInfo best = null;
+        int bestScore = Integer.MIN_VALUE;
+        for (AccessibilityNodeInfo node : nodes) {
+            int s = 0;
+            String id = safe(node.getViewIdResourceName());
+            String cls = safe(node.getClassName());
+            String desc = safe(node.getContentDescription());
+            if (!rule.anchorViewId.isEmpty()) {
+                if (!rule.anchorViewId.equals(id)) continue;
+                s += 100;
+            }
+            if (!rule.anchorClassName.isEmpty() && rule.anchorClassName.equals(cls)) s += 30;
+            if (!rule.anchorContentDescription.isEmpty()
+                    && rule.anchorContentDescription.equals(desc)) s += 50;
+            if (s > bestScore) {
+                bestScore = s;
+                best = node;
+            }
+        }
+        return best == null ? null : AccessibilityNodeInfo.obtain(best);
     }
 
     private static boolean composerStateCompatible(

@@ -1202,6 +1202,14 @@ public class CrewAccessibilityService extends AccessibilityService {
                 java.util.List<LearnedUiMappingStore.Rule> learnedRules =
                         learnedUiMappingStore.findRules(pkg, sig, "COMPOSER_SEND");
 
+                LearnedUiResolver.Match anchored =
+                        LearnedUiResolver.resolveAnchored(root, learnedRules);
+                if (anchored != null && anchored.node != null) {
+                    lastLearnedSendMatch = anchored;
+                    if (composer != null) composer.recycle();
+                    return AccessibilityNodeInfo.obtain(anchored.node);
+                }
+
                 LearnedUiResolver.Match learned = composer == null
                         ? null
                         : LearnedUiResolver.resolve(root, learnedRules, composer);
@@ -1240,6 +1248,103 @@ public class CrewAccessibilityService extends AccessibilityService {
         }
     }
 
+    private AccessibilityNodeInfo pendingTeachAnchor;
+
+    private void clearPendingTeachAnchor() {
+        if (pendingTeachAnchor != null) {
+            try { pendingTeachAnchor.recycle(); } catch (Exception ignored) {}
+            pendingTeachAnchor = null;
+        }
+    }
+
+    private boolean beginTeachAnchoredElement(final String role) {
+        if (uiTeachOverlay == null) uiTeachOverlay = new UiTeachOverlay(this);
+        FloatingBubbleManager fb = FloatingBubbleManager.getInstance();
+        if (fb != null) {
+            fb.showCompactStatus("第 1 步：請點基準點（建議點輸入框）", "");
+        }
+        return uiTeachOverlay.show(
+            "第 1 步：請點基準點（建議點輸入框）",
+            new UiTeachOverlay.Callback() {
+                @Override
+                public void onPicked(int screenX, int screenY) {
+                    AccessibilityNodeInfo root = getRootInActiveWindow();
+                    if (root == null) {
+                        FloatingBubbleManager fb = FloatingBubbleManager.getInstance();
+                        if (fb != null) fb.showCompactStatus("找不到畫面，請重試", "");
+                        clearPendingTeachAnchor();
+                        return;
+                    }
+                    AccessibilityNodeInfo hit = UiNodeHitTester.findBest(root, screenX, screenY);
+                    if (hit == null) {
+                        FloatingBubbleManager fb = FloatingBubbleManager.getInstance();
+                        if (fb != null) fb.showCompactStatus("找不到基準點，請重試", "");
+                        root.recycle();
+                        clearPendingTeachAnchor();
+                        return;
+                    }
+                    clearPendingTeachAnchor();
+                    pendingTeachAnchor = AccessibilityNodeInfo.obtain(hit);
+                    hit.recycle();
+                    root.recycle();
+                    FloatingBubbleManager fb = FloatingBubbleManager.getInstance();
+                    if (fb != null) fb.showCompactStatus("第 2 步：請點真正要執行的送出按鈕", "");
+                    beginTeachAnchoredTarget(role);
+                }
+
+                @Override
+                public void onCancelled() {
+                    clearPendingTeachAnchor();
+                    FloatingBubbleManager fb = FloatingBubbleManager.getInstance();
+                    if (fb != null) fb.showCompactStatus("已取消教學", "");
+                }
+            }
+        );
+    }
+
+    private boolean beginTeachAnchoredTarget(final String role) {
+        if (uiTeachOverlay == null) uiTeachOverlay = new UiTeachOverlay(this);
+        return uiTeachOverlay.show(
+            "第 2 步：請點真正要執行的送出按鈕",
+            new UiTeachOverlay.Callback() {
+                @Override
+                public void onPicked(int screenX, int screenY) {
+                    AccessibilityNodeInfo root = getRootInActiveWindow();
+                    AccessibilityNodeInfo hit = root != null ? UiNodeHitTester.findBest(root, screenX, screenY) : null;
+                    if (root == null || hit == null || pendingTeachAnchor == null) {
+                        FloatingBubbleManager fb = FloatingBubbleManager.getInstance();
+                        if (fb != null) fb.showCompactStatus("找不到目標點，請重新教學", "");
+                        if (hit != null) hit.recycle();
+                        if (root != null) root.recycle();
+                        clearPendingTeachAnchor();
+                        return;
+                    }
+                    try {
+                        String pkg = root.getPackageName() == null ? "" : root.getPackageName().toString();
+                        String sig = ScreenFingerprint.create(root);
+                        if (learnedUiMappingStore == null) learnedUiMappingStore = new LearnedUiMappingStore(CrewAccessibilityService.this);
+                        learnedUiMappingStore.learnAnchored(
+                            pkg, sig, role, pendingTeachAnchor, hit
+                        );
+                        FloatingBubbleManager fb = FloatingBubbleManager.getInstance();
+                        if (fb != null) fb.showCompactStatus("已記住：基準點 → 送出按鈕", pkg);
+                    } finally {
+                        hit.recycle();
+                        root.recycle();
+                        clearPendingTeachAnchor();
+                    }
+                }
+
+                @Override
+                public void onCancelled() {
+                    clearPendingTeachAnchor();
+                    FloatingBubbleManager fb = FloatingBubbleManager.getInstance();
+                    if (fb != null) fb.showCompactStatus("已取消教學", "");
+                }
+            }
+        );
+    }
+
     public boolean beginTeachElement(String role) {
         final String requestedRole = role == null ? "" : role.trim().toUpperCase(java.util.Locale.ROOT);
         AccessibilityNodeInfo root = getRootInActiveWindow();
@@ -1257,6 +1362,10 @@ public class CrewAccessibilityService extends AccessibilityService {
         }
         if (activeComposer != null) activeComposer.recycle();
         if (root != null) root.recycle();
+
+        if ("COMPOSER_SEND".equalsIgnoreCase(requestedRole)) {
+            return beginTeachAnchoredElement(requestedRole);
+        }
 
         if (uiTeachOverlay == null) uiTeachOverlay = new UiTeachOverlay(this);
 

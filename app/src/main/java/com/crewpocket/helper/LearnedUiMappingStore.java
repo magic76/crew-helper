@@ -39,6 +39,16 @@ final class LearnedUiMappingStore {
         String composerViewId = "";
         int centerX = -1;   // absolute screen X of the tapped node center
         int centerY = -1;   // absolute screen Y of the tapped node center
+        // 0022 two-point anchored learning. Absolute target coordinates remain
+        // debug/supporting data; execution uses the live anchor + offset.
+        String anchorViewId = "";
+        String anchorClassName = "";
+        String anchorContentDescription = "";
+        int anchorCenterX = -1;
+        int anchorCenterY = -1;
+        int targetOffsetX = 0;
+        int targetOffsetY = 0;
+        boolean anchored = false;
         long learnedAt = 0L;
         long lastVerifiedAt = 0L;
         int successCount = 0;
@@ -70,6 +80,14 @@ final class LearnedUiMappingStore {
                 o.put("composerViewId", composerViewId);
                 o.put("centerX", centerX);
                 o.put("centerY", centerY);
+                o.put("anchorViewId", anchorViewId);
+                o.put("anchorClassName", anchorClassName);
+                o.put("anchorContentDescription", anchorContentDescription);
+                o.put("anchorCenterX", anchorCenterX);
+                o.put("anchorCenterY", anchorCenterY);
+                o.put("targetOffsetX", targetOffsetX);
+                o.put("targetOffsetY", targetOffsetY);
+                o.put("anchored", anchored);
                 o.put("learnedAt", learnedAt);
                 o.put("lastVerifiedAt", lastVerifiedAt);
                 o.put("successCount", successCount);
@@ -94,6 +112,14 @@ final class LearnedUiMappingStore {
             r.composerViewId = o.optString("composerViewId", "");
             r.centerX = o.optInt("centerX", -1);
             r.centerY = o.optInt("centerY", -1);
+            r.anchorViewId = o.optString("anchorViewId", "");
+            r.anchorClassName = o.optString("anchorClassName", "");
+            r.anchorContentDescription = o.optString("anchorContentDescription", "");
+            r.anchorCenterX = o.optInt("anchorCenterX", -1);
+            r.anchorCenterY = o.optInt("anchorCenterY", -1);
+            r.targetOffsetX = o.optInt("targetOffsetX", 0);
+            r.targetOffsetY = o.optInt("targetOffsetY", 0);
+            r.anchored = o.optBoolean("anchored", false);
             r.learnedAt = o.optLong("learnedAt", 0L);
             r.lastVerifiedAt = o.optLong("lastVerifiedAt", 0L);
             r.successCount = o.optInt("successCount", 0);
@@ -144,6 +170,39 @@ final class LearnedUiMappingStore {
         }
         rule.learnedAt = System.currentTimeMillis();
         rule.lastVerifiedAt = rule.learnedAt;
+
+        List<Rule> rules = loadRules();
+        for (int i = rules.size() - 1; i >= 0; i--) {
+            Rule old = rules.get(i);
+            if (sameIdentity(old, rule)) rules.remove(i);
+        }
+        rules.add(0, rule);
+        while (rules.size() > MAX_RULES) rules.remove(rules.size() - 1);
+        saveRules(rules);
+        return rule;
+    }
+
+    synchronized Rule learnAnchored(String packageName,
+                                    String screenSignature,
+                                    String role,
+                                    AccessibilityNodeInfo anchor,
+                                    AccessibilityNodeInfo target) {
+        Rule rule = learn(packageName, screenSignature, role, target, anchor);
+        if (rule == null) return null;
+        if (anchor == null || target == null) return rule;
+        android.graphics.Rect a = new android.graphics.Rect();
+        android.graphics.Rect t = new android.graphics.Rect();
+        anchor.getBoundsInScreen(a);
+        target.getBoundsInScreen(t);
+        if (a.isEmpty() || t.isEmpty()) return rule;
+        rule.anchorViewId = safe(anchor.getViewIdResourceName());
+        rule.anchorClassName = safe(anchor.getClassName());
+        rule.anchorContentDescription = sanitizeDescription(anchor.getContentDescription());
+        rule.anchorCenterX = a.centerX();
+        rule.anchorCenterY = a.centerY();
+        rule.targetOffsetX = t.centerX() - a.centerX();
+        rule.targetOffsetY = t.centerY() - a.centerY();
+        rule.anchored = true;
 
         List<Rule> rules = loadRules();
         for (int i = rules.size() - 1; i >= 0; i--) {
