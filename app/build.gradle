@@ -29,7 +29,11 @@ android {
 }
 
 dependencies {
-    implementation fileTree(dir: 'libs', include: ['*.jar'], exclude: ['sherpa-onnx-*.jar'])
+    implementation fileTree(dir: 'libs', include: ['*.jar'], exclude: ['sherpa-onnx-*.jar', 'kotlin-*.jar', 'annotations-*.jar'])
     implementation files('libs/sherpa-onnx-1.13.7.aar')
-    implementation 'org.jetbrains.kotlin:kotlin-stdlib:1.7.20'
+    implementation files('libs/kotlin-stdlib-1.7.20.jar')
+    implementation files('libs/kotlin-stdlib-common-1.7.20.jar')
+    implementation files('libs/kotlin-stdlib-jdk7-1.7.20.jar')
+    implementation files('libs/kotlin-stdlib-jdk8-1.7.20.jar')
+    implementation files('libs/annotations-13.0.jar')
 }
