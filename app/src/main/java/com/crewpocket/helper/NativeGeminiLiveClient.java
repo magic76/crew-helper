@@ -120,6 +120,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private final WorkingContext workingContext = new WorkingContext();
     private final UserActionScope userActionScope = new UserActionScope();
     private String authorizationTranscript = "";
+    private MemoryRuleIndex memoryRuleIndex;
+    private String lastMemoryDispatchKey = "";
+    private long lastMemoryDispatchAt = 0L;
     private volatile PendingCondition pendingCondition = null;
 
     NativeGeminiLiveClient(String apiKey, Listener listener) { this(apiKey, "", AppConfig.DEFAULT_VOICE, "auto", 35, "warm", "", 55, "call", listener); }
@@ -139,6 +142,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     }
     NativeGeminiLiveClient(Context context, String apiKey, String serverUrl, String voiceName, String noiseMode, int noiseSuppression, String liveTone, String customPrompt, int interruptionSensitivity, String audioOutput, Listener listener) {
         this.appContext = context == null ? null : context.getApplicationContext();
+        this.memoryRuleIndex = this.appContext == null ? null : new MemoryRuleIndex(this.appContext);
         this.apiKey = apiKey;
         this.serverUrl = serverUrl == null ? "" : serverUrl.trim();
         this.voiceName = voiceName == null || voiceName.trim().isEmpty() ? AppConfig.DEFAULT_VOICE : voiceName.trim();
@@ -570,19 +574,30 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             }, 120);
             return;
         }
-        if (response.has("setupComplete") || response.has("setup_complete")) { setupReady = true; reportStage("🎙️ 已連線，直接說話"); startAudio(); return; }
+        if (response.has("setupComplete") || response.has("setup_complete")) {
+            setupReady = true;
+            if (memoryRuleIndex != null) {
+                memoryRuleIndex.refresh();
+                Log.i(TAG, "0028 MemoryRuleIndex ready: " + memoryRuleIndex.count() + " rules");
+            }
+            reportStage("🎙️ 已連線，直接說話");
+            startAudio();
+            return;
+        }
 
         // Read latest user transcript before same-frame tool calls.
         JSONObject server = response.optJSONObject("serverContent");
         if (server == null) server = response.optJSONObject("server_content");
         JSONObject inputTranscript = server == null ? null : server.optJSONObject("inputTranscription");
         if (inputTranscript == null && server != null) inputTranscript = server.optJSONObject("input_transcription");
+        String completeUserInput = "";
         if (inputTranscript != null && !inputTranscript.optString("text").isEmpty()) {
             String fragment = inputTranscript.optString("text");
             authorizationTranscript = fragment.startsWith(authorizationTranscript)
                     ? fragment : authorizationTranscript + fragment;
             if (authorizationTranscript.length() > 4096) authorizationTranscript = fragment;
-            userActionScope.updateFromUserText(authorizationTranscript);
+            completeUserInput = authorizationTranscript;
+            userActionScope.updateFromUserText(completeUserInput);
         }
 
         JSONObject toolCall = response.optJSONObject("toolCall");
@@ -610,7 +625,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             return;
         }
         if (inputTranscript != null && !inputTranscript.optString("text").isEmpty()) {
-            String inputText = inputTranscript.optString("text");
+            String inputText = completeUserInput.isEmpty() ? inputTranscript.optString("text") : completeUserInput;
             listener.onTranscript("你", inputText);
             if (isStopAgentTaskPhrase(inputText)) cancelAgentTask("使用者語音停止任務");
             boolean correctionInput = correctionWindowActive && System.currentTimeMillis() <= correctionWindowUntil;
@@ -688,6 +703,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                     reportStage("Memory Rule 未儲存：規則格式不完整或含敏感內容");
                     sendInternalAgentDirective("【Memory Rule 系統】規則未儲存。請要求使用者用「記住一條規則：以後我說『觸發語句』，就幫我『操作描述』」重述；不可聲稱已記住。");
                 } else {
+                    if (memoryRuleIndex != null) memoryRuleIndex.refresh();
                     reportStage("已儲存 Memory Rule：「" + saved.trigger + "」");
                     sendInternalAgentDirective("【Memory Rule 系統】已永久儲存規則：當使用者說「" + saved.trigger + "」，任務意圖是「" + saved.action + "」。目前這句是教學，不要立刻執行；只簡短確認已儲存。未來精確命中觸發語句時，必須依此意圖執行，但仍遵守所有安全確認與畫面驗證。 ");
                 }
@@ -698,8 +714,15 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 sendInternalAgentDirective("【Memory Rule 系統】使用者要求建立規則，但尚未提供完整 trigger 與 action。請只問一句：「以後你說哪一句話時，要我做什麼？」在原生系統確認已儲存前，絕不可說已記住。");
                 return;
             }
-            MemoryRuleStore.Rule matched = store.findExact(inputText);
+            MemoryRuleStore.Rule matched = memoryRuleIndex == null
+                    ? store.findExact(inputText)
+                    : memoryRuleIndex.findExact(inputText);
             if (matched != null) {
+                String dispatchKey = TextMatch.caseFold(matched.trigger);
+                long now = System.currentTimeMillis();
+                if (dispatchKey.equals(lastMemoryDispatchKey) && now - lastMemoryDispatchAt < 2500L) return;
+                lastMemoryDispatchKey = dispatchKey;
+                lastMemoryDispatchAt = now;
                 userActionScope.updateFromTrustedAction(matched.action);
                 reportStage("Memory Rule 命中：「" + matched.trigger + "」");
                 sendInternalAgentDirective("【Memory Rule 命中】使用者剛說「" + matched.trigger + "」。這是已儲存的持久規則，現在必須處理的任務是：「" + matched.action + "」。請立即規劃並執行需要的工具步驟；每一步以實際畫面驗證。敏感、高風險或需要輸入私密資料的步驟仍須先取得當次明確確認。 ");
@@ -827,7 +850,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         tools.put(new JSONObject().put("name", "tap_screen").put("description", "Tap a button or UI element using its semantic label, description, resource viewId, or coordinates. Prefer tap_element over tap_screen.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("label", new JSONObject().put("type", "STRING").put("description", "The button, app icon, or text label to tap")).put("id", new JSONObject().put("type", "STRING").put("description", "Optional resource viewId (e.g. 'send_btn')")).put("x", new JSONObject().put("type", "NUMBER").put("description", "Optional X coordinate for vision fallback")).put("y", new JSONObject().put("type", "NUMBER").put("description", "Optional Y coordinate for vision fallback")).put("coordinate_space", new JSONObject().put("type", "STRING").put("enum", new JSONArray().put("image").put("normalized_1000").put("screen"))))));
         tools.put(new JSONObject().put("name", "swipe_screen").put("description", "Scroll or swipe the phone screen. Direction: up (scroll down), down (scroll up), left, right. Distance: short, normal, long.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("direction", new JSONObject().put("type", "STRING").put("enum", new JSONArray().put("up").put("down").put("left").put("right"))).put("distance", new JSONObject().put("type", "STRING").put("enum", new JSONArray().put("short").put("normal").put("long").put("page")))).put("required", new JSONArray().put("direction"))));
         tools.put(new JSONObject().put("name", "type_text").put("description", "Enter requested text without submitting. Search fields: type the query and inspect results; opening results needs separate permission. Message composer: use send_text only with explicit sending authorization.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("target", new JSONObject().put("type", "STRING").put("description", "Input field hint or label")).put("text", new JSONObject().put("type", "STRING").put("description", "The text to type"))).put("required", new JSONArray().put("text"))));
-        tools.put(new JSONObject().put("name", "send_text").put("description", "Atomically type, submit exactly once, and locally verify a message/reply in the currently open composer. First obtain explicit send permission and verify the recipient and message composer. Search/find/open never imply permission. On COMPOSER_NOT_FOUND or SUBMIT_TARGET_NOT_FOUND inspect and replan. On SEND_NOT_VERIFIED stop and report uncertainty; never resend.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("text", new JSONObject().put("type", "STRING").put("description", "Exact message text to send"))).put("required", new JSONArray().put("text"))));
+        tools.put(new JSONObject().put("name", "send_text").put("description", "Atomically type, submit exactly once, and locally verify a message/reply. Runtime accepts only a latest-turn explicit message-send command; vague tell/say/transfer wording is not permission. For a named recipient Runtime must verify that recipient in the current chat header before sending. Search/find/open never imply permission. On authorization/recipient failure ask one short clarification. On SEND_NOT_VERIFIED stop and never resend.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("text", new JSONObject().put("type", "STRING").put("description", "Exact message text to send"))).put("required", new JSONArray().put("text"))));
         tools.put(new JSONObject().put("name", "teach_ui_element").put("description", "Ask the user to teach an unresolved UI element. For COMPOSER_SEND the composer must contain text so the real send control is visible. Runtime manages anchor-relative learning; never replay old absolute coordinates.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("role", new JSONObject().put("type", "STRING").put("description", "The semantic role to teach, e.g. 'COMPOSER_SEND', 'SEARCH_SUBMIT', 'CONFIRM', 'NEXT'"))).put("required", new JSONArray().put("role"))));
         tools.put(new JSONObject().put("name", "schedule_reminder").put("description", "Set a countdown timer / reminder in seconds. When time is up, the assistant vibrates and announces the message.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("delay_seconds", new JSONObject().put("type", "NUMBER").put("description", "Delay in seconds, e.g. 300 for 5 minutes")).put("message", new JSONObject().put("type", "STRING").put("description", "Reminder text to speak when timer expires")).put("label", new JSONObject().put("type", "STRING").put("description", "Short label for the timer"))).put("required", new JSONArray().put("delay_seconds"))));
         tools.put(new JSONObject().put("name", "start_screen_monitor").put("description", "Start periodic background screen checks or wait until a specific condition/text appears on screen.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("interval_seconds", new JSONObject().put("type", "NUMBER").put("description", "Interval between checks in seconds (e.g. 60)")).put("duration_minutes", new JSONObject().put("type", "NUMBER").put("description", "Total monitoring duration in minutes (default 10)")).put("target_condition", new JSONObject().put("type", "STRING").put("description", "Optional text/word to look for on screen (e.g. '已送達', '完成')")).put("label", new JSONObject().put("type", "STRING").put("description", "Short task name"))).put("required", new JSONArray().put("interval_seconds"))));
@@ -1940,8 +1963,25 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         }
         if (!userActionScope.canSend()) {
             return runtimeBlocked("SEND_NOT_AUTHORIZED_BY_LATEST_USER_TURN",
-                    "最新一句沒有明確要求傳送、發訊息或回覆；Runtime 已阻止送出。");
+                    "最新一句沒有明確要求傳訊息、發訊息、回覆或送出目前訊息；Runtime 已阻止送出。");
         }
+
+        if (userActionScope.requiresRecipientVerification()) {
+            String recipient = userActionScope.authorizedRecipient();
+            if (recipient.isEmpty()) {
+                return runtimeBlocked("SEND_RECIPIENT_NOT_EXPLICIT",
+                        "使用者雖然明確要求傳訊息，但沒有可驗證的收件人。請只問要傳給誰。");
+            }
+            JSONObject currentScreen = readSemanticScreenQuietly();
+            SendRecipientVerifier.Result recipientCheck =
+                    SendRecipientVerifier.verify(currentScreen, recipient);
+            if (!recipientCheck.verified) {
+                Log.w(TAG, "0028 send blocked: recipient not verified (" + recipientCheck.reason + ")");
+                return runtimeBlocked("SEND_RECIPIENT_NOT_VERIFIED",
+                        "目前畫面無法確認是指定收件人的聊天室。不要送出；重新 inspect_ui/進入正確聊天室，或請使用者確認。");
+            }
+        }
+
         JSONObject reply = helperPost(
                 "/send_text",
                 new JSONObject().put("text", text));

@@ -1,19 +1,31 @@
 package com.crewpocket.helper;
 
-
 /**
- * 0027-hotfix2: deterministic latest-turn action boundary.
- * Stores capabilities only, never user plaintext.
+ * 0028: deterministic latest-turn action boundary.
+ *
+ * Send authorization is deliberately narrow:
+ * - search/open/type never imply sending;
+ * - vague phrases such as "跟他說", "告訴他", "傳給..." do not grant send;
+ * - a named-recipient send stores only the current-turn recipient token in RAM;
+ * - the grant is consumed after one send/uncertain-send attempt.
  */
 final class UserActionScope {
     private static final long SCOPE_TTL_MS = 120_000L;
 
     private boolean sendAuthorized;
+    private boolean sendRecipientRequired;
+    private String sendRecipient = "";
     private boolean searchIntent;
     private boolean openSearchResultAuthorized;
     private boolean searchQueryEntered;
     private long updatedAtMs;
     private boolean endCallAuthorized;
+
+    private static final class SendGrant {
+        boolean authorized;
+        boolean recipientRequired;
+        String recipient = "";
+    }
 
     synchronized boolean consumeEndCallAuthorization() {
         expireIfNeeded();
@@ -32,27 +44,27 @@ final class UserActionScope {
 
     private void update(String text) {
         String value = normalize(text);
-        // Fail closed on negated/quoted discussions of actions. A later explicit
-        // instruction can grant a fresh capability; previous grants never survive.
+
+        // Fail closed on negated / hypothetical / explanatory discussions.
         if (containsAny(value, "不要", "別", "不用", "取消", "停止", "怎麼", "如何", "如果", "假如",
                 "don't", "dont", "do not", "never", "cancel", "stop", "how to", "if ")) {
-            sendAuthorized = false;
-            endCallAuthorized = false;
-            searchIntent = false;
-            openSearchResultAuthorized = false;
-            searchQueryEntered = false;
+            clearActionGrants();
             updatedAtMs = System.currentTimeMillis();
             return;
         }
+
         endCallAuthorized = value.matches("(?:請|幫我|请|帮我)?(?:結束通話|结束通话|掛斷電話|挂断电话|退出語音助理|退出语音助理)(?:吧|謝謝|谢谢)?")
                 || value.matches("(?:please)?(?:endthecall|hangup|exitthevoiceassistant)(?:please)?");
-        boolean send = hasExplicitSendIntent(value);
+
+        SendGrant grant = parseSendGrant(text);
         boolean search = hasSearchIntent(value);
         boolean open = hasExplicitOpenIntent(value);
 
-        sendAuthorized = send;
+        sendAuthorized = grant.authorized;
+        sendRecipientRequired = grant.recipientRequired;
+        sendRecipient = grant.recipient;
         searchIntent = search;
-        openSearchResultAuthorized = open || send;
+        openSearchResultAuthorized = open || grant.authorized;
         searchQueryEntered = false;
         updatedAtMs = System.currentTimeMillis();
     }
@@ -62,8 +74,20 @@ final class UserActionScope {
         return sendAuthorized;
     }
 
+    synchronized boolean requiresRecipientVerification() {
+        expireIfNeeded();
+        return sendAuthorized && sendRecipientRequired;
+    }
+
+    synchronized String authorizedRecipient() {
+        expireIfNeeded();
+        return sendRecipient == null ? "" : sendRecipient;
+    }
+
     synchronized void consumeSendAuthorization() {
         sendAuthorized = false;
+        sendRecipientRequired = false;
+        sendRecipient = "";
     }
 
     synchronized boolean markSearchQueryEntered() {
@@ -100,13 +124,19 @@ final class UserActionScope {
     private void expireIfNeeded() {
         long age = System.currentTimeMillis() - updatedAtMs;
         if (updatedAtMs == 0L || age < 0L || age > SCOPE_TTL_MS) {
-            sendAuthorized = false;
-            endCallAuthorized = false;
-            searchIntent = false;
-            openSearchResultAuthorized = false;
-            searchQueryEntered = false;
+            clearActionGrants();
             updatedAtMs = 0L;
         }
+    }
+
+    private void clearActionGrants() {
+        sendAuthorized = false;
+        sendRecipientRequired = false;
+        sendRecipient = "";
+        endCallAuthorized = false;
+        searchIntent = false;
+        openSearchResultAuthorized = false;
+        searchQueryEntered = false;
     }
 
     static boolean looksLikeSendTarget(String metadata) {
@@ -139,22 +169,109 @@ final class UserActionScope {
                 "open", "enter", "select", "click", "tap");
     }
 
-    private static boolean hasExplicitSendIntent(String value) {
-        return containsAny(value,
+    /**
+     * Explicit send means the utterance itself names the communication action.
+     * "跟他說 / 告訴他 / 傳給小明" remain conversationally ambiguous and do
+     * NOT authorize a real send.
+     */
+    private static SendGrant parseSendGrant(String text) {
+        SendGrant out = new SendGrant();
+        String raw = TextMatch.caseFold(text == null ? "" : text).trim();
+        String value = normalize(raw);
+
+        boolean currentComposer = containsAny(value,
+                "送出這則訊息", "送出这则讯息", "送出這則消息", "送出这则消息",
+                "傳送這則訊息", "传送这则讯息", "發送這則訊息", "发送这则讯息",
+                "送出目前訊息", "送出当前讯息", "sendthismessage", "sendcurrentmessage");
+
+        boolean explicitMessageVerb = containsAny(value,
                 "傳訊息", "传讯息", "傳消息", "传消息",
                 "發訊息", "发讯息", "發消息", "发消息",
                 "傳送訊息", "传送讯息", "傳送消息", "传送消息",
                 "發送訊息", "发送讯息", "發送消息", "发送消息",
-                "送出訊息", "送出讯息", "送出消息",
-                "回覆", "回复", "回訊息", "回讯息", "回消息",
-                "傳給", "传给", "發給", "发给",
-                "跟他說", "跟她說", "跟他講", "跟她講",
-                "告訴他", "告訴她", "告诉他", "告诉她",
-                "留言給", "留言给",
-                "send", "replyto", "reply to",
-                "messagehim", "messageher", "message him", "message her",
-                "texthim", "texther", "text him", "text her",
-                "tellhim", "tellher", "tell him", "tell her");
+                "回覆", "回复",
+                "sendmessage", "sendtext", "sendamsg", "replyto");
+
+        if (!currentComposer && !explicitMessageVerb) return out;
+
+        out.authorized = true;
+        if (currentComposer) {
+            out.recipientRequired = false;
+            return out;
+        }
+
+        out.recipientRequired = true;
+        out.recipient = extractRecipient(raw);
+        return out;
+    }
+
+    private static String extractRecipient(String raw) {
+        if (raw == null) return "";
+        String text = raw.trim();
+
+        // Chinese: 傳訊息給小明說... / 發訊息給小明：...
+        int giveAt = firstIndex(text, "給", "给");
+        if (giveAt >= 0) {
+            String candidate = text.substring(giveAt + 1);
+            candidate = cutAt(candidate, "說", "说", "：", ":", "，", ",", "。", "！", "!", "內容", "内容");
+            return cleanRecipient(candidate);
+        }
+
+        // Chinese: 回覆小明：...
+        int replyAt = firstIndex(text, "回覆", "回复");
+        if (replyAt >= 0) {
+            String candidate = text.substring(replyAt + 2);
+            candidate = candidate.replaceFirst("^(一下|訊息|讯息|消息|給|给)+", "");
+            candidate = cutAt(candidate, "說", "说", "：", ":", "，", ",", "。", "！", "!");
+            return cleanRecipient(candidate);
+        }
+
+        // English: send a message to John saying ...
+        String lower = TextMatch.caseFold(text);
+        int toAt = lower.indexOf(" to ");
+        if (toAt >= 0) {
+            String candidate = text.substring(toAt + 4);
+            candidate = cutAtIgnoreCase(candidate, " saying ", " with ", ":", ",", ".", "!");
+            return cleanRecipient(candidate);
+        }
+
+        return "";
+    }
+
+    private static String cleanRecipient(String value) {
+        String out = value == null ? "" : value.trim();
+        out = out.replaceAll("^[給给對对向\\s]+|[\\s，,。！？!：:]+$", "");
+        String normalized = normalize(out);
+        if (normalized.isEmpty() || normalized.length() > 48) return "";
+        if (containsAny(normalized,
+                "他", "她", "它", "他們", "他们", "她們", "她们", "對方", "对方",
+                "某人", "那個人", "那个人", "him", "her", "them", "someone")) return "";
+        return out;
+    }
+
+    private static int firstIndex(String text, String... tokens) {
+        int result = -1;
+        if (text == null) return -1;
+        for (String token : tokens) {
+            int at = text.indexOf(token);
+            if (at >= 0 && (result < 0 || at < result)) result = at;
+        }
+        return result;
+    }
+
+    private static String cutAt(String text, String... tokens) {
+        int at = firstIndex(text, tokens);
+        return at < 0 ? text : text.substring(0, at);
+    }
+
+    private static String cutAtIgnoreCase(String text, String... tokens) {
+        String lower = TextMatch.caseFold(text == null ? "" : text);
+        int best = -1;
+        for (String token : tokens) {
+            int at = lower.indexOf(TextMatch.caseFold(token));
+            if (at >= 0 && (best < 0 || at < best)) best = at;
+        }
+        return best < 0 ? text : text.substring(0, best);
     }
 
     private static boolean containsAny(String value, String... needles) {
@@ -168,6 +285,6 @@ final class UserActionScope {
 
     private static String normalize(String text) {
         return TextMatch.caseFold(text)
-                .replaceAll("[\\s，,。！？!「」『』\"'：:；;（）()]", "");
+                .replaceAll("[\\s，,。！？!「」『』\\\"'：:；;（）()]", "");
     }
 }
