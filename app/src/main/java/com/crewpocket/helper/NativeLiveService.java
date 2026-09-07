@@ -7,6 +7,8 @@ import android.app.Service;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.content.Intent;
+import android.media.AudioManager;
+import android.media.AudioRecordingConfiguration;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.Handler;
@@ -14,6 +16,7 @@ import android.os.Looper;
 import android.os.SystemClock;
 import android.os.Vibrator;
 
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -40,6 +43,7 @@ public class NativeLiveService extends Service {
     private static final int WAKE_FAST_RECOVERY_MAX = 3;
     private static final long WAKE_SLOW_PROBE_MS = 300000L;
     private static final long LIVE_TO_WAKE_COOLDOWN_MS = 1800L;
+    private static final long EXTERNAL_MIC_RESUME_GRACE_MS = 800L;
 
     private enum RuntimeState { IDLE, ACTIVE }
 
@@ -57,6 +61,12 @@ public class NativeLiveService extends Service {
     private int wakeGeneration;
     private int wakeRetryAttempts;
     private boolean externalMicSuspended;
+    /** True only for automatic Android recording-contention suspension. */
+    private boolean externalMicAutoYield;
+    private int externalRecordingCount;
+    private String externalMicReason = "";
+    private AudioManager audioManager;
+    private AudioManager.AudioRecordingCallback audioRecordingCallback;
     private boolean foregroundStarted;
     private boolean alwaysOnEnabled;
     private boolean sharingCamera;
@@ -80,6 +90,29 @@ public class NativeLiveService extends Service {
     private int wakeFastRecoveryAttempts;
     private int wakeSlowProbeCount;
     private String wakeHealthLastReason = "not checked";
+
+    private final Runnable externalMicResumeRunnable = new Runnable() {
+        @Override public void run() {
+            if (!externalMicSuspended || !externalMicAutoYield
+                    || active || !alwaysOnEnabled) return;
+            if (hasExternalRecordingNow()) {
+                visualHandler.postDelayed(this, EXTERNAL_MIC_RESUME_GRACE_MS);
+                return;
+            }
+            externalMicSuspended = false;
+            externalMicAutoYield = false;
+            externalRecordingCount = 0;
+            externalMicReason = "";
+            wakeHealthState = "STARTING";
+            clearWakeBlock();
+            resetWakeHealthBaseline("external mic released");
+            lastWakeEvent = "external mic released";
+            lastWakeStatus = "STARTING";
+            updateForegroundNotification("其他 App 已釋放麥克風，正在恢復喚醒詞");
+            startIdleWakeWord();
+            armWakeHealthWatchdog();
+        }
+    };
 
     private final Runnable reconnectRunnable = new Runnable() {
         @Override public void run() {
@@ -123,6 +156,7 @@ public class NativeLiveService extends Service {
         NativeLiveService service = instance;
         if (!serviceRunning || service == null) return "STOPPED";
         if (active) return "ACTIVE";
+        if (service.externalMicSuspended) return "IDLE_MIC_YIELDED";
         SherpaWakeWordEngine engine = service.wakeWordEngine;
         if (engine != null && engine.isRunning()) return "IDLE_LISTENING";
         if (!service.wakeBlockKind.isEmpty()) return "BLOCKED";
@@ -167,6 +201,10 @@ public class NativeLiveService extends Service {
         out.append("\nservice.active=").append(active);
         out.append("\nservice.foreground=").append(service.foregroundStarted);
         out.append("\nservice.externalMicSuspended=").append(service.externalMicSuspended);
+        out.append("\nservice.externalMicAutoYield=").append(service.externalMicAutoYield);
+        out.append("\nservice.externalRecordingCount=").append(service.externalRecordingCount);
+        out.append("\nservice.externalMicReason=").append(blankAsDash(service.externalMicReason));
+        out.append("\nservice.externalMicResumeGraceMs=").append(EXTERNAL_MIC_RESUME_GRACE_MS);
         out.append("\nwake.generation=").append(service.wakeGeneration);
         out.append("\nwake.retryAttempts=").append(service.wakeRetryAttempts);
         out.append("\nwake.lastEvent=").append(service.lastWakeEvent);
@@ -201,6 +239,101 @@ public class NativeLiveService extends Service {
 
     private static String ageMs(long now, long timestamp) {
         return timestamp <= 0 ? "-" : String.valueOf(Math.max(0L, now - timestamp));
+    }
+
+    private void registerExternalMicMonitor() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N || audioRecordingCallback != null) return;
+        try {
+            audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+            if (audioManager == null) return;
+            audioRecordingCallback = new AudioManager.AudioRecordingCallback() {
+                @Override public void onRecordingConfigChanged(
+                        List<AudioRecordingConfiguration> configs) {
+                    handleRecordingConfigChanged(configs);
+                }
+            };
+            audioManager.registerAudioRecordingCallback(audioRecordingCallback, visualHandler);
+        } catch (Throwable error) {
+            audioRecordingCallback = null;
+            android.util.Log.w("CrewNativeLive", "External mic monitor unavailable: "
+                    + (error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage()));
+        }
+    }
+
+    private void unregisterExternalMicMonitor() {
+        visualHandler.removeCallbacks(externalMicResumeRunnable);
+        AudioManager manager = audioManager;
+        AudioManager.AudioRecordingCallback callback = audioRecordingCallback;
+        audioRecordingCallback = null;
+        audioManager = null;
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N
+                || manager == null || callback == null) return;
+        try { manager.unregisterAudioRecordingCallback(callback); }
+        catch (Throwable ignored) {}
+    }
+
+    private void handleRecordingConfigChanged(List<AudioRecordingConfiguration> configs) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N || !alwaysOnEnabled || active) return;
+
+        if (externalMicSuspended) {
+            if (!externalMicAutoYield) return;
+            externalRecordingCount = configs == null ? 0 : configs.size();
+            visualHandler.removeCallbacks(externalMicResumeRunnable);
+            visualHandler.postDelayed(externalMicResumeRunnable, EXTERNAL_MIC_RESUME_GRACE_MS);
+            return;
+        }
+
+        SherpaWakeWordEngine engine = wakeWordEngine;
+        int ownSession = engine == null ? -1 : engine.getAudioSessionId();
+        // Avoid startup races where our own just-created AudioRecord appears
+        // before wakeWordEngine has been published on the main thread.
+        if (ownSession <= 0 || configs == null) return;
+
+        int external = 0;
+        for (AudioRecordingConfiguration config : configs) {
+            if (config == null) continue;
+            int session = -1;
+            try { session = config.getClientAudioSessionId(); }
+            catch (Throwable ignored) {}
+            if (session != ownSession) external++;
+        }
+        if (external > 0) {
+            suspendIdleWakeForExternalMic("AudioManager detected another recorder", external);
+        }
+    }
+
+    private void suspendIdleWakeForExternalMic(String reason, int count) {
+        if (active || !alwaysOnEnabled) return;
+        externalMicSuspended = true;
+        externalMicAutoYield = true;
+        externalRecordingCount = Math.max(1, count);
+        externalMicReason = reason == null ? "external recording" : reason;
+        wakeHealthState = "SUSPENDED_EXTERNAL_MIC";
+        lastWakeEvent = "external mic auto-yield";
+        lastWakeStatus = "SUSPENDED_EXTERNAL_MIC";
+        visualHandler.removeCallbacks(wakeRetryRunnable);
+        visualHandler.removeCallbacks(wakeHealthRunnable);
+        visualHandler.removeCallbacks(wakeSlowProbeRunnable);
+        visualHandler.removeCallbacks(externalMicResumeRunnable);
+        stopIdleWakeWord();
+        updateForegroundNotification("其他 App 正在使用麥克風；喚醒詞已暫停");
+        visualHandler.postDelayed(externalMicResumeRunnable, EXTERNAL_MIC_RESUME_GRACE_MS);
+    }
+
+    private boolean hasExternalRecordingNow() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return false;
+        AudioManager manager = audioManager;
+        if (manager == null) return false;
+        try {
+            List<AudioRecordingConfiguration> configs =
+                    manager.getActiveRecordingConfigurations();
+            externalRecordingCount = configs == null ? 0 : configs.size();
+            return externalRecordingCount > 0;
+        } catch (Throwable error) {
+            android.util.Log.w("CrewNativeLive", "Cannot inspect active recordings: "
+                    + (error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage()));
+            return false;
+        }
     }
 
     static void reconcileAlwaysOn(Context context) {
@@ -472,6 +605,10 @@ public class NativeLiveService extends Service {
         running.visualHandler.post(new Runnable() {
             @Override public void run() {
                 running.externalMicSuspended = true;
+                running.externalMicAutoYield = false;
+                running.externalRecordingCount = 0;
+                running.externalMicReason = "Crew Helper page-owned Live";
+                running.visualHandler.removeCallbacks(running.externalMicResumeRunnable);
                 running.wakeHealthState = "SUSPENDED";
                 running.visualHandler.removeCallbacks(running.wakeHealthRunnable);
                 running.visualHandler.removeCallbacks(running.wakeSlowProbeRunnable);
@@ -487,7 +624,11 @@ public class NativeLiveService extends Service {
         if (running == null) return;
         running.visualHandler.post(new Runnable() {
             @Override public void run() {
+                running.visualHandler.removeCallbacks(running.externalMicResumeRunnable);
                 running.externalMicSuspended = false;
+                running.externalMicAutoYield = false;
+                running.externalRecordingCount = 0;
+                running.externalMicReason = "";
                 if (running.alwaysOnEnabled && !active) {
                     running.updateForegroundNotification("正在等待喚醒詞「" + AppConfig.getWakePhrase(running) + "」");
                     running.wakeHealthState = "STARTING";
@@ -588,6 +729,7 @@ public class NativeLiveService extends Service {
         alwaysOnEnabled = AppConfig.isAlwaysOnEnabled(this);
         DeckRepository.initialize(this);
         createChannel();
+        registerExternalMicMonitor();
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
@@ -647,6 +789,10 @@ public class NativeLiveService extends Service {
         AppConfig.setAlwaysOnEnabled(this, true);
         alwaysOnEnabled = true;
         externalMicSuspended = false;
+        externalMicAutoYield = false;
+        externalRecordingCount = 0;
+        externalMicReason = "";
+        visualHandler.removeCallbacks(externalMicResumeRunnable);
         if (!ensureMicrophonePermission()) {
             AppConfig.setAlwaysOnEnabled(this, false);
             alwaysOnEnabled = false;
@@ -671,6 +817,10 @@ public class NativeLiveService extends Service {
         AppConfig.setAlwaysOnEnabled(this, false);
         alwaysOnEnabled = false;
         externalMicSuspended = false;
+        externalMicAutoYield = false;
+        externalRecordingCount = 0;
+        externalMicReason = "";
+        visualHandler.removeCallbacks(externalMicResumeRunnable);
         wakeHealthState = "OFF";
         clearWakeBlock();
         visualHandler.removeCallbacks(wakeHealthRunnable);
@@ -700,7 +850,11 @@ public class NativeLiveService extends Service {
         wakeHealthState = "ACTIVE";
         resetWakeHealthBaseline("Gemini ACTIVE");
         stopIdleWakeWord();
+        visualHandler.removeCallbacks(externalMicResumeRunnable);
         externalMicSuspended = false;
+        externalMicAutoYield = false;
+        externalRecordingCount = 0;
+        externalMicReason = "";
         runtimeState = RuntimeState.ACTIVE;
         active = true;
         stopRequested = false;
@@ -768,6 +922,18 @@ public class NativeLiveService extends Service {
                                         lastWakeEvent = "engine status";
                                         lastWakeStatus = status == null ? "" : status;
                                         if (!active && alwaysOnEnabled) updateForegroundNotification(status);
+                                    }
+                                });
+                            }
+
+                            @Override public void onCaptureSilenced(final boolean silenced) {
+                                if (!silenced) return;
+                                visualHandler.post(new Runnable() {
+                                    @Override public void run() {
+                                        if (generation != wakeGeneration
+                                                || active || !alwaysOnEnabled) return;
+                                        suspendIdleWakeForExternalMic(
+                                                "Android silenced wake-word capture", 1);
                                     }
                                 });
                             }
@@ -1038,6 +1204,11 @@ public class NativeLiveService extends Service {
         visualHandler.removeCallbacks(wakeRetryRunnable);
         visualHandler.removeCallbacks(wakeHealthRunnable);
         visualHandler.removeCallbacks(wakeSlowProbeRunnable);
+        visualHandler.removeCallbacks(externalMicResumeRunnable);
+        externalMicSuspended = false;
+        externalMicAutoYield = false;
+        externalRecordingCount = 0;
+        externalMicReason = "";
         CameraPreviewOverlay.getInstance(this).hide();
         sharingCamera = false;
         sharingScreen = false;
@@ -1139,6 +1310,8 @@ public class NativeLiveService extends Service {
         visualHandler.removeCallbacks(wakeRetryRunnable);
         visualHandler.removeCallbacks(wakeHealthRunnable);
         visualHandler.removeCallbacks(wakeSlowProbeRunnable);
+        visualHandler.removeCallbacks(externalMicResumeRunnable);
+        unregisterExternalMicMonitor();
         SherpaWakeWordEngine wakeClosing = wakeWordEngine;
         wakeWordEngine = null;
         if (wakeClosing != null) wakeClosing.release();

@@ -4,12 +4,16 @@ import android.Manifest;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.media.AudioFormat;
+import android.media.AudioManager;
 import android.media.AudioRecord;
+import android.media.AudioRecordingConfiguration;
 import android.media.MediaRecorder;
 import android.os.Build;
 import android.os.Process;
 import android.os.SystemClock;
 import android.util.Log;
+
+import java.util.List;
 
 import com.k2fsa.sherpa.onnx.FeatureConfig;
 import com.k2fsa.sherpa.onnx.KeywordSpotter;
@@ -23,6 +27,7 @@ final class SherpaWakeWordEngine {
     interface Listener {
         void onDetected();
         void onStatus(String status);
+        void onCaptureSilenced(boolean silenced);
         void onError(String error);
     }
 
@@ -54,6 +59,8 @@ final class SherpaWakeWordEngine {
     private volatile boolean running;
     private volatile boolean detectionLatched;
     private volatile AudioRecord audioRecord;
+    private volatile AudioManager.AudioRecordingCallback recordingCallback;
+    private volatile boolean captureSilenced;
     private volatile Thread worker;
     private KeywordSpotter spotter;
     private OnlineStream stream;
@@ -85,6 +92,7 @@ final class SherpaWakeWordEngine {
         lastError = "";
         lastKeyword = "";
         lastReadResult = 0;
+        captureSilenced = false;
         audioReadCount = 0;
         audioSampleCount = 0;
         decodeCount = 0;
@@ -121,10 +129,12 @@ final class SherpaWakeWordEngine {
             phase = "MODEL_READY";
             phase = "OPENING_MIC";
             AudioRecord record = createAudioRecord();
+            registerCaptureCallback(record);
 
             phase = "STARTING_MIC";
             record.startRecording();
             if (record.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING) {
+                unregisterCaptureCallback(record);
                 try { record.release(); } catch (Exception ignored) {}
                 throw new IllegalStateException("AudioRecord 無法開始錄音");
             }
@@ -327,6 +337,13 @@ final class SherpaWakeWordEngine {
         }
     }
 
+    int getAudioSessionId() {
+        AudioRecord record = audioRecord;
+        if (record == null) return -1;
+        try { return record.getAudioSessionId(); }
+        catch (Throwable ignored) { return -1; }
+    }
+
     long getAudioReadCount() {
         return audioReadCount;
     }
@@ -359,6 +376,7 @@ final class SherpaWakeWordEngine {
                 + "\nengine.workerAlive=" + (t != null && t.isAlive())
                 + "\nmic.audioRecord=" + audioState
                 + "\nmic.recording=" + recordingState
+                + "\nmic.clientSilenced=" + captureSilenced
                 + "\naudio.lastReadResult=" + lastReadResult
                 + "\naudio.readCount=" + audioReadCount
                 + "\naudio.sampleCount=" + audioSampleCount
@@ -372,10 +390,64 @@ final class SherpaWakeWordEngine {
                 + "\nengine.lastError=" + blankAsDash(lastError);
     }
 
+    private void registerCaptureCallback(final AudioRecord record) {
+        if (Build.VERSION.SDK_INT < 29 || record == null) return;
+        final int sessionId;
+        try { sessionId = record.getAudioSessionId(); }
+        catch (Throwable ignored) { return; }
+
+        final AudioManager.AudioRecordingCallback callback =
+                new AudioManager.AudioRecordingCallback() {
+                    @Override public void onRecordingConfigChanged(
+                            List<AudioRecordingConfiguration> configs) {
+                        if (configs == null) return;
+                        for (AudioRecordingConfiguration config : configs) {
+                            if (config == null
+                                    || config.getClientAudioSessionId() != sessionId) continue;
+                            boolean silenced = false;
+                            try { silenced = ((Boolean) AudioRecordingConfiguration.class
+                                    .getMethod("isClientSilenced").invoke(config)).booleanValue(); }
+                            catch (Throwable ignored) {}
+                            if (silenced == captureSilenced) return;
+                            captureSilenced = silenced;
+                            if (silenced) phase = "MIC_SILENCED_EXTERNAL";
+                            Listener callback = listener;
+                            if (callback != null) callback.onCaptureSilenced(silenced);
+                            return;
+                        }
+                    }
+                };
+        try {
+            recordingCallback = callback;
+            AudioManager.class.getMethod("registerAudioRecordingCallback",
+                    AudioManager.AudioRecordingCallback.class, android.os.Handler.class)
+                    .invoke((AudioManager) context.getSystemService(Context.AUDIO_SERVICE), callback,
+                            new android.os.Handler(android.os.Looper.getMainLooper()));
+        } catch (Throwable error) {
+            recordingCallback = null;
+            Log.w(TAG, "Wake capture callback unavailable: " + safeMessage(error));
+        }
+    }
+
+    private void unregisterCaptureCallback(AudioRecord record) {
+        AudioManager.AudioRecordingCallback callback = recordingCallback;
+        recordingCallback = null;
+        captureSilenced = false;
+        if (Build.VERSION.SDK_INT < 29
+                || callback == null || record == null) return;
+        try {
+            AudioManager.class.getMethod("unregisterAudioRecordingCallback",
+                    AudioManager.AudioRecordingCallback.class)
+                    .invoke((AudioManager) context.getSystemService(Context.AUDIO_SERVICE), callback);
+        }
+        catch (Throwable ignored) {}
+    }
+
     private synchronized void stopAndReleaseAudioRecord() {
         AudioRecord record = audioRecord;
         audioRecord = null;
         if (record == null) return;
+        unregisterCaptureCallback(record);
         try {
             if (record.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING) {
                 record.stop();

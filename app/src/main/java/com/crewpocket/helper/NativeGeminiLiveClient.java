@@ -123,6 +123,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private MemoryRuleIndex memoryRuleIndex;
     private String lastMemoryDispatchKey = "";
     private long lastMemoryDispatchAt = 0L;
+    private AudioIncidentRecorder audioIncidentRecorder;
     private volatile PendingCondition pendingCondition = null;
 
     NativeGeminiLiveClient(String apiKey, Listener listener) { this(apiKey, "", AppConfig.DEFAULT_VOICE, "auto", 35, "warm", "", 55, "call", listener); }
@@ -143,6 +144,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     NativeGeminiLiveClient(Context context, String apiKey, String serverUrl, String voiceName, String noiseMode, int noiseSuppression, String liveTone, String customPrompt, int interruptionSensitivity, String audioOutput, Listener listener) {
         this.appContext = context == null ? null : context.getApplicationContext();
         this.memoryRuleIndex = this.appContext == null ? null : new MemoryRuleIndex(this.appContext);
+        this.audioIncidentRecorder = this.appContext == null ? null : new AudioIncidentRecorder(this.appContext);
         this.apiKey = apiKey;
         this.serverUrl = serverUrl == null ? "" : serverUrl.trim();
         this.voiceName = voiceName == null || voiceName.trim().isEmpty() ? AppConfig.DEFAULT_VOICE : voiceName.trim();
@@ -299,6 +301,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     boolean sendText(String text) {
         if (!running || webSocket == null || text == null || text.trim().isEmpty()) return false;
         try {
+            if (audioIncidentRecorder != null) audioIncidentRecorder.markTypedInput(text.trim());
             userActionScope.updateFromUserText(text.trim());
             boolean correctionInput = correctionWindowActive && System.currentTimeMillis() <= correctionWindowUntil;
             if (correctionInput) consumeCorrectionWindowOnUserSpeech(text.trim());
@@ -598,6 +601,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             if (authorizationTranscript.length() > 4096) authorizationTranscript = fragment;
             completeUserInput = authorizationTranscript;
             userActionScope.updateFromUserText(completeUserInput);
+            if (audioIncidentRecorder != null) {
+                audioIncidentRecorder.onVoiceTranscript(completeUserInput);
+            }
         }
 
         JSONObject toolCall = response.optJSONObject("toolCall");
@@ -943,6 +949,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             sendBlockedToolResponse(id, name, task.blockedReason);
             requestAgentConclusion(task, task.blockedReason);
             return;
+        }
+        if (isMutationTool(name) && audioIncidentRecorder != null) {
+            audioIncidentRecorder.captureBeforeFirstMutation(task.taskId, name, args);
         }
         final JSONObject beforeCorrectionContext = workingContext.toJson();
         final CorrectionLearningRuntime.Decision correctionDecision =
@@ -2365,6 +2374,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 audio.put("data", Base64.encodeToString(chunk, Base64.NO_WRAP));
                 root.put("realtimeInput", new JSONObject().put("audio", audio));
                 if (!webSocket.send(root.toString())) throw new Exception("audio send failed");
+                if (audioIncidentRecorder != null) {
+                    audioIncidentRecorder.onUpstreamPcm(chunk, rms, noiseFloor, gateThreshold);
+                }
             } catch (Exception error) { fail("麥克風串流失敗：" + error.getMessage(), error); }
         }
     }
