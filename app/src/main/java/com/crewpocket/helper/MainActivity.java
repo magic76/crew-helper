@@ -312,6 +312,16 @@ public class MainActivity extends Activity {
             @Override public void onClick(View v) { showAccessibilityDisclosureDialog(); }
         }));
 
+        boolean alwaysOn = AppConfig.isAlwaysOnEnabled(this);
+        String alwaysOnSummary = alwaysOn
+            ? I18n.get(this, "狀態：🟢 全天待命 · 喚醒詞「" + AppConfig.getWakePhrase(this) + "」 · " + NativeLiveService.getRuntimeState(),
+                "Status: 🟢 Always-on · Wake phrase: " + AppConfig.getWakePhrase(this) + " · " + NativeLiveService.getRuntimeState())
+            : I18n.get(this, "狀態：⚪ 未啟用 · 點擊設定低功耗語音喚醒", "Status: ⚪ Disabled · Tap to configure low-power wake word");
+        pageContent.addView(makeActionCard("🎧", I18n.get(this, "全天語音喚醒", "Always-On Wake Word"),
+            alwaysOnSummary, CrewTheme.TEAL_400, new View.OnClickListener() {
+                @Override public void onClick(View v) { showAlwaysOnDialog(); }
+            }));
+
         pageContent.addView(makeActionCard("📸", I18n.cardCameraTitle(this), I18n.cardCameraDesc(this), CrewTheme.AMBER_400, new View.OnClickListener() {
             @Override public void onClick(View v) { requestCameraPermission(); }
         }));
@@ -495,6 +505,8 @@ public class MainActivity extends Activity {
             .setTitle(I18n.get(this, "診斷資訊", "Diagnostics"))
             .setMessage("Crew Helper v2.0\n\n" + I18n.get(this, "無障礙服務：", "Accessibility: ") + state
                 + "\nLive Service: " + (NativeLiveService.isActive() ? "Active" : "Idle")
+                + "\nAlways-On: " + (AppConfig.isAlwaysOnEnabled(this) ? NativeLiveService.getRuntimeState() : "Disabled")
+                + "\nWake Phrase: " + AppConfig.getWakePhrase(this)
                 + "\nBridge: 127.0.0.1:8766")
             .setPositiveButton(I18n.get(this, "關閉", "Close"), null)
             .show();
@@ -620,6 +632,117 @@ public class MainActivity extends Activity {
             }
         });
         builder.setNegativeButton(I18n.get(this, "取消", "Cancel"), null);
+        builder.show();
+    }
+
+    private void showAlwaysOnDialog() {
+        final boolean enabled = AppConfig.isAlwaysOnEnabled(this);
+        final android.widget.EditText accessKeyInput = new android.widget.EditText(this);
+        accessKeyInput.setHint("Picovoice AccessKey");
+        accessKeyInput.setHintTextColor(CrewTheme.TEXT_MUTED);
+        accessKeyInput.setText(AppConfig.getPicovoiceAccessKey(this));
+        accessKeyInput.setTextColor(CrewTheme.TEXT_PRIMARY);
+        accessKeyInput.setTextSize(12);
+        accessKeyInput.setSingleLine(true);
+        accessKeyInput.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        accessKeyInput.setBackground(CrewTheme.createCard(this, CrewTheme.BG_SURFACE, CrewTheme.BORDER_SUBTLE, 8));
+        accessKeyInput.setPadding(dp(10), dp(10), dp(10), dp(10));
+
+        final android.widget.SeekBar sensitivity = new android.widget.SeekBar(this);
+        sensitivity.setMax(90);
+        sensitivity.setProgress(AppConfig.getWakeSensitivity(this) - 5);
+
+        final TextView sensitivityValue = new TextView(this);
+        sensitivityValue.setText(String.valueOf(AppConfig.getWakeSensitivity(this)));
+        sensitivityValue.setTextColor(CrewTheme.TEAL_300);
+        sensitivityValue.setTextSize(11);
+        sensitivity.setOnSeekBarChangeListener(new android.widget.SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(android.widget.SeekBar seekBar, int progress, boolean fromUser) {
+                sensitivityValue.setText(String.valueOf(progress + 5));
+            }
+            @Override public void onStartTrackingTouch(android.widget.SeekBar seekBar) {}
+            @Override public void onStopTrackingTouch(android.widget.SeekBar seekBar) {}
+        });
+
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(dp(20), dp(8), dp(20), dp(4));
+
+        TextView desc = new TextView(this);
+        desc.setText(I18n.get(this,
+            "IDLE 只在本機聽「小酷小酷」，偵測到後才切換 Gemini Live。首次啟用會透過 Picovoice 建立一次喚醒詞模型；之後辨識在裝置端執行。",
+            "IDLE listens locally only for the wake phrase. Gemini Live starts only after detection. First setup creates the keyword model once; runtime detection is on-device."));
+        desc.setTextSize(11);
+        desc.setTextColor(CrewTheme.TEXT_SECONDARY);
+        desc.setPadding(0, 0, 0, dp(12));
+        layout.addView(desc);
+
+        TextView phrase = new TextView(this);
+        phrase.setText(I18n.get(this, "喚醒詞：小酷小酷", "Wake phrase: 小酷小酷"));
+        phrase.setTextSize(12);
+        phrase.setTypeface(Typeface.DEFAULT_BOLD);
+        phrase.setTextColor(CrewTheme.TEAL_300);
+        phrase.setPadding(0, 0, 0, dp(8));
+        layout.addView(phrase);
+
+        TextView keyLabel = new TextView(this);
+        keyLabel.setText("Picovoice AccessKey");
+        keyLabel.setTextSize(11);
+        keyLabel.setTextColor(CrewTheme.TEXT_SECONDARY);
+        layout.addView(keyLabel);
+        layout.addView(accessKeyInput, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        TextView sensitivityLabel = new TextView(this);
+        sensitivityLabel.setText(I18n.get(this, "偵測靈敏度（越高越容易喚醒，也較容易誤觸）", "Sensitivity (higher wakes easier but may false-trigger)"));
+        sensitivityLabel.setTextSize(11);
+        sensitivityLabel.setTextColor(CrewTheme.TEXT_SECONDARY);
+        sensitivityLabel.setPadding(0, dp(12), 0, dp(2));
+        layout.addView(sensitivityLabel);
+
+        LinearLayout sensitivityRow = new LinearLayout(this);
+        sensitivityRow.setOrientation(LinearLayout.HORIZONTAL);
+        sensitivityRow.setGravity(Gravity.CENTER_VERTICAL);
+        sensitivityRow.addView(sensitivity, new LinearLayout.LayoutParams(0, dp(40), 1f));
+        sensitivityRow.addView(sensitivityValue, new LinearLayout.LayoutParams(dp(36), dp(40)));
+        layout.addView(sensitivityRow);
+
+        android.app.AlertDialog.Builder builder = new android.app.AlertDialog.Builder(this)
+            .setTitle(I18n.get(this, "🎧 全天語音喚醒", "🎧 Always-On Wake Word"))
+            .setView(layout)
+            .setPositiveButton(I18n.get(this, enabled ? "儲存並重新啟動" : "儲存並啟用", enabled ? "Save & restart" : "Save & enable"),
+                new android.content.DialogInterface.OnClickListener() {
+                    @Override public void onClick(android.content.DialogInterface dialog, int which) {
+                        String key = accessKeyInput.getText().toString().trim();
+                        if (key.isEmpty()) {
+                            Toast.makeText(MainActivity.this, "請先設定 Picovoice AccessKey", Toast.LENGTH_LONG).show();
+                            return;
+                        }
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+                                && checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                            requestPermissions(new String[]{android.Manifest.permission.RECORD_AUDIO}, 301);
+                            Toast.makeText(MainActivity.this, "允許麥克風後，再點一次啟用全天待命", Toast.LENGTH_LONG).show();
+                            return;
+                        }
+                        AppConfig.setPicovoiceAccessKey(MainActivity.this, key);
+                        AppConfig.setWakePhrase(MainActivity.this, AppConfig.DEFAULT_WAKE_PHRASE);
+                        AppConfig.setWakeSensitivity(MainActivity.this, sensitivity.getProgress() + 5);
+                        NativeLiveService.enableAlwaysOn(MainActivity.this);
+                        Toast.makeText(MainActivity.this, "全天待命已啟用：小酷小酷", Toast.LENGTH_SHORT).show();
+                        renderSettingsPage();
+                    }
+                })
+            .setNegativeButton(I18n.get(this, "取消", "Cancel"), null);
+
+        if (enabled) {
+            builder.setNeutralButton(I18n.get(this, "停用全天待命", "Disable always-on"),
+                new android.content.DialogInterface.OnClickListener() {
+                    @Override public void onClick(android.content.DialogInterface dialog, int which) {
+                        NativeLiveService.disableAlwaysOn(MainActivity.this);
+                        Toast.makeText(MainActivity.this, "全天待命已關閉", Toast.LENGTH_SHORT).show();
+                        renderSettingsPage();
+                    }
+                });
+        }
         builder.show();
     }
 

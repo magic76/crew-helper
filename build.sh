@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FRAMEWORK_RES="${ANDROID_FRAMEWORK_RES:-/system/framework/framework-res.apk}"
-ANDROID_JAR="${ANDROID_JAR:-/data/data/com.termux/files/usr/share/java/android-24.jar}"
+ANDROID_JAR="${ANDROID_JAR:-/data/data/com.termux/files/usr/share/java/android.jar}"
 KEYSTORE="${CREW_HELPER_KEYSTORE:-$SCRIPT_DIR/test.keystore}"
 OUT_APK="$SCRIPT_DIR/CrewHelper.apk"
 
@@ -50,10 +50,13 @@ clang++ -shared -Wl,-z,max-page-size=16384 \
   bin/oboe-obj/*.o -llog -lOpenSLES -o bin/lib/arm64-v8a/libcrewaudio.so
 cp /data/data/com.termux/files/usr/lib/libc++_shared.so bin/lib/arm64-v8a/
 
+if [ -d app/src/main/jniLibs/arm64-v8a ]; then
+  cp app/src/main/jniLibs/arm64-v8a/*.so bin/lib/arm64-v8a/
+fi
+
 cd bin
 aapt add unsigned.apk classes.dex
-aapt add unsigned.apk lib/arm64-v8a/libcrewaudio.so
-aapt add unsigned.apk lib/arm64-v8a/libc++_shared.so
+find lib -type f -name '*.so' -print0 | xargs -0 -r aapt add unsigned.apk
 if [ -d assets ]; then
   find assets -type f -print0 | xargs -0 -r aapt add unsigned.apk
 fi

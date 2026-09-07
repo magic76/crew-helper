@@ -30,4 +30,5 @@ android {
 
 dependencies {
     implementation fileTree(dir: 'libs', include: ['*.jar'])
+    implementation 'ai.picovoice:porcupine-android:4.0.2'
 }

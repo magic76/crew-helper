@@ -18,8 +18,15 @@ public class AppConfig {
     /** Maximum automatic Gemini tool-result cycles in one Live agent task. */
     public static final String KEY_AGENT_MAX_STEPS = "agent_max_steps";
 
+    // 0025: Always-On infra. These are runtime/infra preferences, not LLM state.
+    public static final String KEY_ALWAYS_ON_ENABLED = "always_on_enabled";
+    public static final String KEY_PICOVOICE_ACCESS_KEY = "picovoice_access_key";
+    public static final String KEY_WAKE_PHRASE = "wake_phrase";
+    public static final String KEY_WAKE_SENSITIVITY = "wake_sensitivity";
+
     public static final String DEFAULT_VOICE = "Kore";
     public static final String DEFAULT_SERVER = "http://127.0.0.1:8000";
+    public static final String DEFAULT_WAKE_PHRASE = "小酷小酷";
 
     public static SharedPreferences getPrefs(Context context) {
         return context.getApplicationContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
@@ -162,6 +169,48 @@ public class AppConfig {
     public static void setAgentMaxSteps(Context context, int steps) {
         if (context == null) return;
         getPrefs(context).edit().putInt(KEY_AGENT_MAX_STEPS, Math.max(1, Math.min(100, steps))).apply();
+    }
+
+    // ── 0025. Always-On Runtime ──
+    public static boolean isAlwaysOnEnabled(Context context) {
+        return context != null && getPrefs(context).getBoolean(KEY_ALWAYS_ON_ENABLED, false);
+    }
+
+    public static void setAlwaysOnEnabled(Context context, boolean enabled) {
+        if (context == null) return;
+        getPrefs(context).edit().putBoolean(KEY_ALWAYS_ON_ENABLED, enabled).apply();
+    }
+
+    public static String getPicovoiceAccessKey(Context context) {
+        if (context == null) return "";
+        return getPrefs(context).getString(KEY_PICOVOICE_ACCESS_KEY, "").trim();
+    }
+
+    public static void setPicovoiceAccessKey(Context context, String key) {
+        if (context == null) return;
+        getPrefs(context).edit().putString(KEY_PICOVOICE_ACCESS_KEY, key == null ? "" : key.trim()).apply();
+    }
+
+    public static String getWakePhrase(Context context) {
+        if (context == null) return DEFAULT_WAKE_PHRASE;
+        String phrase = getPrefs(context).getString(KEY_WAKE_PHRASE, DEFAULT_WAKE_PHRASE);
+        return phrase == null || phrase.trim().isEmpty() ? DEFAULT_WAKE_PHRASE : phrase.trim();
+    }
+
+    public static void setWakePhrase(Context context, String phrase) {
+        if (context == null) return;
+        String clean = phrase == null || phrase.trim().isEmpty() ? DEFAULT_WAKE_PHRASE : phrase.trim();
+        getPrefs(context).edit().putString(KEY_WAKE_PHRASE, clean).apply();
+    }
+
+    public static int getWakeSensitivity(Context context) {
+        if (context == null) return 65;
+        return Math.max(5, Math.min(95, getPrefs(context).getInt(KEY_WAKE_SENSITIVITY, 65)));
+    }
+
+    public static void setWakeSensitivity(Context context, int value) {
+        if (context == null) return;
+        getPrefs(context).edit().putInt(KEY_WAKE_SENSITIVITY, Math.max(5, Math.min(95, value))).apply();
     }
 
     private static boolean isLiveTone(String tone) {

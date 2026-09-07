@@ -52,9 +52,6 @@ public class CrewAccessibilityService extends AccessibilityService {
     private ServerSocket serverSocket;
     private boolean isRunning = false;
     private Handler mainHandler;
-    private android.speech.SpeechRecognizer wakeRecognizer;
-    private Intent wakeRecognizerIntent;
-    private boolean wakeWordActive = false;
     private LearnedUiMappingStore learnedUiMappingStore;
     private UiTeachOverlay uiTeachOverlay;
 
@@ -77,15 +74,8 @@ public class CrewAccessibilityService extends AccessibilityService {
         uiTeachOverlay = new UiTeachOverlay(this);
         startLocalServer();
 
-        // The floating bubble stays opt-in; no notification-bar control is used.
-        mainHandler.postDelayed(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    startNativeWakeWordListener();
-                } catch (Exception ignored) {}
-            }
-        }, 800);
+        // 0025: Accessibility no longer owns microphone or Wake Word lifecycle.
+        // Always-On is explicitly enabled from the app and owned by NativeLiveService.
     }
 
     @Override
@@ -1457,94 +1447,16 @@ public class CrewAccessibilityService extends AccessibilityService {
         );
     }
 
-    // ── Native Background Wake Word Engine ──
+    // ── 0025 compatibility aliases ──
+    // Keep old callers source-compatible, but Accessibility never opens the mic.
+    @Deprecated
     public void startNativeWakeWordListener() {
-        if (wakeWordActive || NativeLiveService.isActive()) return;
-        mainHandler.post(new Runnable() {
-            @Override public void run() {
-                try {
-                    if (!android.speech.SpeechRecognizer.isRecognitionAvailable(CrewAccessibilityService.this)) return;
-                    if (wakeRecognizer != null) {
-                        try { wakeRecognizer.destroy(); } catch (Exception ignored) {}
-                        wakeRecognizer = null;
-                    }
-                    wakeRecognizer = android.speech.SpeechRecognizer.createSpeechRecognizer(CrewAccessibilityService.this);
-                    wakeRecognizerIntent = new Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-                    wakeRecognizerIntent.putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL, android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-                    wakeRecognizerIntent.putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE, "zh-TW");
-                    wakeRecognizerIntent.putExtra(android.speech.RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
-                    wakeRecognizerIntent.putExtra(android.speech.RecognizerIntent.EXTRA_MAX_RESULTS, 3);
-
-                    wakeRecognizer.setRecognitionListener(new android.speech.RecognitionListener() {
-                        @Override public void onReadyForSpeech(Bundle params) {}
-                        @Override public void onBeginningOfSpeech() {}
-                        @Override public void onRmsChanged(float rmsdB) {}
-                        @Override public void onBufferReceived(byte[] buffer) {}
-                        @Override public void onEndOfSpeech() {}
-                        @Override public void onError(int error) {
-                            if (!NativeLiveService.isActive() && isRunning) {
-                                mainHandler.postDelayed(new Runnable() {
-                                    @Override public void run() {
-                                        startNativeWakeWordListener();
-                                    }
-                                }, 1500);
-                            }
-                        }
-                        @Override public void onResults(Bundle results) {
-                            handleWakeResults(results);
-                            if (!NativeLiveService.isActive() && isRunning) {
-                                mainHandler.postDelayed(new Runnable() {
-                                    @Override public void run() {
-                                        startNativeWakeWordListener();
-                                    }
-                                }, 800);
-                            }
-                        }
-                        @Override public void onPartialResults(Bundle partialResults) {
-                            handleWakeResults(partialResults);
-                        }
-                        @Override public void onEvent(int eventType, Bundle params) {}
-                    });
-
-                    wakeRecognizer.startListening(wakeRecognizerIntent);
-                    wakeWordActive = true;
-                } catch (Exception ignored) {}
-            }
-        });
+        NativeLiveService.resumeIdleWakeIfRunning();
     }
 
-    private void handleWakeResults(Bundle bundle) {
-        if (bundle == null || NativeLiveService.isActive()) return;
-        ArrayList<String> matches = bundle.getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION);
-        if (matches == null) return;
-        for (String text : matches) {
-            if (text == null) continue;
-            String lower = text.trim().toLowerCase(Locale.ROOT).replace(" ", "");
-            if (lower.contains("小酷小酷") || lower.contains("小酷") || lower.contains("小酷同學") || lower.contains("阿酷阿酷") || lower.contains("嗨小酷") || lower.contains("小庫小庫") || lower.contains("小褲小褲") || lower.contains("heypocket") || lower.contains("heycrew") || lower.contains("hicrew") || lower.contains("嗨酷")) {
-                stopNativeWakeWordListener();
-                try {
-                    android.os.Vibrator v = (android.os.Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
-                    if (v != null) v.vibrate(new long[]{0, 40, 60, 40}, -1);
-                } catch (Exception ignored) {}
-                NativeLiveService.start(CrewAccessibilityService.this);
-                break;
-            }
-        }
-    }
-
+    @Deprecated
     public void stopNativeWakeWordListener() {
-        wakeWordActive = false;
-        mainHandler.post(new Runnable() {
-            @Override public void run() {
-                if (wakeRecognizer != null) {
-                    try {
-                        wakeRecognizer.stopListening();
-                        wakeRecognizer.destroy();
-                    } catch (Exception ignored) {}
-                    wakeRecognizer = null;
-                }
-            }
-        });
+        NativeLiveService.suspendIdleWakeIfRunning();
     }
 
     private AccessibilityNodeInfo findClickableAncestor(AccessibilityNodeInfo node) {

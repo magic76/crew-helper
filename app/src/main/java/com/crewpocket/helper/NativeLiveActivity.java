@@ -869,6 +869,7 @@ public class NativeLiveActivity extends Activity {
             client = null;
             handler.removeCallbacks(connectionWatchdog);
             handler.removeCallbacks(reconnectRunnable);
+            NativeLiveService.resumeIdleWakeIfRunning();
             updateCallButtonUi(false);
             updateStatus(CrewTheme.TEXT_MUTED, "通話已結束");
             refreshAssistantControls();
@@ -883,6 +884,7 @@ public class NativeLiveActivity extends Activity {
         AppConfig.setGeminiApiKey(this, key);
         callRequested = true;
         reconnectAttempts = 0;
+        NativeLiveService.suspendIdleWakeIfRunning();
         startClient(key);
     }
 
@@ -918,10 +920,12 @@ public class NativeLiveActivity extends Activity {
                             client = null;
                             handler.removeCallbacks(reconnectRunnable);
                             handler.removeCallbacks(connectionWatchdog);
+                            NativeLiveService.resumeIdleWakeIfRunning();
                             updateStatus(CrewTheme.TEXT_MUTED, reason);
                             updateCallButtonUi(false);
                             refreshAssistantControls();
                         } else if (!callRequested) {
+                            NativeLiveService.resumeIdleWakeIfRunning();
                             updateStatus(CrewTheme.TEXT_MUTED, reason);
                             handler.removeCallbacks(connectionWatchdog);
                             updateCallButtonUi(false);
@@ -934,6 +938,7 @@ public class NativeLiveActivity extends Activity {
                             handler.postDelayed(reconnectRunnable, 900L * reconnectAttempts);
                         } else {
                             callRequested = false;
+                            NativeLiveService.resumeIdleWakeIfRunning();
                             updateStatus(CrewTheme.ROSE_400, "重連 3 次仍失敗：" + reason);
                             handler.removeCallbacks(connectionWatchdog);
                             updateCallButtonUi(false);
@@ -1050,6 +1055,7 @@ public class NativeLiveActivity extends Activity {
         if (client != null) client.stop();
         handler.removeCallbacks(connectionWatchdog);
         handler.removeCallbacks(reconnectRunnable);
+        NativeLiveService.resumeIdleWakeIfRunning();
         super.onDestroy();
     }
 }
