@@ -286,7 +286,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     boolean sendText(String text) {
         if (!running || webSocket == null || text == null || text.trim().isEmpty()) return false;
         try {
-            processMemoryRuleInput(text.trim());
+            boolean correctionInput = correctionWindowActive && System.currentTimeMillis() <= correctionWindowUntil;
+            if (correctionInput) consumeCorrectionWindowOnUserSpeech(text.trim());
+            if (!correctionInput) processMemoryRuleInput(text.trim());
             JSONObject part = new JSONObject().put("text", text.trim());
             JSONObject turn = new JSONObject().put("role", "user").put("parts", new JSONArray().put(part));
             boolean sent = webSocket.send(new JSONObject().put("clientContent", new JSONObject()
@@ -589,9 +591,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if (inputTranscript != null && !inputTranscript.optString("text").isEmpty()) {
             String inputText = inputTranscript.optString("text");
             listener.onTranscript("你", inputText);
-            processMemoryRuleInput(inputText);
             if (isStopAgentTaskPhrase(inputText)) cancelAgentTask("使用者語音停止任務");
+            boolean correctionInput = correctionWindowActive && System.currentTimeMillis() <= correctionWindowUntil;
             consumeCorrectionWindowOnUserSpeech(inputText);
+            if (!correctionInput) processMemoryRuleInput(inputText);
         }
         JSONObject outputTranscript = server.optJSONObject("outputTranscription");
         if (outputTranscript == null) outputTranscript = server.optJSONObject("output_transcription");
@@ -669,7 +672,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             }
             if (isMemoryRuleRequest(inputText)) {
                 reportStage("Memory Rule 尚缺觸發語句或操作內容");
-                sendInternalAgentDirective("【Memory Rule 系統】使用者要求記住規則，但尚未提供完整 trigger 與 action。請只問一句：「以後你說哪一句話時，要我做什麼？」在 save_memory_rule 成功前，絕不可說已記住。");
+                sendInternalAgentDirective("【Memory Rule 系統】使用者要求建立規則，但尚未提供完整 trigger 與 action。請只問一句：「以後你說哪一句話時，要我做什麼？」在原生系統確認已儲存前，絕不可說已記住。");
                 return;
             }
             MemoryRuleStore.Rule matched = store.findExact(inputText);
@@ -706,7 +709,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
     private boolean isMemoryRuleRequest(String text) {
         String clean = text == null ? "" : text.replaceAll("\\s+", "");
-        return clean.contains("記住") || clean.contains("記憶") || clean.toLowerCase(Locale.ROOT).contains("memoryrule");
+        String lower = clean.toLowerCase(Locale.ROOT);
+        return lower.contains("memoryrule") || clean.contains("建立規則") || clean.contains("新增規則") || clean.contains("記住一條規則") || clean.contains("記憶一條規則") || clean.contains("幫我記住一條規則") || clean.contains("幫我記憶一條規則");
     }
 
     private static String mapToSupportedVoice(String name) {
@@ -760,7 +764,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 + "【Icon】沒有文字不代表沒有語意。先使用 contentDescription、viewId、role、hierarchy、Learned UI Mapping；仍不足才使用 Vision。只有 semantic screen 回報 visionRecommended=true，或 canvas/custom UI 無法由 Accessibility 表達時，才 screenshot/vision。"
                 + "【Working Context】只維護短期 goal/current app/current screen/last actions/last result/pending task，用來理解『繼續』『上一個』『不是這個』『回去剛才那頁』；不得把它當成新的操作授權。"
                 + "【工具邊界與授權】只有使用者本輪最新一句明確口令要求操作手機時，才可呼叫手機工具；過去對話、推測或一般問題絕不可授權操作。一般問題直接回答。"
-                + "【Memory Rule】使用者要求『記住／記憶一個規則』時，必須呼叫 save_memory_rule(trigger, action)；只有 tool 回傳 success=true 才可說已記住。若缺 trigger 或 action，先問一句最小澄清，絕不可只存入 session 或口頭承諾。原生系統也可能送來「Memory Rule 系統」或「Memory Rule 命中」控制訊息；命中時必須依規則的 action 規劃工具操作，而不是把規則只當成聊天記憶。仍不得繞過安全確認、私密資料保護或畫面驗證。"
+                + "【Memory Rule】持久規則由 Android Runtime 寫入，模型沒有寫入權限。一般糾正、偏好、事實，以及『記住這個／記得這個』都不是 Memory Rule；不得因此說『我記住了』『我會記得』。只有收到原生【Memory Rule 系統】明確告知『已永久儲存規則』時，才可簡短說『規則已儲存』。使用者糾正操作也不等於建立持久規則。"
                 + "【安全防護】絕對禁止刪除、付款、購買、修改帳戶、輸入密碼、OTP、簡訊驗證碼；遇到此類敏感操作一律停止並語音提示使用者自行操作。"
                 + "【手機操作三層架構】"
                 + "1. 第一層（系統原生優先）：開啟 App（如『打開幣安』『開 Chrome』）一律呼叫 launch_app(app='...') 直接啟動，絕不在桌面滑動翻頁找圖示。若找到多個相近 App，系統會列出候選清單（如 1. 幣安 2. 幣安合約），請簡短詢問使用者要開哪一個；當使用者回答『第一個』、『第2個』或特定名稱時，直接呼叫 launch_app(index=1) 或 launch_app(app='第一個') 啟動。系統按鍵（首頁、返回、多工、通知列、快捷設定）一律呼叫 press_key。"
@@ -817,11 +821,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 .put("package_name", new JSONObject().put("type", "STRING").put("description", "Optional exact package name if known from previous candidate list"));
         tools.put(new JSONObject().put("name", "launch_app").put("description", "Open an installed Android app directly by name (e.g. 'Binance', 'LINE', 'Chrome', 'Settings') or by ordinal index (e.g. 第一個/1). Always use this instead of looking for icons on launcher.")
                 .put("parameters", new JSONObject().put("type", "OBJECT").put("properties", launchProperties)));
-        tools.put(new JSONObject().put("name", "save_memory_rule").put("description", "Persist an explicitly user-taught voice rule. Call only after the user provided both the exact trigger phrase and the action intent; do not claim it was remembered until this returns success.")
-                .put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject()
-                        .put("trigger", new JSONObject().put("type", "STRING").put("description", "Exact phrase the user will say next time"))
-                        .put("action", new JSONObject().put("type", "STRING").put("description", "What the assistant should do when the phrase is spoken")))
-                        .put("required", new JSONArray().put("trigger").put("action"))));
         tools.put(new JSONObject().put("name", "list_memory_rules").put("description", "List persisted Memory Rules when the user asks what has been remembered."));
         tools.put(new JSONObject().put("name", "press_key").put("description", "Trigger an Android system key or action.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("key", new JSONObject().put("type", "STRING").put("enum", new JSONArray().put("HOME").put("BACK").put("RECENTS").put("NOTIFICATIONS").put("QUICK_SETTINGS").put("POWER_DIALOG")))).put("required", new JSONArray().put("key"))));
         tools.put(new JSONObject().put("name", "inspect_ui").put("description",
@@ -963,7 +962,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             else if ("start_screen_monitor".equals(name)) result = startScreenMonitor(args);
             else if ("list_active_schedules".equals(name)) result = listSchedules();
             else if ("cancel_schedule".equals(name)) result = cancelSchedule(args);
-            else if ("save_memory_rule".equals(name)) result = saveMemoryRule(args);
+            else if ("save_memory_rule".equals(name)) result.put("success", false).put("error", "MEMORY_RULE_WRITES_ARE_RUNTIME_ONLY");
             else if ("list_memory_rules".equals(name)) result = listMemoryRules();
             else if ("end_voice_session".equals(name)) {
                 result.put("success", true).put("message", "語音通話即將結束");

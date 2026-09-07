@@ -1358,10 +1358,9 @@ public class FloatingBubbleManager {
                         muteBg.setStroke(dp(2), Color.parseColor("#F43F5E")); // Rose 500
                         voiceMuteButton.setIcon(DockIconButton.ICON_MIC_MUTED, Color.parseColor("#FECDD3"));
                     } else {
-                        // 🎙️ State 3: Live microphone is open. Red makes the
-                        // listening state unmistakable from the desktop bubble.
-                        muteBg.setColor(Color.parseColor("#DC2626")); // Red 600
-                        muteBg.setStroke(dp(2), Color.parseColor("#FCA5A5")); // Red 300
+                        // 🎙️ State 3: Listening / Active -> Teal 600 (Tap to mute)
+                        muteBg.setColor(Color.parseColor("#0D9488")); // Teal 600
+                        muteBg.setStroke(dp(2), Color.parseColor("#2DD4BF")); // Teal 400
                         voiceMuteButton.setIcon(DockIconButton.ICON_MIC_ACTIVE, Color.WHITE);
                     }
                     voiceMuteButton.setBackground(muteBg);
