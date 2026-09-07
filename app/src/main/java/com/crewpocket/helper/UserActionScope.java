@@ -13,6 +13,14 @@ final class UserActionScope {
     private boolean openSearchResultAuthorized;
     private boolean searchQueryEntered;
     private long updatedAtMs;
+    private boolean endCallAuthorized;
+
+    synchronized boolean consumeEndCallAuthorization() {
+        expireIfNeeded();
+        boolean authorized = endCallAuthorized;
+        endCallAuthorized = false;
+        return authorized;
+    }
 
     synchronized void updateFromUserText(String text) {
         update(text);
@@ -24,6 +32,20 @@ final class UserActionScope {
 
     private void update(String text) {
         String value = normalize(text);
+        // Fail closed on negated/quoted discussions of actions. A later explicit
+        // instruction can grant a fresh capability; previous grants never survive.
+        if (containsAny(value, "不要", "別", "不用", "取消", "停止", "怎麼", "如何", "如果", "假如",
+                "don't", "dont", "do not", "never", "cancel", "stop", "how to", "if ")) {
+            sendAuthorized = false;
+            endCallAuthorized = false;
+            searchIntent = false;
+            openSearchResultAuthorized = false;
+            searchQueryEntered = false;
+            updatedAtMs = System.currentTimeMillis();
+            return;
+        }
+        endCallAuthorized = value.matches("(?:請|幫我|请|帮我)?(?:結束通話|结束通话|掛斷電話|挂断电话|退出語音助理|退出语音助理)(?:吧|謝謝|谢谢)?")
+                || value.matches("(?:please)?(?:endthecall|hangup|exitthevoiceassistant)(?:please)?");
         boolean send = hasExplicitSendIntent(value);
         boolean search = hasSearchIntent(value);
         boolean open = hasExplicitOpenIntent(value);
@@ -79,6 +101,7 @@ final class UserActionScope {
         long age = System.currentTimeMillis() - updatedAtMs;
         if (updatedAtMs == 0L || age < 0L || age > SCOPE_TTL_MS) {
             sendAuthorized = false;
+            endCallAuthorized = false;
             searchIntent = false;
             openSearchResultAuthorized = false;
             searchQueryEntered = false;

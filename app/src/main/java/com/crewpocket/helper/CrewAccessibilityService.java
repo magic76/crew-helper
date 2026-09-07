@@ -889,6 +889,10 @@ public class CrewAccessibilityService extends AccessibilityService {
                                     error[0] = "ELEMENT_NOT_CLICKABLE";
                                     return;
                                 }
+                                if (SensitiveDataGuard.isBlockedAction(clickable)) {
+                                    error[0] = "SENSITIVE_TARGET_BLOCKED";
+                                    return;
+                                }
                                 ok[0] = clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK);
                                 if (!ok[0]) error[0] = "SEMANTIC_CLICK_REJECTED";
                             } catch (Exception e) {
@@ -1003,6 +1007,7 @@ public class CrewAccessibilityService extends AccessibilityService {
     }
 
     private void performTap(float x, float y) {
+        if (evaluateTapPolicy(x, y).blocked()) return;
         Path path = new Path();
         path.moveTo(x, y);
         GestureDescription.Builder builder = new GestureDescription.Builder();
@@ -1029,6 +1034,7 @@ public class CrewAccessibilityService extends AccessibilityService {
             }
             if (target == null) return false;
             try {
+                if (SensitiveDataGuard.isBlockedAction(target)) return false;
                 Rect bounds = new Rect();
                 target.getBoundsInScreen(bounds);
                 boolean clicked = target.performAction(AccessibilityNodeInfo.ACTION_CLICK);
@@ -1692,11 +1698,12 @@ public class CrewAccessibilityService extends AccessibilityService {
 
     private PolicyEngine.Result evaluateTapPolicy(float x, float y) {
         AccessibilityNodeInfo root = getRootInActiveWindow();
-        if (root == null) return PolicyEngine.evaluate("click", "", "", false);
+        if (root == null) return new PolicyEngine.Result(PolicyEngine.Decision.BLOCK, "no observable tap target");
         try {
             AccessibilityNodeInfo target = findActionNodeAtPoint(root, Math.round(x), Math.round(y));
-            if (target == null) return PolicyEngine.evaluate("click", "", "", false);
+            if (target == null) return new PolicyEngine.Result(PolicyEngine.Decision.BLOCK, "unidentified coordinate target requires manual operation");
             try {
+                if (SensitiveDataGuard.isBlockedAction(target)) return new PolicyEngine.Result(PolicyEngine.Decision.BLOCK, "sensitive target");
                 String text = target.getText() == null ? "" : target.getText().toString();
                 String desc = target.getContentDescription() == null ? "" : target.getContentDescription().toString();
                 String id = target.getViewIdResourceName() == null ? "" : target.getViewIdResourceName().toString();
@@ -1706,7 +1713,7 @@ public class CrewAccessibilityService extends AccessibilityService {
                 target.recycle();
             }
         } catch (Exception ignored) {
-            return PolicyEngine.evaluate("click", "", "", false);
+            return new PolicyEngine.Result(PolicyEngine.Decision.BLOCK, "target safety inspection failed");
         } finally {
             root.recycle();
         }

@@ -126,6 +126,12 @@ final class SendTextTransaction {
             try {
                 send = environment.resolveSendButton(root);
                 if (send != null) {
+                    if (SensitiveDataGuard.isBlockedAction(send)) {
+                        recycle(send);
+                        send = null;
+                        result.error = "SENSITIVE_TARGET_BLOCKED";
+                        return result;
+                    }
                     // 0020: if a semantic/learned Send target exists, attempt it ONCE.
                     // Do not immediately fall back to IME merely because ACTION_CLICK
                     // returned false; some apps can execute while returning false.

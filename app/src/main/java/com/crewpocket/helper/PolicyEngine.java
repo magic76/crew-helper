@@ -21,6 +21,9 @@ final class PolicyEngine {
     static Result evaluate(String action, String label, String id, boolean sensitiveTarget) {
         String a = lower(action);
         String target = lower((label == null ? "" : label) + " " + (id == null ? "" : id));
+        if (sensitiveTarget || ActionSafetyPolicy.blocks(target)) {
+            return new Result(Decision.BLOCK, "sensitive or destructive target requires manual operation");
+        }
 
         if ("type".equals(a) && sensitiveTarget) {
             return new Result(Decision.BLOCK, "credential input is blocked");

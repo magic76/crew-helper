@@ -60,7 +60,24 @@ final class SensitiveDataGuard {
      * accidentally disabling ordinary message/search/composer input.
      */
     static boolean isHardBlockedInput(AccessibilityNodeInfo node) {
-        return node != null && (node.isPassword() || isPasswordInputType(node.getInputType()));
+        return node != null && (node.isPassword() || isPasswordInputType(node.getInputType())
+                || containsSensitiveFieldMarker(node.getViewIdResourceName())
+                || containsSensitiveFieldMarker(String.valueOf(node.getContentDescription()))
+                || (node.isEditable() && containsSensitiveFieldMarker(String.valueOf(node.getText()))));
+    }
+
+    static boolean isBlockedAction(AccessibilityNodeInfo node) {
+        if (node == null) return true;
+        if (isHardBlockedInput(node)) return true;
+        if (PolicyEngine.evaluate("click", String.valueOf(node.getText()) + " "
+                + node.getContentDescription(), node.getViewIdResourceName(), false).blocked()) return true;
+        for (int i = 0; i < node.getChildCount(); i++) {
+            AccessibilityNodeInfo child = node.getChild(i);
+            if (child == null) continue;
+            try { if (isBlockedAction(child)) return true; }
+            finally { child.recycle(); }
+        }
+        return false;
     }
 
     static boolean isSensitiveNode(AccessibilityNodeInfo node) {

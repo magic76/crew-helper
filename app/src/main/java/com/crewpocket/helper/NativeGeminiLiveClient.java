@@ -119,6 +119,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private volatile String latestSemanticFingerprint = "";
     private final WorkingContext workingContext = new WorkingContext();
     private final UserActionScope userActionScope = new UserActionScope();
+    private String authorizationTranscript = "";
     private volatile PendingCondition pendingCondition = null;
 
     NativeGeminiLiveClient(String apiKey, Listener listener) { this(apiKey, "", AppConfig.DEFAULT_VOICE, "auto", 35, "warm", "", 55, "call", listener); }
@@ -577,12 +578,17 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         JSONObject inputTranscript = server == null ? null : server.optJSONObject("inputTranscription");
         if (inputTranscript == null && server != null) inputTranscript = server.optJSONObject("input_transcription");
         if (inputTranscript != null && !inputTranscript.optString("text").isEmpty()) {
-            userActionScope.updateFromUserText(inputTranscript.optString("text"));
+            String fragment = inputTranscript.optString("text");
+            authorizationTranscript = fragment.startsWith(authorizationTranscript)
+                    ? fragment : authorizationTranscript + fragment;
+            if (authorizationTranscript.length() > 4096) authorizationTranscript = fragment;
+            userActionScope.updateFromUserText(authorizationTranscript);
         }
 
         JSONObject toolCall = response.optJSONObject("toolCall");
         if (toolCall == null) toolCall = response.optJSONObject("tool_call");
         if (toolCall != null) {
+            authorizationTranscript = "";
             JSONArray calls = toolCall.optJSONArray("functionCalls");
             if (calls == null) calls = toolCall.optJSONArray("function_calls");
             if (calls != null) {
@@ -617,6 +623,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         JSONObject turn = server.optJSONObject("modelTurn");
         if (turn == null) turn = server.optJSONObject("model_turn");
         if (turn != null) {
+            authorizationTranscript = "";
             markAgentModelResponse();
             // Continuous camera/screen frames must not arrive while Gemini is
             // producing this answer, otherwise they can trigger a duplicate turn.
@@ -771,41 +778,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         setup.put("outputAudioTranscription", new JSONObject());
         setup.put("tools", new JSONArray().put(new JSONObject().put("functionDeclarations", buildToolDeclarations())));
         String customPrompt = this.customPrompt;
-        String baseInstruction = "你是 Crew Helper 的原生即時語音助理。你的定位是高階『規劃者 (Planner) 與意圖解讀者』。自然、準確、極簡地回應；最終回答一律以 AUDIO 語音說出。"
-                + "【少廢話規則】不要對控制事件、打斷、等待、工具取消、UI 展開/收合做口頭確認。禁止無資訊量的『好的』『了解』『沒問題』『你繼續』。只有使用者真正提出內容、需要最小澄清、或任務有最終結果時才開口。"
-                + "【Interrupt + Correction】打斷本身是本地控制事件，不是對話事件。當之後收到 Deferred Correction Context 時，直接處理最新使用者意圖，不要確認『你剛剛打斷我』。省略式修正應承接最近目標；完整且不相關的新命令視為新目標。"
-                + "【Goal 與 Task】一次 Live 通話可包含多個 Conversation Goal；一個 Goal 可包含多個 Agent execution task、follow-up 與 correction。工具安全 budget（timeout、max steps、mutation 上限、screenshot 上限）一律針對單一 execution task 重新計算，不是整通電話共用。不要因為同一 Goal 的 follow-up 就沿用上一個 task 已消耗的 budget，也不要因為 budget 重置而重做上一個已完成/已取消的 mutation。"
-                + "【Semantic Agent Loop】手機操作必須遵守 Observe → one Action → Observe → Verify → Next。每次 mutation 後先取得新的 semantic screen，再決定下一步；禁止一次規劃十個 tap/swipe 並盲跑。優先使用 Accessibility semantic element（文字、contentDescription、role、resource id、clickable、列表結構）；能 tap element 就不要猜座標。"
-                + "【等待與 continuation】如果使用者說『打字後等等』『等結果』『等它載入』『看看會不會出現』，不能把 type/tap 成功視為整個任務完成。應建立 pending condition，讓 runtime 等待畫面變化或 element 出現，再把最新 observe 交回 planner。wait 不是單純 sleep，而是 condition wait。"
-                + "【Icon】沒有文字不代表沒有語意。先使用 contentDescription、viewId、role、hierarchy、Learned UI Mapping；仍不足才使用 Vision。只有 semantic screen 回報 visionRecommended=true，或 canvas/custom UI 無法由 Accessibility 表達時，才 screenshot/vision。"
-                + "【Working Context】只維護短期 goal/current app/current screen/last actions/last result/pending task，用來理解『繼續』『上一個』『不是這個』『回去剛才那頁』；不得把它當成新的操作授權。"
-                + "【工具邊界與授權】只有使用者本輪最新一句明確口令要求操作手機時，才可呼叫手機工具；過去對話、推測或一般問題絕不可授權操作。一般問題直接回答。"
-                + "【任務作用域】嚴格遵守使用者最新一句的動詞邊界。『搜尋／找名字／查找』只代表把查詢輸入並顯示搜尋結果；結果出現後該任務即完成。除非最新一句另外明確說『打開／進入／選擇』，否則不得點進任何人、群組、聊天室或結果；除非最新一句明確說『傳送／回覆／發訊息』，否則更不得輸入或送出訊息。Runtime 會硬性拒絕越權動作。"
-                + "【Memory Rule】持久規則由 Android Runtime 寫入，模型沒有寫入權限。一般糾正、偏好、事實，以及『記住這個／記得這個』都不是 Memory Rule；不得因此說『我記住了』『我會記得』。單獨說『新增規則』只是要求收集觸發句與操作內容，絕不是儲存完成。只有收到原生【Memory Rule 系統】明確告知『已永久儲存規則』時，才可簡短說『規則已儲存』。使用者糾正操作也不等於建立持久規則。"
-                + "【安全防護】絕對禁止刪除、付款、購買、修改帳戶、輸入密碼、OTP、簡訊驗證碼；遇到此類敏感操作一律停止並語音提示使用者自行操作。"
-                + "【手機操作三層架構】"
-                + "1. 第一層（系統原生優先）：開啟 App（如『打開幣安』『開 Chrome』）一律呼叫 launch_app(app='...') 直接啟動，絕不在桌面滑動翻頁找圖示。若找到多個相近 App，系統會列出候選清單（如 1. 幣安 2. 幣安合約），請簡短詢問使用者要開哪一個；當使用者回答『第一個』、『第2個』或特定名稱時，直接呼叫 launch_app(index=1) 或 launch_app(app='第一個') 啟動。系統按鍵（首頁、返回、多工、通知列、快捷設定）一律呼叫 press_key。"
-                + "2. 第二層（Accessibility 語意執行）：一律以語意操作為主。點擊按鈕呼叫 tap_element(element_id='...') 或 tap_screen(label='...' 或 id='...')；滑動呼叫 swipe_screen(direction='up'|'down'|'left'|'right', distance='short'|'normal'|'long')；一般輸入但不提交時呼叫 type_text(text='...', target='...')；判斷畫面呼叫 inspect_ui；等待結果呼叫 wait。"
-                + "【原子化傳送】只要使用者明確要求『傳送/送出/回覆一段文字』，且目前已在可輸入的聊天/留言 composer 畫面，優先只呼叫 send_text(text='...')。send_text 會由 Android runtime 完成輸入、選擇 learned/semantic Send、一次性提交及本地驗證；不要再自行拆成 type_text → inspect_ui → tap send。很多 App 在輸入框空白時顯示麥克風/加號/貼圖，打字後才顯示真正 Send；送出按鈕記憶與解析必須以 composer=HAS_TEXT 狀態為準。只有 send_text 回傳 COMPOSER_NOT_FOUND / SUBMIT_TARGET_NOT_FOUND 時，才重新 inspect/replan；若 SEND_NOT_VERIFIED，不可再次送出，以免重複訊息。"
-                + "3. 第三層（Vision 視覺兜底）：只有在 inspect_ui 完全取不到有效節點（例如 Canvas 畫布、遊戲自訂 UI）時，才呼叫 take_screenshot 截圖並以座標點擊。"
-                + "【結束通話】只有使用者明確說『結束通話』、『掛斷電話』或『退出語音助理』時，才可呼叫 end_voice_session。單獨的『關閉』、『退出』、『先這樣』、『再見』、『退下』，或任何關於關閉 App／視窗／功能的話，都不是掛斷授權；應依其原本任務處理，必要時只問最小澄清。"
-                + "【定時提醒與畫面巡檢】當使用者要求計時（如『5分鐘後叫我』）呼叫 schedule_reminder；週期性檢查畫面（如『每分鐘看一次畫面跟我說』）或等待條件（如『等出現已送達時叫我』）呼叫 start_screen_monitor；查詢目前排程呼叫 list_active_schedules；取消排程呼叫 cancel_schedule。"
-                + "【Live Deck 簡報與自動導播】使用者要求講故事、教學或簡報時，先呼叫 list_decks，確認 deckId 後呼叫 open_deck。系統配備『自動簡報導播機制』：每一頁切換顯示並生動介紹；語音播報播放完畢後，系統會自動在適當時機回饋翻頁指示，請直接呼叫 advance_deck 繼續下一頁，抵達最後一頁時請作結。每次以 get_deck_card 的 speakerNotes、facts 與 allowedNext 作為內容邊界，但不可逐字死板朗讀；應依聽眾反應、時間、語氣與理解狀態靈活講解。使用者插話時優先回答，可跳到相關 cardId 或調整詳略。不得杜撰不存在的卡片、數字或圖片，也不要把內部 JSON 念給使用者。"
-                + "【Deck 動態調整】播報中使用者要求補充、簡化、重排或增加圖片時，只能改目前頁之後的卡片：用 update_deck_card 改後續內容、insert_deck_card 加入補充、remove_future_deck_card 移除重複。先 list_deck_images，僅從回傳的 assetId 使用 attach_deck_image 加入匯入圖片；不得捏造圖片、URL 或來源。修改後要簡短告知已調整後續內容，接著依新卡片繼續。"
-                + "【即席 Deck 與圖片】若使用者要求介紹一般主題、但未指定已匯入資料 Deck，先用 create_ephemeral_deck 建立 3–8 張簡潔卡片（卡片可包含合適的 HTTPS 圖片網址以豐富視覺），再逐頁同步顯示與語音介紹。即席 Deck 僅基於既有知識與本輪對話，必須在需要時清楚說明它不是即時查證資料；不可偽稱最新、引用來源或精確統計。"
-                + "【Runtime 結果權威】對 tap/type/launch/swipe/press_key 等 mutation，原生 Runtime 會在操作後重新觀察，並把最終結果收斂為 stepResult。STEP_OK 表示這一步已生效；STEP_FAILED 表示這一步未確認生效。不要自行重新解讀 Android API 的原始回傳，也不要因舊 error、progress 或預期畫面推翻 stepResult。"
-                + "【Agent 自動迴圈】收到 STEP_OK 後，只根據 after 最新畫面決定下一步；若整體任務尚未完成就繼續。收到 STEP_FAILED 才換方法，禁止原樣重複同一動作。"
-                + "【ActionRegistry 優先】inspect_ui 若回傳 actions，下一步必須優先從 actions 中挑選 CLICK/TYPE/SCROLL；除非 actions 無法完成目標，否則不得自行猜 resource id、按鈕文字或座標。"
-                + "【失敗恢復】mutation 若回傳 stepResult=STEP_FAILED，不得立刻原樣重複同一動作。先看 after 最新畫面，必要時再 inspect_ui，改用另一個 action、返回上一層、重新聚焦或改用其他語意路徑。連續兩次無進展就停止並向使用者說明卡在哪裡。"
-                + "【文字輸入分流】搜尋框、訊息 composer、一般表單是三種不同意圖，不可互相延伸。搜尋文字用 type_text 後只觀察搜尋結果，絕不可因此尋找 send/submit 或進入聊天室；訊息 composer 只有最新一句明確授權傳送/回覆時才可使用 send_text；一般表單只執行使用者明確要求的欄位與按鈕，不可自行推論提交。"
-                + "【Composer Send Resolver】輸入訊息後 inspect_ui 若 actions 中存在 role='COMPOSER_SEND' 或 label='send' 的 CLICK action，直接使用該 action；這是 Crew Helper 根據目前輸入框與按鈕幾何位置解析出的送出鍵，不要再自行猜其他圖示。"
-                + "【送出鍵安全規則】沒有 role='COMPOSER_SEND' 或明確 send/發送/送出 metadata 時，禁止只因為某個按鈕位於輸入框最右側就把它當送出；右側按鈕可能是清除 X、關閉、附件或語音。若沒有高可信度 send action，先 inspect_ui 重新確認；Accessibility 仍無法辨識時才用 screenshot/vision 判斷。"
-                + "【UI 學習機制 (Teach UI)】若多次無法在畫面中找到送出或其他重要按鈕，或使用者表示要教助理按哪裡時，呼叫 teach_ui_element(role='COMPOSER_SEND' 等) 啟動教學遮罩。教學送出按鈕時，如果輸入框仍為空白，系統會引導使用者先輸入任意文字讓真正 Send 出現，不可把 EMPTY 狀態下的麥克風/加號誤記成 COMPOSER_SEND。"
-                + "【雙點 Send 教學】COMPOSER_SEND 使用 two-point anchored learning：第一點是基準點（通常輸入框），第二點是真正 Send。執行時必須先在目前 UI 找到基準 node，再用相對 offset 尋找附近真實 clickable target；禁止直接點教學時的舊絕對座標。"
-                + "【嚴禁憑空臆測與幻決回報】執行操作（例如打開 App、點擊按鈕、輸入搜尋、切換頁面等）後，絕不可憑空想像或提前告訴使用者畫面會呈現什麼內容；必須先呼叫 inspect_ui（或 take_screenshot）親自讀取當前真實畫面，確認畫面內容與操作狀態符合預期後，才能向使用者報告實際看到的結果與結論！"
-                + "【動作執行迴圈】遵守標準闭環：『1. inspect_ui 觀察當前畫面 → 2. 決策語意動作並執行 (tap_element/tap/type/launch/swipe) → 3. 檢查自動回傳之 after 畫面或再次 inspect_ui 自我驗證 → 4. 確認已達成目標才向使用者語音回報真實內容』。"
-                + "【Context Discipline】每輪決策永遠優先最新 user turn、最新 after 與 runtimeContext；已完成或取消 task 不得污染下一個目標。"
-                + "【語氣模式】" + liveToneInstruction();
+        String baseInstruction = LivePrompt.CORE + "\nVoice style: " + liveToneInstruction()
+                + (DeckRepository.hasActiveDeck() ? "\n" + LivePrompt.DECK : "");
 
         if (customPrompt != null && !customPrompt.trim().isEmpty()) {
             baseInstruction = baseInstruction
@@ -852,9 +826,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                         .put("timeout_ms", new JSONObject().put("type", "INTEGER").put("description", "Maximum wait time in milliseconds (default 5000, max 15000)")))));
         tools.put(new JSONObject().put("name", "tap_screen").put("description", "Tap a button or UI element using its semantic label, description, resource viewId, or coordinates. Prefer tap_element over tap_screen.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("label", new JSONObject().put("type", "STRING").put("description", "The button, app icon, or text label to tap")).put("id", new JSONObject().put("type", "STRING").put("description", "Optional resource viewId (e.g. 'send_btn')")).put("x", new JSONObject().put("type", "NUMBER").put("description", "Optional X coordinate for vision fallback")).put("y", new JSONObject().put("type", "NUMBER").put("description", "Optional Y coordinate for vision fallback")).put("coordinate_space", new JSONObject().put("type", "STRING").put("enum", new JSONArray().put("image").put("normalized_1000").put("screen"))))));
         tools.put(new JSONObject().put("name", "swipe_screen").put("description", "Scroll or swipe the phone screen. Direction: up (scroll down), down (scroll up), left, right. Distance: short, normal, long.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("direction", new JSONObject().put("type", "STRING").put("enum", new JSONArray().put("up").put("down").put("left").put("right"))).put("distance", new JSONObject().put("type", "STRING").put("enum", new JSONArray().put("short").put("normal").put("long").put("page")))).put("required", new JSONArray().put("direction"))));
-        tools.put(new JSONObject().put("name", "type_text").put("description", "Type text into an input field or search bar.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("target", new JSONObject().put("type", "STRING").put("description", "Input field hint or label")).put("text", new JSONObject().put("type", "STRING").put("description", "The text to type"))).put("required", new JSONArray().put("text"))));
-        tools.put(new JSONObject().put("name", "send_text").put("description", "Atomically type, submit exactly once, and locally verify a message/reply in the currently open composer. Runtime accepts this only when the latest user turn explicitly authorized sending/replying; search/find/open requests never imply send permission.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("text", new JSONObject().put("type", "STRING").put("description", "Exact message text to send"))).put("required", new JSONArray().put("text"))));
-        tools.put(new JSONObject().put("name", "teach_ui_element").put("description", "Enter interactive UI teaching mode so user can tap and teach an unlabeled button (e.g. COMPOSER_SEND, SEARCH_SUBMIT, CONFIRM).").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("role", new JSONObject().put("type", "STRING").put("description", "The semantic role to teach, e.g. 'COMPOSER_SEND', 'SEARCH_SUBMIT', 'CONFIRM', 'NEXT'"))).put("required", new JSONArray().put("role"))));
+        tools.put(new JSONObject().put("name", "type_text").put("description", "Enter requested text without submitting. Search fields: type the query and inspect results; opening results needs separate permission. Message composer: use send_text only with explicit sending authorization.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("target", new JSONObject().put("type", "STRING").put("description", "Input field hint or label")).put("text", new JSONObject().put("type", "STRING").put("description", "The text to type"))).put("required", new JSONArray().put("text"))));
+        tools.put(new JSONObject().put("name", "send_text").put("description", "Atomically type, submit exactly once, and locally verify a message/reply in the currently open composer. First obtain explicit send permission and verify the recipient and message composer. Search/find/open never imply permission. On COMPOSER_NOT_FOUND or SUBMIT_TARGET_NOT_FOUND inspect and replan. On SEND_NOT_VERIFIED stop and report uncertainty; never resend.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("text", new JSONObject().put("type", "STRING").put("description", "Exact message text to send"))).put("required", new JSONArray().put("text"))));
+        tools.put(new JSONObject().put("name", "teach_ui_element").put("description", "Ask the user to teach an unresolved UI element. For COMPOSER_SEND the composer must contain text so the real send control is visible. Runtime manages anchor-relative learning; never replay old absolute coordinates.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("role", new JSONObject().put("type", "STRING").put("description", "The semantic role to teach, e.g. 'COMPOSER_SEND', 'SEARCH_SUBMIT', 'CONFIRM', 'NEXT'"))).put("required", new JSONArray().put("role"))));
         tools.put(new JSONObject().put("name", "schedule_reminder").put("description", "Set a countdown timer / reminder in seconds. When time is up, the assistant vibrates and announces the message.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("delay_seconds", new JSONObject().put("type", "NUMBER").put("description", "Delay in seconds, e.g. 300 for 5 minutes")).put("message", new JSONObject().put("type", "STRING").put("description", "Reminder text to speak when timer expires")).put("label", new JSONObject().put("type", "STRING").put("description", "Short label for the timer"))).put("required", new JSONArray().put("delay_seconds"))));
         tools.put(new JSONObject().put("name", "start_screen_monitor").put("description", "Start periodic background screen checks or wait until a specific condition/text appears on screen.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("interval_seconds", new JSONObject().put("type", "NUMBER").put("description", "Interval between checks in seconds (e.g. 60)")).put("duration_minutes", new JSONObject().put("type", "NUMBER").put("description", "Total monitoring duration in minutes (default 10)")).put("target_condition", new JSONObject().put("type", "STRING").put("description", "Optional text/word to look for on screen (e.g. '已送達', '完成')")).put("label", new JSONObject().put("type", "STRING").put("description", "Short task name"))).put("required", new JSONArray().put("interval_seconds"))));
         tools.put(new JSONObject().put("name", "list_active_schedules").put("description", "List all currently active timers, background screen monitors, and countdowns with their remaining time.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject())));
@@ -982,6 +956,14 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             else if ("save_memory_rule".equals(name)) result.put("success", false).put("error", "MEMORY_RULE_WRITES_ARE_RUNTIME_ONLY");
             else if ("list_memory_rules".equals(name)) result = listMemoryRules();
             else if ("end_voice_session".equals(name)) {
+                if (!userActionScope.consumeEndCallAuthorization()) {
+                    JSONObject blocked = runtimeBlocked("END_CALL_NOT_AUTHORIZED", "請使用者明確說結束通話；關閉視窗或再見不代表掛斷。");
+                    task.addStep(name, blocked);
+                    sendToolResponse(id, name, blocked);
+                    task.awaitingModel = true;
+                    scheduleAgentResponseWatchdog(task);
+                    return;
+                }
                 result.put("success", true).put("message", "語音通話即將結束");
                 sendToolResponse(id, name, result);
                 finishAgentTask(task, "通話結束", "");
@@ -2077,6 +2059,20 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     }
 
     private void sendToolResponse(String id, String name, JSONObject result) throws Exception {
+        synchronized (agentLock) {
+            if (activeAgentTask != null) {
+                AgentTaskRecord task = activeAgentTask;
+                long remainingMs = Math.max(0, AGENT_TASK_TIMEOUT_MS - (System.currentTimeMillis() - task.startedAt));
+                result.put("agentState", new JSONObject().put("taskId", task.taskId)
+                        .put("remainingSteps", Math.max(0, agentMaxSteps - task.steps))
+                        .put("remainingTimeMs", remainingMs)
+                        .put("canContinue", !task.cancelled && !task.finished && task.blockedReason == null
+                                && task.steps < agentMaxSteps && remainingMs > 0));
+            }
+        }
+        if (DeckRepository.hasActiveDeck() && (name.contains("deck"))) {
+            result.put("modeInstructions", LivePrompt.DECK);
+        }
         JSONObject item = new JSONObject().put("response", new JSONObject().put("result", result)).put("id", id).put("name", name);
         if (webSocket == null || !webSocket.send(new JSONObject().put("toolResponse", new JSONObject().put("functionResponses", new JSONArray().put(item))).toString())) {
             throw new Exception("工具結果無法傳回 Gemini");
