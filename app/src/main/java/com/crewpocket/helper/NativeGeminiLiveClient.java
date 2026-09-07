@@ -242,6 +242,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             conversationGoalId = "goal_" + now;
             conversationGoalTaskIndex = 0;
             conversationGoalHint = "";
+            workingContext.resetTransientForNewGoal();
+            consecutiveNoProgress = 0;
+            pendingCondition = null;
+            lastCandidateApps.clear();
         }
         conversationGoalTouchedAt = now;
         if (safeHint != null && !safeHint.trim().isEmpty()) {
@@ -736,7 +740,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         setup.put("generationConfig", generation);
         // Match the web Live session: its context is continuously compressed,
         // and Gemini can renew the socket before the upstream lifetime expires.
-        setup.put("contextWindowCompression", new JSONObject().put("slidingWindow", new JSONObject()));
+        setup.put("contextWindowCompression", new JSONObject().put("triggerTokens", "25000")
+                .put("slidingWindow", new JSONObject().put("targetTokens", "10000")));
         if (resumptionHandle != null && !resumptionHandle.isEmpty()) {
             setup.put("sessionResumption", new JSONObject().put("handle", resumptionHandle));
         } else {
@@ -778,6 +783,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 + "【雙點 Send 教學】COMPOSER_SEND 使用 two-point anchored learning：第一點是基準點（通常輸入框），第二點是真正 Send。執行時必須先在目前 UI 找到基準 node，再用相對 offset 尋找附近真實 clickable target；禁止直接點教學時的舊絕對座標。"
                 + "【嚴禁憑空臆測與幻決回報】執行操作（例如打開 App、點擊按鈕、輸入搜尋、切換頁面等）後，絕不可憑空想像或提前告訴使用者畫面會呈現什麼內容；必須先呼叫 inspect_ui（或 take_screenshot）親自讀取當前真實畫面，確認畫面內容與操作狀態符合預期後，才能向使用者報告實際看到的結果與結論！"
                 + "【動作執行迴圈】遵守標準闭環：『1. inspect_ui 觀察當前畫面 → 2. 決策語意動作並執行 (tap_element/tap/type/launch/swipe) → 3. 檢查自動回傳之 after 畫面或再次 inspect_ui 自我驗證 → 4. 確認已達成目標才向使用者語音回報真實內容』。"
+                + "【Context Discipline】每輪決策永遠優先最新 user turn、最新 after 與 runtimeContext；已完成或取消 task 不得污染下一個目標。"
                 + "【語氣模式】" + liveToneInstruction();
 
         if (customPrompt != null && !customPrompt.trim().isEmpty()) {
@@ -1457,13 +1463,13 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             if (met) {
                 latestSemanticFingerprint = fp;
                 semanticObserveRequired = false;
-                workingContext.observe(last.optString("package", ""), fp);
+                workingContext.observe(last.optString("package", ""), fp, last.optString("stableScreenKey", ""));
                 workingContext.setPendingTask("");
                 pendingCondition = null;
                 try {
                     last.put("conditionMet", true)
                         .put("condition", type.name())
-                        .put("workingContext", workingContext.toJson());
+                        .put("runtimeContext", workingContext.toModelJson());
                 } catch (Exception ignored) {}
                 return last;
             }
@@ -1475,7 +1481,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                .put("conditionMet", false)
                .put("condition", type.name())
                .put("timeout", true)
-               .put("workingContext", workingContext.toJson());
+               .put("runtimeContext", workingContext.toModelJson());
         } catch (Exception ignored) {}
         pendingCondition = null;
         workingContext.setPendingTask("");
@@ -1583,7 +1589,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             String fp = after.optString("fingerprint", "");
             latestSemanticFingerprint = fp;
             semanticObserveRequired = false;
-            workingContext.observe(after.optString("package", ""), fp);
+            workingContext.observe(after.optString("package", ""), fp, after.optString("stableScreenKey", ""));
         } else {
             semanticObserveRequired = true;
         }
@@ -1618,7 +1624,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             }
 
             workingContext.updateLastResult(finalSuccess ? "STEP_OK" : "STEP_FAILED");
-            actionResult.put("workingContext", workingContext.toJson());
+            actionResult.put("runtimeContext", workingContext.toModelJson());
         } catch (Exception ignored) {}
 
         return actionResult;
@@ -1630,8 +1636,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if (reply.optBoolean("success", false)) {
             latestSemanticFingerprint = reply.optString("fingerprint", "");
             semanticObserveRequired = false;
-            workingContext.observe(reply.optString("package", ""), latestSemanticFingerprint);
-            try { reply.put("workingContext", workingContext.toJson()); } catch (Exception ignored) {}
+            workingContext.observe(reply.optString("package", ""), latestSemanticFingerprint, reply.optString("stableScreenKey", ""));
+            try { reply.put("runtimeContext", workingContext.toModelJson()); } catch (Exception ignored) {}
         }
         return reply;
     }

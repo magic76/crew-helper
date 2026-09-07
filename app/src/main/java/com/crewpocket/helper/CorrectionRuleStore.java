@@ -22,6 +22,7 @@ final class CorrectionRuleStore {
     private static final String PREFS = "crew_correction_rules";
     private static final String KEY_RULES = "rules_v1";
     private static final int MAX_RULES = 200;
+    private static final int WRONG_TAP_TOLERANCE_PX = 48;
 
     static final class Rule {
         String id = "";
@@ -121,7 +122,7 @@ final class CorrectionRuleStore {
         String pkg = safe(packageName);
         String screen = safe(screenFingerprint);
         String tool = normalizeTool(wrongTool);
-        String argSignature = signature(tool, wrongArgs);
+        JSONObject normalizedWrongArgs = sanitizeArgs(tool, wrongArgs);
         if (pkg.isEmpty() || screen.isEmpty() || tool.isEmpty()) return null;
 
         Rule best = null;
@@ -130,7 +131,7 @@ final class CorrectionRuleStore {
             if (!pkg.equals(r.packageName)) continue;
             if (!screen.equals(r.screenFingerprint)) continue;
             if (!tool.equals(r.wrongTool)) continue;
-            if (!argSignature.equals(r.wrongArgs)) continue;
+            if (!wrongArgsMatch(tool, normalizedWrongArgs, r.wrongArgs)) continue;
             if (r.failureCount >= 2 && r.failureCount > r.successCount) continue;
             if (best == null || r.confidence() > best.confidence()) best = r;
         }
@@ -305,6 +306,7 @@ final class CorrectionRuleStore {
         return out;
     }
 
+    private static boolean wrongArgsMatch(String tool, JSONObject requested, String raw) { try { JSONObject stored=sanitizeArgs(tool,new JSONObject(raw==null?"{}":raw)); if (!"tap_screen".equals(normalizeTool(tool))) return requested.toString().equals(stored.toString()); String id=requested.optString("id",""); if(!id.isEmpty()||!stored.optString("id","").isEmpty()) return id.equals(stored.optString("id", "")); String label=requested.optString("label",""); if(!label.isEmpty()||!stored.optString("label","").isEmpty()) return label.equalsIgnoreCase(stored.optString("label", "")); return requested.has("x")&&requested.has("y")&&Math.abs(requested.optInt("x")-stored.optInt("x"))<=WRONG_TAP_TOLERANCE_PX&&Math.abs(requested.optInt("y")-stored.optInt("y"))<=WRONG_TAP_TOLERANCE_PX; } catch(Exception e){return false;} }
     static String signature(String tool, JSONObject args) {
         return sanitizeArgs(tool, args).toString();
     }

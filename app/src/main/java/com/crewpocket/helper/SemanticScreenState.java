@@ -31,6 +31,7 @@ final class SemanticScreenState {
             out.put("success", true)
                .put("package", root.getPackageName() == null ? "" : root.getPackageName().toString())
                .put("fingerprint", ScreenFingerprint.create(root))
+               .put("stableScreenKey", StableScreenKey.create(root))
                .put("elements", elements)
                .put("elementCount", elements.length())
                .put("actionableCount", stats.actionable)

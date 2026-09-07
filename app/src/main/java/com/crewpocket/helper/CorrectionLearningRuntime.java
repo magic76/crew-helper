@@ -107,9 +107,11 @@ final class CorrectionLearningRuntime {
         }
 
         String pkg = contextString(beforeContext, "currentApp");
-        String screen = contextString(beforeContext, "currentScreen");
+        String screen = screenMatchKey(beforeContext);
+        String legacyScreen = contextString(beforeContext, "currentScreen");
         CorrectionRuleStore.Rule rule =
                 store.findBest(pkg, screen, requestedTool, requestedArgs);
+        if (rule == null && !legacyScreen.isEmpty() && !legacyScreen.equals(screen)) rule = store.findBest(pkg, legacyScreen, requestedTool, requestedArgs);
         if (rule == null) {
             return Decision.none(requestedTool, requestedArgs);
         }
@@ -149,7 +151,7 @@ final class CorrectionLearningRuntime {
 
         MutationSnapshot current = new MutationSnapshot();
         current.packageName = contextString(beforeContext, "currentApp");
-        current.screenFingerprint = contextString(beforeContext, "currentScreen");
+        current.screenFingerprint = screenMatchKey(beforeContext);
         current.requestedTool = requestedTool == null ? "" : requestedTool;
         current.requestedArgs =
                 CorrectionRuleStore.sanitizeArgs(requestedTool, requestedArgs);
@@ -228,6 +230,7 @@ final class CorrectionLearningRuntime {
         }
     }
 
+    private static String screenMatchKey(JSONObject context) { String stable=contextString(context, "stableScreen"); return stable.isEmpty()?contextString(context,"currentScreen"):stable; }
     private static String contextString(JSONObject context, String key) {
         return context == null ? "" : context.optString(key, "").trim();
     }

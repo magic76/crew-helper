@@ -10,18 +10,23 @@ final class WorkingContext {
     private String userGoal = "";
     private String currentApp = "";
     private String currentScreenFingerprint = "";
+    private String currentStableScreenKey = "";
     private String previousScreenFingerprint = "";
     private String lastResult = "";
     private String pendingTask = "";
     private final ArrayDeque<String> lastActions = new ArrayDeque<String>();
 
     synchronized void observe(String app, String fingerprint) {
+        observe(app, fingerprint, "");
+    }
+    synchronized void observe(String app, String fingerprint, String stableScreenKey) {
         String next = safe(fingerprint);
         if (!next.equals(currentScreenFingerprint) && !currentScreenFingerprint.isEmpty()) {
             previousScreenFingerprint = currentScreenFingerprint;
         }
         currentApp = safe(app);
         currentScreenFingerprint = next;
+        currentStableScreenKey = safe(stableScreenKey);
     }
 
     synchronized void setGoalHint(String value) { userGoal = safe(value); }
@@ -45,6 +50,7 @@ final class WorkingContext {
             out.put("userGoal", userGoal)
                .put("currentApp", currentApp)
                .put("currentScreen", currentScreenFingerprint)
+               .put("stableScreen", currentStableScreenKey)
                .put("previousScreen", previousScreenFingerprint)
                .put("lastActions", actions)
                .put("lastResult", lastResult)
@@ -52,11 +58,14 @@ final class WorkingContext {
         } catch (Exception ignored) {}
         return out;
     }
+    synchronized JSONObject toModelJson() { JSONObject out=new JSONObject(); try { if(!currentApp.isEmpty())out.put("currentApp",currentApp); if(!currentScreenFingerprint.isEmpty())out.put("currentScreen",currentScreenFingerprint); if(!lastResult.isEmpty())out.put("lastResult",lastResult); if(!pendingTask.isEmpty())out.put("pendingTask",pendingTask); } catch(Exception ignored){} return out; }
+    synchronized void resetTransientForNewGoal() { userGoal=""; previousScreenFingerprint=""; lastResult=""; pendingTask=""; lastActions.clear(); }
 
     synchronized void clear() {
         userGoal = "";
         currentApp = "";
         currentScreenFingerprint = "";
+        currentStableScreenKey = "";
         previousScreenFingerprint = "";
         lastResult = "";
         pendingTask = "";

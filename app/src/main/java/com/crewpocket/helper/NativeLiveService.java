@@ -53,6 +53,7 @@ public class NativeLiveService extends Service {
     private final Handler visualHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService wakeExecutor = Executors.newSingleThreadExecutor();
     private SherpaWakeWordEngine wakeWordEngine;
+    private WakeAcknowledgement wakeAcknowledgement;
     private int wakeGeneration;
     private int wakeRetryAttempts;
     private boolean externalMicSuspended;
@@ -583,6 +584,7 @@ public class NativeLiveService extends Service {
         instance = this;
         serviceRunning = true;
         CorrectionLearningRuntime.init(this);
+        wakeAcknowledgement = new WakeAcknowledgement(this);
         alwaysOnEnabled = AppConfig.isAlwaysOnEnabled(this);
         DeckRepository.initialize(this);
         createChannel();
@@ -718,7 +720,7 @@ public class NativeLiveService extends Service {
 
         // Give sherpa KWS / page-owned AudioRecord a short deterministic release
         // window before Oboe opens the Live microphone.
-        visualHandler.postDelayed(new Runnable() {
+        if ("wake_word".equals(source) && wakeAcknowledgement != null) { wakeAcknowledgement.speak("在呢", new WakeAcknowledgement.Callback() { @Override public void onDone() { visualHandler.postDelayed(new Runnable() { @Override public void run() { if (active && !stopRequested) startLiveClient(); } }, 80L); } }); } else visualHandler.postDelayed(new Runnable() {
             @Override public void run() {
                 if (active && !stopRequested) startLiveClient();
             }
@@ -1149,6 +1151,8 @@ public class NativeLiveService extends Service {
         if (liveClosing != null && liveClosing.isRunning()) {
             try { liveClosing.stop(); } catch (Exception ignored) {}
         }
+        WakeAcknowledgement ackClosing = wakeAcknowledgement; wakeAcknowledgement = null;
+        if (ackClosing != null) try { ackClosing.release(); } catch (Exception ignored) {}
         super.onDestroy();
     }
 
