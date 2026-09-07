@@ -311,6 +311,34 @@ final class SherpaWakeWordEngine {
         return running;
     }
 
+    boolean isWorkerAlive() {
+        Thread t = worker;
+        return t != null && t.isAlive();
+    }
+
+    boolean isMicRecording() {
+        AudioRecord record = audioRecord;
+        if (record == null) return false;
+        try {
+            return record.getState() == AudioRecord.STATE_INITIALIZED
+                    && record.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    long getAudioReadCount() {
+        return audioReadCount;
+    }
+
+    long getDecodeCount() {
+        return decodeCount;
+    }
+
+    String getPhase() {
+        return phase;
+    }
+
     String getDiagnostics() {
         long now = SystemClock.elapsedRealtime();
         AudioRecord record = audioRecord;

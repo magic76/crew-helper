@@ -11,6 +11,7 @@ import android.os.Build;
 import android.os.IBinder;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.os.Vibrator;
 
 import java.util.concurrent.ExecutorService;
@@ -30,8 +31,15 @@ public class NativeLiveService extends Service {
     private static final String ACTION_STOP = "com.crewpocket.helper.NATIVE_LIVE_STOP";
     private static final String ACTION_ENABLE_ALWAYS_ON = "com.crewpocket.helper.ALWAYS_ON_ENABLE";
     private static final String ACTION_DISABLE_ALWAYS_ON = "com.crewpocket.helper.ALWAYS_ON_DISABLE";
+    private static final String ACTION_RESTART_WAKE = "com.crewpocket.helper.ALWAYS_ON_RESTART_WAKE";
     private static final int NOTIFICATION_ID = 8767;
     private static final String CHANNEL_ID = "crew_native_live";
+
+    private static final long WAKE_HEALTH_INTERVAL_MS = 60000L;
+    private static final int WAKE_HEALTH_STALE_LIMIT = 2;
+    private static final int WAKE_FAST_RECOVERY_MAX = 3;
+    private static final long WAKE_SLOW_PROBE_MS = 300000L;
+    private static final long LIVE_TO_WAKE_COOLDOWN_MS = 1800L;
 
     private enum RuntimeState { IDLE, ACTIVE }
 
@@ -60,6 +68,18 @@ public class NativeLiveService extends Service {
     private volatile String lastWakeError = "";
     private volatile String lastWakeEvent = "service created";
 
+    private volatile String wakeHealthState = "IDLE";
+    private volatile String wakeBlockKind = "";
+    private volatile String wakeBlockReason = "";
+    private long wakeHealthLastCheckAtMs;
+    private long wakeHealthLastReadCount = -1L;
+    private long wakeHealthLastDecodeCount = -1L;
+    private int wakeHealthStaleChecks;
+    private int wakeHealthRestartCount;
+    private int wakeFastRecoveryAttempts;
+    private int wakeSlowProbeCount;
+    private String wakeHealthLastReason = "not checked";
+
     private final Runnable reconnectRunnable = new Runnable() {
         @Override public void run() {
             if (!active || stopRequested) return;
@@ -71,6 +91,26 @@ public class NativeLiveService extends Service {
         @Override public void run() {
             if (!alwaysOnEnabled || active || externalMicSuspended) return;
             startIdleWakeWord();
+            armWakeHealthWatchdog();
+        }
+    };
+
+    private final Runnable wakeHealthRunnable = new Runnable() {
+        @Override public void run() {
+            runWakeHealthCheck();
+        }
+    };
+
+    private final Runnable wakeSlowProbeRunnable = new Runnable() {
+        @Override public void run() {
+            if (!alwaysOnEnabled || active || externalMicSuspended) return;
+            wakeSlowProbeCount++;
+            wakeHealthState = "RECOVERING";
+            wakeHealthLastReason = "slow probe #" + wakeSlowProbeCount;
+            stopIdleWakeWord();
+            resetWakeHealthBaseline("slow probe");
+            startIdleWakeWord();
+            armWakeHealthWatchdog();
         }
     };
 
@@ -83,7 +123,10 @@ public class NativeLiveService extends Service {
         if (!serviceRunning || service == null) return "STOPPED";
         if (active) return "ACTIVE";
         SherpaWakeWordEngine engine = service.wakeWordEngine;
-        return engine != null && engine.isRunning() ? "IDLE_LISTENING" : "IDLE";
+        if (engine != null && engine.isRunning()) return "IDLE_LISTENING";
+        if (!service.wakeBlockKind.isEmpty()) return "BLOCKED";
+        if ("DEGRADED".equals(service.wakeHealthState)) return "DEGRADED";
+        return "IDLE";
     }
 
     static String getWakeDiagnostics(Context context) {
@@ -116,6 +159,18 @@ public class NativeLiveService extends Service {
         out.append("\nwake.lastEvent=").append(service.lastWakeEvent);
         out.append("\nwake.lastStatus=").append(blankAsDash(service.lastWakeStatus));
         out.append("\nwake.lastError=").append(blankAsDash(service.lastWakeError));
+        out.append("\nhealth.state=").append(service.wakeHealthState);
+        out.append("\nhealth.blockKind=").append(blankAsDash(service.wakeBlockKind));
+        out.append("\nhealth.blockReason=").append(blankAsDash(service.wakeBlockReason));
+        out.append("\nhealth.intervalMs=").append(WAKE_HEALTH_INTERVAL_MS);
+        out.append("\nhealth.lastCheckAgoMs=")
+                .append(ageMs(SystemClock.elapsedRealtime(), service.wakeHealthLastCheckAtMs));
+        out.append("\nhealth.staleChecks=").append(service.wakeHealthStaleChecks);
+        out.append("\nhealth.restarts=").append(service.wakeHealthRestartCount);
+        out.append("\nhealth.fastRecoveryAttempts=").append(service.wakeFastRecoveryAttempts);
+        out.append("\nhealth.slowProbeCount=").append(service.wakeSlowProbeCount);
+        out.append("\nhealth.lastReason=").append(blankAsDash(service.wakeHealthLastReason));
+        out.append("\nhealth.liveToWakeCooldownMs=").append(LIVE_TO_WAKE_COOLDOWN_MS);
 
         SherpaWakeWordEngine engine = service.wakeWordEngine;
         out.append("\nengine.instance=").append(engine != null ? "READY" : "null");
@@ -129,6 +184,213 @@ public class NativeLiveService extends Service {
 
     private static String blankAsDash(String value) {
         return value == null || value.trim().isEmpty() ? "-" : value.trim();
+    }
+
+    private static String ageMs(long now, long timestamp) {
+        return timestamp <= 0 ? "-" : String.valueOf(Math.max(0L, now - timestamp));
+    }
+
+    static void reconcileAlwaysOn(Context context) {
+        if (context == null || !AppConfig.isAlwaysOnEnabled(context)) return;
+
+        NativeLiveService running = instance;
+        if (!serviceRunning || running == null) {
+            startServiceAction(context, ACTION_ENABLE_ALWAYS_ON, true);
+            return;
+        }
+
+        running.visualHandler.post(new Runnable() {
+            @Override public void run() {
+                if (!AppConfig.isAlwaysOnEnabled(running)) return;
+                running.alwaysOnEnabled = true;
+                if (active || running.externalMicSuspended) return;
+
+                SherpaWakeWordEngine engine = running.wakeWordEngine;
+                if (engine != null && engine.isRunning()) {
+                    running.armWakeHealthWatchdog();
+                    return;
+                }
+
+                if ("SETUP".equals(running.wakeBlockKind)) return;
+                running.restartWakeInternal("app-open reconcile", true);
+            }
+        });
+    }
+
+    private void resetWakeHealthBaseline(String reason) {
+        wakeHealthLastReadCount = -1L;
+        wakeHealthLastDecodeCount = -1L;
+        wakeHealthStaleChecks = 0;
+        wakeHealthLastReason = reason;
+    }
+
+    private void clearWakeBlock() {
+        wakeBlockKind = "";
+        wakeBlockReason = "";
+    }
+
+    private void setWakeBlock(String kind, String reason) {
+        wakeBlockKind = kind == null ? "" : kind;
+        wakeBlockReason = reason == null ? "" : reason;
+        wakeHealthState = "BLOCKED";
+        wakeHealthLastReason = "blocked " + wakeBlockKind + ": " + wakeBlockReason;
+    }
+
+    private void armWakeHealthWatchdog() {
+        visualHandler.removeCallbacks(wakeHealthRunnable);
+        if (!alwaysOnEnabled || active || externalMicSuspended) return;
+        if ("DEGRADED".equals(wakeHealthState) || "BLOCKED".equals(wakeHealthState)) return;
+        visualHandler.postDelayed(wakeHealthRunnable, WAKE_HEALTH_INTERVAL_MS);
+    }
+
+    private void scheduleSlowProbe(String reason) {
+        if (!alwaysOnEnabled || active || externalMicSuspended) return;
+        visualHandler.removeCallbacks(wakeSlowProbeRunnable);
+        wakeHealthState = "DEGRADED";
+        wakeHealthLastReason = "slow recovery: " + reason;
+        updateForegroundNotification("喚醒監聽暫時異常，稍後自動重試");
+        visualHandler.postDelayed(wakeSlowProbeRunnable, WAKE_SLOW_PROBE_MS);
+    }
+
+    private void scheduleWakeRecovery(String reason) {
+        if (!alwaysOnEnabled || active || externalMicSuspended) return;
+
+        visualHandler.removeCallbacks(wakeRetryRunnable);
+        visualHandler.removeCallbacks(wakeHealthRunnable);
+
+        if (wakeFastRecoveryAttempts >= WAKE_FAST_RECOVERY_MAX) {
+            scheduleSlowProbe(reason);
+            return;
+        }
+
+        wakeFastRecoveryAttempts++;
+        wakeRetryAttempts = wakeFastRecoveryAttempts;
+        wakeHealthRestartCount++;
+        wakeHealthState = "RECOVERING";
+        wakeHealthLastReason = "fast recovery "
+                + wakeFastRecoveryAttempts + "/" + WAKE_FAST_RECOVERY_MAX
+                + ": " + reason;
+        lastWakeEvent = "health fast recovery";
+        lastWakeStatus = "RECOVERING";
+        updateForegroundNotification("喚醒監聽自動恢復中");
+
+        stopIdleWakeWord();
+        resetWakeHealthBaseline("fast recovery");
+        long delay = 1000L << (wakeFastRecoveryAttempts - 1);
+        visualHandler.postDelayed(wakeRetryRunnable, delay);
+    }
+
+    private void runWakeHealthCheck() {
+        if (!alwaysOnEnabled || active || externalMicSuspended) return;
+
+        wakeHealthLastCheckAtMs = SystemClock.elapsedRealtime();
+
+        if (!ensureMicrophonePermission()) {
+            setWakeBlock("PERMISSION", "RECORD_AUDIO missing");
+            visualHandler.removeCallbacks(wakeHealthRunnable);
+            scheduleSlowProbe("microphone permission missing");
+            return;
+        }
+
+        SherpaWakeWordEngine engine = wakeWordEngine;
+        if (engine == null) {
+            scheduleWakeRecovery("engine instance missing");
+            return;
+        }
+        if (!engine.isRunning()) {
+            scheduleWakeRecovery("engine not running; phase=" + engine.getPhase());
+            return;
+        }
+        if (!engine.isWorkerAlive()) {
+            scheduleWakeRecovery("worker thread dead; phase=" + engine.getPhase());
+            return;
+        }
+        if (!engine.isMicRecording()) {
+            setWakeBlock("MIC", "AudioRecord not recording");
+            scheduleWakeRecovery("AudioRecord not recording; phase=" + engine.getPhase());
+            return;
+        }
+
+        long reads = engine.getAudioReadCount();
+        long decodes = engine.getDecodeCount();
+
+        if (wakeHealthLastReadCount < 0L || wakeHealthLastDecodeCount < 0L) {
+            wakeHealthLastReadCount = reads;
+            wakeHealthLastDecodeCount = decodes;
+            wakeHealthStaleChecks = 0;
+            wakeHealthState = "LISTENING";
+            wakeHealthLastReason = "healthy baseline";
+            armWakeHealthWatchdog();
+            return;
+        }
+
+        boolean audioAdvanced = reads > wakeHealthLastReadCount;
+        boolean decodeAdvanced = decodes > wakeHealthLastDecodeCount;
+        wakeHealthLastReadCount = reads;
+        wakeHealthLastDecodeCount = decodes;
+
+        if (audioAdvanced && decodeAdvanced) {
+            wakeHealthStaleChecks = 0;
+            wakeFastRecoveryAttempts = 0;
+            wakeRetryAttempts = 0;
+            wakeHealthState = "HEALTHY";
+            clearWakeBlock();
+            wakeHealthLastReason = "healthy: audio+decode advancing";
+            armWakeHealthWatchdog();
+            return;
+        }
+
+        wakeHealthStaleChecks++;
+        wakeHealthLastReason = "stale "
+                + wakeHealthStaleChecks + "/" + WAKE_HEALTH_STALE_LIMIT
+                + ": audioAdvanced=" + audioAdvanced
+                + ", decodeAdvanced=" + decodeAdvanced;
+
+        if (wakeHealthStaleChecks >= WAKE_HEALTH_STALE_LIMIT) {
+            scheduleWakeRecovery(wakeHealthLastReason);
+        } else {
+            armWakeHealthWatchdog();
+        }
+    }
+
+    private void restartWakeInternal(String reason, boolean resetRecoveryBudget) {
+        if (!alwaysOnEnabled || active || externalMicSuspended) return;
+
+        visualHandler.removeCallbacks(wakeRetryRunnable);
+        visualHandler.removeCallbacks(wakeHealthRunnable);
+        visualHandler.removeCallbacks(wakeSlowProbeRunnable);
+
+        if (resetRecoveryBudget) {
+            wakeFastRecoveryAttempts = 0;
+            wakeRetryAttempts = 0;
+            clearWakeBlock();
+        }
+
+        wakeHealthState = "RECOVERING";
+        wakeHealthLastReason = reason;
+        lastWakeEvent = "manual/reconcile restart";
+        lastWakeStatus = "RECOVERING";
+        lastWakeError = "";
+        stopIdleWakeWord();
+        resetWakeHealthBaseline(reason);
+
+        visualHandler.postDelayed(new Runnable() {
+            @Override public void run() {
+                if (!alwaysOnEnabled || active || externalMicSuspended) return;
+                startIdleWakeWord();
+                armWakeHealthWatchdog();
+            }
+        }, 400L);
+    }
+
+    private void restartWakeFromNotification() {
+        if (!alwaysOnEnabled) return;
+        if (!ensureMicrophonePermission()) {
+            setWakeBlock("PERMISSION", "RECORD_AUDIO missing");
+            updateForegroundNotification("缺少麥克風權限，請開啟 Crew Helper");
+            return;
+        }
+        restartWakeInternal("notification restart", true);
     }
 
     static void enableAlwaysOn(Context context) {
@@ -182,6 +444,9 @@ public class NativeLiveService extends Service {
         running.visualHandler.post(new Runnable() {
             @Override public void run() {
                 running.externalMicSuspended = true;
+                running.wakeHealthState = "SUSPENDED";
+                running.visualHandler.removeCallbacks(running.wakeHealthRunnable);
+                running.visualHandler.removeCallbacks(running.wakeSlowProbeRunnable);
                 running.stopIdleWakeWord();
                 running.updateForegroundNotification("其他 Live 畫面正在使用麥克風");
             }
@@ -197,8 +462,13 @@ public class NativeLiveService extends Service {
                 running.externalMicSuspended = false;
                 if (running.alwaysOnEnabled && !active) {
                     running.updateForegroundNotification("正在等待喚醒詞「" + AppConfig.getWakePhrase(running) + "」");
+                    running.wakeHealthState = "STARTING";
+                    running.resetWakeHealthBaseline("external mic resumed");
                     running.visualHandler.postDelayed(new Runnable() {
-                        @Override public void run() { running.startIdleWakeWord(); }
+                        @Override public void run() {
+                            running.startIdleWakeWord();
+                            running.armWakeHealthWatchdog();
+                        }
                     }, 250L);
                 }
             }
@@ -298,6 +568,11 @@ public class NativeLiveService extends Service {
             return START_NOT_STICKY;
         }
 
+        if (ACTION_RESTART_WAKE.equals(action)) {
+            restartWakeFromNotification();
+            return alwaysOnEnabled ? START_STICKY : START_NOT_STICKY;
+        }
+
         if (ACTION_ENABLE_ALWAYS_ON.equals(action)) {
             enableAlwaysOnInternal();
             return START_STICKY;
@@ -326,7 +601,11 @@ public class NativeLiveService extends Service {
             ensureForeground("正在等待喚醒詞「" + AppConfig.getWakePhrase(this) + "」");
             runtimeState = RuntimeState.IDLE;
             active = false;
+            wakeHealthState = "STARTING";
+            clearWakeBlock();
+            resetWakeHealthBaseline("service restored");
             startIdleWakeWord();
+            armWakeHealthWatchdog();
             return START_STICKY;
         }
 
@@ -348,7 +627,13 @@ public class NativeLiveService extends Service {
         if (!active) {
             stopIdleWakeWord();
             runtimeState = RuntimeState.IDLE;
+            wakeHealthState = "STARTING";
+            wakeFastRecoveryAttempts = 0;
+            wakeRetryAttempts = 0;
+            clearWakeBlock();
+            resetWakeHealthBaseline("always-on enabled");
             startIdleWakeWord();
+            armWakeHealthWatchdog();
         }
     }
 
@@ -356,6 +641,10 @@ public class NativeLiveService extends Service {
         AppConfig.setAlwaysOnEnabled(this, false);
         alwaysOnEnabled = false;
         externalMicSuspended = false;
+        wakeHealthState = "OFF";
+        clearWakeBlock();
+        visualHandler.removeCallbacks(wakeHealthRunnable);
+        visualHandler.removeCallbacks(wakeSlowProbeRunnable);
         stopIdleWakeWord();
         if (active) {
             updateForegroundNotification("Gemini Live 使用中 · 全天待命已關閉");
@@ -376,6 +665,10 @@ public class NativeLiveService extends Service {
             return;
         }
 
+        visualHandler.removeCallbacks(wakeHealthRunnable);
+        visualHandler.removeCallbacks(wakeSlowProbeRunnable);
+        wakeHealthState = "ACTIVE";
+        resetWakeHealthBaseline("Gemini ACTIVE");
         stopIdleWakeWord();
         externalMicSuspended = false;
         runtimeState = RuntimeState.ACTIVE;
@@ -462,10 +755,13 @@ public class NativeLiveService extends Service {
                         }
                         if (started) {
                             wakeWordEngine = engine;
-                            wakeRetryAttempts = 0;
+                            wakeHealthState = "LISTENING";
+                            clearWakeBlock();
+                            resetWakeHealthBaseline("engine listening");
                             lastWakeEvent = "engine start returned true";
                             lastWakeStatus = "LISTENING";
                             updateForegroundNotification("正在等待喚醒詞「" + phrase + "」");
+                            armWakeHealthWatchdog();
                         } else {
                             lastWakeEvent = "engine start returned false";
                             if (lastWakeError == null || lastWakeError.isEmpty()) {
@@ -489,20 +785,39 @@ public class NativeLiveService extends Service {
         lastWakeStatus = "ERROR";
         updateForegroundNotification(message);
 
-        // Missing local runtime/model assets need a build/setup fix. Do not
-        // burn battery retrying a deterministic setup failure forever.
         String upper = message.toUpperCase(java.util.Locale.ROOT);
-        if ((upper.contains("SHERPA") && (upper.contains("JNI") || upper.contains("AAR")))
-                || message.contains("模型資源")
-                || message.contains("模型檔")
-                || message.contains("目前只支援喚醒詞")) {
+
+        if (message.contains("麥克風權限")
+                || upper.contains("RECORD_AUDIO")
+                || upper.contains("PERMISSION")) {
+            setWakeBlock("PERMISSION", message);
+            scheduleSlowProbe("permission blocked");
             return;
         }
 
-        wakeRetryAttempts = Math.min(6, wakeRetryAttempts + 1);
-        long delay = Math.min(60000L, 3000L * wakeRetryAttempts);
-        visualHandler.removeCallbacks(wakeRetryRunnable);
-        visualHandler.postDelayed(wakeRetryRunnable, delay);
+        if (upper.contains("AUDIORECORD")
+                || upper.contains("MICROPHONE")
+                || message.contains("麥克風")
+                || message.contains("錄音")) {
+            setWakeBlock("MIC", message);
+            scheduleWakeRecovery("microphone blocked");
+            return;
+        }
+
+        if ((upper.contains("SHERPA")
+                && (upper.contains("JNI") || upper.contains("AAR")
+                    || upper.contains("NOCLASSDEFFOUNDERROR")))
+                || message.contains("模型資源")
+                || message.contains("模型檔")
+                || message.contains("目前只支援喚醒詞")) {
+            setWakeBlock("SETUP", message);
+            visualHandler.removeCallbacks(wakeHealthRunnable);
+            visualHandler.removeCallbacks(wakeSlowProbeRunnable);
+            updateForegroundNotification("喚醒引擎設定異常，請開啟 Crew Helper 查看診斷");
+            return;
+        }
+
+        scheduleWakeRecovery(message);
     }
 
     private synchronized void stopIdleWakeWord() {
@@ -658,12 +973,19 @@ public class NativeLiveService extends Service {
 
         if (alwaysOnEnabled) {
             stopRequested = false;
-            ensureForeground("正在等待喚醒詞「" + AppConfig.getWakePhrase(this) + "」");
+            wakeHealthState = "COOLDOWN";
+            clearWakeBlock();
+            resetWakeHealthBaseline("Live -> IDLE cooldown");
+            ensureForeground("對話已結束，稍後恢復喚醒監聽");
             visualHandler.postDelayed(new Runnable() {
                 @Override public void run() {
-                    if (!active && alwaysOnEnabled && !externalMicSuspended) startIdleWakeWord();
+                    if (!active && alwaysOnEnabled && !externalMicSuspended) {
+                        wakeHealthState = "STARTING";
+                        startIdleWakeWord();
+                        armWakeHealthWatchdog();
+                    }
                 }
-            }, 300L);
+            }, LIVE_TO_WAKE_COOLDOWN_MS);
         } else {
             stopRuntime(reason);
         }
@@ -678,6 +1000,8 @@ public class NativeLiveService extends Service {
         visualHandler.removeCallbacks(reconnectRunnable);
         visualHandler.removeCallbacks(visualFrameSender);
         visualHandler.removeCallbacks(wakeRetryRunnable);
+        visualHandler.removeCallbacks(wakeHealthRunnable);
+        visualHandler.removeCallbacks(wakeSlowProbeRunnable);
         CameraPreviewOverlay.getInstance(this).hide();
         sharingCamera = false;
         sharingScreen = false;
@@ -728,6 +1052,31 @@ public class NativeLiveService extends Service {
         if (Build.VERSION.SDK_INT >= 26) {
             builder.setChannelId(CHANNEL_ID);
         }
+
+        if (!active && alwaysOnEnabled) {
+            int actionFlags = PendingIntent.FLAG_UPDATE_CURRENT;
+            if (Build.VERSION.SDK_INT >= 23) actionFlags |= PendingIntent.FLAG_IMMUTABLE;
+
+            Intent restartIntent = new Intent(this, NativeLiveService.class)
+                    .setAction(ACTION_RESTART_WAKE);
+            PendingIntent restartPending = PendingIntent.getService(
+                    this, 87671, restartIntent, actionFlags);
+
+            Intent disableIntent = new Intent(this, NativeLiveService.class)
+                    .setAction(ACTION_DISABLE_ALWAYS_ON);
+            PendingIntent disablePending = PendingIntent.getService(
+                    this, 87672, disableIntent, actionFlags);
+
+            builder.addAction(
+                    android.R.drawable.ic_popup_sync,
+                    "重新啟動待命",
+                    restartPending);
+            builder.addAction(
+                    android.R.drawable.ic_menu_close_clear_cancel,
+                    "關閉全天待命",
+                    disablePending);
+        }
+
         return builder.build();
     }
 
@@ -752,6 +1101,8 @@ public class NativeLiveService extends Service {
         visualHandler.removeCallbacks(reconnectRunnable);
         visualHandler.removeCallbacks(visualFrameSender);
         visualHandler.removeCallbacks(wakeRetryRunnable);
+        visualHandler.removeCallbacks(wakeHealthRunnable);
+        visualHandler.removeCallbacks(wakeSlowProbeRunnable);
         SherpaWakeWordEngine wakeClosing = wakeWordEngine;
         wakeWordEngine = null;
         if (wakeClosing != null) wakeClosing.release();

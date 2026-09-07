@@ -69,6 +69,28 @@ public class MainActivity extends Activity {
         checkAndRequestPermissions();
     }
 
+    @Override
+    protected void onResume() {
+        super.onResume();
+        NativeLiveService.reconcileAlwaysOn(this);
+        if (activeTab == 0) renderHomePage();
+        else refreshServiceStatus();
+
+        if (pageContent != null) {
+            pageContent.postDelayed(new Runnable() {
+                @Override public void run() {
+                    if (isFinishing()) return;
+                    if (activeTab == 2) {
+                        renderSettingsPage();
+                        refreshNavigation();
+                    } else {
+                        refreshServiceStatus();
+                    }
+                }
+            }, 900L);
+        }
+    }
+
     private void renderTab(int tab) {
         activeTab = tab;
         if (tab == 0) renderHomePage();
@@ -1248,13 +1270,6 @@ public class MainActivity extends Activity {
                 previewTts = null;
             } catch (Exception ignored) {}
         }
-    }
-
-    @Override
-    protected void onResume() {
-        super.onResume();
-        if (activeTab == 0) renderHomePage();
-        else refreshServiceStatus();
     }
 
     private void refreshServiceStatus() {
