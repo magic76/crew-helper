@@ -685,6 +685,40 @@ public class MainActivity extends Activity {
         engine.setPadding(0, 0, 0, dp(10));
         layout.addView(engine);
 
+        TextView debugTitle = new TextView(this);
+        debugTitle.setText(I18n.get(this, "Wake Runtime 診斷", "Wake Runtime Diagnostics"));
+        debugTitle.setTextSize(11);
+        debugTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        debugTitle.setTextColor(CrewTheme.AMBER_400);
+        debugTitle.setPadding(0, dp(4), 0, dp(4));
+        layout.addView(debugTitle);
+
+        final TextView wakeDebug = new TextView(this);
+        wakeDebug.setText(NativeLiveService.getWakeDiagnostics(this));
+        wakeDebug.setTextSize(10);
+        wakeDebug.setTypeface(Typeface.MONOSPACE);
+        wakeDebug.setTextColor(CrewTheme.TEXT_SECONDARY);
+        wakeDebug.setTextIsSelectable(true);
+        wakeDebug.setPadding(dp(8), dp(8), dp(8), dp(8));
+        wakeDebug.setBackground(CrewTheme.createCard(
+            this, CrewTheme.BG_SURFACE, CrewTheme.BORDER_SUBTLE, 8));
+        layout.addView(wakeDebug, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        Button refreshWakeDebug = new Button(this);
+        refreshWakeDebug.setText(I18n.get(this, "重新整理診斷", "Refresh diagnostics"));
+        refreshWakeDebug.setAllCaps(false);
+        refreshWakeDebug.setTextSize(11);
+        refreshWakeDebug.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                wakeDebug.setText(NativeLiveService.getWakeDiagnostics(MainActivity.this));
+            }
+        });
+        LinearLayout.LayoutParams refreshLp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(44));
+        refreshLp.setMargins(0, dp(6), 0, dp(4));
+        layout.addView(refreshWakeDebug, refreshLp);
+
         TextView sensitivityLabel = new TextView(this);
         sensitivityLabel.setText(I18n.get(this,
             "偵測靈敏度（越高越容易喚醒，也較容易誤觸）",
@@ -730,8 +764,8 @@ public class MainActivity extends Activity {
                         NativeLiveService.enableAlwaysOn(MainActivity.this);
                         Toast.makeText(
                             MainActivity.this,
-                            "全天待命已啟用：小酷小酷",
-                            Toast.LENGTH_SHORT).show();
+                            "已送出全天待命啟動要求，請查看 Wake Runtime 診斷",
+                            Toast.LENGTH_LONG).show();
                         renderSettingsPage();
                     }
                 })

@@ -55,6 +55,11 @@ public class NativeLiveService extends Service {
     private int reconnectAttempts;
     private boolean stopRequested;
 
+    // 0025-hotfix3 diagnostics. No audio content is retained.
+    private volatile String lastWakeStatus = "not started";
+    private volatile String lastWakeError = "";
+    private volatile String lastWakeEvent = "service created";
+
     private final Runnable reconnectRunnable = new Runnable() {
         @Override public void run() {
             if (!active || stopRequested) return;
@@ -79,6 +84,51 @@ public class NativeLiveService extends Service {
         if (active) return "ACTIVE";
         SherpaWakeWordEngine engine = service.wakeWordEngine;
         return engine != null && engine.isRunning() ? "IDLE_LISTENING" : "IDLE";
+    }
+
+    static String getWakeDiagnostics(Context context) {
+        NativeLiveService service = instance;
+        boolean prefEnabled = context != null && AppConfig.isAlwaysOnEnabled(context);
+        boolean micPermission = context != null
+                && (Build.VERSION.SDK_INT < Build.VERSION_CODES.M
+                || context.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
+                   == PackageManager.PERMISSION_GRANTED);
+
+        StringBuilder out = new StringBuilder();
+        out.append("runtime=").append(getRuntimeState());
+        out.append("\nservice.running=").append(serviceRunning);
+        out.append("\npref.alwaysOn=").append(prefEnabled);
+        out.append("\npermission.mic=").append(micPermission);
+
+        if (service == null) {
+            out.append("\nservice.instance=null");
+            out.append("\nHINT=service 尚未啟動；先啟用全天待命");
+            return out.toString();
+        }
+
+        out.append("\nservice.instance=READY");
+        out.append("\nservice.alwaysOn=").append(service.alwaysOnEnabled);
+        out.append("\nservice.active=").append(active);
+        out.append("\nservice.foreground=").append(service.foregroundStarted);
+        out.append("\nservice.externalMicSuspended=").append(service.externalMicSuspended);
+        out.append("\nwake.generation=").append(service.wakeGeneration);
+        out.append("\nwake.retryAttempts=").append(service.wakeRetryAttempts);
+        out.append("\nwake.lastEvent=").append(service.lastWakeEvent);
+        out.append("\nwake.lastStatus=").append(blankAsDash(service.lastWakeStatus));
+        out.append("\nwake.lastError=").append(blankAsDash(service.lastWakeError));
+
+        SherpaWakeWordEngine engine = service.wakeWordEngine;
+        out.append("\nengine.instance=").append(engine != null ? "READY" : "null");
+        if (engine != null) {
+            out.append("\n--- engine ---\n").append(engine.getDiagnostics());
+        } else if (service.alwaysOnEnabled && !active) {
+            out.append("\nHINT=Always-On 已開，但 engine.instance=null；查看 lastError/lastStatus");
+        }
+        return out.toString();
+    }
+
+    private static String blankAsDash(String value) {
+        return value == null || value.trim().isEmpty() ? "-" : value.trim();
     }
 
     static void enableAlwaysOn(Context context) {
@@ -360,6 +410,9 @@ public class NativeLiveService extends Service {
         if (wakeWordEngine != null && wakeWordEngine.isRunning()) return;
 
         final int generation = ++wakeGeneration;
+        lastWakeEvent = "startIdleWakeWord queued";
+        lastWakeStatus = "queued";
+        lastWakeError = "";
         final String phrase = AppConfig.getWakePhrase(this);
         final float sensitivity = AppConfig.getWakeSensitivity(this) / 100f;
         updateForegroundNotification("正在準備本機喚醒詞「" + phrase + "」");
@@ -383,6 +436,8 @@ public class NativeLiveService extends Service {
                             @Override public void onStatus(final String status) {
                                 visualHandler.post(new Runnable() {
                                     @Override public void run() {
+                                        lastWakeEvent = "engine status";
+                                        lastWakeStatus = status == null ? "" : status;
                                         if (!active && alwaysOnEnabled) updateForegroundNotification(status);
                                     }
                                 });
@@ -408,8 +463,14 @@ public class NativeLiveService extends Service {
                         if (started) {
                             wakeWordEngine = engine;
                             wakeRetryAttempts = 0;
+                            lastWakeEvent = "engine start returned true";
+                            lastWakeStatus = "LISTENING";
                             updateForegroundNotification("正在等待喚醒詞「" + phrase + "」");
                         } else {
+                            lastWakeEvent = "engine start returned false";
+                            if (lastWakeError == null || lastWakeError.isEmpty()) {
+                                lastWakeError = "engine.start() returned false";
+                            }
                             engine.release();
                         }
                     }
@@ -423,6 +484,9 @@ public class NativeLiveService extends Service {
                 || !alwaysOnEnabled || active || externalMicSuspended) return;
 
         String message = error == null ? "Wake Word 啟動失敗" : error;
+        lastWakeEvent = "engine error";
+        lastWakeError = message;
+        lastWakeStatus = "ERROR";
         updateForegroundNotification(message);
 
         // Missing local runtime/model assets need a build/setup fix. Do not

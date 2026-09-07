@@ -8,6 +8,7 @@ import android.media.AudioRecord;
 import android.media.MediaRecorder;
 import android.os.Build;
 import android.os.Process;
+import android.os.SystemClock;
 import android.util.Log;
 
 import com.k2fsa.sherpa.onnx.FeatureConfig;
@@ -18,18 +19,6 @@ import com.k2fsa.sherpa.onnx.OnlineModelConfig;
 import com.k2fsa.sherpa.onnx.OnlineStream;
 import com.k2fsa.sherpa.onnx.OnlineTransducerModelConfig;
 
-/**
- * 0025-hotfix: fully local sherpa-onnx keyword spotter.
- *
- * It replaces Porcupine only. NativeLiveService still owns the IDLE/ACTIVE
- * lifecycle and remains the single microphone owner:
- *
- * IDLE   -> this engine owns AudioRecord
- * ACTIVE -> this engine is released before Gemini Live opens its microphone
- *
- * No account, cloud request, API key, or phrase-specific model generation is
- * required at runtime.
- */
 final class SherpaWakeWordEngine {
     interface Listener {
         void onDetected();
@@ -41,7 +30,7 @@ final class SherpaWakeWordEngine {
     private static final int SAMPLE_RATE = 16000;
     private static final int CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO;
     private static final int AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT;
-    private static final int FRAME_SAMPLES = 1600; // 100 ms
+    private static final int FRAME_SAMPLES = 1600;
 
     private static final String MODEL_DIR = "sherpa-kws";
     private static final String ENCODER =
@@ -69,6 +58,18 @@ final class SherpaWakeWordEngine {
     private KeywordSpotter spotter;
     private OnlineStream stream;
 
+    private volatile String phase = "CREATED";
+    private volatile String assetStatus = "UNCHECKED";
+    private volatile String lastError = "";
+    private volatile String lastKeyword = "";
+    private volatile int lastReadResult;
+    private volatile long audioReadCount;
+    private volatile long audioSampleCount;
+    private volatile long decodeCount;
+    private volatile long lastAudioAtMs;
+    private volatile long lastDecodeAtMs;
+    private volatile long startedAtMs;
+
     SherpaWakeWordEngine(Context context, String phrase, float sensitivity, Listener listener) {
         this.context = context.getApplicationContext();
         this.phrase = phrase == null || phrase.trim().isEmpty()
@@ -80,25 +81,48 @@ final class SherpaWakeWordEngine {
     synchronized boolean start() {
         if (running) return true;
 
+        phase = "VALIDATING";
+        lastError = "";
+        lastKeyword = "";
+        lastReadResult = 0;
+        audioReadCount = 0;
+        audioSampleCount = 0;
+        decodeCount = 0;
+        lastAudioAtMs = 0;
+        lastDecodeAtMs = 0;
+        startedAtMs = SystemClock.elapsedRealtime();
+
         if (!SUPPORTED_PHRASE.equals(phrase)) {
+            phase = "FAILED_PHRASE";
             emitError("0025-hotfix 目前只支援喚醒詞「" + SUPPORTED_PHRASE + "」");
             return false;
         }
         if (!hasRecordAudioPermission()) {
+            phase = "FAILED_PERMISSION";
             emitError("Wake Word 缺少麥克風權限");
             return false;
         }
+
+        phase = "CHECKING_ASSETS";
         String missing = firstMissingAsset();
         if (missing != null) {
+            assetStatus = "MISSING " + missing;
+            phase = "FAILED_ASSET";
             emitError("缺少 sherpa Wake Word 模型資源：" + missing);
             return false;
         }
+        assetStatus = "OK";
 
         try {
-            listener.onStatus("正在載入本機喚醒詞「" + phrase + "」");
+            phase = "LOADING_MODEL";
+            emitStatus("正在載入本機喚醒詞「" + phrase + "」");
             initSpotter();
 
+            phase = "MODEL_READY";
+            phase = "OPENING_MIC";
             AudioRecord record = createAudioRecord();
+
+            phase = "STARTING_MIC";
             record.startRecording();
             if (record.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING) {
                 try { record.release(); } catch (Exception ignored) {}
@@ -108,6 +132,7 @@ final class SherpaWakeWordEngine {
             audioRecord = record;
             detectionLatched = false;
             running = true;
+            phase = "MIC_RECORDING";
 
             Thread t = new Thread(new Runnable() {
                 @Override public void run() {
@@ -117,10 +142,12 @@ final class SherpaWakeWordEngine {
             worker = t;
             t.start();
 
-            listener.onStatus("本機喚醒詞已啟動：「" + phrase + "」");
+            phase = "LISTENING";
+            emitStatus("本機喚醒詞已啟動：「" + phrase + "」");
             return true;
         } catch (Throwable error) {
             running = false;
+            phase = "START_FAILED";
             stopAndReleaseAudioRecord();
             releaseModels();
             emitError("sherpa Wake Word 啟動失敗：" + safeMessage(error));
@@ -142,7 +169,7 @@ final class SherpaWakeWordEngine {
         OnlineModelConfig model = new OnlineModelConfig();
         model.setTransducer(transducer);
         model.setTokens(TOKENS);
-        model.setNumThreads(1); // always-on: predictable/low CPU use
+        model.setNumThreads(1);
         model.setDebug(false);
         model.setProvider("cpu");
         model.setModelType("");
@@ -188,18 +215,25 @@ final class SherpaWakeWordEngine {
         short[] pcm = new short[FRAME_SAMPLES];
 
         try {
+            phase = "LISTENING";
             while (running) {
                 AudioRecord record = audioRecord;
                 if (record == null) break;
 
                 int count = record.read(pcm, 0, pcm.length);
+                lastReadResult = count;
                 if (!running) break;
+
                 if (count <= 0) {
                     if (count == AudioRecord.ERROR_DEAD_OBJECT) {
                         throw new IllegalStateException("AudioRecord dead object");
                     }
                     continue;
                 }
+
+                audioReadCount++;
+                audioSampleCount += count;
+                lastAudioAtMs = SystemClock.elapsedRealtime();
 
                 float[] samples = new float[count];
                 for (int i = 0; i < count; i++) {
@@ -208,16 +242,23 @@ final class SherpaWakeWordEngine {
 
                 OnlineStream localStream = stream;
                 KeywordSpotter localSpotter = spotter;
-                if (localStream == null || localSpotter == null) break;
+                if (localStream == null || localSpotter == null) {
+                    throw new IllegalStateException("KeywordSpotter stream/model disappeared");
+                }
 
                 localStream.acceptWaveform(samples, SAMPLE_RATE);
 
                 while (running && localSpotter.isReady(localStream)) {
                     localSpotter.decode(localStream);
+                    decodeCount++;
+                    lastDecodeAtMs = SystemClock.elapsedRealtime();
+
                     KeywordSpotterResult result = localSpotter.getResult(localStream);
                     String keyword = result == null ? "" : result.getKeyword();
 
                     if (keyword != null && !keyword.trim().isEmpty()) {
+                        lastKeyword = keyword.trim();
+                        phase = "DETECTED";
                         localSpotter.reset(localStream);
                         if (!detectionLatched) {
                             detectionLatched = true;
@@ -231,20 +272,29 @@ final class SherpaWakeWordEngine {
             }
         } catch (Throwable error) {
             if (running) {
+                phase = "RUNTIME_ERROR";
                 emitError("sherpa Wake Word 執行錯誤：" + safeMessage(error));
             }
         } finally {
             running = false;
             stopAndReleaseAudioRecord();
             releaseModels();
+            if (!"RUNTIME_ERROR".equals(phase)
+                    && !"START_FAILED".equals(phase)
+                    && !"DETECTED".equals(phase)
+                    && !phase.startsWith("FAILED_")) {
+                phase = "STOPPED";
+            }
         }
     }
 
     synchronized void release() {
         running = false;
         detectionLatched = true;
+        if (!"DETECTED".equals(phase) && !"RUNTIME_ERROR".equals(phase)) {
+            phase = "RELEASING";
+        }
 
-        // Mic release is synchronous. Model cleanup may finish on the worker.
         stopAndReleaseAudioRecord();
 
         Thread t = worker;
@@ -252,10 +302,46 @@ final class SherpaWakeWordEngine {
         if (t == null || !t.isAlive()) {
             releaseModels();
         }
+        if (!"DETECTED".equals(phase) && !"RUNTIME_ERROR".equals(phase)) {
+            phase = "RELEASED";
+        }
     }
 
     boolean isRunning() {
         return running;
+    }
+
+    String getDiagnostics() {
+        long now = SystemClock.elapsedRealtime();
+        AudioRecord record = audioRecord;
+        Thread t = worker;
+
+        String audioState = "null";
+        String recordingState = "null";
+        if (record != null) {
+            try { audioState = audioStateName(record.getState()); } catch (Throwable ignored) {}
+            try { recordingState = recordingStateName(record.getRecordingState()); } catch (Throwable ignored) {}
+        }
+
+        return "engine.phase=" + phase
+                + "\nengine.running=" + running
+                + "\nengine.assets=" + assetStatus
+                + "\nengine.spotter=" + (spotter != null ? "READY" : "null")
+                + "\nengine.stream=" + (stream != null ? "READY" : "null")
+                + "\nengine.workerAlive=" + (t != null && t.isAlive())
+                + "\nmic.audioRecord=" + audioState
+                + "\nmic.recording=" + recordingState
+                + "\naudio.lastReadResult=" + lastReadResult
+                + "\naudio.readCount=" + audioReadCount
+                + "\naudio.sampleCount=" + audioSampleCount
+                + "\naudio.lastAgoMs=" + ageMs(now, lastAudioAtMs)
+                + "\ndecode.count=" + decodeCount
+                + "\ndecode.lastAgoMs=" + ageMs(now, lastDecodeAtMs)
+                + "\nkeyword.last=" + blankAsDash(lastKeyword)
+                + "\nengine.sensitivity=" + sensitivity
+                + "\nengine.threshold=" + thresholdForSensitivity(sensitivity)
+                + "\nengine.uptimeMs=" + ageMs(now, startedAtMs)
+                + "\nengine.lastError=" + blankAsDash(lastError);
     }
 
     private synchronized void stopAndReleaseAudioRecord() {
@@ -306,19 +392,41 @@ final class SherpaWakeWordEngine {
         return null;
     }
 
-    /**
-     * Existing 0025 UI exposes 5..95 where higher means easier to wake.
-     * sherpa uses the opposite direction: lower threshold is easier.
-     *  5 -> 0.45, 65 -> 0.25, 95 -> 0.15.
-     */
     private static float thresholdForSensitivity(float value) {
         float threshold = 0.46666667f - (value / 3.0f);
         return clamp(threshold, 0.15f, 0.45f);
     }
 
-    private void emitError(String text) {
+    private void emitStatus(String text) {
         Listener callback = listener;
-        if (callback != null) callback.onError(text);
+        if (callback != null) callback.onStatus(text);
+    }
+
+    private void emitError(String text) {
+        lastError = text == null ? "" : text;
+        Log.e(TAG, lastError);
+        Listener callback = listener;
+        if (callback != null) callback.onError(lastError);
+    }
+
+    private static String audioStateName(int state) {
+        if (state == AudioRecord.STATE_INITIALIZED) return "INITIALIZED";
+        if (state == AudioRecord.STATE_UNINITIALIZED) return "UNINITIALIZED";
+        return String.valueOf(state);
+    }
+
+    private static String recordingStateName(int state) {
+        if (state == AudioRecord.RECORDSTATE_RECORDING) return "RECORDING";
+        if (state == AudioRecord.RECORDSTATE_STOPPED) return "STOPPED";
+        return String.valueOf(state);
+    }
+
+    private static String ageMs(long now, long timestamp) {
+        return timestamp <= 0 ? "-" : String.valueOf(Math.max(0, now - timestamp));
+    }
+
+    private static String blankAsDash(String value) {
+        return value == null || value.trim().isEmpty() ? "-" : value.trim();
     }
 
     private static float clamp(float value, float low, float high) {
@@ -330,6 +438,6 @@ final class SherpaWakeWordEngine {
         String message = error.getMessage();
         return message == null || message.trim().isEmpty()
                 ? error.getClass().getSimpleName()
-                : message.trim();
+                : error.getClass().getSimpleName() + ": " + message.trim();
     }
 }
