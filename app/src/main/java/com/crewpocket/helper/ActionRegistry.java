@@ -28,6 +28,10 @@ final class ActionRegistry {
         if (service != null && service.getLearnedUiMappingStore() != null) {
             try {
                 AccessibilityNodeInfo composer = service.findActiveEditText(root);
+                if (ComposerSendResolver.isSearchInput(composer)) {
+                    if (composer != null) composer.recycle();
+                    return;
+                }
                 String pkg = root.getPackageName() == null ? "" : root.getPackageName().toString();
                 String sig = ScreenFingerprint.create(root);
                 java.util.List<LearnedUiMappingStore.Rule> learnedRules =

@@ -54,6 +54,7 @@ public class CrewAccessibilityService extends AccessibilityService {
     private Handler mainHandler;
     private LearnedUiMappingStore learnedUiMappingStore;
     private UiTeachOverlay uiTeachOverlay;
+    private AppCatalog appCatalog;
 
     public static boolean isServiceRunning() { return instance != null; }
     public static CrewAccessibilityService getInstance() {
@@ -72,6 +73,8 @@ public class CrewAccessibilityService extends AccessibilityService {
         isRunning = true;
         learnedUiMappingStore = new LearnedUiMappingStore(this);
         uiTeachOverlay = new UiTeachOverlay(this);
+        appCatalog = new AppCatalog(this);
+        appCatalog.prewarm();
         startLocalServer();
 
         // 0025: Accessibility no longer owns microphone or Wake Word lifecycle.
@@ -84,6 +87,7 @@ public class CrewAccessibilityService extends AccessibilityService {
         instance = this;
         if (learnedUiMappingStore == null) learnedUiMappingStore = new LearnedUiMappingStore(this);
         if (uiTeachOverlay == null) uiTeachOverlay = new UiTeachOverlay(this);
+        if (appCatalog == null) { appCatalog = new AppCatalog(this); appCatalog.prewarm(); }
         try {
             AccessibilityServiceInfo info = getServiceInfo();
             if (info == null) {
@@ -761,64 +765,68 @@ public class CrewAccessibilityService extends AccessibilityService {
                 final String packageName = getJsonString(body, "package");
                 final String url = getJsonString(body, "url");
                 final String target = getJsonString(body, "target");
-                final boolean[] launchSuccess = new boolean[]{false};
-                final String[] resolvedPkg = new String[]{""};
-                final Object launchLock = new Object();
-                mainHandler.post(new Runnable() {
-                    @Override public void run() {
-                        try {
-                            Intent intent = null;
-                            if (url != null && !url.trim().isEmpty()) {
-                                intent = new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url.trim()));
-                            } else if ("settings".equalsIgnoreCase(target)) {
-                                intent = new Intent(Settings.ACTION_SETTINGS);
-                            } else if (packageName != null && !packageName.trim().isEmpty()) {
-                                intent = getPackageManager().getLaunchIntentForPackage(packageName.trim());
-                                resolvedPkg[0] = packageName.trim();
-                            } else if (appName != null && !appName.trim().isEmpty()) {
-                                Intent launcherIntent = new Intent(Intent.ACTION_MAIN, null);
-                                launcherIntent.addCategory(Intent.CATEGORY_LAUNCHER);
-                                List<ResolveInfo> results = getPackageManager().queryIntentActivities(launcherIntent, 0);
-                                String lowerApp = appName.trim().toLowerCase(Locale.ROOT);
-                                for (ResolveInfo info : results) {
-                                    String label = String.valueOf(info.loadLabel(getPackageManager()));
-                                    String pkg = info.activityInfo.packageName;
-                                    if (matchesAppQuery(label, pkg, lowerApp)) {
-                                        intent = getPackageManager().getLaunchIntentForPackage(pkg);
-                                        resolvedPkg[0] = pkg;
-                                        break;
-                                    }
-                                }
+                final long requestStartedAt = System.currentTimeMillis();
+
+                String resolvedPackage = packageName == null ? "" : packageName.trim();
+                String resolvedLabel = "";
+                if ((url == null || url.trim().isEmpty()) && !"settings".equalsIgnoreCase(target) && resolvedPackage.isEmpty()) {
+                    if (appName == null || appName.trim().isEmpty()) {
+                        responseJson = "{\"success\":false,\"error\":\"APP_NAME_REQUIRED\"}";
+                    } else {
+                        if (appCatalog == null) appCatalog = new AppCatalog(this);
+                        AppCatalog.Resolution resolution = appCatalog.resolve(appName);
+                        if (AppCatalog.Resolution.MULTIPLE.equals(resolution.status)) {
+                            StringBuilder json = new StringBuilder("{\"success\":false,\"status\":\"MULTIPLE_MATCHES\",\"resolveMs\":").append(resolution.resolveMs).append(",\"matches\":[");
+                            for (int i = 0; i < resolution.matches.size(); i++) {
+                                if (i > 0) json.append(',');
+                                AppCatalog.Entry e = resolution.matches.get(i);
+                                json.append("{\"label\":\"").append(jsonEscape(e.label)).append("\",\"package\":\"").append(jsonEscape(e.packageName)).append("\"}");
                             }
-                            if (intent != null) {
-                                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                                startActivity(intent);
-                                launchSuccess[0] = true;
-                            }
-                        } catch (Exception ignored) {}
-                        finally { synchronized (launchLock) { launchLock.notify(); } }
+                            json.append("]}");
+                            responseJson = json.toString();
+                        } else if (AppCatalog.Resolution.NOT_FOUND.equals(resolution.status) || resolution.chosen == null) {
+                            responseJson = "{\"success\":false,\"error\":\"APP_NOT_FOUND\",\"resolveMs\":" + resolution.resolveMs + "}";
+                        } else {
+                            resolvedPackage = resolution.chosen.packageName;
+                            resolvedLabel = resolution.chosen.label;
+                        }
                     }
-                });
-                synchronized (launchLock) { try { launchLock.wait(1500); } catch (Exception ignored) {} }
-                responseJson = "{\"success\":" + launchSuccess[0] + ",\"action\":\"LAUNCH\",\"package\":\"" + jsonEscape(resolvedPkg[0]) + "\"}";
+                }
+
+                if (!resolvedPackage.isEmpty() || (url != null && !url.trim().isEmpty()) || "settings".equalsIgnoreCase(target)) {
+                    final String fResolvedPackage = resolvedPackage;
+                    final boolean[] launchSuccess = new boolean[]{false};
+                    final Object launchLock = new Object();
+                    mainHandler.post(new Runnable() {
+                        @Override public void run() {
+                            try {
+                                Intent intent = null;
+                                if (url != null && !url.trim().isEmpty()) intent = new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url.trim()));
+                                else if ("settings".equalsIgnoreCase(target)) intent = new Intent(Settings.ACTION_SETTINGS);
+                                else if (!fResolvedPackage.isEmpty()) intent = getPackageManager().getLaunchIntentForPackage(fResolvedPackage);
+                                if (intent != null) {
+                                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                                    startActivity(intent);
+                                    launchSuccess[0] = true;
+                                }
+                            } catch (Exception ignored) {}
+                            finally { synchronized (launchLock) { launchLock.notify(); } }
+                        }
+                    });
+                    synchronized (launchLock) { try { launchLock.wait(1000); } catch (Exception ignored) {} }
+                    responseJson = "{\"success\":" + launchSuccess[0] + ",\"action\":\"LAUNCH\",\"package\":\"" + jsonEscape(resolvedPackage)
+                            + "\",\"label\":\"" + jsonEscape(resolvedLabel) + "\",\"runtimeMs\":" + (System.currentTimeMillis() - requestStartedAt) + "}";
+                }
             } else if (path.startsWith("/apps")) {
                 String query = getJsonString(body, "query");
-                String lowerQuery = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
-                StringBuilder apps = new StringBuilder("{\"success\":true,\"matches\":[");
-                try {
-                    Intent launcherIntent = new Intent(Intent.ACTION_MAIN, null);
-                    launcherIntent.addCategory(Intent.CATEGORY_LAUNCHER);
-                    List<ResolveInfo> results = getPackageManager().queryIntentActivities(launcherIntent, 0);
-                    int count = 0;
-                    for (ResolveInfo info : results) {
-                        String label = String.valueOf(info.loadLabel(getPackageManager()));
-                        String packageName = info.activityInfo.packageName;
-                        if (!matchesAppQuery(label, packageName, lowerQuery)) continue;
-                        if (count++ >= 12) break;
-                        if (count > 1) apps.append(',');
-                        apps.append("{\"label\":\"").append(jsonEscape(label)).append("\",\"package\":\"").append(jsonEscape(packageName)).append("\"}");
-                    }
-                } catch (Exception ignored) {}
+                if (appCatalog == null) appCatalog = new AppCatalog(this);
+                ArrayList<AppCatalog.Entry> matches = appCatalog.search(query);
+                StringBuilder apps = new StringBuilder("{\"success\":true,\"cached\":true,\"matches\":[");
+                for (int i = 0; i < matches.size(); i++) {
+                    if (i > 0) apps.append(',');
+                    AppCatalog.Entry e = matches.get(i);
+                    apps.append("{\"label\":\"").append(jsonEscape(e.label)).append("\",\"package\":\"").append(jsonEscape(e.packageName)).append("\"}");
+                }
                 apps.append("]}");
                 responseJson = apps.toString();
             } else if (path.startsWith("/screen_state")) {

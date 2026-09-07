@@ -26,6 +26,10 @@ final class ComposerSendResolver {
             input.recycle();
             return null;
         }
+        if (isSearchInput(input)) {
+            input.recycle();
+            return null;
+        }
 
         ArrayList<AccessibilityNodeInfo> clickable = new ArrayList<AccessibilityNodeInfo>();
         collectClickable(root, clickable);
@@ -100,7 +104,7 @@ final class ComposerSendResolver {
         if (value == null) return 0;
         if (hasRejectMarker(value)) return 0;
         if (value.contains("send") || value.contains("發送") || value.contains("送出")
-                || value.contains("傳送") || value.contains("提交")) return 140;
+                || value.contains("傳送")) return 140;
         if (value.contains("composer_send") || value.contains("message_send")
                 || value.contains("action_send") || value.contains("send_btn")
                 || value.contains("send_button")) return 160;
@@ -130,6 +134,23 @@ final class ComposerSendResolver {
                 || v.contains("关闭")
                 || v.contains("刪除")
                 || v.contains("删除");
+    }
+
+    static boolean isSearchInput(AccessibilityNodeInfo input) {
+        if (input == null) return false;
+        String text = input.getText() == null ? "" : input.getText().toString();
+        String desc = input.getContentDescription() == null ? "" : input.getContentDescription().toString();
+        String id = input.getViewIdResourceName() == null ? "" : input.getViewIdResourceName().toString();
+        String cls = input.getClassName() == null ? "" : input.getClassName().toString();
+        String hint = "";
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 26 && input.getHintText() != null) {
+                hint = input.getHintText().toString();
+            }
+        } catch (Exception ignored) {}
+        String meta = (text + " " + desc + " " + id + " " + cls + " " + hint).toLowerCase(Locale.ROOT);
+        return meta.contains("search") || meta.contains("query") || meta.contains("filter")
+                || meta.contains("搜尋") || meta.contains("搜索") || meta.contains("查找");
     }
 
     private static AccessibilityNodeInfo findActiveEditable(AccessibilityNodeInfo root) {

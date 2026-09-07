@@ -116,6 +116,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private volatile boolean semanticObserveRequired = false;
     private volatile String latestSemanticFingerprint = "";
     private final WorkingContext workingContext = new WorkingContext();
+    private final UserActionScope userActionScope = new UserActionScope();
     private volatile PendingCondition pendingCondition = null;
 
     NativeGeminiLiveClient(String apiKey, Listener listener) { this(apiKey, "", AppConfig.DEFAULT_VOICE, "auto", 35, "warm", "", 55, "call", listener); }
@@ -286,6 +287,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     boolean sendText(String text) {
         if (!running || webSocket == null || text == null || text.trim().isEmpty()) return false;
         try {
+            userActionScope.updateFromUserText(text.trim());
             boolean correctionInput = correctionWindowActive && System.currentTimeMillis() <= correctionWindowUntil;
             if (correctionInput) consumeCorrectionWindowOnUserSpeech(text.trim());
             if (!correctionInput) processMemoryRuleInput(text.trim());
@@ -561,6 +563,16 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             return;
         }
         if (response.has("setupComplete") || response.has("setup_complete")) { setupReady = true; reportStage("🎙️ 已連線，直接說話"); startAudio(); return; }
+
+        // Read latest user transcript before same-frame tool calls.
+        JSONObject server = response.optJSONObject("serverContent");
+        if (server == null) server = response.optJSONObject("server_content");
+        JSONObject inputTranscript = server == null ? null : server.optJSONObject("inputTranscription");
+        if (inputTranscript == null && server != null) inputTranscript = server.optJSONObject("input_transcription");
+        if (inputTranscript != null && !inputTranscript.optString("text").isEmpty()) {
+            userActionScope.updateFromUserText(inputTranscript.optString("text"));
+        }
+
         JSONObject toolCall = response.optJSONObject("toolCall");
         if (toolCall == null) toolCall = response.optJSONObject("tool_call");
         if (toolCall != null) {
@@ -571,8 +583,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 for (int i = 0; i < calls.length(); i++) executeToolAsync(calls.getJSONObject(i));
             }
         }
-        JSONObject server = response.optJSONObject("serverContent");
-        if (server == null) server = response.optJSONObject("server_content");
         if (server == null) return;
         if (server.optBoolean("interrupted", false)) {
             stopPlayback();
@@ -586,8 +596,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             interruptedCurrentTurn = false;
             return;
         }
-        JSONObject inputTranscript = server.optJSONObject("inputTranscription");
-        if (inputTranscript == null) inputTranscript = server.optJSONObject("input_transcription");
         if (inputTranscript != null && !inputTranscript.optString("text").isEmpty()) {
             String inputText = inputTranscript.optString("text");
             listener.onTranscript("你", inputText);
@@ -677,6 +685,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             }
             MemoryRuleStore.Rule matched = store.findExact(inputText);
             if (matched != null) {
+                userActionScope.updateFromTrustedAction(matched.action);
                 reportStage("Memory Rule 命中：「" + matched.trigger + "」");
                 sendInternalAgentDirective("【Memory Rule 命中】使用者剛說「" + matched.trigger + "」。這是已儲存的持久規則，現在必須處理的任務是：「" + matched.action + "」。請立即規劃並執行需要的工具步驟；每一步以實際畫面驗證。敏感、高風險或需要輸入私密資料的步驟仍須先取得當次明確確認。 ");
             }
@@ -764,6 +773,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 + "【Icon】沒有文字不代表沒有語意。先使用 contentDescription、viewId、role、hierarchy、Learned UI Mapping；仍不足才使用 Vision。只有 semantic screen 回報 visionRecommended=true，或 canvas/custom UI 無法由 Accessibility 表達時，才 screenshot/vision。"
                 + "【Working Context】只維護短期 goal/current app/current screen/last actions/last result/pending task，用來理解『繼續』『上一個』『不是這個』『回去剛才那頁』；不得把它當成新的操作授權。"
                 + "【工具邊界與授權】只有使用者本輪最新一句明確口令要求操作手機時，才可呼叫手機工具；過去對話、推測或一般問題絕不可授權操作。一般問題直接回答。"
+                + "【任務作用域】嚴格遵守使用者最新一句的動詞邊界。『搜尋／找名字／查找』只代表把查詢輸入並顯示搜尋結果；結果出現後該任務即完成。除非最新一句另外明確說『打開／進入／選擇』，否則不得點進任何人、群組、聊天室或結果；除非最新一句明確說『傳送／回覆／發訊息』，否則更不得輸入或送出訊息。Runtime 會硬性拒絕越權動作。"
                 + "【Memory Rule】持久規則由 Android Runtime 寫入，模型沒有寫入權限。一般糾正、偏好、事實，以及『記住這個／記得這個』都不是 Memory Rule；不得因此說『我記住了』『我會記得』。只有收到原生【Memory Rule 系統】明確告知『已永久儲存規則』時，才可簡短說『規則已儲存』。使用者糾正操作也不等於建立持久規則。"
                 + "【安全防護】絕對禁止刪除、付款、購買、修改帳戶、輸入密碼、OTP、簡訊驗證碼；遇到此類敏感操作一律停止並語音提示使用者自行操作。"
                 + "【手機操作三層架構】"
@@ -780,7 +790,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 + "【Agent 自動迴圈】收到 STEP_OK 後，只根據 after 最新畫面決定下一步；若整體任務尚未完成就繼續。收到 STEP_FAILED 才換方法，禁止原樣重複同一動作。"
                 + "【ActionRegistry 優先】inspect_ui 若回傳 actions，下一步必須優先從 actions 中挑選 CLICK/TYPE/SCROLL；除非 actions 無法完成目標，否則不得自行猜 resource id、按鈕文字或座標。"
                 + "【失敗恢復】mutation 若回傳 stepResult=STEP_FAILED，不得立刻原樣重複同一動作。先看 after 最新畫面，必要時再 inspect_ui，改用另一個 action、返回上一層、重新聚焦或改用其他語意路徑。連續兩次無進展就停止並向使用者說明卡在哪裡。"
-                + "【輸入與送出】一般訊息、搜尋文字、表單文字可正常使用 type_text。只有真正 Android password input 禁止自動輸入；不要把一般文字輸入框誤判成敏感欄位。輸入成功後必須 inspect_ui 確認內容/狀態已改變，再找 send/submit action。"
+                + "【文字輸入分流】搜尋框、訊息 composer、一般表單是三種不同意圖，不可互相延伸。搜尋文字用 type_text 後只觀察搜尋結果，絕不可因此尋找 send/submit 或進入聊天室；訊息 composer 只有最新一句明確授權傳送/回覆時才可使用 send_text；一般表單只執行使用者明確要求的欄位與按鈕，不可自行推論提交。"
                 + "【Composer Send Resolver】輸入訊息後 inspect_ui 若 actions 中存在 role='COMPOSER_SEND' 或 label='send' 的 CLICK action，直接使用該 action；這是 Crew Helper 根據目前輸入框與按鈕幾何位置解析出的送出鍵，不要再自行猜其他圖示。"
                 + "【送出鍵安全規則】沒有 role='COMPOSER_SEND' 或明確 send/發送/送出 metadata 時，禁止只因為某個按鈕位於輸入框最右側就把它當送出；右側按鈕可能是清除 X、關閉、附件或語音。若沒有高可信度 send action，先 inspect_ui 重新確認；Accessibility 仍無法辨識時才用 screenshot/vision 判斷。"
                 + "【UI 學習機制 (Teach UI)】若多次無法在畫面中找到送出或其他重要按鈕，或使用者表示要教助理按哪裡時，呼叫 teach_ui_element(role='COMPOSER_SEND' 等) 啟動教學遮罩。教學送出按鈕時，如果輸入框仍為空白，系統會引導使用者先輸入任意文字讓真正 Send 出現，不可把 EMPTY 狀態下的麥克風/加號誤記成 COMPOSER_SEND。"
@@ -836,7 +846,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         tools.put(new JSONObject().put("name", "tap_screen").put("description", "Tap a button or UI element using its semantic label, description, resource viewId, or coordinates. Prefer tap_element over tap_screen.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("label", new JSONObject().put("type", "STRING").put("description", "The button, app icon, or text label to tap")).put("id", new JSONObject().put("type", "STRING").put("description", "Optional resource viewId (e.g. 'send_btn')")).put("x", new JSONObject().put("type", "NUMBER").put("description", "Optional X coordinate for vision fallback")).put("y", new JSONObject().put("type", "NUMBER").put("description", "Optional Y coordinate for vision fallback")).put("coordinate_space", new JSONObject().put("type", "STRING").put("enum", new JSONArray().put("image").put("normalized_1000").put("screen"))))));
         tools.put(new JSONObject().put("name", "swipe_screen").put("description", "Scroll or swipe the phone screen. Direction: up (scroll down), down (scroll up), left, right. Distance: short, normal, long.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("direction", new JSONObject().put("type", "STRING").put("enum", new JSONArray().put("up").put("down").put("left").put("right"))).put("distance", new JSONObject().put("type", "STRING").put("enum", new JSONArray().put("short").put("normal").put("long").put("page")))).put("required", new JSONArray().put("direction"))));
         tools.put(new JSONObject().put("name", "type_text").put("description", "Type text into an input field or search bar.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("target", new JSONObject().put("type", "STRING").put("description", "Input field hint or label")).put("text", new JSONObject().put("type", "STRING").put("description", "The text to type"))).put("required", new JSONArray().put("text"))));
-        tools.put(new JSONObject().put("name", "send_text").put("description", "Atomically type, submit exactly once, and locally verify a message/reply in the currently open composer. Prefer this over type_text + tap_screen when the user explicitly wants to send text.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("text", new JSONObject().put("type", "STRING").put("description", "Exact message text to send"))).put("required", new JSONArray().put("text"))));
+        tools.put(new JSONObject().put("name", "send_text").put("description", "Atomically type, submit exactly once, and locally verify a message/reply in the currently open composer. Runtime accepts this only when the latest user turn explicitly authorized sending/replying; search/find/open requests never imply send permission.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("text", new JSONObject().put("type", "STRING").put("description", "Exact message text to send"))).put("required", new JSONArray().put("text"))));
         tools.put(new JSONObject().put("name", "teach_ui_element").put("description", "Enter interactive UI teaching mode so user can tap and teach an unlabeled button (e.g. COMPOSER_SEND, SEARCH_SUBMIT, CONFIRM).").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("role", new JSONObject().put("type", "STRING").put("description", "The semantic role to teach, e.g. 'COMPOSER_SEND', 'SEARCH_SUBMIT', 'CONFIRM', 'NEXT'"))).put("required", new JSONArray().put("role"))));
         tools.put(new JSONObject().put("name", "schedule_reminder").put("description", "Set a countdown timer / reminder in seconds. When time is up, the assistant vibrates and announces the message.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("delay_seconds", new JSONObject().put("type", "NUMBER").put("description", "Delay in seconds, e.g. 300 for 5 minutes")).put("message", new JSONObject().put("type", "STRING").put("description", "Reminder text to speak when timer expires")).put("label", new JSONObject().put("type", "STRING").put("description", "Short label for the timer"))).put("required", new JSONArray().put("delay_seconds"))));
         tools.put(new JSONObject().put("name", "start_screen_monitor").put("description", "Start periodic background screen checks or wait until a specific condition/text appears on screen.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("interval_seconds", new JSONObject().put("type", "NUMBER").put("description", "Interval between checks in seconds (e.g. 60)")).put("duration_minutes", new JSONObject().put("type", "NUMBER").put("description", "Total monitoring duration in minutes (default 10)")).put("target_condition", new JSONObject().put("type", "STRING").put("description", "Optional text/word to look for on screen (e.g. '已送達', '完成')")).put("label", new JSONObject().put("type", "STRING").put("description", "Short task name"))).put("required", new JSONArray().put("interval_seconds"))));
@@ -1343,6 +1353,16 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         String coordinateSpace = args.optString("coordinate_space", "").trim().toLowerCase();
         boolean resolvedFromNode = false;
 
+        String tapMeta = label + " " + id;
+        if (UserActionScope.looksLikeSendTarget(tapMeta) && !userActionScope.canSend()) {
+            return runtimeBlocked("SEND_NOT_AUTHORIZED_BY_LATEST_USER_TURN",
+                    "最新一句沒有明確要求傳送/回覆訊息；禁止點擊 Send。");
+        }
+        if (userActionScope.shouldBlockTapForSearch(tapMeta, label.isEmpty() && id.isEmpty())) {
+            return runtimeBlocked("SEARCH_SCOPE_RESULT_OPEN_NOT_AUTHORIZED",
+                    "最新任務只要求搜尋。搜尋結果出現後不要打開人、群組或聊天室；直接回報結果。");
+        }
+
         // 🎯 1. Let Android activate the matching Accessibility node directly.
         if (!label.isEmpty() || !id.isEmpty()) {
             try {
@@ -1410,6 +1430,17 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private JSONObject tapSemanticElement(JSONObject args) throws Exception {
         String elementId = args == null ? "" : args.optString("element_id", "").trim();
         if (elementId.isEmpty()) return new JSONObject().put("success", false).put("error", "MISSING_ELEMENT_ID");
+
+        String elementMeta = semanticElementMeta(elementId);
+        if (UserActionScope.looksLikeSendTarget(elementMeta) && !userActionScope.canSend()) {
+            return runtimeBlocked("SEND_NOT_AUTHORIZED_BY_LATEST_USER_TURN",
+                    "最新一句沒有明確要求傳送/回覆訊息；禁止點擊 Send。");
+        }
+        if (userActionScope.shouldBlockTapForSearch(elementMeta, elementMeta.isEmpty())) {
+            return runtimeBlocked("SEARCH_SCOPE_RESULT_OPEN_NOT_AUTHORIZED",
+                    "最新任務只要求搜尋。搜尋結果出現後不要打開人、群組或聊天室；直接回報結果。");
+        }
+
         JSONObject reply = null;
         try {
             reply = helperPost("/semantic_tap", new JSONObject().put("elementId", elementId));
@@ -1484,6 +1515,37 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         } catch (Exception ignored) {}
         pendingCondition = null;
         workingContext.setPendingTask("");
+        return out;
+    }
+
+    private String semanticElementMeta(String elementId) {
+        if (elementId == null || elementId.isEmpty()) return "";
+        JSONObject screen = readSemanticScreenQuietly();
+        if (screen == null) return "";
+        JSONArray elements = screen.optJSONArray("elements");
+        if (elements == null) return "";
+        for (int i = 0; i < elements.length(); i++) {
+            JSONObject e = elements.optJSONObject(i);
+            if (e == null || !elementId.equals(e.optString("id", ""))) continue;
+            return e.optString("label", "") + " "
+                    + e.optString("viewId", "") + " "
+                    + e.optString("semanticHint", "") + " "
+                    + e.optString("role", "");
+        }
+        return "";
+    }
+
+    private JSONObject runtimeBlocked(String error, String instruction) {
+        JSONObject out = new JSONObject();
+        try {
+            workingContext.updateLastResult("STEP_FAILED");
+            out.put("success", false)
+                    .put("stepResult", "STEP_FAILED")
+                    .put("blockedByRuntime", true)
+                    .put("error", error)
+                    .put("instruction", instruction)
+                    .put("runtimeContext", workingContext.toModelJson());
+        } catch (Exception ignored) {}
         return out;
     }
 
@@ -1731,7 +1793,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         int explicitIndex = args.optInt("index", -1);
         String explicitPkg = args.optString("package_name", "").trim();
 
-        // 1. If explicit package name provided
         if (!explicitPkg.isEmpty()) {
             JSONObject reply = helperPost("/launch", new JSONObject().put("package", explicitPkg));
             if (reply.optBoolean("success")) {
@@ -1742,93 +1803,49 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             return autoObserveAfterMutation(reply, "launch_app");
         }
 
-        // 2. Check if the input is an ordinal referencing previous candidates (e.g. "第一個", "第1個", "1", "one")
         int selectedIndex = parseOrdinalIndex(app);
-        if (selectedIndex < 0 && explicitIndex > 0) {
-            selectedIndex = explicitIndex - 1;
-        }
+        if (selectedIndex < 0 && explicitIndex > 0) selectedIndex = explicitIndex - 1;
         if (selectedIndex >= 0 && !lastCandidateApps.isEmpty()) {
-            if (selectedIndex < lastCandidateApps.size()) {
-                JSONObject chosen = lastCandidateApps.get(selectedIndex);
-                lastCandidateApps.clear();
-                JSONObject reply = helperPost("/launch", new JSONObject().put("package", chosen.optString("package", "")));
-                if (reply.optBoolean("success")) {
-                    reply.put("app", chosen.optString("label", "App")).put("message", "已為您啟動「" + chosen.optString("label", "App") + "」，以下為啟動後的最新畫面。");
-                    }
-                workingContext.recordAction("launch:" + chosen.optString("package", ""), reply.optBoolean("success", false) ? "submitted" : "failed");
-                return autoObserveAfterMutation(reply, "launch_app");
-            }
-        }
-
-        if (app.isEmpty()) {
-            return new JSONObject().put("success", false).put("error", "App 名稱不可為空");
-        }
-
-        // 3. Query installed apps from local bridge
-        JSONObject found = helperPost("/apps", new JSONObject().put("query", app));
-        JSONArray matches = found.optJSONArray("matches");
-        if (matches == null || matches.length() == 0) {
-            return new JSONObject().put("success", false).put("error", "找不到已安裝的 App：" + app);
-        }
-
-        // 4. Exact match check
-        String query = app.toLowerCase(Locale.ROOT);
-        JSONObject exactMatch = null;
-        ArrayList<JSONObject> candidates = new ArrayList<JSONObject>();
-        for (int i = 0; i < matches.length(); i++) {
-            JSONObject candidate = matches.optJSONObject(i);
-            if (candidate == null) continue;
-            candidates.add(candidate);
-            String label = candidate.optString("label", "").toLowerCase(Locale.ROOT);
-            String pkg = candidate.optString("package", "").toLowerCase(Locale.ROOT);
-            if (label.equals(query) || pkg.equals(query)) {
-                exactMatch = candidate;
-                break;
-            }
-        }
-
-        if (exactMatch != null) {
+            if (selectedIndex >= lastCandidateApps.size()) return new JSONObject().put("success", false).put("error", "候選 App 編號超出範圍");
+            JSONObject chosen = lastCandidateApps.get(selectedIndex);
             lastCandidateApps.clear();
-            JSONObject reply = helperPost("/launch", new JSONObject().put("package", exactMatch.optString("package", "")));
-            if (reply.optBoolean("success")) {
-                reply.put("app", exactMatch.optString("label", app)).put("message", "已啟動 App，以下為啟動後的最新畫面。");
-            }
-            workingContext.recordAction("launch:" + exactMatch.optString("package", ""), reply.optBoolean("success", false) ? "submitted" : "failed");
+            String pkg = chosen.optString("package", "");
+            JSONObject reply = helperPost("/launch", new JSONObject().put("package", pkg));
+            if (reply.optBoolean("success")) reply.put("app", chosen.optString("label", "App")).put("message", "已啟動 App，以下為啟動後的最新畫面。");
+            workingContext.recordAction("launch:" + pkg, reply.optBoolean("success", false) ? "submitted" : "failed");
             return autoObserveAfterMutation(reply, "launch_app");
         }
 
-        // 5. If only 1 match found, launch directly
-        if (matches.length() == 1) {
+        if (app.isEmpty()) return new JSONObject().put("success", false).put("error", "App 名稱不可為空");
+
+        // Fast path: one localhost request. Runtime resolves from cached AppCatalog.
+        JSONObject reply = helperPost("/launch", new JSONObject().put("app", app));
+        if (reply.optBoolean("success", false)) {
             lastCandidateApps.clear();
-            JSONObject candidate = matches.optJSONObject(0);
-            JSONObject reply = helperPost("/launch", new JSONObject().put("package", candidate.optString("package", "")));
-            if (reply.optBoolean("success")) {
-                reply.put("app", candidate.optString("label", app)).put("message", "已啟動 App，以下為啟動後的最新畫面。");
-            }
-            workingContext.recordAction("launch:" + candidate.optString("package", ""), reply.optBoolean("success", false) ? "submitted" : "failed");
+            String pkg = reply.optString("package", "");
+            reply.put("app", reply.optString("label", app)).put("message", "已啟動 App，以下為啟動後的最新畫面。");
+            workingContext.recordAction("launch:" + (pkg.isEmpty() ? app : pkg), "submitted");
             return autoObserveAfterMutation(reply, "launch_app");
         }
 
-        // 6. Multiple matches: Cache candidates and return clear list for user selection
-        lastCandidateApps.clear();
-        JSONArray list = new JSONArray();
-        StringBuilder promptBuilder = new StringBuilder("找到多個相近 App，請說第幾個：\n");
-        for (int i = 0; i < matches.length(); i++) {
-            JSONObject c = matches.optJSONObject(i);
-            if (c != null) {
-                lastCandidateApps.add(c);
-                list.put(new JSONObject().put("index", i + 1).put("label", c.optString("label")).put("package", c.optString("package")));
-                promptBuilder.append(i + 1).append(". ").append(c.optString("label")).append("\n");
+        if ("MULTIPLE_MATCHES".equals(reply.optString("status", ""))) {
+            JSONArray matches = reply.optJSONArray("matches");
+            lastCandidateApps.clear();
+            JSONArray candidates = new JSONArray();
+            StringBuilder prompt = new StringBuilder("找到多個相近 App，請說第幾個：\n");
+            if (matches != null) {
+                for (int i = 0; i < matches.length(); i++) {
+                    JSONObject c = matches.optJSONObject(i);
+                    if (c == null) continue;
+                    lastCandidateApps.add(c);
+                    candidates.put(new JSONObject().put("index", lastCandidateApps.size()).put("label", c.optString("label", "App")).put("package", c.optString("package", "")));
+                    prompt.append(lastCandidateApps.size()).append(". ").append(c.optString("label", "App")).append("\n");
+                }
             }
+            return new JSONObject().put("success", false).put("status", "MULTIPLE_MATCHES").put("candidates", candidates)
+                    .put("error", prompt.toString().trim()).put("instruction", "只詢問使用者要開第幾個；回答後再呼叫 launch_app(index=...)。");
         }
-
-        JSONObject multipleReply = new JSONObject();
-        multipleReply.put("success", false);
-        multipleReply.put("status", "MULTIPLE_MATCHES");
-        multipleReply.put("candidates", list);
-        multipleReply.put("error", promptBuilder.toString().trim());
-        multipleReply.put("instruction", "請詢問使用者要開啟哪一個（例如『請問要開啟 1. " + lastCandidateApps.get(0).optString("label") + " 還是 2. " + (lastCandidateApps.size() > 1 ? lastCandidateApps.get(1).optString("label") : "") + "？』），使用者回答後呼叫 launch_app(index=...) 或 launch_app(app='第一個')。");
-        return multipleReply;
+        return reply;
     }
 
     private int parseOrdinalIndex(String input) {
@@ -1890,6 +1907,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private JSONObject typeText(JSONObject args) throws Exception {
         String text = args.optString("text", "").trim();
         if (text.isEmpty()) return new JSONObject().put("success", false).put("error", "輸入文字不可為空");
+        if (userActionScope.shouldBlockAdditionalTextEntry()) {
+            return runtimeBlocked("SEARCH_SCOPE_ADDITIONAL_TEXT_NOT_AUTHORIZED",
+                    "搜尋查詢已輸入；最新任務沒有授權進入聊天室或再輸入訊息。");
+        }
 
         // 1. If target or coordinates provided, tap to focus first
         String target = args.optString("target", args.optString("label", "")).trim();
@@ -1914,7 +1935,13 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             reply.put("message", "已在輸入框輸入文字");
         }
         workingContext.recordAction("type", reply.optBoolean("success", false) ? "submitted" : "failed");
-        return autoObserveAfterMutation(reply, "type_text");
+        JSONObject observed = autoObserveAfterMutation(reply, "type_text");
+        if (observed.optBoolean("success", false) && userActionScope.markSearchQueryEntered()) {
+            observed.put("taskBoundary", "SEARCH_RESULTS_ONLY");
+            observed.put("instruction",
+                    "最新任務只要求搜尋；現在只觀察並回報搜尋結果，不要打開結果、群組、聊天室，也不要傳訊息。");
+        }
+        return observed;
     }
 
     private JSONObject sendTextToPhone(JSONObject args) throws Exception {
@@ -1922,11 +1949,19 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if (text.isEmpty()) {
             return new JSONObject().put("success", false).put("error", "EMPTY_TEXT");
         }
+        if (!userActionScope.canSend()) {
+            return runtimeBlocked("SEND_NOT_AUTHORIZED_BY_LATEST_USER_TURN",
+                    "最新一句沒有明確要求傳送、發訊息或回覆；Runtime 已阻止送出。");
+        }
         JSONObject reply = helperPost(
                 "/send_text",
                 new JSONObject().put("text", text));
         // Runtime deliberately does not echo plaintext back to Gemini.
         reply.put("textLength", text.length());
+        String sendError = reply.optString("error", "").toUpperCase(Locale.ROOT);
+        if (reply.optBoolean("success", false) || sendError.contains("SEND_NOT_VERIFIED")) {
+            userActionScope.consumeSendAuthorization();
+        }
         workingContext.recordAction("send_text", reply.optBoolean("success", false) ? "submitted" : "failed");
         return reply;
     }
