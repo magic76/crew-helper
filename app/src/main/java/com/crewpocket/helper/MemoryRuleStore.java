@@ -6,7 +6,6 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.UUID;
 
 /** Persistent voice trigger → action-intent rules. Execution still keeps all Live safety checks. */
@@ -95,6 +94,6 @@ final class MemoryRuleStore {
     private static String trimQuotes(String text) { return clip(text, 100).replaceAll("^[「『\"'\\s]+|[」』\"'\\s]+$", ""); }
     private static String trimEnd(String text) { return clip(text, 500).replaceAll("[。！!\\s]+$", ""); }
     private static String clip(String text, int max) { String out = text == null ? "" : text.trim(); return out.length() <= max ? out : out.substring(0, max); }
-    private static String normalize(String text) { return (text == null ? "" : text).toLowerCase(Locale.ROOT).replaceAll("[\\s，,。！？!「」『』\"']", ""); }
+    private static String normalize(String text) { return TextMatch.caseFold(text).replaceAll("[\\s，,。！？!「」『』\"']", ""); }
     private static boolean containsSensitiveText(String text) { String value = normalize(text); return value.contains("密碼") || value.contains("password") || value.contains("otp") || value.contains("驗證碼") || value.contains("簡訊碼"); }
 }

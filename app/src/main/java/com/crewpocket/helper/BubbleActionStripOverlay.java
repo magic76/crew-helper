@@ -26,6 +26,9 @@ import android.widget.LinearLayout;
  * Icons only. No labels, no mini-status card.
  */
 final class BubbleActionStripOverlay {
+    // Keep the expanded rail visually separate from the draggable main bubble.
+    // Six dp made their shadows overlap on compact screens.
+    static final int ACTION_STRIP_GAP_DP = 34;
     interface Actions {
         void onToggleCall();
         void onOpenConsole();
@@ -132,7 +135,7 @@ final class BubbleActionStripOverlay {
         // Center the vertical rail directly under the bubble.
         int centeredX = bubbleX + bubbleSize / 2 - stripWidth / 2;
         lp.x = Math.max(dp(6), Math.min(screenW - stripWidth - dp(6), centeredX));
-        lp.y = bubbleY + bubbleSize + dp(6);
+        lp.y = bubbleY + bubbleSize + dp(ACTION_STRIP_GAP_DP);
 
         try {
             windowManager.addView(row, lp);

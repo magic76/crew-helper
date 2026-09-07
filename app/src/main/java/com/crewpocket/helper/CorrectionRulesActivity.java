@@ -80,6 +80,20 @@ public class CorrectionRulesActivity extends Activity {
         summary.setPadding(0, 0, 0, dp(12));
         content.addView(summary);
 
+        Button addMemoryRule = new Button(this);
+        addMemoryRule.setText(I18n.get(this, "＋ 新增記憶規則", "+ Add Memory Rule"));
+        addMemoryRule.setAllCaps(false);
+        addMemoryRule.setTextColor(CrewTheme.TEXT_PRIMARY);
+        addMemoryRule.setBackground(CrewTheme.createCard(
+                this, CrewTheme.BG_SURFACE, CrewTheme.BORDER_TEAL, 12));
+        addMemoryRule.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { showAddMemoryRuleDialog(); }
+        });
+        LinearLayout.LayoutParams addRuleLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(48));
+        addRuleLp.setMargins(0, 0, 0, dp(12));
+        content.addView(addMemoryRule, addRuleLp);
+
         List<MemoryRuleStore.Rule> memoryRules = memoryStore.list();
         if (rules.isEmpty() && memoryRules.isEmpty()) {
             TextView empty = new TextView(this);
@@ -168,6 +182,62 @@ public class CorrectionRulesActivity extends Activity {
         title.setText(text); title.setTextSize(11); title.setTypeface(Typeface.DEFAULT_BOLD);
         title.setTextColor(CrewTheme.TEAL_300); title.setPadding(0, dp(8), 0, dp(8));
         content.addView(title);
+    }
+
+    /** Direct creation is deterministic; voice phrasing remains an optional shortcut. */
+    private void showAddMemoryRuleDialog() {
+        LinearLayout form = new LinearLayout(this);
+        form.setOrientation(LinearLayout.VERTICAL);
+        int padding = dp(20);
+        form.setPadding(padding, dp(8), padding, 0);
+
+        TextView note = new TextView(this);
+        note.setText(I18n.get(this,
+                "輸入你要說的觸發句，以及助理應執行的操作。規則不會保存密碼、OTP 或訊息內容。",
+                "Enter the phrase you will say and the action the assistant should perform. Passwords, OTPs and message content are not stored."));
+        note.setTextSize(12);
+        note.setTextColor(CrewTheme.TEXT_SECONDARY);
+        form.addView(note);
+
+        final EditText trigger = new EditText(this);
+        trigger.setHint(I18n.get(this, "例如：開 V App", "Example: Open V App"));
+        trigger.setSingleLine(true);
+        trigger.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        form.addView(trigger, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        final EditText action = new EditText(this);
+        action.setHint(I18n.get(this, "例如：開啟 WEAApp", "Example: Open WEAApp"));
+        action.setMinLines(2);
+        action.setGravity(Gravity.TOP | Gravity.START);
+        action.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        form.addView(action, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        new android.app.AlertDialog.Builder(this)
+                .setTitle(I18n.get(this, "新增記憶規則", "Add Memory Rule"))
+                .setView(form)
+                .setNegativeButton(I18n.get(this, "取消", "Cancel"), null)
+                .setPositiveButton(I18n.get(this, "儲存規則", "Save Rule"),
+                        new DialogInterface.OnClickListener() {
+                            @Override public void onClick(DialogInterface dialog, int which) {
+                                MemoryRuleStore.Rule saved = memoryStore.save(
+                                        trigger.getText().toString(), action.getText().toString());
+                                if (saved == null) {
+                                    Toast.makeText(CorrectionRulesActivity.this,
+                                            I18n.get(CorrectionRulesActivity.this,
+                                                    "未儲存：請填寫觸發句與非敏感操作內容。",
+                                                    "Not saved: enter a trigger and a non-sensitive action."),
+                                            Toast.LENGTH_LONG).show();
+                                    return;
+                                }
+                                Toast.makeText(CorrectionRulesActivity.this,
+                                        I18n.get(CorrectionRulesActivity.this,
+                                                "規則已儲存", "Rule saved"), Toast.LENGTH_SHORT).show();
+                                render();
+                            }
+                        })
+                .show();
     }
 
     private View buildMemoryRuleCard(final MemoryRuleStore.Rule rule) {

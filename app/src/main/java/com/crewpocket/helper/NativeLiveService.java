@@ -878,7 +878,7 @@ public class NativeLiveService extends Service {
         }
         final String serverUrl = AppConfig.getServerUrl(this);
         final String voiceName = AppConfig.getVoiceName(this);
-        client = new NativeGeminiLiveClient(apiKey, serverUrl, voiceName,
+        client = new NativeGeminiLiveClient(this, apiKey, serverUrl, voiceName,
                 AppConfig.getNoiseMode(this), AppConfig.getNoiseSuppression(this),
                 AppConfig.getLiveTone(this), AppConfig.getCustomSystemPrompt(this),
                 AppConfig.getInterruptionSensitivity(this), AppConfig.getAudioOutput(this),

@@ -6,7 +6,6 @@ import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 
 /** Cached launcher app catalog for fast voice launch. */
 final class AppCatalog {
@@ -124,6 +123,6 @@ final class AppCatalog {
     }
 
     private static String normalize(String value) {
-        return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
+        return TextMatch.caseFold(value).trim();
     }
 }

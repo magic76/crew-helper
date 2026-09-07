@@ -55,6 +55,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private volatile int interruptionSensitivity;
     private final String audioOutput;
     private final Listener listener;
+    /** App-owned storage must not depend on AccessibilityService being alive. */
+    private final Context appContext;
     private volatile boolean running;
     private volatile String stage = "尚未開始";
     private OkHttpClient httpClient;
@@ -131,6 +133,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         this(apiKey, serverUrl, voiceName, noiseMode, noiseSuppression, liveTone, customPrompt, 55, "call", listener);
     }
     NativeGeminiLiveClient(String apiKey, String serverUrl, String voiceName, String noiseMode, int noiseSuppression, String liveTone, String customPrompt, int interruptionSensitivity, String audioOutput, Listener listener) {
+        this(null, apiKey, serverUrl, voiceName, noiseMode, noiseSuppression, liveTone, customPrompt,
+                interruptionSensitivity, audioOutput, listener);
+    }
+    NativeGeminiLiveClient(Context context, String apiKey, String serverUrl, String voiceName, String noiseMode, int noiseSuppression, String liveTone, String customPrompt, int interruptionSensitivity, String audioOutput, Listener listener) {
+        this.appContext = context == null ? null : context.getApplicationContext();
         this.apiKey = apiKey;
         this.serverUrl = serverUrl == null ? "" : serverUrl.trim();
         this.voiceName = voiceName == null || voiceName.trim().isEmpty() ? AppConfig.DEFAULT_VOICE : voiceName.trim();
@@ -660,16 +667,17 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     /** Native persistence means rules survive the Live session and app process. */
     private void processMemoryRuleInput(String inputText) {
         try {
-            CrewAccessibilityService accessibility = CrewAccessibilityService.getInstance();
-            if (accessibility == null) {
-                Log.w(TAG, "Memory Rule 無法儲存：無障礙服務未啟用");
+            if (appContext == null) {
+                Log.w(TAG, "Memory Rule 無法儲存：App Context 不可用");
+                reportStage("Memory Rule 未儲存：系統尚未就緒");
                 return;
             }
-            MemoryRuleStore store = new MemoryRuleStore(accessibility);
+            MemoryRuleStore store = new MemoryRuleStore(appContext);
             MemoryRuleStore.Rule teaching = MemoryRuleStore.parseTeaching(inputText);
             if (teaching != null) {
                 MemoryRuleStore.Rule saved = store.save(teaching.trigger, teaching.action);
-                if (saved == null) {
+                MemoryRuleStore.Rule verified = saved == null ? null : store.findExact(saved.trigger);
+                if (verified == null || !saved.action.equals(verified.action)) {
                     reportStage("Memory Rule 未儲存：規則格式不完整或含敏感內容");
                     sendInternalAgentDirective("【Memory Rule 系統】規則未儲存。請要求使用者用「記住一條規則：以後我說『觸發語句』，就幫我『操作描述』」重述；不可聲稱已記住。");
                 } else {
@@ -693,9 +701,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     }
 
     private MemoryRuleStore memoryRuleStore() throws Exception {
-        CrewAccessibilityService accessibility = CrewAccessibilityService.getInstance();
-        if (accessibility == null) throw new Exception("無障礙服務未啟用，無法保存 Memory Rule");
-        return new MemoryRuleStore(accessibility);
+        if (appContext == null) throw new Exception("App Context 不可用，無法保存 Memory Rule");
+        return new MemoryRuleStore(appContext);
     }
 
     private JSONObject saveMemoryRule(JSONObject args) throws Exception {
@@ -774,7 +781,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 + "【Working Context】只維護短期 goal/current app/current screen/last actions/last result/pending task，用來理解『繼續』『上一個』『不是這個』『回去剛才那頁』；不得把它當成新的操作授權。"
                 + "【工具邊界與授權】只有使用者本輪最新一句明確口令要求操作手機時，才可呼叫手機工具；過去對話、推測或一般問題絕不可授權操作。一般問題直接回答。"
                 + "【任務作用域】嚴格遵守使用者最新一句的動詞邊界。『搜尋／找名字／查找』只代表把查詢輸入並顯示搜尋結果；結果出現後該任務即完成。除非最新一句另外明確說『打開／進入／選擇』，否則不得點進任何人、群組、聊天室或結果；除非最新一句明確說『傳送／回覆／發訊息』，否則更不得輸入或送出訊息。Runtime 會硬性拒絕越權動作。"
-                + "【Memory Rule】持久規則由 Android Runtime 寫入，模型沒有寫入權限。一般糾正、偏好、事實，以及『記住這個／記得這個』都不是 Memory Rule；不得因此說『我記住了』『我會記得』。只有收到原生【Memory Rule 系統】明確告知『已永久儲存規則』時，才可簡短說『規則已儲存』。使用者糾正操作也不等於建立持久規則。"
+                + "【Memory Rule】持久規則由 Android Runtime 寫入，模型沒有寫入權限。一般糾正、偏好、事實，以及『記住這個／記得這個』都不是 Memory Rule；不得因此說『我記住了』『我會記得』。單獨說『新增規則』只是要求收集觸發句與操作內容，絕不是儲存完成。只有收到原生【Memory Rule 系統】明確告知『已永久儲存規則』時，才可簡短說『規則已儲存』。使用者糾正操作也不等於建立持久規則。"
                 + "【安全防護】絕對禁止刪除、付款、購買、修改帳戶、輸入密碼、OTP、簡訊驗證碼；遇到此類敏感操作一律停止並語音提示使用者自行操作。"
                 + "【手機操作三層架構】"
                 + "1. 第一層（系統原生優先）：開啟 App（如『打開幣安』『開 Chrome』）一律呼叫 launch_app(app='...') 直接啟動，絕不在桌面滑動翻頁找圖示。若找到多個相近 App，系統會列出候選清單（如 1. 幣安 2. 幣安合約），請簡短詢問使用者要開哪一個；當使用者回答『第一個』、『第2個』或特定名稱時，直接呼叫 launch_app(index=1) 或 launch_app(app='第一個') 啟動。系統按鍵（首頁、返回、多工、通知列、快捷設定）一律呼叫 press_key。"

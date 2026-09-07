@@ -1,6 +1,5 @@
 package com.crewpocket.helper;
 
-import java.util.Locale;
 
 /**
  * 0027-hotfix2: deterministic latest-turn action boundary.
@@ -145,8 +144,7 @@ final class UserActionScope {
     }
 
     private static String normalize(String text) {
-        return (text == null ? "" : text)
-                .toLowerCase(Locale.ROOT)
+        return TextMatch.caseFold(text)
                 .replaceAll("[\\s，,。！？!「」『』\"'：:；;（）()]", "");
     }
 }

@@ -679,7 +679,9 @@ public class FloatingBubbleManager {
             int itemCount = NativeLiveService.isActive() ? 3 : 2;
             int shortcutHeight = dp(12) + itemCount * dp(42);
             int requiredBottom =
-                    bubbleParams.y + bubbleSize + dp(6) + shortcutHeight + dp(18);
+                    bubbleParams.y + bubbleSize
+                            + dp(BubbleActionStripOverlay.ACTION_STRIP_GAP_DP)
+                            + shortcutHeight + dp(18);
             if (requiredBottom <= screenHeight) return;
             int delta = requiredBottom - screenHeight;
             int topLimit = getStatusBarHeight() + dp(4);

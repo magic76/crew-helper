@@ -37,6 +37,10 @@
   1. **☁️ Standalone Cloud Mode**: Works 100% independently with your Gemini API Key.
   2. **🔗 Connected Server Mode**: Optionally syncs with custom servers for synchronized automation skills.
 
+## 🧠 Live Voice Prompt
+
+The reviewable static Gemini Live system instruction, plus its runtime additions and source-of-truth references, is maintained in [docs/LIVE_VOICE_SYSTEM_PROMPT.md](docs/LIVE_VOICE_SYSTEM_PROMPT.md).
+
 ---
 
 ## 🏗️ System Architecture (系統架構)
