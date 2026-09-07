@@ -637,16 +637,6 @@ public class MainActivity extends Activity {
 
     private void showAlwaysOnDialog() {
         final boolean enabled = AppConfig.isAlwaysOnEnabled(this);
-        final android.widget.EditText accessKeyInput = new android.widget.EditText(this);
-        accessKeyInput.setHint("Picovoice AccessKey");
-        accessKeyInput.setHintTextColor(CrewTheme.TEXT_MUTED);
-        accessKeyInput.setText(AppConfig.getPicovoiceAccessKey(this));
-        accessKeyInput.setTextColor(CrewTheme.TEXT_PRIMARY);
-        accessKeyInput.setTextSize(12);
-        accessKeyInput.setSingleLine(true);
-        accessKeyInput.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        accessKeyInput.setBackground(CrewTheme.createCard(this, CrewTheme.BG_SURFACE, CrewTheme.BORDER_SUBTLE, 8));
-        accessKeyInput.setPadding(dp(10), dp(10), dp(10), dp(10));
 
         final android.widget.SeekBar sensitivity = new android.widget.SeekBar(this);
         sensitivity.setMax(90);
@@ -657,7 +647,8 @@ public class MainActivity extends Activity {
         sensitivityValue.setTextColor(CrewTheme.TEAL_300);
         sensitivityValue.setTextSize(11);
         sensitivity.setOnSeekBarChangeListener(new android.widget.SeekBar.OnSeekBarChangeListener() {
-            @Override public void onProgressChanged(android.widget.SeekBar seekBar, int progress, boolean fromUser) {
+            @Override public void onProgressChanged(
+                    android.widget.SeekBar seekBar, int progress, boolean fromUser) {
                 sensitivityValue.setText(String.valueOf(progress + 5));
             }
             @Override public void onStartTrackingTouch(android.widget.SeekBar seekBar) {}
@@ -670,8 +661,8 @@ public class MainActivity extends Activity {
 
         TextView desc = new TextView(this);
         desc.setText(I18n.get(this,
-            "IDLE 只在本機聽「小酷小酷」，偵測到後才切換 Gemini Live。首次啟用會透過 Picovoice 建立一次喚醒詞模型；之後辨識在裝置端執行。",
-            "IDLE listens locally only for the wake phrase. Gemini Live starts only after detection. First setup creates the keyword model once; runtime detection is on-device."));
+            "IDLE 使用 sherpa-onnx 在手機本機只偵測「小酷小酷」，命中後才切換 Gemini Live。不需要帳號、AccessKey，也不會把待命音訊送到雲端。",
+            "IDLE uses sherpa-onnx fully on-device to detect only the wake phrase. Gemini Live starts only after detection. No account or AccessKey is required."));
         desc.setTextSize(11);
         desc.setTextColor(CrewTheme.TEXT_SECONDARY);
         desc.setPadding(0, 0, 0, dp(12));
@@ -682,21 +673,25 @@ public class MainActivity extends Activity {
         phrase.setTextSize(12);
         phrase.setTypeface(Typeface.DEFAULT_BOLD);
         phrase.setTextColor(CrewTheme.TEAL_300);
-        phrase.setPadding(0, 0, 0, dp(8));
+        phrase.setPadding(0, 0, 0, dp(5));
         layout.addView(phrase);
 
-        TextView keyLabel = new TextView(this);
-        keyLabel.setText("Picovoice AccessKey");
-        keyLabel.setTextSize(11);
-        keyLabel.setTextColor(CrewTheme.TEXT_SECONDARY);
-        layout.addView(keyLabel);
-        layout.addView(accessKeyInput, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        TextView engine = new TextView(this);
+        engine.setText(I18n.get(this,
+            "引擎：sherpa-onnx KWS · 完全本機",
+            "Engine: sherpa-onnx KWS · fully on-device"));
+        engine.setTextSize(10);
+        engine.setTextColor(CrewTheme.TEXT_MUTED);
+        engine.setPadding(0, 0, 0, dp(10));
+        layout.addView(engine);
 
         TextView sensitivityLabel = new TextView(this);
-        sensitivityLabel.setText(I18n.get(this, "偵測靈敏度（越高越容易喚醒，也較容易誤觸）", "Sensitivity (higher wakes easier but may false-trigger)"));
+        sensitivityLabel.setText(I18n.get(this,
+            "偵測靈敏度（越高越容易喚醒，也較容易誤觸）",
+            "Sensitivity (higher wakes easier but may false-trigger)"));
         sensitivityLabel.setTextSize(11);
         sensitivityLabel.setTextColor(CrewTheme.TEXT_SECONDARY);
-        sensitivityLabel.setPadding(0, dp(12), 0, dp(2));
+        sensitivityLabel.setPadding(0, dp(8), 0, dp(2));
         layout.addView(sensitivityLabel);
 
         LinearLayout sensitivityRow = new LinearLayout(this);
@@ -709,36 +704,50 @@ public class MainActivity extends Activity {
         android.app.AlertDialog.Builder builder = new android.app.AlertDialog.Builder(this)
             .setTitle(I18n.get(this, "🎧 全天語音喚醒", "🎧 Always-On Wake Word"))
             .setView(layout)
-            .setPositiveButton(I18n.get(this, enabled ? "儲存並重新啟動" : "儲存並啟用", enabled ? "Save & restart" : "Save & enable"),
+            .setPositiveButton(
+                I18n.get(this,
+                    enabled ? "儲存並重新啟動" : "儲存並啟用",
+                    enabled ? "Save & restart" : "Save & enable"),
                 new android.content.DialogInterface.OnClickListener() {
-                    @Override public void onClick(android.content.DialogInterface dialog, int which) {
-                        String key = accessKeyInput.getText().toString().trim();
-                        if (key.isEmpty()) {
-                            Toast.makeText(MainActivity.this, "請先設定 Picovoice AccessKey", Toast.LENGTH_LONG).show();
-                            return;
-                        }
+                    @Override public void onClick(
+                            android.content.DialogInterface dialog, int which) {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
-                                && checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                            requestPermissions(new String[]{android.Manifest.permission.RECORD_AUDIO}, 301);
-                            Toast.makeText(MainActivity.this, "允許麥克風後，再點一次啟用全天待命", Toast.LENGTH_LONG).show();
+                                && checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
+                                   != PackageManager.PERMISSION_GRANTED) {
+                            requestPermissions(
+                                new String[]{android.Manifest.permission.RECORD_AUDIO}, 301);
+                            Toast.makeText(
+                                MainActivity.this,
+                                "允許麥克風後，再點一次啟用全天待命",
+                                Toast.LENGTH_LONG).show();
                             return;
                         }
-                        AppConfig.setPicovoiceAccessKey(MainActivity.this, key);
-                        AppConfig.setWakePhrase(MainActivity.this, AppConfig.DEFAULT_WAKE_PHRASE);
-                        AppConfig.setWakeSensitivity(MainActivity.this, sensitivity.getProgress() + 5);
+
+                        AppConfig.setWakePhrase(
+                            MainActivity.this, AppConfig.DEFAULT_WAKE_PHRASE);
+                        AppConfig.setWakeSensitivity(
+                            MainActivity.this, sensitivity.getProgress() + 5);
                         NativeLiveService.enableAlwaysOn(MainActivity.this);
-                        Toast.makeText(MainActivity.this, "全天待命已啟用：小酷小酷", Toast.LENGTH_SHORT).show();
+                        Toast.makeText(
+                            MainActivity.this,
+                            "全天待命已啟用：小酷小酷",
+                            Toast.LENGTH_SHORT).show();
                         renderSettingsPage();
                     }
                 })
             .setNegativeButton(I18n.get(this, "取消", "Cancel"), null);
 
         if (enabled) {
-            builder.setNeutralButton(I18n.get(this, "停用全天待命", "Disable always-on"),
+            builder.setNeutralButton(
+                I18n.get(this, "停用全天待命", "Disable always-on"),
                 new android.content.DialogInterface.OnClickListener() {
-                    @Override public void onClick(android.content.DialogInterface dialog, int which) {
+                    @Override public void onClick(
+                            android.content.DialogInterface dialog, int which) {
                         NativeLiveService.disableAlwaysOn(MainActivity.this);
-                        Toast.makeText(MainActivity.this, "全天待命已關閉", Toast.LENGTH_SHORT).show();
+                        Toast.makeText(
+                            MainActivity.this,
+                            "全天待命已關閉",
+                            Toast.LENGTH_SHORT).show();
                         renderSettingsPage();
                     }
                 });

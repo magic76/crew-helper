@@ -19,8 +19,8 @@ import java.util.concurrent.Executors;
 /**
  * 0025: single-owner audio runtime.
  *
- * IDLE   -> Porcupine owns the microphone and only detects the wake phrase.
- * ACTIVE -> Porcupine is fully stopped before Gemini Live opens the microphone.
+ * IDLE   -> sherpa-onnx KWS owns the microphone and only detects the wake phrase.
+ * ACTIVE -> sherpa-onnx KWS is fully stopped before Gemini Live opens the microphone.
  *
  * This service deliberately stays independent of Accessibility so voice can
  * remain available even when phone-control capability is unavailable.
@@ -44,7 +44,7 @@ public class NativeLiveService extends Service {
     private NativeGeminiLiveClient client;
     private final Handler visualHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService wakeExecutor = Executors.newSingleThreadExecutor();
-    private PorcupineWakeWordEngine wakeWordEngine;
+    private SherpaWakeWordEngine wakeWordEngine;
     private int wakeGeneration;
     private int wakeRetryAttempts;
     private boolean externalMicSuspended;
@@ -77,7 +77,7 @@ public class NativeLiveService extends Service {
         NativeLiveService service = instance;
         if (!serviceRunning || service == null) return "STOPPED";
         if (active) return "ACTIVE";
-        PorcupineWakeWordEngine engine = service.wakeWordEngine;
+        SherpaWakeWordEngine engine = service.wakeWordEngine;
         return engine != null && engine.isRunning() ? "IDLE_LISTENING" : "IDLE";
     }
 
@@ -345,7 +345,7 @@ public class NativeLiveService extends Service {
         FloatingBubbleManager.getInstance(this).updateNativeLiveStatus("正在連線 Gemini Live", true);
         NativeLiveActivity.releaseLocalClientForService();
 
-        // Give Porcupine / page-owned AudioRecord a short deterministic release
+        // Give sherpa KWS / page-owned AudioRecord a short deterministic release
         // window before Oboe opens the Live microphone.
         visualHandler.postDelayed(new Runnable() {
             @Override public void run() {
@@ -359,25 +359,18 @@ public class NativeLiveService extends Service {
         if (!ensureMicrophonePermission()) return;
         if (wakeWordEngine != null && wakeWordEngine.isRunning()) return;
 
-        final String accessKey = AppConfig.getPicovoiceAccessKey(this);
-        if (accessKey.isEmpty()) {
-            updateForegroundNotification("待命未啟動：請設定 Picovoice AccessKey");
-            return;
-        }
-
         final int generation = ++wakeGeneration;
         final String phrase = AppConfig.getWakePhrase(this);
         final float sensitivity = AppConfig.getWakeSensitivity(this) / 100f;
-        updateForegroundNotification("正在準備喚醒詞「" + phrase + "」");
+        updateForegroundNotification("正在準備本機喚醒詞「" + phrase + "」");
 
         wakeExecutor.execute(new Runnable() {
             @Override public void run() {
-                final PorcupineWakeWordEngine engine = new PorcupineWakeWordEngine(
+                final SherpaWakeWordEngine engine = new SherpaWakeWordEngine(
                         NativeLiveService.this,
-                        accessKey,
                         phrase,
                         sensitivity,
-                        new PorcupineWakeWordEngine.Listener() {
+                        new SherpaWakeWordEngine.Listener() {
                             @Override public void onDetected() {
                                 visualHandler.post(new Runnable() {
                                     @Override public void run() {
@@ -397,15 +390,18 @@ public class NativeLiveService extends Service {
 
                             @Override public void onError(final String error) {
                                 visualHandler.post(new Runnable() {
-                                    @Override public void run() { handleWakeWordError(generation, error); }
+                                    @Override public void run() {
+                                        handleWakeWordError(generation, error);
+                                    }
                                 });
                             }
                         });
 
-                boolean started = engine.start();
+                final boolean started = engine.start();
                 visualHandler.post(new Runnable() {
                     @Override public void run() {
-                        if (generation != wakeGeneration || active || externalMicSuspended || !alwaysOnEnabled) {
+                        if (generation != wakeGeneration
+                                || active || externalMicSuspended || !alwaysOnEnabled) {
                             engine.release();
                             return;
                         }
@@ -423,13 +419,21 @@ public class NativeLiveService extends Service {
     }
 
     private void handleWakeWordError(int generation, String error) {
-        if (generation != wakeGeneration || !alwaysOnEnabled || active || externalMicSuspended) return;
+        if (generation != wakeGeneration
+                || !alwaysOnEnabled || active || externalMicSuspended) return;
+
         String message = error == null ? "Wake Word 啟動失敗" : error;
         updateForegroundNotification(message);
 
-        // Setup failures need a user action; do not burn battery retrying them.
+        // Missing local runtime/model assets need a build/setup fix. Do not
+        // burn battery retrying a deterministic setup failure forever.
         String upper = message.toUpperCase(java.util.Locale.ROOT);
-        if (upper.contains("ACCESSKEY") || message.contains("中文模型") || message.contains("模型檔")) return;
+        if ((upper.contains("SHERPA") && (upper.contains("JNI") || upper.contains("AAR")))
+                || message.contains("模型資源")
+                || message.contains("模型檔")
+                || message.contains("目前只支援喚醒詞")) {
+            return;
+        }
 
         wakeRetryAttempts = Math.min(6, wakeRetryAttempts + 1);
         long delay = Math.min(60000L, 3000L * wakeRetryAttempts);
@@ -440,7 +444,7 @@ public class NativeLiveService extends Service {
     private synchronized void stopIdleWakeWord() {
         wakeGeneration++;
         visualHandler.removeCallbacks(wakeRetryRunnable);
-        PorcupineWakeWordEngine closing = wakeWordEngine;
+        SherpaWakeWordEngine closing = wakeWordEngine;
         wakeWordEngine = null;
         if (closing != null) closing.release();
     }
@@ -684,7 +688,7 @@ public class NativeLiveService extends Service {
         visualHandler.removeCallbacks(reconnectRunnable);
         visualHandler.removeCallbacks(visualFrameSender);
         visualHandler.removeCallbacks(wakeRetryRunnable);
-        PorcupineWakeWordEngine wakeClosing = wakeWordEngine;
+        SherpaWakeWordEngine wakeClosing = wakeWordEngine;
         wakeWordEngine = null;
         if (wakeClosing != null) wakeClosing.release();
         try { wakeExecutor.shutdownNow(); } catch (Exception ignored) {}
