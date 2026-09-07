@@ -136,12 +136,24 @@ public class NativeLiveService extends Service {
                 && (Build.VERSION.SDK_INT < Build.VERSION_CODES.M
                 || context.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
                    == PackageManager.PERMISSION_GRANTED);
+        boolean notificationPermission = context != null
+                && (Build.VERSION.SDK_INT < 33
+                || context.checkSelfPermission("android.permission.POST_NOTIFICATIONS")
+                   == PackageManager.PERMISSION_GRANTED);
+        boolean notificationsEnabled = true;
+        try {
+            NotificationManager manager = context == null ? null
+                    : (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+            notificationsEnabled = manager == null || manager.areNotificationsEnabled();
+        } catch (Throwable ignored) {}
 
         StringBuilder out = new StringBuilder();
         out.append("runtime=").append(getRuntimeState());
         out.append("\nservice.running=").append(serviceRunning);
         out.append("\npref.alwaysOn=").append(prefEnabled);
         out.append("\npermission.mic=").append(micPermission);
+        out.append("\nnotification.permission=").append(notificationPermission);
+        out.append("\nnotification.enabled=").append(notificationsEnabled);
 
         if (service == null) {
             out.append("\nservice.instance=null");
@@ -406,6 +418,21 @@ public class NativeLiveService extends Service {
         startServiceAction(context, ACTION_ENABLE_ALWAYS_ON, true);
     }
 
+    static void refreshAlwaysOnNotification() {
+        NativeLiveService running = instance;
+        if (running == null || !running.foregroundStarted) return;
+        running.visualHandler.post(new Runnable() {
+            @Override public void run() {
+                if (active) {
+                    running.updateForegroundNotification("Gemini Live 使用中");
+                } else if (running.alwaysOnEnabled) {
+                    running.updateForegroundNotification(
+                        "正在等待喚醒詞「" + AppConfig.getWakePhrase(running) + "」");
+                }
+            }
+        });
+    }
+
     static void disableAlwaysOn(Context context) {
         if (context == null) return;
         AppConfig.setAlwaysOnEnabled(context, false);
@@ -555,6 +582,7 @@ public class NativeLiveService extends Service {
         super.onCreate();
         instance = this;
         serviceRunning = true;
+        CorrectionLearningRuntime.init(this);
         alwaysOnEnabled = AppConfig.isAlwaysOnEnabled(this);
         DeckRepository.initialize(this);
         createChannel();
@@ -721,6 +749,12 @@ public class NativeLiveService extends Service {
                                 visualHandler.post(new Runnable() {
                                     @Override public void run() {
                                         if (!alwaysOnEnabled || active || externalMicSuspended) return;
+                                        // A wake-word activation must leave an obvious, reachable
+                                        // on-screen control.  Do this before the Live client takes
+                                        // over the microphone; showBubble() is a safe no-op when
+                                        // overlay permission has not been granted.
+                                        FloatingBubbleManager.getInstance(NativeLiveService.this)
+                                                .showBubble();
                                         enterActive("wake_word");
                                     }
                                 });

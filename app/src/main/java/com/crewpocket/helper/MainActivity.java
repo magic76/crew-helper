@@ -19,15 +19,12 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
-import android.speech.tts.TextToSpeech;
-import java.util.Locale;
 
 public class MainActivity extends Activity {
     private TextView statusDot;
     private TextView statusText;
     private TextView statusDetail;
     private LinearLayout statusCard;
-    private TextToSpeech previewTts;
     private LinearLayout pageContent;
     private final Button[] navButtons = new Button[3];
     private int activeTab = 0;
@@ -39,6 +36,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        CorrectionLearningRuntime.init(this);
 
         // 🌌 Immersive Dark Status & Navigation Bar
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
@@ -344,6 +342,16 @@ public class MainActivity extends Activity {
                 @Override public void onClick(View v) { showAlwaysOnDialog(); }
             }));
 
+        String notificationSummary = notificationPermissionGranted() && notificationsEnabled()
+            ? I18n.get(this, "狀態：🟢 通知已允許 · Always-On 控制會顯示在通知列",
+                "Status: 🟢 Notifications allowed · Always-On controls are visible")
+            : I18n.get(this, "狀態：🟠 通知未允許/被系統關閉 · 點擊開啟設定",
+                "Status: 🟠 Notifications blocked · Tap to open settings");
+        pageContent.addView(makeActionCard("🔔", I18n.get(this, "通知與待命控制", "Notifications & Always-On Controls"),
+            notificationSummary, CrewTheme.CYAN_400, new View.OnClickListener() {
+                @Override public void onClick(View v) { openNotificationSettings(); }
+            }));
+
         pageContent.addView(makeActionCard("📸", I18n.cardCameraTitle(this), I18n.cardCameraDesc(this), CrewTheme.AMBER_400, new View.OnClickListener() {
             @Override public void onClick(View v) { requestCameraPermission(); }
         }));
@@ -357,7 +365,26 @@ public class MainActivity extends Activity {
                 }
             }));
 
-        // ── 3. System Preferences ──
+        // ── 3. Learning & Corrections ──
+        addSectionTitle(pageContent, I18n.get(this, "🧠 學習與修正", "LEARNING & CORRECTIONS"));
+        CorrectionRuleStore correctionStore = new CorrectionRuleStore(this);
+        int correctionTotal = correctionStore.count();
+        int correctionEnabled = correctionStore.enabledCount();
+        String correctionSummary = correctionTotal == 0
+            ? I18n.get(this, "尚未學習修正 · 助理做錯時按「打斷」並教它正確做法",
+                "No corrections learned yet · Interrupt and teach the correct action")
+            : I18n.get(this,
+                "已學習 " + correctionTotal + " 條 · 啟用 " + correctionEnabled + " 條 · 點擊 review / 編輯",
+                correctionTotal + " learned · " + correctionEnabled + " enabled · Tap to review/edit");
+        pageContent.addView(makeActionCard("🧩",
+            I18n.get(this, "已學習操作（Correction Memory）", "Learned Operations (Correction Memory)"),
+            correctionSummary, CrewTheme.TEAL_400, new View.OnClickListener() {
+                @Override public void onClick(View v) {
+                    startActivity(new Intent(MainActivity.this, CorrectionRulesActivity.class));
+                }
+            }));
+
+        // ── 4. System Preferences ──
         addSectionTitle(pageContent, I18n.get(this, "🌐 系統與連線", "SYSTEM & CONNECTION"));
 
         boolean isStandalone = AppConfig.isStandaloneMode(this);
@@ -510,6 +537,45 @@ public class MainActivity extends Activity {
         manager.showBubble(onShown);
         Toast.makeText(this, I18n.get(this, "🎙️ 浮動泡泡已啟用！短按開啟控制台，長按開始／結束 Live 通話", "🎙️ Floating Bubble enabled! Tap for controls; long-press to start or end a Live call"), Toast.LENGTH_SHORT).show();
         return true;
+    }
+
+    private boolean notificationPermissionGranted() {
+        return Build.VERSION.SDK_INT < 33
+                || checkSelfPermission("android.permission.POST_NOTIFICATIONS")
+                   == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private boolean notificationsEnabled() {
+        try {
+            android.app.NotificationManager manager =
+                    (android.app.NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+            return manager == null || manager.areNotificationsEnabled();
+        } catch (Throwable ignored) {
+            return true;
+        }
+    }
+
+    private void openNotificationSettings() {
+        try {
+            Intent intent;
+            if (Build.VERSION.SDK_INT >= 26) {
+                intent = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS);
+                intent.putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName());
+            } else {
+                intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        Uri.parse("package:" + getPackageName()));
+            }
+            startActivity(intent);
+        } catch (Exception ignored) {}
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == 306) {
+            NativeLiveService.refreshAlwaysOnNotification();
+            if (activeTab == 2) renderSettingsPage();
+        }
     }
 
     private void requestCameraPermission() {
@@ -779,6 +845,14 @@ public class MainActivity extends Activity {
                             return;
                         }
 
+                        if (Build.VERSION.SDK_INT >= 33
+                                && checkSelfPermission("android.permission.POST_NOTIFICATIONS")
+                                   != PackageManager.PERMISSION_GRANTED) {
+                            requestPermissions(
+                                new String[]{"android.permission.POST_NOTIFICATIONS"}, 306);
+                            // Notification denial must not disable wake-word operation.
+                        }
+
                         AppConfig.setWakePhrase(
                             MainActivity.this, AppConfig.DEFAULT_WAKE_PHRASE);
                         AppConfig.setWakeSensitivity(
@@ -944,72 +1018,45 @@ public class MainActivity extends Activity {
         }
     }
 
-    private static final VoiceInfo[] ALL_VOICES = new VoiceInfo[]{
+    /** Gemini Live's current prebuilt voices. Preview and the next call use the same name. */
+    static final VoiceInfo[] ALL_VOICES = new VoiceInfo[]{
         // Female (15)
-        new VoiceInfo("Kore", true, "自然放鬆 · 預設推薦", "Relaxed & Natural · Recommended", 1.15f),
-        new VoiceInfo("Aoede", true, "清澈優雅 · 溫柔細膩", "Breathy & Gentle", 1.18f),
+        new VoiceInfo("Kore", true, "自然放鬆 · 溫柔沉穩", "Relaxed & Natural · Gentle", 1.15f),
+        new VoiceInfo("Aoede", true, "清澈優雅 · 溫柔細膩", "Breathy & Gentle · Fairy Tale", 1.18f),
         new VoiceInfo("Leda", true, "年輕活潑 · 朝氣蓬勃", "Youthful & Bright", 1.25f),
-        new VoiceInfo("Callisto", true, "沉著清晰 · 俐落流暢", "Smooth & Articulate", 1.05f),
-        new VoiceInfo("Europa", true, "活力親切 · 陽光開朗", "Energetic & Friendly", 1.20f),
-        new VoiceInfo("Io", true, "俐落敏銳 · 熱情自信", "Crisp & Enthusiastic", 1.22f),
-        new VoiceInfo("Rhea", true, "溫暖包容 · 慈祥親和", "Warm & Supportive", 1.02f),
-        new VoiceInfo("Dione", true, "輕柔安撫 · 靜謐舒緩", "Soft & Reassuring", 1.10f),
-        new VoiceInfo("Tethys", true, "靈動生動 · 抑揚頓挫", "Vibrant & Animated", 1.16f),
-        new VoiceInfo("Ariel", true, "歡快輕盈 · 清新純淨", "Cheerful & Light", 1.28f),
-        new VoiceInfo("Miranda", true, "真誠細膩 · 娓娓道來", "Friendly & Expressive", 1.12f),
-        new VoiceInfo("Sycorax", true, "氣場強大 · 自信威嚴", "Expressive & Commanding", 0.98f),
-        new VoiceInfo("Titania", true, "優雅華貴 · 典雅端莊", "Luminous & Graceful", 1.14f),
-        new VoiceInfo("Despina", true, "明亮敏捷 · 節奏輕快", "Bright & Agile", 1.24f),
-        new VoiceInfo("Galatea", true, "柔和流暢 · 舒適悅耳", "Gentle & Flowing", 1.08f),
+        new VoiceInfo("Callirrhoe", true, "輕快悠閒 · 甜美清晰", "Easygoing & Sweet", 1.20f),
+        new VoiceInfo("Autonoe", true, "明亮靈動 · 陽光開朗", "Bright & Lively", 1.22f),
+        new VoiceInfo("Despina", true, "柔順舒適 · 抑揚頓挫", "Smooth & Fluent", 1.12f),
+        new VoiceInfo("Erinome", true, "清新純淨 · 清楚動聽", "Clear & Melodic", 1.16f),
+        new VoiceInfo("Laomedeia", true, "活潑俏皮 · 靈巧生動", "Cheerful & Playful", 1.26f),
+        new VoiceInfo("Achernar", true, "柔和舒緩 · 靜謐溫暖", "Soft & Soothing", 1.05f),
+        new VoiceInfo("Vindemiatrix", true, "溫柔親切 · 慈祥包容", "Gentle & Kind", 1.08f),
+        new VoiceInfo("Sadachbia", true, "生動鮮明 · 富有情感", "Vivid & Expressive", 1.14f),
+        new VoiceInfo("Sulafat", true, "溫暖安撫 · 睡前繪本", "Warm & Bedtime", 1.02f),
+        new VoiceInfo("Algieba", true, "圓潤甜美 · 娓娓道來", "Rounded & Sweet", 1.10f),
+        new VoiceInfo("Pulcherrima", true, "優雅前進 · 堅定自信", "Luminous & Elegant", 1.13f),
+        new VoiceInfo("Achird", true, "友善鄰家 · 隨和親切", "Friendly & Approachable", 1.18f),
 
         // Male (15)
-        new VoiceInfo("Puck", false, "活力俏皮 · 幽默隨和", "Playful & Engaging", 0.95f),
-        new VoiceInfo("Charon", false, "沉穩專業 · 冷靜自信", "Deep & Confident", 0.80f),
-        new VoiceInfo("Fenrir", false, "磁性堅定 · 威嚴有力", "Authoritative & Strong", 0.75f),
-        new VoiceInfo("Orus", false, "沉著清晰 · 條理分明", "Firm & Clear", 0.88f),
-        new VoiceInfo("Zephyr", false, "溫暖平靜 · 撫慰人心", "Warm & Calm", 0.92f),
-        new VoiceInfo("Ganymede", false, "醇厚穩重 · 磁性迷人", "Rich & Deep", 0.78f),
-        new VoiceInfo("Titan", false, "渾厚有力 · 磅礴大氣", "Resonant & Powerful", 0.72f),
-        new VoiceInfo("Hyperion", false, "朝氣蓬勃 · 積極果斷", "Dynamic & Energetic", 0.96f),
-        new VoiceInfo("Iapetus", false, "踏實沉著 · 值得信賴", "Grounded & Measured", 0.82f),
-        new VoiceInfo("Enceladus", false, "健談親近 · 鄰家隨和", "Conversational & Warm", 0.90f),
-        new VoiceInfo("Mimas", false, "靈活好奇 · 輕快幽默", "Curious & Lively", 1.00f),
-        new VoiceInfo("Aegaeon", false, "深沉撫慰 · 靜心放鬆", "Deep & Soothing", 0.76f),
-        new VoiceInfo("Umbriel", false, "深邃靜謐 · 哲思冷靜", "Reflective & Calm", 0.84f),
-        new VoiceInfo("Caliban", false, "果斷直率 · 剛毅堅強", "Bold & Direct", 0.78f),
-        new VoiceInfo("Prospero", false, "智慧博學 · 沉著大方", "Wise & Articulate", 0.86f)
+        new VoiceInfo("Puck", false, "童趣歡快 · 預設推薦", "Playful & Cheerful · Recommended", 0.95f),
+        new VoiceInfo("Charon", false, "沉穩專業 · 磁性冷靜", "Deep & Confident", 0.80f),
+        new VoiceInfo("Fenrir", false, "低沉冒險 · 威嚴有力", "Adventurous & Powerful", 0.75f),
+        new VoiceInfo("Orus", false, "沉著清晰 · 條理分明", "Firm & Articulate", 0.88f),
+        new VoiceInfo("Zephyr", false, "溫暖明亮 · 撫慰人心", "Warm & Bright", 0.92f),
+        new VoiceInfo("Enceladus", false, "氣聲磁性 · 溫暖陪伴", "Breathy & Warm", 0.85f),
+        new VoiceInfo("Iapetus", false, "踏實清晰 · 值得信賴", "Grounded & Clear", 0.82f),
+        new VoiceInfo("Umbriel", false, "輕鬆休閒 · 幽默自在", "Easygoing & Calm", 0.88f),
+        new VoiceInfo("Algenib", false, "沙啞磁性 · 歷練說書", "Husky & Storyteller", 0.78f),
+        new VoiceInfo("Rasalgethi", false, "知識博學 · 沉穩說理", "Wise & Articulate", 0.86f),
+        new VoiceInfo("Alnilam", false, "堅定沉著 · 宏亮有力", "Resonant & Firm", 0.76f),
+        new VoiceInfo("Schedar", false, "平穩安定 · 故事說書", "Steady & Measured", 0.84f),
+        new VoiceInfo("Gacrux", false, "成熟醇厚 · 威嚴可靠", "Mature & Rich", 0.72f),
+        new VoiceInfo("Zubenelgenubi", false, "隨和親近 · 幽默自然", "Conversational & Warm", 0.90f),
+        new VoiceInfo("Sadaltager", false, "博學智慧 · 娓娓道來", "Wise & Engaging", 0.86f)
     };
 
     private void playAudition(VoiceInfo voice) {
-        if (voice == null) return;
-        if (previewTts == null) {
-            final VoiceInfo target = voice;
-            previewTts = new TextToSpeech(this, new TextToSpeech.OnInitListener() {
-                @Override public void onInit(int status) {
-                    if (status == TextToSpeech.SUCCESS) {
-                        speakVoiceSample(target);
-                    }
-                }
-            });
-        } else {
-            speakVoiceSample(voice);
-        }
-    }
-
-    private void speakVoiceSample(VoiceInfo voice) {
-        if (previewTts == null || voice == null) return;
-        try {
-            previewTts.stop();
-            previewTts.setPitch(voice.pitch);
-            previewTts.setSpeechRate(1.0f);
-            if (I18n.isEn(this)) {
-                previewTts.setLanguage(Locale.US);
-                previewTts.speak("Hello! I am " + voice.name + ", your Crew Helper AI voice copilot.", TextToSpeech.QUEUE_FLUSH, null, "sample_" + voice.name);
-            } else {
-                previewTts.setLanguage(Locale.TRADITIONAL_CHINESE);
-                previewTts.speak("你好！我是 " + voice.name + "，我是你的隨身特工語音助理，很高興為你服務！", TextToSpeech.QUEUE_FLUSH, null, "sample_" + voice.name);
-            }
-        } catch (Exception ignored) {}
+        if (voice != null) GeminiVoicePreviewClient.play(this, voice.name);
     }
 
     private void showCustomPromptDialog() {
@@ -1236,7 +1283,7 @@ public class MainActivity extends Activity {
         builder.setView(root);
         builder.setNegativeButton(I18n.get(this, "關閉", "Close"), new android.content.DialogInterface.OnClickListener() {
             @Override public void onClick(android.content.DialogInterface dialog, int which) {
-                if (previewTts != null) previewTts.stop();
+                GeminiVoicePreviewClient.stop();
             }
         });
 
@@ -1263,13 +1310,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        if (previewTts != null) {
-            try {
-                previewTts.stop();
-                previewTts.shutdown();
-                previewTts = null;
-            } catch (Exception ignored) {}
-        }
+        GeminiVoicePreviewClient.stop();
     }
 
     private void refreshServiceStatus() {

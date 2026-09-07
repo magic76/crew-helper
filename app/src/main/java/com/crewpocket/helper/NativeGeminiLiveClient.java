@@ -194,13 +194,15 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             cancelAgentTask("使用者打斷，等待修正");
         }
 
+        CorrectionLearningRuntime.beginCorrection();
+
         correctionWindowActive = true;
         correctionWindowUntil = System.currentTimeMillis() + CORRECTION_WINDOW_MS;
         correctionTaskHint = hint;
         correctionContextPendingInjection = true;
         correctionHandler.removeCallbacks(clearCorrectionWindow);
         correctionHandler.postDelayed(clearCorrectionWindow, CORRECTION_WINDOW_MS);
-        reportStage("已打斷，等待使用者修正");
+        reportStage("已打斷，等待使用者修正；驗證成功後會記住正確操作");
         return true;
     }
 
@@ -280,6 +282,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     boolean sendText(String text) {
         if (!running || webSocket == null || text == null || text.trim().isEmpty()) return false;
         try {
+            processMemoryRuleInput(text.trim());
             JSONObject part = new JSONObject().put("text", text.trim());
             JSONObject turn = new JSONObject().put("role", "user").put("parts", new JSONArray().put(part));
             boolean sent = webSocket.send(new JSONObject().put("clientContent", new JSONObject()
@@ -582,6 +585,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if (inputTranscript != null && !inputTranscript.optString("text").isEmpty()) {
             String inputText = inputTranscript.optString("text");
             listener.onTranscript("你", inputText);
+            processMemoryRuleInput(inputText);
             if (isStopAgentTaskPhrase(inputText)) cancelAgentTask("使用者語音停止任務");
             consumeCorrectionWindowOnUserSpeech(inputText);
         }
@@ -638,27 +642,88 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 || clean.contains("停止簡報") || clean.contains("暫停簡報") || clean.contains("不要翻頁") || clean.contains("先別翻頁") || clean.contains("關閉簡報");
     }
 
+    /** Native persistence means rules survive the Live session and app process. */
+    private void processMemoryRuleInput(String inputText) {
+        try {
+            CrewAccessibilityService accessibility = CrewAccessibilityService.getInstance();
+            if (accessibility == null) {
+                Log.w(TAG, "Memory Rule 無法儲存：無障礙服務未啟用");
+                return;
+            }
+            MemoryRuleStore store = new MemoryRuleStore(accessibility);
+            MemoryRuleStore.Rule teaching = MemoryRuleStore.parseTeaching(inputText);
+            if (teaching != null) {
+                MemoryRuleStore.Rule saved = store.save(teaching.trigger, teaching.action);
+                if (saved == null) {
+                    reportStage("Memory Rule 未儲存：規則格式不完整或含敏感內容");
+                    sendInternalAgentDirective("【Memory Rule 系統】規則未儲存。請要求使用者用「記住一條規則：以後我說『觸發語句』，就幫我『操作描述』」重述；不可聲稱已記住。");
+                } else {
+                    reportStage("已儲存 Memory Rule：「" + saved.trigger + "」");
+                    sendInternalAgentDirective("【Memory Rule 系統】已永久儲存規則：當使用者說「" + saved.trigger + "」，任務意圖是「" + saved.action + "」。目前這句是教學，不要立刻執行；只簡短確認已儲存。未來精確命中觸發語句時，必須依此意圖執行，但仍遵守所有安全確認與畫面驗證。 ");
+                }
+                return;
+            }
+            if (isMemoryRuleRequest(inputText)) {
+                reportStage("Memory Rule 尚缺觸發語句或操作內容");
+                sendInternalAgentDirective("【Memory Rule 系統】使用者要求記住規則，但尚未提供完整 trigger 與 action。請只問一句：「以後你說哪一句話時，要我做什麼？」在 save_memory_rule 成功前，絕不可說已記住。");
+                return;
+            }
+            MemoryRuleStore.Rule matched = store.findExact(inputText);
+            if (matched != null) {
+                reportStage("Memory Rule 命中：「" + matched.trigger + "」");
+                sendInternalAgentDirective("【Memory Rule 命中】使用者剛說「" + matched.trigger + "」。這是已儲存的持久規則，現在必須處理的任務是：「" + matched.action + "」。請立即規劃並執行需要的工具步驟；每一步以實際畫面驗證。敏感、高風險或需要輸入私密資料的步驟仍須先取得當次明確確認。 ");
+            }
+        } catch (Exception error) { Log.w(TAG, "Memory Rule 處理失敗：" + error.getMessage()); }
+    }
+
+    private MemoryRuleStore memoryRuleStore() throws Exception {
+        CrewAccessibilityService accessibility = CrewAccessibilityService.getInstance();
+        if (accessibility == null) throw new Exception("無障礙服務未啟用，無法保存 Memory Rule");
+        return new MemoryRuleStore(accessibility);
+    }
+
+    private JSONObject saveMemoryRule(JSONObject args) throws Exception {
+        MemoryRuleStore.Rule saved = memoryRuleStore().save(args.optString("trigger"), args.optString("action"));
+        if (saved == null) return new JSONObject().put("success", false)
+                .put("error", "規則必須包含觸發語句、非敏感操作描述，且不可含密碼、OTP 或驗證碼");
+        return new JSONObject().put("success", true).put("ruleId", saved.id)
+                .put("trigger", saved.trigger).put("action", saved.action)
+                .put("message", "已永久儲存 Memory Rule；可在『已學習操作與規則』查看。");
+    }
+
+    private JSONObject listMemoryRules() throws Exception {
+        JSONArray rules = new JSONArray();
+        for (MemoryRuleStore.Rule rule : memoryRuleStore().list()) {
+            rules.put(new JSONObject().put("id", rule.id).put("trigger", rule.trigger)
+                    .put("action", rule.action).put("enabled", rule.enabled));
+        }
+        return new JSONObject().put("success", true).put("rules", rules).put("count", rules.length());
+    }
+
+    private boolean isMemoryRuleRequest(String text) {
+        String clean = text == null ? "" : text.replaceAll("\\s+", "");
+        return clean.contains("記住") || clean.contains("記憶") || clean.toLowerCase(Locale.ROOT).contains("memoryrule");
+    }
+
     private static String mapToSupportedVoice(String name) {
         if (name == null || name.trim().isEmpty()) return "Kore";
         String v = name.trim();
-        // Google Gemini Live WebSocket officially supports: "Puck", "Charon", "Kore", "Fenrir", "Aoede"
-        if ("Aoede".equalsIgnoreCase(v) || "Leda".equalsIgnoreCase(v) || "Europa".equalsIgnoreCase(v) ||
-            "Io".equalsIgnoreCase(v) || "Tethys".equalsIgnoreCase(v) || "Ariel".equalsIgnoreCase(v) ||
-            "Sycorax".equalsIgnoreCase(v) || "Titania".equalsIgnoreCase(v) || "Despina".equalsIgnoreCase(v)) {
-            return "Aoede";
+        // Keep the configured current Gemini Live voice intact.  The old client
+        // collapsed 30 picker entries into five voices, so audition and calls
+        // never matched.  Legacy names are retained only for existing installs.
+        for (MainActivity.VoiceInfo voice : MainActivity.ALL_VOICES) {
+            if (voice.name.equalsIgnoreCase(v)) return voice.name;
         }
-        if ("Puck".equalsIgnoreCase(v) || "Zephyr".equalsIgnoreCase(v) || "Hyperion".equalsIgnoreCase(v) ||
-            "Enceladus".equalsIgnoreCase(v) || "Mimas".equalsIgnoreCase(v)) {
-            return "Puck";
-        }
-        if ("Charon".equalsIgnoreCase(v) || "Orus".equalsIgnoreCase(v) || "Ganymede".equalsIgnoreCase(v) ||
-            "Iapetus".equalsIgnoreCase(v) || "Aegaeon".equalsIgnoreCase(v) || "Umbriel".equalsIgnoreCase(v) ||
-            "Prospero".equalsIgnoreCase(v)) {
-            return "Charon";
-        }
-        if ("Fenrir".equalsIgnoreCase(v) || "Titan".equalsIgnoreCase(v) || "Caliban".equalsIgnoreCase(v)) {
-            return "Fenrir";
-        }
+        if ("Ganymede".equalsIgnoreCase(v)) return "Gacrux";
+        if ("Titan".equalsIgnoreCase(v) || "Caliban".equalsIgnoreCase(v)) return "Alnilam";
+        if ("Hyperion".equalsIgnoreCase(v) || "Mimas".equalsIgnoreCase(v)) return "Puck";
+        if ("Aegaeon".equalsIgnoreCase(v) || "Prospero".equalsIgnoreCase(v)) return "Rasalgethi";
+        if ("Callisto".equalsIgnoreCase(v) || "Rhea".equalsIgnoreCase(v)
+                || "Dione".equalsIgnoreCase(v) || "Galatea".equalsIgnoreCase(v)) return "Kore";
+        if ("Europa".equalsIgnoreCase(v) || "Io".equalsIgnoreCase(v)
+                || "Tethys".equalsIgnoreCase(v) || "Ariel".equalsIgnoreCase(v)
+                || "Miranda".equalsIgnoreCase(v) || "Sycorax".equalsIgnoreCase(v)
+                || "Titania".equalsIgnoreCase(v)) return "Aoede";
         return "Kore"; // Default fallback (Kore, Callisto, Rhea, Dione, Miranda, Galatea)
     }
 
@@ -690,13 +755,14 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 + "【Icon】沒有文字不代表沒有語意。先使用 contentDescription、viewId、role、hierarchy、Learned UI Mapping；仍不足才使用 Vision。只有 semantic screen 回報 visionRecommended=true，或 canvas/custom UI 無法由 Accessibility 表達時，才 screenshot/vision。"
                 + "【Working Context】只維護短期 goal/current app/current screen/last actions/last result/pending task，用來理解『繼續』『上一個』『不是這個』『回去剛才那頁』；不得把它當成新的操作授權。"
                 + "【工具邊界與授權】只有使用者本輪最新一句明確口令要求操作手機時，才可呼叫手機工具；過去對話、推測或一般問題絕不可授權操作。一般問題直接回答。"
+                + "【Memory Rule】使用者要求『記住／記憶一個規則』時，必須呼叫 save_memory_rule(trigger, action)；只有 tool 回傳 success=true 才可說已記住。若缺 trigger 或 action，先問一句最小澄清，絕不可只存入 session 或口頭承諾。原生系統也可能送來「Memory Rule 系統」或「Memory Rule 命中」控制訊息；命中時必須依規則的 action 規劃工具操作，而不是把規則只當成聊天記憶。仍不得繞過安全確認、私密資料保護或畫面驗證。"
                 + "【安全防護】絕對禁止刪除、付款、購買、修改帳戶、輸入密碼、OTP、簡訊驗證碼；遇到此類敏感操作一律停止並語音提示使用者自行操作。"
                 + "【手機操作三層架構】"
                 + "1. 第一層（系統原生優先）：開啟 App（如『打開幣安』『開 Chrome』）一律呼叫 launch_app(app='...') 直接啟動，絕不在桌面滑動翻頁找圖示。若找到多個相近 App，系統會列出候選清單（如 1. 幣安 2. 幣安合約），請簡短詢問使用者要開哪一個；當使用者回答『第一個』、『第2個』或特定名稱時，直接呼叫 launch_app(index=1) 或 launch_app(app='第一個') 啟動。系統按鍵（首頁、返回、多工、通知列、快捷設定）一律呼叫 press_key。"
                 + "2. 第二層（Accessibility 語意執行）：一律以語意操作為主。點擊按鈕呼叫 tap_element(element_id='...') 或 tap_screen(label='...' 或 id='...')；滑動呼叫 swipe_screen(direction='up'|'down'|'left'|'right', distance='short'|'normal'|'long')；一般輸入但不提交時呼叫 type_text(text='...', target='...')；判斷畫面呼叫 inspect_ui；等待結果呼叫 wait。"
                 + "【原子化傳送】只要使用者明確要求『傳送/送出/回覆一段文字』，且目前已在可輸入的聊天/留言 composer 畫面，優先只呼叫 send_text(text='...')。send_text 會由 Android runtime 完成輸入、選擇 learned/semantic Send、一次性提交及本地驗證；不要再自行拆成 type_text → inspect_ui → tap send。很多 App 在輸入框空白時顯示麥克風/加號/貼圖，打字後才顯示真正 Send；送出按鈕記憶與解析必須以 composer=HAS_TEXT 狀態為準。只有 send_text 回傳 COMPOSER_NOT_FOUND / SUBMIT_TARGET_NOT_FOUND 時，才重新 inspect/replan；若 SEND_NOT_VERIFIED，不可再次送出，以免重複訊息。"
                 + "3. 第三層（Vision 視覺兜底）：只有在 inspect_ui 完全取不到有效節點（例如 Canvas 畫布、遊戲自訂 UI）時，才呼叫 take_screenshot 截圖並以座標點擊。"
-                + "【結束通話】當使用者說『關閉』、『掛斷』、『結束通話』、『退下』、『先這樣』或『再見』時，先簡短道別一句（如『好的，先為您關閉，隨時喊我！』），並一律呼叫 end_voice_session 工具以自動掛斷連線。"
+                + "【結束通話】只有使用者明確說『結束通話』、『掛斷電話』或『退出語音助理』時，才可呼叫 end_voice_session。單獨的『關閉』、『退出』、『先這樣』、『再見』、『退下』，或任何關於關閉 App／視窗／功能的話，都不是掛斷授權；應依其原本任務處理，必要時只問最小澄清。"
                 + "【定時提醒與畫面巡檢】當使用者要求計時（如『5分鐘後叫我』）呼叫 schedule_reminder；週期性檢查畫面（如『每分鐘看一次畫面跟我說』）或等待條件（如『等出現已送達時叫我』）呼叫 start_screen_monitor；查詢目前排程呼叫 list_active_schedules；取消排程呼叫 cancel_schedule。"
                 + "【Live Deck 簡報與自動導播】使用者要求講故事、教學或簡報時，先呼叫 list_decks，確認 deckId 後呼叫 open_deck。系統配備『自動簡報導播機制』：每一頁切換顯示並生動介紹；語音播報播放完畢後，系統會自動在適當時機回饋翻頁指示，請直接呼叫 advance_deck 繼續下一頁，抵達最後一頁時請作結。每次以 get_deck_card 的 speakerNotes、facts 與 allowedNext 作為內容邊界，但不可逐字死板朗讀；應依聽眾反應、時間、語氣與理解狀態靈活講解。使用者插話時優先回答，可跳到相關 cardId 或調整詳略。不得杜撰不存在的卡片、數字或圖片，也不要把內部 JSON 念給使用者。"
                 + "【Deck 動態調整】播報中使用者要求補充、簡化、重排或增加圖片時，只能改目前頁之後的卡片：用 update_deck_card 改後續內容、insert_deck_card 加入補充、remove_future_deck_card 移除重複。先 list_deck_images，僅從回傳的 assetId 使用 attach_deck_image 加入匯入圖片；不得捏造圖片、URL 或來源。修改後要簡短告知已調整後續內容，接著依新卡片繼續。"
@@ -745,6 +811,12 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 .put("package_name", new JSONObject().put("type", "STRING").put("description", "Optional exact package name if known from previous candidate list"));
         tools.put(new JSONObject().put("name", "launch_app").put("description", "Open an installed Android app directly by name (e.g. 'Binance', 'LINE', 'Chrome', 'Settings') or by ordinal index (e.g. 第一個/1). Always use this instead of looking for icons on launcher.")
                 .put("parameters", new JSONObject().put("type", "OBJECT").put("properties", launchProperties)));
+        tools.put(new JSONObject().put("name", "save_memory_rule").put("description", "Persist an explicitly user-taught voice rule. Call only after the user provided both the exact trigger phrase and the action intent; do not claim it was remembered until this returns success.")
+                .put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject()
+                        .put("trigger", new JSONObject().put("type", "STRING").put("description", "Exact phrase the user will say next time"))
+                        .put("action", new JSONObject().put("type", "STRING").put("description", "What the assistant should do when the phrase is spoken")))
+                        .put("required", new JSONArray().put("trigger").put("action"))));
+        tools.put(new JSONObject().put("name", "list_memory_rules").put("description", "List persisted Memory Rules when the user asks what has been remembered."));
         tools.put(new JSONObject().put("name", "press_key").put("description", "Trigger an Android system key or action.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("key", new JSONObject().put("type", "STRING").put("enum", new JSONArray().put("HOME").put("BACK").put("RECENTS").put("NOTIFICATIONS").put("QUICK_SETTINGS").put("POWER_DIALOG")))).put("required", new JSONArray().put("key"))));
         tools.put(new JSONObject().put("name", "inspect_ui").put("description",
                 "Read the current Android screen state before and after phone actions. "
@@ -766,7 +838,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         tools.put(new JSONObject().put("name", "list_active_schedules").put("description", "List all currently active timers, background screen monitors, and countdowns with their remaining time.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject())));
         tools.put(new JSONObject().put("name", "cancel_schedule").put("description", "Cancel one or all active timers/screen monitors.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("task_id", new JSONObject().put("type", "STRING").put("description", "Optional task ID to cancel, e.g. 'timer_1'")).put("label_hint", new JSONObject().put("type", "STRING").put("description", "Optional keyword/label of the timer to cancel")).put("cancel_all", new JSONObject().put("type", "BOOLEAN").put("description", "Set true to cancel all active timers and monitors")))));
         tools.put(new JSONObject().put("name", "take_screenshot").put("description", "Capture the phone screen ONLY when inspect_ui has no nodes (e.g. Canvas, Unity, WebGL, custom game UI) or user explicitly requests it."));
-        tools.put(new JSONObject().put("name", "end_voice_session").put("description", "End or hang up the voice call immediately when the user asks to close, exit, hang up, or says goodbye (e.g. 關閉, 掛斷, 結束通話, 退下, 再見, 先這樣)."));
+        tools.put(new JSONObject().put("name", "end_voice_session").put("description", "End the voice call only for an explicit call-ending command: '結束通話', '掛斷電話', or '退出語音助理'. Never infer this from '關閉', '退出', '再見', '先這樣', or a request to close an app, window, or feature."));
         tools.put(new JSONObject().put("name", "save_to_main_chat").put("description", "Save a concise result or note to Crew Pocket main chat ONLY when the user explicitly asks to save, record, or send it there. Never use this for ordinary conversation.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("message", new JSONObject().put("type", "STRING").put("description", "The exact concise note to save"))).put("required", new JSONArray().put("message"))));
         tools.put(new JSONObject().put("name", "list_decks").put("description", "List trusted locally installed Live Decks available for a presentation, story, or teaching flow. Call before opening a deck when its ID is unknown."));
         tools.put(new JSONObject().put("name", "open_deck").put("description", "Open a trusted Live Deck by deckId and show its first card full-screen. Returns that card's concise presentation data.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("deck_id", new JSONObject().put("type", "STRING").put("description", "ID returned by list_decks"))).put("required", new JSONArray().put("deck_id"))));
@@ -853,10 +925,24 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             requestAgentConclusion(task, task.blockedReason);
             return;
         }
+        final JSONObject beforeCorrectionContext = workingContext.toJson();
+        final CorrectionLearningRuntime.Decision correctionDecision =
+                CorrectionLearningRuntime.beforeMutation(name, args, beforeCorrectionContext);
+
         JSONObject result = new JSONObject();
         activeToolThread = Thread.currentThread();
         try {
-            if ("take_screenshot".equals(name)) result = captureAndSendScreen();
+            if (correctionDecision.applied) {
+                String learnedName = correctionDecision.toolName;
+                JSONObject learnedArgs = correctionDecision.args;
+                if ("tap_element".equals(learnedName)) result = tapSemanticElement(learnedArgs);
+                else if ("tap_screen".equals(learnedName)) result = tap(learnedArgs);
+                else if ("launch_app".equals(learnedName)) result = launchApp(learnedArgs);
+                else if ("swipe_screen".equals(learnedName)) result = swipe(learnedArgs);
+                else if ("press_key".equals(learnedName)) result = pressKey(learnedArgs);
+                else result.put("success", false).put("error", "LEARNED_CORRECTION_UNSUPPORTED");
+            }
+            else if ("take_screenshot".equals(name)) result = captureAndSendScreen();
             else if ("inspect_ui".equals(name)) result = inspectUi(args);
             else if ("tap_element".equals(name)) result = tapSemanticElement(args);
             else if ("wait".equals(name)) result = waitForCondition(args);
@@ -871,6 +957,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             else if ("start_screen_monitor".equals(name)) result = startScreenMonitor(args);
             else if ("list_active_schedules".equals(name)) result = listSchedules();
             else if ("cancel_schedule".equals(name)) result = cancelSchedule(args);
+            else if ("save_memory_rule".equals(name)) result = saveMemoryRule(args);
+            else if ("list_memory_rules".equals(name)) result = listMemoryRules();
             else if ("end_voice_session".equals(name)) {
                 result.put("success", true).put("message", "語音通話即將結束");
                 sendToolResponse(id, name, result);
@@ -907,6 +995,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         } finally { activeToolConnection = null; }
         try {
             if (task.cancelled) result = new JSONObject().put("success", false).put("cancelled", true).put("error", "使用者已停止任務");
+            if (isMutationTool(name)) {
+                CorrectionLearningRuntime.afterMutation(
+                        name, args, result, beforeCorrectionContext, correctionDecision);
+            }
             task.addStep(name, result);
             sendToolResponse(id, name, result);
             task.awaitingModel = true;
