@@ -322,6 +322,18 @@ public class MainActivity extends Activity {
                 @Override public void onClick(View v) { showVoicePersonaDialog(); }
             }));
 
+        final int liveIdleMinutes = AppConfig.getLiveIdleTimeoutMinutes(this);
+        String liveIdleSummary = liveIdleMinutes <= 0
+            ? I18n.get(this, "已關閉 · Live 不會因閒置自動結束", "Disabled · Live will not auto-end when idle")
+            : I18n.get(this,
+                "最後一次使用者指令後 " + liveIdleMinutes + " 分鐘，Agent 閒置時自動結束 Live",
+                "Auto-end Live after " + liveIdleMinutes + " min without a new user instruction, once Agent is idle");
+        pageContent.addView(makeActionCard("⏱️",
+            I18n.get(this, "語音閒置自動結束", "Live Idle Auto-End"),
+            liveIdleSummary, CrewTheme.CYAN_400, new View.OnClickListener() {
+                @Override public void onClick(View v) { showLiveIdleTimeoutDialog(); }
+            }));
+
         // ── 2. System & Permissions ──
         addSectionTitle(pageContent, I18n.get(this, "📱 手機操作與權限", "PHONE CONTROL & PERMISSIONS"));
 
@@ -584,6 +596,38 @@ public class MainActivity extends Activity {
         } else {
             requestPermissions(new String[]{android.Manifest.permission.CAMERA}, 101);
         }
+    }
+
+    private void showLiveIdleTimeoutDialog() {
+        final int[] values = new int[]{0, 1, 2, 3, 5, 10, 15, 30};
+        final String[] labels = new String[]{
+            I18n.get(this, "關閉自動結束", "Disable auto-end"),
+            I18n.get(this, "1 分鐘", "1 minute"),
+            I18n.get(this, "2 分鐘（預設）", "2 minutes (default)"),
+            I18n.get(this, "3 分鐘", "3 minutes"),
+            I18n.get(this, "5 分鐘", "5 minutes"),
+            I18n.get(this, "10 分鐘", "10 minutes"),
+            I18n.get(this, "15 分鐘", "15 minutes"),
+            I18n.get(this, "30 分鐘", "30 minutes")
+        };
+        int current = AppConfig.getLiveIdleTimeoutMinutes(this);
+        int checked = 0;
+        for (int i = 0; i < values.length; i++) {
+            if (values[i] == current) { checked = i; break; }
+        }
+
+        new android.app.AlertDialog.Builder(this)
+            .setTitle(I18n.get(this, "⏱️ 語音閒置自動結束", "⏱️ Live Idle Auto-End"))
+            .setSingleChoiceItems(labels, checked, new android.content.DialogInterface.OnClickListener() {
+                @Override public void onClick(android.content.DialogInterface dialog, int which) {
+                    AppConfig.setLiveIdleTimeoutMinutes(MainActivity.this, values[which]);
+                    NativeLiveService.refreshLiveIdleTimeout();
+                    dialog.dismiss();
+                    renderSettingsPage();
+                }
+            })
+            .setNegativeButton(I18n.get(this, "取消", "Cancel"), null)
+            .show();
     }
 
     private void showDiagnosticsDialog() {

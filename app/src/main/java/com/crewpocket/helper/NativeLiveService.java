@@ -73,6 +73,8 @@ public class NativeLiveService extends Service {
     private boolean sharingScreen;
     private int reconnectAttempts;
     private boolean stopRequested;
+    /** 0031: wall-clock of the latest real user transcript/typed instruction. */
+    private long lastUserInstructionAtMs;
 
     // 0025-hotfix3 diagnostics. No audio content is retained.
     private volatile String lastWakeStatus = "not started";
@@ -120,6 +122,57 @@ public class NativeLiveService extends Service {
             startLiveClient();
         }
     };
+
+    private final Runnable liveIdleTimeoutRunnable = new Runnable() {
+        @Override public void run() {
+            if (!active || stopRequested) return;
+
+            int minutes = AppConfig.getLiveIdleTimeoutMinutes(NativeLiveService.this);
+            if (minutes <= 0) return;
+
+            long timeoutMs = minutes * 60_000L;
+            long now = System.currentTimeMillis();
+            if (lastUserInstructionAtMs <= 0L) lastUserInstructionAtMs = now;
+            long ageMs = Math.max(0L, now - lastUserInstructionAtMs);
+
+            if (ageMs < timeoutMs) {
+                visualHandler.postDelayed(this, Math.max(1000L, timeoutMs - ageMs));
+                return;
+            }
+
+            NativeGeminiLiveClient live = client;
+            if (live != null && (live.hasActiveAgentTask() || live.isAiSpeaking())) {
+                visualHandler.postDelayed(this, 15_000L);
+                return;
+            }
+
+            returnToIdle("閒置 " + minutes + " 分鐘，自動結束語音");
+        }
+    };
+
+    private void noteLiveUserInstruction() {
+        if (!active) return;
+        lastUserInstructionAtMs = System.currentTimeMillis();
+        armLiveIdleTimeout();
+    }
+
+    private void armLiveIdleTimeout() {
+        visualHandler.removeCallbacks(liveIdleTimeoutRunnable);
+        if (!active || stopRequested) return;
+        int minutes = AppConfig.getLiveIdleTimeoutMinutes(this);
+        if (minutes <= 0) return;
+        if (lastUserInstructionAtMs <= 0L) {
+            lastUserInstructionAtMs = System.currentTimeMillis();
+        }
+        long timeoutMs = minutes * 60_000L;
+        long ageMs = Math.max(0L, System.currentTimeMillis() - lastUserInstructionAtMs);
+        visualHandler.postDelayed(liveIdleTimeoutRunnable, Math.max(1000L, timeoutMs - ageMs));
+    }
+
+    static void refreshLiveIdleTimeout() {
+        NativeLiveService service = instance;
+        if (service != null) service.armLiveIdleTimeout();
+    }
 
     private final Runnable wakeRetryRunnable = new Runnable() {
         @Override public void run() {
@@ -858,6 +911,8 @@ public class NativeLiveService extends Service {
         runtimeState = RuntimeState.ACTIVE;
         active = true;
         stopRequested = false;
+        lastUserInstructionAtMs = System.currentTimeMillis();
+        armLiveIdleTimeout();
         reconnectAttempts = 0;
         wakeRetryAttempts = 0;
         ensureForeground("Gemini Live 使用中");
@@ -1057,6 +1112,9 @@ public class NativeLiveService extends Service {
                         handleClientStopped(reason);
                     }
                     @Override public void onTranscript(String role, String text) {
+                        if ("你".equals(role) && text != null && !text.trim().isEmpty()) {
+                            noteLiveUserInstruction();
+                        }
                         FloatingBubbleManager.getInstance(NativeLiveService.this).updateLiveTranscript(role, text);
                     }
                     @Override public void onSpeakingChanged(boolean speaking) {
@@ -1157,6 +1215,8 @@ public class NativeLiveService extends Service {
 
     private synchronized void returnToIdle(String reason) {
         visualHandler.removeCallbacks(reconnectRunnable);
+        visualHandler.removeCallbacks(liveIdleTimeoutRunnable);
+        lastUserInstructionAtMs = 0L;
         CameraPreviewOverlay.getInstance(this).hide();
         sharingCamera = false;
         sharingScreen = false;
@@ -1205,6 +1265,8 @@ public class NativeLiveService extends Service {
         visualHandler.removeCallbacks(wakeHealthRunnable);
         visualHandler.removeCallbacks(wakeSlowProbeRunnable);
         visualHandler.removeCallbacks(externalMicResumeRunnable);
+        visualHandler.removeCallbacks(liveIdleTimeoutRunnable);
+        lastUserInstructionAtMs = 0L;
         externalMicSuspended = false;
         externalMicAutoYield = false;
         externalRecordingCount = 0;
@@ -1311,6 +1373,8 @@ public class NativeLiveService extends Service {
         visualHandler.removeCallbacks(wakeHealthRunnable);
         visualHandler.removeCallbacks(wakeSlowProbeRunnable);
         visualHandler.removeCallbacks(externalMicResumeRunnable);
+        visualHandler.removeCallbacks(liveIdleTimeoutRunnable);
+        lastUserInstructionAtMs = 0L;
         unregisterExternalMicMonitor();
         SherpaWakeWordEngine wakeClosing = wakeWordEngine;
         wakeWordEngine = null;

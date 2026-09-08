@@ -298,9 +298,16 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         return true;
     }
 
+    private void supersedeActiveAgentTaskForNewUserInstruction() {
+        if (hasActiveAgentTask()) {
+            cancelAgentTask("新使用者指令取代舊任務");
+        }
+    }
+
     boolean sendText(String text) {
         if (!running || webSocket == null || text == null || text.trim().isEmpty()) return false;
         try {
+            supersedeActiveAgentTaskForNewUserInstruction();
             if (audioIncidentRecorder != null) audioIncidentRecorder.markTypedInput(text.trim());
             userActionScope.updateFromUserText(text.trim());
             boolean correctionInput = correctionWindowActive && System.currentTimeMillis() <= correctionWindowUntil;
@@ -596,6 +603,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         String completeUserInput = "";
         if (inputTranscript != null && !inputTranscript.optString("text").isEmpty()) {
             String fragment = inputTranscript.optString("text");
+            boolean newUserTurn = authorizationTranscript.isEmpty();
+            if (newUserTurn) supersedeActiveAgentTaskForNewUserInstruction();
             authorizationTranscript = fragment.startsWith(authorizationTranscript)
                     ? fragment : authorizationTranscript + fragment;
             if (authorizationTranscript.length() > 4096) authorizationTranscript = fragment;
@@ -940,6 +949,24 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         final String id = call.optString("id", "tool_" + System.nanoTime());
         final String name = call.optString("name", "unknown");
         final JSONObject args = call.optJSONObject("args") == null ? new JSONObject() : call.optJSONObject("args");
+
+        final AgentTaskRecord stabilityTask = peekActiveAgentTask();
+        final JSONObject stabilityBlock = agentStabilityPreflight(stabilityTask, name, args);
+        if (stabilityBlock != null && stabilityTask != null) {
+            try {
+                stabilityTask.addStep(name, stabilityBlock);
+                sendToolResponse(id, name, stabilityBlock);
+                if (stabilityTask.blockedReason != null) {
+                    requestAgentConclusion(stabilityTask, stabilityTask.blockedReason);
+                } else {
+                    stabilityTask.awaitingModel = true;
+                    scheduleAgentResponseWatchdog(stabilityTask);
+                    reportStage("Runtime 要求先重新觀察畫面，再改用不同方法");
+                }
+            } catch (Exception ignored) {}
+            return;
+        }
+
         final AgentTaskRecord task = beginAgentStep(name, args);
         if (task == null) {
             sendBlockedToolResponse(id, name, "Agent 任務已停止，請以目前資訊作結論。");
@@ -1032,14 +1059,20 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         try {
             if (task.cancelled) result = new JSONObject().put("success", false).put("cancelled", true).put("error", "使用者已停止任務");
             if (isMutationTool(name)) {
+                normalizeMutationContract(result);
                 CorrectionLearningRuntime.afterMutation(
                         name, args, result, beforeCorrectionContext, correctionDecision);
             }
+            updateAgentStabilityAfterResult(task, name, args, result);
             task.addStep(name, result);
             sendToolResponse(id, name, result);
-            task.awaitingModel = true;
-            scheduleAgentResponseWatchdog(task);
-            reportStage("Agent 第 " + task.steps + " / " + agentMaxSteps + " 步：已取得「" + name + "」結果，正在決定下一步");
+            if (task.blockedReason != null) {
+                requestAgentConclusion(task, task.blockedReason);
+            } else {
+                task.awaitingModel = true;
+                scheduleAgentResponseWatchdog(task);
+                reportStage("Agent 第 " + task.steps + " / " + agentMaxSteps + " 步：已取得「" + name + "」結果，正在決定下一步");
+            }
         } catch (Exception error) { reportStage("Agent 工具結果回灌失敗：" + error.getMessage()); }
     }
 
@@ -1096,6 +1129,115 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 || "type_text".equals(name)
                 || "send_text".equals(name)
                 || "press_key".equals(name);
+    }
+
+    private AgentTaskRecord peekActiveAgentTask() {
+        synchronized (agentLock) {
+            return activeAgentTask == null || activeAgentTask.finished ? null : activeAgentTask;
+        }
+    }
+
+    private JSONObject agentStabilityPreflight(AgentTaskRecord task, String name, JSONObject args) {
+        if (task == null || task.finished || task.cancelled || !isMutationTool(name)) return null;
+        synchronized (agentLock) {
+            String code = "";
+            String instruction = "";
+            if (task.requireObservationAfterFailure || semanticObserveRequired) {
+                code = "OBSERVE_REQUIRED_AFTER_FAILURE";
+                instruction = "上一個操作失敗或驗證不足。先呼叫 inspect_ui 一次，再依最新畫面改用不同方法；不要直接重做 mutation。";
+            } else {
+                String signature = buildAgentSignature(name, args);
+                if (!task.lastFailedMutationSignature.isEmpty()
+                        && signature.equals(task.lastFailedMutationSignature)
+                        && !task.failedMutationScreenFingerprint.isEmpty()
+                        && task.failedMutationScreenFingerprint.equals(latestSemanticFingerprint)) {
+                    code = "REPEAT_FAILED_ACTION_ON_UNCHANGED_SCREEN";
+                    instruction = "這個完全相同的操作已在目前畫面失敗。禁止原樣重試；請換 selector、換工具、返回，或直接回報卡點。";
+                }
+            }
+            if (code.isEmpty()) return null;
+
+            task.stabilityBlocks++;
+            if (task.stabilityBlocks >= 2) {
+                task.blockedReason = "Runtime 已連續兩次阻止無效重試，停止本次 Agent loop；請向使用者簡短回報目前卡點。";
+            }
+            try {
+                return new JSONObject()
+                        .put("success", false)
+                        .put("stepResult", "STEP_FAILED")
+                        .put("blockedByRuntime", true)
+                        .put("error", code)
+                        .put("instruction", instruction);
+            } catch (Exception ignored) {
+                return new JSONObject();
+            }
+        }
+    }
+
+    private void normalizeMutationContract(JSONObject result) {
+        if (result == null) return;
+        try {
+            if (!result.has("stepResult")) {
+                result.put("stepResult", result.optBoolean("success", false) ? "STEP_OK" : "STEP_FAILED");
+            }
+            if (!result.has("success")) {
+                result.put("success", "STEP_OK".equals(result.optString("stepResult", "")));
+            }
+        } catch (Exception ignored) {}
+    }
+
+    private void updateAgentStabilityAfterResult(AgentTaskRecord task,
+                                                 String name,
+                                                 JSONObject args,
+                                                 JSONObject result) {
+        if (task == null || result == null) return;
+        synchronized (agentLock) {
+            if ("inspect_ui".equals(name) && result.optBoolean("success", false)) {
+                task.requireObservationAfterFailure = false;
+                task.stabilityBlocks = 0;
+                String observed = result.optString("fingerprint", latestSemanticFingerprint);
+                if (!task.failedMutationScreenFingerprint.isEmpty()
+                        && !observed.isEmpty()
+                        && !task.failedMutationScreenFingerprint.equals(observed)) {
+                    task.lastFailedMutationSignature = "";
+                    task.failedMutationScreenFingerprint = "";
+                    task.consecutiveMutationFailures = 0;
+                }
+                return;
+            }
+
+            if (!isMutationTool(name)) return;
+
+            boolean success = result.optBoolean("success", false)
+                    || "STEP_OK".equals(result.optString("stepResult", ""));
+            if (success) {
+                task.requireObservationAfterFailure = false;
+                task.lastFailedMutationSignature = "";
+                task.failedMutationScreenFingerprint = "";
+                task.consecutiveMutationFailures = 0;
+                task.stabilityBlocks = 0;
+                return;
+            }
+
+            if (result.optBoolean("cancelled", false)
+                    || result.optBoolean("agentStopped", false)
+                    || result.optBoolean("blockedByRuntime", false)
+                    || result.has("policy")) {
+                return;
+            }
+
+            task.lastFailedMutationSignature = buildAgentSignature(name, args);
+            task.failedMutationScreenFingerprint = latestSemanticFingerprint;
+            task.consecutiveMutationFailures++;
+
+            if (!blocksOutcomeReconciliation(result)) {
+                task.requireObservationAfterFailure = true;
+            }
+
+            if (task.consecutiveMutationFailures >= 3) {
+                task.blockedReason = "連續 3 次手機操作失敗，Runtime 已停止繼續試錯；請回報目前畫面與卡點，不要再呼叫工具。";
+            }
+        }
     }
 
     private int maxRunsForTool(String name) { return "advance_deck".equals(name) || "present_deck_card".equals(name) ? AGENT_DECK_NAV_MAX_RUNS : AGENT_MAX_TOOL_RUNS; }
@@ -2423,6 +2565,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         final java.util.HashMap<String, Integer> toolCounts = new java.util.HashMap<String, Integer>();
         int steps;
         int mutationActions;
+        int consecutiveMutationFailures;
+        int stabilityBlocks;
+        boolean requireObservationAfterFailure;
+        String lastFailedMutationSignature = "";
+        String failedMutationScreenFingerprint = "";
         String lastSignature = "";
         String status = "";
         String blockedReason;

@@ -17,6 +17,8 @@ public class AppConfig {
     public static final String KEY_VOICE_PRESET = "voice_preset";
     /** Maximum automatic Gemini tool-result cycles in one Live agent task. */
     public static final String KEY_AGENT_MAX_STEPS = "agent_max_steps";
+    /** 0031: minutes without a new user instruction before Live returns to IDLE. 0 disables. */
+    public static final String KEY_LIVE_IDLE_TIMEOUT_MINUTES = "live_idle_timeout_minutes";
 
     // 0025: Always-On infra. These are runtime/infra preferences, not LLM state.
     public static final String KEY_ALWAYS_ON_ENABLED = "always_on_enabled";
@@ -169,6 +171,20 @@ public class AppConfig {
     public static void setAgentMaxSteps(Context context, int steps) {
         if (context == null) return;
         getPrefs(context).edit().putInt(KEY_AGENT_MAX_STEPS, Math.max(1, Math.min(100, steps))).apply();
+    }
+
+    // 0031. Live idle timeout
+    public static int getLiveIdleTimeoutMinutes(Context context) {
+        if (context == null) return 2;
+        return Math.max(0, Math.min(30,
+                getPrefs(context).getInt(KEY_LIVE_IDLE_TIMEOUT_MINUTES, 2)));
+    }
+
+    public static void setLiveIdleTimeoutMinutes(Context context, int minutes) {
+        if (context == null) return;
+        getPrefs(context).edit().putInt(
+                KEY_LIVE_IDLE_TIMEOUT_MINUTES,
+                Math.max(0, Math.min(30, minutes))).apply();
     }
 
     // ── 0025. Always-On Runtime ──
