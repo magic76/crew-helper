@@ -51,8 +51,8 @@ public class CorrectionRulesActivity extends Activity {
 
         TextView title = new TextView(this);
         title.setText(I18n.get(this,
-                "🧠 已學習操作與規則",
-                "🧠 Learned Operations & Rules"));
+                "🧠 已學習操作與快捷指令",
+                "🧠 Learned Operations & Shortcuts"));
         title.setTextSize(23);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         title.setTextColor(CrewTheme.TEXT_PRIMARY);
@@ -60,8 +60,8 @@ public class CorrectionRulesActivity extends Activity {
 
         TextView desc = new TextView(this);
         desc.setText(I18n.get(this,
-                "包含單步修正與你明確教學的 Memory Rule；不保存輸入文字、訊息內容、密碼或 OTP。",
-                "Contains verified corrections and explicitly taught Memory Rules. Typed text, messages, passwords and OTPs are never stored."));
+                "包含單步修正與你明確建立的快捷指令；舊 Memory Rule 會自動相容。不保存密碼、OTP 或訊息內容。",
+                "Contains verified corrections and explicitly created shortcuts. Legacy Memory Rules remain compatible. Passwords, OTPs and message contents are not stored."));
         desc.setTextSize(12);
         desc.setTextColor(CrewTheme.TEXT_SECONDARY);
         desc.setPadding(0, dp(6), 0, dp(16));
@@ -71,9 +71,9 @@ public class CorrectionRulesActivity extends Activity {
 
         TextView summary = new TextView(this);
         summary.setText(I18n.get(this,
-                "修正 " + rules.size() + " 條 · 規則 " + memoryStore.count()
+                "修正 " + rules.size() + " 條 · 快捷指令 " + memoryStore.count()
                         + " 條 · 啟用 " + (store.enabledCount() + memoryStore.enabledCount()) + " 條",
-                rules.size() + " corrections · " + memoryStore.count() + " rules · "
+                rules.size() + " corrections · " + memoryStore.count() + " shortcuts · "
                         + (store.enabledCount() + memoryStore.enabledCount()) + " enabled"));
         summary.setTextSize(11);
         summary.setTextColor(CrewTheme.TEAL_300);
@@ -81,7 +81,7 @@ public class CorrectionRulesActivity extends Activity {
         content.addView(summary);
 
         Button addMemoryRule = new Button(this);
-        addMemoryRule.setText(I18n.get(this, "＋ 新增記憶規則", "+ Add Memory Rule"));
+        addMemoryRule.setText(I18n.get(this, "＋ 新增快捷指令", "+ Add Shortcut"));
         addMemoryRule.setAllCaps(false);
         addMemoryRule.setTextColor(CrewTheme.TEXT_PRIMARY);
         addMemoryRule.setBackground(CrewTheme.createCard(
@@ -113,7 +113,7 @@ public class CorrectionRulesActivity extends Activity {
         }
 
         if (!memoryRules.isEmpty()) {
-            addGroupTitle(I18n.get(this, "記憶規則", "MEMORY RULES"));
+            addGroupTitle(I18n.get(this, "快捷指令", "SHORTCUTS"));
             for (final MemoryRuleStore.Rule rule : memoryRules) content.addView(buildMemoryRuleCard(rule));
         }
         if (!rules.isEmpty()) addGroupTitle(I18n.get(this, "單步修正", "CORRECTIONS"));
@@ -215,10 +215,10 @@ public class CorrectionRulesActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         new android.app.AlertDialog.Builder(this)
-                .setTitle(I18n.get(this, "新增記憶規則", "Add Memory Rule"))
+                .setTitle(I18n.get(this, "新增快捷指令", "Add Shortcut"))
                 .setView(form)
                 .setNegativeButton(I18n.get(this, "取消", "Cancel"), null)
-                .setPositiveButton(I18n.get(this, "儲存規則", "Save Rule"),
+                .setPositiveButton(I18n.get(this, "儲存快捷指令", "Save Shortcut"),
                         new DialogInterface.OnClickListener() {
                             @Override public void onClick(DialogInterface dialog, int which) {
                                 MemoryRuleStore.Rule saved = memoryStore.save(
@@ -233,7 +233,7 @@ public class CorrectionRulesActivity extends Activity {
                                 }
                                 Toast.makeText(CorrectionRulesActivity.this,
                                         I18n.get(CorrectionRulesActivity.this,
-                                                "規則已儲存", "Rule saved"), Toast.LENGTH_SHORT).show();
+                                                "快捷指令已儲存", "Shortcut saved"), Toast.LENGTH_SHORT).show();
                                 render();
                             }
                         })
@@ -249,7 +249,10 @@ public class CorrectionRulesActivity extends Activity {
         trigger.setText((rule.enabled ? "● 當我說「" : "○ 已停用：當我說「") + rule.trigger + "」");
         trigger.setTextColor(rule.enabled ? CrewTheme.TEXT_PRIMARY : CrewTheme.TEXT_MUTED);
         trigger.setTextSize(13); trigger.setTypeface(Typeface.DEFAULT_BOLD); card.addView(trigger);
-        TextView action = new TextView(this); action.setText("→ " + rule.action);
+        TextView action = new TextView(this);
+        String usage = rule.triggerCount > 0
+                ? "\n使用 " + rule.triggerCount + " 次 · " + rule.lastMatchMode : "";
+        action.setText("→ " + rule.action + usage);
         action.setTextColor(CrewTheme.TEXT_SECONDARY); action.setTextSize(12); action.setPadding(0, dp(5), 0, 0); card.addView(action);
         card.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View view) { showMemoryRuleDialog(rule); } });
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -258,7 +261,7 @@ public class CorrectionRulesActivity extends Activity {
 
     private void showMemoryRuleDialog(final MemoryRuleStore.Rule rule) {
         new android.app.AlertDialog.Builder(this)
-                .setTitle(I18n.get(this, "Memory Rule", "Memory Rule"))
+                .setTitle(I18n.get(this, "快捷指令", "Shortcut"))
                 .setMessage(I18n.get(this, "觸發：" + rule.trigger + "\n\n執行：" + rule.action,
                         "Trigger: " + rule.trigger + "\n\nAction: " + rule.action))
                 .setPositiveButton(I18n.get(this, rule.enabled ? "停用" : "啟用", rule.enabled ? "Disable" : "Enable"),

@@ -123,6 +123,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private MemoryRuleIndex memoryRuleIndex;
     private String lastMemoryDispatchKey = "";
     private long lastMemoryDispatchAt = 0L;
+    // Gemini may compile a shortcut only after a recent explicit teaching request.
+    private long shortcutTeachingAuthorizedUntil = 0L;
     private AudioIncidentRecorder audioIncidentRecorder;
     private volatile PendingCondition pendingCondition = null;
 
@@ -701,12 +703,12 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 || clean.contains("停止簡報") || clean.contains("暫停簡報") || clean.contains("不要翻頁") || clean.contains("先別翻頁") || clean.contains("關閉簡報");
     }
 
-    /** Native persistence means rules survive the Live session and app process. */
+    /** Runtime matches/persists; Gemini only compiles during explicit teaching. */
     private void processMemoryRuleInput(String inputText) {
         try {
             if (appContext == null) {
-                Log.w(TAG, "Memory Rule 無法儲存：App Context 不可用");
-                reportStage("Memory Rule 未儲存：系統尚未就緒");
+                Log.w(TAG, "Shortcut 無法儲存：App Context 不可用");
+                reportStage("Shortcut 未儲存：系統尚未就緒");
                 return;
             }
             MemoryRuleStore store = new MemoryRuleStore(appContext);
@@ -715,34 +717,42 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 MemoryRuleStore.Rule saved = store.save(teaching.trigger, teaching.action);
                 MemoryRuleStore.Rule verified = saved == null ? null : store.findExact(saved.trigger);
                 if (verified == null || !saved.action.equals(verified.action)) {
-                    reportStage("Memory Rule 未儲存：規則格式不完整或含敏感內容");
-                    sendInternalAgentDirective("【Memory Rule 系統】規則未儲存。請要求使用者用「記住一條規則：以後我說『觸發語句』，就幫我『操作描述』」重述；不可聲稱已記住。");
+                    shortcutTeachingAuthorizedUntil = System.currentTimeMillis() + 90_000L;
+                    reportStage("Shortcut 尚未儲存：請由 AI 整理觸發句與操作");
+                    sendInternalAgentDirective("【Shortcut Runtime】使用者正在建立快捷指令。請從最新使用者語句整理 trigger 與 action；缺任何一項只問一次最小澄清。資訊完整後呼叫 create_shortcut(trigger, action, aliases)。aliases 只放非常接近的自然說法，不可擴大語意。在 tool success=true 前不可說已儲存。");
                 } else {
+                    shortcutTeachingAuthorizedUntil = 0L;
                     if (memoryRuleIndex != null) memoryRuleIndex.refresh();
-                    reportStage("已儲存 Memory Rule：「" + saved.trigger + "」");
-                    sendInternalAgentDirective("【Memory Rule 系統】已永久儲存規則：當使用者說「" + saved.trigger + "」，任務意圖是「" + saved.action + "」。目前這句是教學，不要立刻執行；只簡短確認已儲存。未來精確命中觸發語句時，必須依此意圖執行，但仍遵守所有安全確認與畫面驗證。 ");
+                    reportStage("Shortcut 已儲存：「" + saved.trigger + "」");
+                    sendInternalAgentDirective("【Shortcut Runtime】已永久儲存快捷指令：觸發「" + saved.trigger + "」，任務「" + saved.action + "」。目前這句是教學，不要立刻執行；只簡短確認『快捷指令已儲存』。");
                 }
                 return;
             }
             if (isMemoryRuleRequest(inputText)) {
-                reportStage("Memory Rule 尚缺觸發語句或操作內容");
-                sendInternalAgentDirective("【Memory Rule 系統】使用者要求建立規則，但尚未提供完整 trigger 與 action。請只問一句：「以後你說哪一句話時，要我做什麼？」在原生系統確認已儲存前，絕不可說已記住。");
+                shortcutTeachingAuthorizedUntil = System.currentTimeMillis() + 90_000L;
+                reportStage("Shortcut 教學模式：等待 AI 整理 trigger / action");
+                sendInternalAgentDirective("【Shortcut Runtime 教學授權】使用者明確要求建立快捷指令／規則。若最新語句已包含 trigger 與 action，直接呼叫 create_shortcut；若不完整，只問一句：『你想用哪一句話觸發，要我做什麼？』收到答案後呼叫 create_shortcut。可提供 0~3 個非常接近的 aliases。不要建立傳訊息、刪除、付款/購買、帳戶修改、密碼/OTP 或掛斷類快捷指令。");
                 return;
             }
-            MemoryRuleStore.Rule matched = memoryRuleIndex == null
-                    ? store.findExact(inputText)
-                    : memoryRuleIndex.findExact(inputText);
-            if (matched != null) {
-                String dispatchKey = TextMatch.caseFold(matched.trigger);
+            MemoryRuleIndex.Match matched = memoryRuleIndex == null ? null : memoryRuleIndex.findBest(inputText);
+            if (matched == null && memoryRuleIndex == null) {
+                MemoryRuleStore.Rule exact = store.findExact(inputText);
+                if (exact != null) matched = new MemoryRuleIndex.Match(exact, "EXACT", 1.0, exact.trigger);
+            }
+            if (matched != null && matched.rule != null) {
+                MemoryRuleStore.Rule rule = matched.rule;
+                String dispatchKey = TextMatch.caseFold(rule.id + "|" + matched.mode);
                 long now = System.currentTimeMillis();
                 if (dispatchKey.equals(lastMemoryDispatchKey) && now - lastMemoryDispatchAt < 2500L) return;
                 lastMemoryDispatchKey = dispatchKey;
                 lastMemoryDispatchAt = now;
-                userActionScope.updateFromTrustedAction(matched.action);
-                reportStage("Memory Rule 命中：「" + matched.trigger + "」");
-                sendInternalAgentDirective("【Memory Rule 命中】使用者剛說「" + matched.trigger + "」。這是已儲存的持久規則，現在必須處理的任務是：「" + matched.action + "」。請立即規劃並執行需要的工具步驟；每一步以實際畫面驗證。敏感、高風險或需要輸入私密資料的步驟仍須先取得當次明確確認。 ");
+                store.recordMatch(rule.id, matched.mode);
+                if (memoryRuleIndex != null) memoryRuleIndex.refresh();
+                if (!MemoryRuleStore.containsProhibitedShortcutAction(rule.action)) userActionScope.updateFromTrustedAction(rule.action);
+                reportStage("Shortcut 命中：「" + rule.trigger + "」 · " + matched.mode);
+                sendInternalAgentDirective("【Shortcut Runtime 命中】Runtime 已確認使用者目前語句命中快捷指令。主觸發：「" + rule.trigger + "」；matchMode=" + matched.mode + "；confidence=" + matched.confidence + "。現在要完成的任務是：「" + rule.action + "」。不要重新判斷是否應命中，也不要再詢問觸發意圖；直接依正常 Observe→Action→Verify 執行。仍必須遵守最新使用者授權、安全政策與 Runtime 拒絕。");
             }
-        } catch (Exception error) { Log.w(TAG, "Memory Rule 處理失敗：" + error.getMessage()); }
+        } catch (Exception error) { Log.w(TAG, "Shortcut 處理失敗：" + error.getMessage()); }
     }
 
     private MemoryRuleStore memoryRuleStore() throws Exception {
@@ -750,28 +760,43 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         return new MemoryRuleStore(appContext);
     }
 
-    private JSONObject saveMemoryRule(JSONObject args) throws Exception {
-        MemoryRuleStore.Rule saved = memoryRuleStore().save(args.optString("trigger"), args.optString("action"));
-        if (saved == null) return new JSONObject().put("success", false)
-                .put("error", "規則必須包含觸發語句、非敏感操作描述，且不可含密碼、OTP 或驗證碼");
-        return new JSONObject().put("success", true).put("ruleId", saved.id)
+    private JSONObject createShortcut(JSONObject args) throws Exception {
+        if (System.currentTimeMillis() > shortcutTeachingAuthorizedUntil) {
+            return new JSONObject().put("success", false).put("error", "SHORTCUT_CREATE_NOT_AUTHORIZED")
+                    .put("message", "只有使用者最近明確要求建立快捷指令／規則時才能儲存。");
+        }
+        String trigger = args.optString("trigger", "").trim();
+        String action = args.optString("action", "").trim();
+        JSONArray aliases = args.optJSONArray("aliases");
+        MemoryRuleStore.Rule saved = memoryRuleStore().save(trigger, action, aliases);
+        if (saved == null) return new JSONObject().put("success", false).put("error", "SHORTCUT_VALIDATION_FAILED")
+                .put("message", "觸發句/操作不完整，或操作包含傳訊息、刪除、付款、帳戶修改、密碼/OTP、掛斷等不允許的快捷動作。");
+        shortcutTeachingAuthorizedUntil = 0L;
+        if (memoryRuleIndex != null) memoryRuleIndex.refresh();
+        return new JSONObject().put("success", true).put("shortcutId", saved.id)
                 .put("trigger", saved.trigger).put("action", saved.action)
-                .put("message", "已永久儲存 Memory Rule；可在『已學習操作與規則』查看。");
+                .put("aliases", new JSONArray(saved.aliases)).put("message", "快捷指令已永久儲存。");
     }
 
     private JSONObject listMemoryRules() throws Exception {
         JSONArray rules = new JSONArray();
         for (MemoryRuleStore.Rule rule : memoryRuleStore().list()) {
             rules.put(new JSONObject().put("id", rule.id).put("trigger", rule.trigger)
-                    .put("action", rule.action).put("enabled", rule.enabled));
+                    .put("aliases", new JSONArray(rule.aliases)).put("action", rule.action)
+                    .put("enabled", rule.enabled).put("triggerCount", rule.triggerCount)
+                    .put("lastUsedAt", rule.lastUsedAt).put("lastMatchMode", rule.lastMatchMode));
         }
-        return new JSONObject().put("success", true).put("rules", rules).put("count", rules.length());
+        return new JSONObject().put("success", true).put("shortcuts", rules).put("rules", rules).put("count", rules.length());
     }
 
     private boolean isMemoryRuleRequest(String text) {
         String clean = text == null ? "" : text.replaceAll("\\s+", "");
         String lower = clean.toLowerCase(Locale.ROOT);
-        return lower.contains("memoryrule") || clean.contains("建立規則") || clean.contains("新增規則") || clean.contains("記住一條規則") || clean.contains("記憶一條規則") || clean.contains("幫我記住一條規則") || clean.contains("幫我記憶一條規則");
+        return lower.contains("memoryrule") || lower.contains("shortcut")
+                || clean.contains("建立規則") || clean.contains("新增規則") || clean.contains("建立快捷指令") || clean.contains("新增快捷指令")
+                || clean.contains("建立快捷命令") || clean.contains("設定口令") || clean.contains("設一個口令")
+                || clean.contains("記住一條規則") || clean.contains("記憶一條規則") || clean.contains("幫我記住一條規則")
+                || clean.contains("幫我建立一個規則") || clean.contains("幫我建立一個快捷指令");
     }
 
     private static String mapToSupportedVoice(String name) {
@@ -850,7 +875,15 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 .put("package_name", new JSONObject().put("type", "STRING").put("description", "Optional exact package name if known from previous candidate list"));
         tools.put(new JSONObject().put("name", "launch_app").put("description", "Open an installed Android app directly by name (e.g. 'Binance', 'LINE', 'Chrome', 'Settings') or by ordinal index (e.g. 第一個/1). Always use this instead of looking for icons on launcher.")
                 .put("parameters", new JSONObject().put("type", "OBJECT").put("properties", launchProperties)));
-        tools.put(new JSONObject().put("name", "list_memory_rules").put("description", "List persisted Memory Rules when the user asks what has been remembered."));
+        tools.put(new JSONObject().put("name", "list_memory_rules").put("description", "List persisted Runtime Shortcuts / legacy Memory Rules when the user asks what has been remembered."));
+        tools.put(new JSONObject().put("name", "create_shortcut")
+                .put("description", "Compile and persist a user-requested shortcut. Runtime accepts this only after a recent explicit user request to create/remember a rule or shortcut. Do not call proactively. Shortcuts cannot encode sending messages, deletion, payments/purchases, account changes, credentials/OTP, or hang-up.")
+                .put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject()
+                        .put("trigger", new JSONObject().put("type", "STRING").put("description", "Primary short phrase the user will say to trigger this shortcut"))
+                        .put("action", new JSONObject().put("type", "STRING").put("description", "Concrete non-sensitive phone task to perform"))
+                        .put("aliases", new JSONObject().put("type", "ARRAY").put("items", new JSONObject().put("type", "STRING"))
+                                .put("description", "Optional 0-3 close alternate trigger phrasings; never broad semantic concepts")))
+                        .put("required", new JSONArray().put("trigger").put("action"))));
         tools.put(new JSONObject().put("name", "press_key").put("description", "Trigger an Android system key or action.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("key", new JSONObject().put("type", "STRING").put("enum", new JSONArray().put("HOME").put("BACK").put("RECENTS").put("NOTIFICATIONS").put("QUICK_SETTINGS").put("POWER_DIALOG")))).put("required", new JSONArray().put("key"))));
         tools.put(new JSONObject().put("name", "inspect_ui").put("description",
                 "Read the current Android screen state before and after phone actions. "
@@ -1013,6 +1046,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             else if ("list_active_schedules".equals(name)) result = listSchedules();
             else if ("cancel_schedule".equals(name)) result = cancelSchedule(args);
             else if ("save_memory_rule".equals(name)) result.put("success", false).put("error", "MEMORY_RULE_WRITES_ARE_RUNTIME_ONLY");
+            else if ("create_shortcut".equals(name)) result = createShortcut(args);
             else if ("list_memory_rules".equals(name)) result = listMemoryRules();
             else if ("end_voice_session".equals(name)) {
                 if (!userActionScope.consumeEndCallAuthorization()) {
@@ -1116,6 +1150,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 || "wait".equals(name)
                 || "teach_ui_element".equals(name)
                 || "list_active_schedules".equals(name)
+                || "list_memory_rules".equals(name)
+                || "create_shortcut".equals(name)
                 || "list_decks".equals(name)
                 || "get_deck_card".equals(name)
                 || "list_deck_images".equals(name);
