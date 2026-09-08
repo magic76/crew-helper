@@ -49,7 +49,7 @@ final class MemoryRuleIndex {
     Match findBest(String spokenText) {
         if (looksNonExecutable(spokenText)) return null;
 
-        String input = normalize(spokenText);
+        String input = collapseImmediateRepetition(normalize(spokenText));
         if (input.length() < 2) return null;
         String strippedInput = stripConversationalWrappers(input);
 
@@ -66,6 +66,18 @@ final class MemoryRuleIndex {
             }
         }
         return best;
+    }
+
+    /**
+     * True only for direct command-shaped speech.  This is deliberately not a
+     * semantic matcher: it lets the UI explain a missed recorded shortcut
+     * without turning normal conversation into a phone action.
+     */
+    static boolean looksLikeRecordedShortcut(String spokenText) {
+        if (looksNonExecutable(spokenText)) return false;
+        String value = stripConversationalWrappers(
+                collapseImmediateRepetition(normalize(spokenText)));
+        return startsWithAny(value, "打開", "打开", "開啟", "开启", "啟動", "启动", "執行", "执行");
     }
 
     private static Match scorePhrase(MemoryRuleStore.Rule rule,
@@ -122,8 +134,9 @@ final class MemoryRuleIndex {
             changed = false;
             String next = stripPrefix(out,
                     "好", "好的", "請", "请", "麻煩", "麻烦",
-                    "可以", "你可以", "幫我", "帮我", "請幫我", "请帮我",
-                    "麻煩幫我", "麻烦帮我");
+                    "可以", "你可以", "請你", "请你", "你幫我", "你帮我",
+                    "幫我", "帮我", "請幫我", "请帮我", "我要", "我想",
+                    "麻煩幫我", "麻烦帮我", "麻煩你", "麻烦你");
             if (!next.equals(out)) {
                 out = next;
                 changed = true;
@@ -131,7 +144,9 @@ final class MemoryRuleIndex {
 
             next = stripSuffix(out,
                     "一下", "一下吧", "吧", "啦", "了", "喔", "哦",
-                    "可以嗎", "可以吗", "嗎", "吗", "呢", "謝謝", "谢谢");
+                    "可以嗎", "可以吗", "嗎", "吗", "呢", "謝謝", "谢谢",
+                    "這個app", "这个app", "這個應用程式", "这个应用程序",
+                    "這個程式", "这个程序");
             if (!next.equals(out)) {
                 out = next;
                 changed = true;
@@ -148,6 +163,14 @@ final class MemoryRuleIndex {
             }
         }
         return value;
+    }
+
+    /** Gemini may occasionally emit the same finalized phrase twice. */
+    private static String collapseImmediateRepetition(String value) {
+        if (value == null || value.length() < 4 || (value.length() & 1) != 0) return value;
+        int half = value.length() / 2;
+        String first = value.substring(0, half);
+        return first.equals(value.substring(half)) ? first : value;
     }
 
     private static String stripSuffix(String value, String... suffixes) {

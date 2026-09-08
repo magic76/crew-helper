@@ -83,6 +83,12 @@ final class AppCatalog {
         return matchingEntries(query);
     }
 
+    /** A display-safe snapshot for the explicit App shortcut picker. */
+    ArrayList<Entry> listLaunchable() {
+        ensureFresh(false);
+        synchronized (lock) { return new ArrayList<Entry>(entries); }
+    }
+
     private Resolution resolveCached(String query, long started) {
         String q = normalize(query);
         ArrayList<Entry> matches = matchingEntries(query);

@@ -16,6 +16,7 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /** 0026 Settings UI for reviewing/editing Correction Memory. */
@@ -80,26 +81,40 @@ public class CorrectionRulesActivity extends Activity {
         summary.setPadding(0, 0, 0, dp(12));
         content.addView(summary);
 
-        Button addMemoryRule = new Button(this);
-        addMemoryRule.setText(I18n.get(this, "● 錄製快捷指令", "● Record Shortcut"));
-        addMemoryRule.setAllCaps(false);
-        addMemoryRule.setTextColor(CrewTheme.TEXT_PRIMARY);
-        addMemoryRule.setBackground(CrewTheme.createCard(
+        Button addAppShortcut = new Button(this);
+        addAppShortcut.setText(I18n.get(this, "＋ 新增開啟 App 指令", "+ Add Open-App Command"));
+        addAppShortcut.setAllCaps(false);
+        addAppShortcut.setTextColor(CrewTheme.TEXT_PRIMARY);
+        addAppShortcut.setBackground(CrewTheme.createCard(
                 this, CrewTheme.BG_SURFACE, CrewTheme.BORDER_TEAL, 12));
-        addMemoryRule.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { showAddMemoryRuleDialog(); }
+        addAppShortcut.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { showAppShortcutPicker(); }
         });
         LinearLayout.LayoutParams addRuleLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(48));
         addRuleLp.setMargins(0, 0, 0, dp(12));
-        content.addView(addMemoryRule, addRuleLp);
+        content.addView(addAppShortcut, addRuleLp);
+
+        Button addAutomation = new Button(this);
+        addAutomation.setText(I18n.get(this, "錄製多步自動化（進階）", "Record Multi-step Automation (Advanced)"));
+        addAutomation.setAllCaps(false);
+        addAutomation.setTextColor(CrewTheme.TEXT_SECONDARY);
+        addAutomation.setBackground(CrewTheme.createCard(
+                this, CrewTheme.BG_SURFACE, CrewTheme.BORDER_SUBTLE, 12));
+        addAutomation.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { showAddMemoryRuleDialog(); }
+        });
+        LinearLayout.LayoutParams addAutomationLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(44));
+        addAutomationLp.setMargins(0, 0, 0, dp(12));
+        content.addView(addAutomation, addAutomationLp);
 
         List<MemoryRuleStore.Rule> memoryRules = memoryStore.list();
         if (rules.isEmpty() && memoryRules.isEmpty()) {
             TextView empty = new TextView(this);
             empty.setText(I18n.get(this,
-                    "目前還沒有記錄。\n修正操作時按「打斷」；建立快捷指令請按上方「錄製快捷指令」，再到其他 App 實際操作。",
-                    "No learned records yet.\nUse Interrupt to correct an action, or Record Shortcut and perform the real steps in other apps."));
+                    "目前還沒有記錄。最常用的需求請按「新增開啟 App 指令」；多步操作才使用進階錄製。",
+                    "No learned records yet. Use Add Open-App Command for common tasks; use advanced recording only for multi-step automation."));
             empty.setTextSize(13);
             empty.setTextColor(CrewTheme.TEXT_SECONDARY);
             empty.setPadding(dp(14), dp(16), dp(14), dp(16));
@@ -200,6 +215,62 @@ public class CorrectionRulesActivity extends Activity {
         moveTaskToBack(true);
     }
 
+    private void showAppShortcutPicker() {
+        final ArrayList<AppCatalog.Entry> apps = new AppCatalog(this).listLaunchable();
+        if (apps.isEmpty()) {
+            Toast.makeText(this, "找不到可開啟的 App", Toast.LENGTH_LONG).show();
+            return;
+        }
+        final String[] labels = new String[apps.size()];
+        for (int i = 0; i < apps.size(); i++) labels[i] = apps.get(i).label;
+        new android.app.AlertDialog.Builder(this)
+                .setTitle(I18n.get(this, "選擇要開啟的 App", "Choose an app to open"))
+                .setItems(labels, new DialogInterface.OnClickListener() {
+                    @Override public void onClick(DialogInterface dialog, int which) {
+                        if (which >= 0 && which < apps.size()) showAppShortcutNameDialog(apps.get(which));
+                    }
+                })
+                .show();
+    }
+
+    private void showAppShortcutNameDialog(final AppCatalog.Entry app) {
+        final EditText trigger = field("當我說…", "打開" + app.label, false);
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("建立開啟 App 指令")
+                .setMessage("將直接開啟「" + app.label + "」，不經 Gemini。")
+                .setView(trigger)
+                .setPositiveButton("儲存", new DialogInterface.OnClickListener() {
+                    @Override public void onClick(DialogInterface dialog, int which) {
+                        String phrase = trigger.getText().toString().trim();
+                        if (phrase.length() < 2) {
+                            Toast.makeText(CorrectionRulesActivity.this,
+                                    "觸發句至少要 2 個字", Toast.LENGTH_LONG).show();
+                            return;
+                        }
+                        MemoryRuleStore.Rule saved = memoryStore.save(phrase,
+                                AppLaunchShortcut.actionFor(app.packageName), buildOpenAliases(phrase));
+                        Toast.makeText(CorrectionRulesActivity.this,
+                                saved == null ? "儲存失敗" : "已儲存：說「" + phrase + "」即可開啟 " + app.label,
+                                Toast.LENGTH_LONG).show();
+                        render();
+                    }
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private List<String> buildOpenAliases(String phrase) {
+        ArrayList<String> aliases = new ArrayList<String>();
+        String clean = phrase == null ? "" : phrase.trim();
+        if (clean.startsWith("打開") && clean.length() > 2) {
+            String target = clean.substring(2);
+            aliases.add("開啟" + target);
+            aliases.add("啟動" + target);
+            aliases.add("開" + target);
+        }
+        return aliases;
+    }
+
     private View buildMemoryRuleCard(final MemoryRuleStore.Rule rule) {
         LinearLayout card = new LinearLayout(this); card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(14), dp(12), dp(14), dp(12));
@@ -219,6 +290,8 @@ public class CorrectionRulesActivity extends Activity {
             displayAction = plan == null
                     ? "錄製快捷操作 · 內容遺失"
                     : "錄製快捷操作 · " + plan.steps.length() + " 步";
+        } else if (AppLaunchShortcut.isAction(rule.action)) {
+            displayAction = AppLaunchShortcut.describe(this, rule.action);
         }
         action.setText("→ " + displayAction + usage);
         action.setTextColor(CrewTheme.TEXT_SECONDARY); action.setTextSize(12); action.setPadding(0, dp(5), 0, 0); card.addView(action);
@@ -235,6 +308,8 @@ public class CorrectionRulesActivity extends Activity {
             displayAction = plan == null
                     ? "錄製快捷操作內容已遺失"
                     : ShortcutPlanStore.describeSteps(plan.steps);
+        } else if (AppLaunchShortcut.isAction(rule.action)) {
+            displayAction = AppLaunchShortcut.describe(this, rule.action);
         }
         final String message = I18n.get(this,
                 "觸發：" + rule.trigger + "\n\n執行：\n" + displayAction,
@@ -266,6 +341,18 @@ public class CorrectionRulesActivity extends Activity {
                 .setNeutralButton(I18n.get(this, "測試", "Test"),
                         new DialogInterface.OnClickListener() {
                             @Override public void onClick(DialogInterface dialog, int which) {
+                                if (AppLaunchShortcut.isAction(rule.action)) {
+                                    try {
+                                        Toast.makeText(CorrectionRulesActivity.this,
+                                                AppLaunchShortcut.launch(CorrectionRulesActivity.this,
+                                                        AppLaunchShortcut.packageNameFromAction(rule.action)),
+                                                Toast.LENGTH_LONG).show();
+                                    } catch (Exception error) {
+                                        Toast.makeText(CorrectionRulesActivity.this,
+                                                error.getMessage(), Toast.LENGTH_LONG).show();
+                                    }
+                                    return;
+                                }
                                 if (!ShortcutPlanStore.isPlanAction(rule.action)) {
                                     Toast.makeText(CorrectionRulesActivity.this,
                                             "舊版 AI Shortcut 請直接用觸發句測試。",

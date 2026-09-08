@@ -598,23 +598,43 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             return;
         }
 
-        // Read latest user transcript before same-frame tool calls.
+        // 0033-hotfix1:
+        // Current Gemini Live API defines inputTranscription as the finalized,
+        // authoritative transcript. interimInputTranscription is the speculative
+        // streaming field. Do not concatenate finalized transcripts as fragments.
+        //
+        // Process Runtime shortcuts BEFORE same-frame tool calls. Transcription and
+        // tool/model events have no guaranteed ordering; Runtime-owned shortcuts
+        // must establish execution ownership before Gemini can mutate the phone.
         JSONObject server = response.optJSONObject("serverContent");
         if (server == null) server = response.optJSONObject("server_content");
         JSONObject inputTranscript = server == null ? null : server.optJSONObject("inputTranscription");
         if (inputTranscript == null && server != null) inputTranscript = server.optJSONObject("input_transcription");
         String completeUserInput = "";
-        if (inputTranscript != null && !inputTranscript.optString("text").isEmpty()) {
-            String fragment = inputTranscript.optString("text");
+        if (inputTranscript != null && !inputTranscript.optString("text").trim().isEmpty()) {
+            completeUserInput = inputTranscript.optString("text").trim();
             boolean newUserTurn = authorizationTranscript.isEmpty();
             if (newUserTurn) supersedeActiveAgentTaskForNewUserInstruction();
-            authorizationTranscript = fragment.startsWith(authorizationTranscript)
-                    ? fragment : authorizationTranscript + fragment;
-            if (authorizationTranscript.length() > 4096) authorizationTranscript = fragment;
-            completeUserInput = authorizationTranscript;
+
+            authorizationTranscript = completeUserInput;
+            if (authorizationTranscript.length() > 4096) {
+                authorizationTranscript = authorizationTranscript.substring(0, 4096);
+            }
+
             userActionScope.updateFromUserText(completeUserInput);
             if (audioIncidentRecorder != null) {
                 audioIncidentRecorder.onVoiceTranscript(completeUserInput);
+            }
+
+            listener.onTranscript("你", completeUserInput);
+            if (isStopAgentTaskPhrase(completeUserInput)) {
+                cancelAgentTask("使用者語音停止任務");
+            }
+            boolean correctionInput = correctionWindowActive
+                    && System.currentTimeMillis() <= correctionWindowUntil;
+            consumeCorrectionWindowOnUserSpeech(completeUserInput);
+            if (!correctionInput) {
+                processMemoryRuleInput(completeUserInput);
             }
         }
 
@@ -642,14 +662,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             interruptedCurrentTurn = false;
             return;
         }
-        if (inputTranscript != null && !inputTranscript.optString("text").isEmpty()) {
-            String inputText = completeUserInput.isEmpty() ? inputTranscript.optString("text") : completeUserInput;
-            listener.onTranscript("你", inputText);
-            if (isStopAgentTaskPhrase(inputText)) cancelAgentTask("使用者語音停止任務");
-            boolean correctionInput = correctionWindowActive && System.currentTimeMillis() <= correctionWindowUntil;
-            consumeCorrectionWindowOnUserSpeech(inputText);
-            if (!correctionInput) processMemoryRuleInput(inputText);
-        }
+        // Finalized input was already processed before tool calls above.
         JSONObject outputTranscript = server.optJSONObject("outputTranscription");
         if (outputTranscript == null) outputTranscript = server.optJSONObject("output_transcription");
         if (outputTranscript != null && !outputTranscript.optString("text").isEmpty()) listener.onTranscript("Gemini", outputTranscript.optString("text"));
@@ -723,6 +736,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 return;
             }
 
+            if (memoryRuleIndex != null) memoryRuleIndex.refresh();
             MemoryRuleIndex.Match matched = memoryRuleIndex == null
                     ? null : memoryRuleIndex.findBest(inputText);
             if (matched == null && memoryRuleIndex == null) {
@@ -731,7 +745,20 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                     matched = new MemoryRuleIndex.Match(exact, "EXACT", 1.0, exact.trigger);
                 }
             }
-            if (matched == null || matched.rule == null) return;
+            if (matched == null || matched.rule == null) {
+                // Do not log or retain spoken content in release builds.  The
+                // visible state makes a short shortcut miss diagnosable without
+                // exposing a transcript in logcat.
+                if (MemoryRuleIndex.looksLikeRecordedShortcut(inputText)) {
+                    reportStage("已收到開啟指令，但未命中已學習快捷操作");
+                    try {
+                        FloatingBubbleManager.getInstance(appContext).showCompactStatus(
+                                "快捷指令未命中",
+                                "請確認觸發句；可在『已學習操作』查看或重新錄製");
+                    } catch (Exception ignored) {}
+                }
+                return;
+            }
 
             MemoryRuleStore.Rule rule = matched.rule;
             String dispatchKey = TextMatch.caseFold(rule.id + "|" + matched.mode);
@@ -754,6 +781,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 runtimeShortcutExecuting = true;
                 runtimeShortcutGuardUntil = Long.MAX_VALUE;
                 reportStage("Runtime Shortcut 命中：「" + rule.trigger + "」 · " + matched.mode);
+                try {
+                    FloatingBubbleManager.getInstance(appContext).showCompactStatus(
+                            "✓ Shortcut HIT",
+                            rule.trigger + " · " + matched.mode);
+                } catch (Exception ignored) {}
                 sendInternalAgentDirective(
                         "【Runtime Shortcut】已由 Android Runtime 接管執行。"
                         + "你不得呼叫任何手機 mutation tool、不得重新規劃或重複操作；"
@@ -775,6 +807,38 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                                 } catch (Exception ignored) {}
                             }
                         });
+                return;
+            }
+
+            // Simple App shortcuts deliberately bypass Gemini and accessibility
+            // recording.  Own the same-frame tool calls before launching.
+            if (AppLaunchShortcut.isAction(rule.action)) {
+                runtimeShortcutExecuting = true;
+                runtimeShortcutGuardUntil = Long.MAX_VALUE;
+                reportStage("App 指令命中：「" + rule.trigger + "」 · " + matched.mode);
+                try {
+                    FloatingBubbleManager.getInstance(appContext).showCompactStatus(
+                            "✓ App 指令命中", rule.trigger + " · " + matched.mode);
+                } catch (Exception ignored) {}
+                try {
+                    String detail = AppLaunchShortcut.launch(appContext,
+                            AppLaunchShortcut.packageNameFromAction(rule.action));
+                    reportStage("App 指令完成：" + detail);
+                    try {
+                        FloatingBubbleManager.getInstance(appContext).showCompactStatus(
+                                "✓ App 指令完成", detail);
+                    } catch (Exception ignored) {}
+                } catch (Exception error) {
+                    String detail = error.getMessage() == null ? "無法開啟 App" : error.getMessage();
+                    reportStage("App 指令失敗：" + detail);
+                    try {
+                        FloatingBubbleManager.getInstance(appContext).showCompactStatus(
+                                "✕ App 指令失敗", detail);
+                    } catch (Exception ignored) {}
+                } finally {
+                    runtimeShortcutExecuting = false;
+                    runtimeShortcutGuardUntil = System.currentTimeMillis() + 1800L;
+                }
                 return;
             }
 

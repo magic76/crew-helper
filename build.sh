@@ -28,7 +28,9 @@ echo "3. Converting to DEX..."
 d8 --output bin/ bin/classes/com/crewpocket/helper/*.class app/libs/*.jar
 
 echo "4. Packaging APK..."
-aapt package -f -M app/src/main/AndroidManifest.xml -S app/src/main/res -I "$FRAMEWORK_RES" -F bin/unsigned.apk
+# Preserve PNG alpha for launcher artwork. The lightweight aapt otherwise
+# crunches transparent icon corners into an opaque black matte.
+aapt package -f -0 png -M app/src/main/AndroidManifest.xml -S app/src/main/res -I "$FRAMEWORK_RES" -F bin/unsigned.apk
 # Keep local, data-driven features (such as Live Deck manifests) in the APK.
 # aapt package does not include src/main/assets automatically in this lightweight build.
 if [ -d app/src/main/assets ]; then
