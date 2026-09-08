@@ -123,8 +123,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private MemoryRuleIndex memoryRuleIndex;
     private String lastMemoryDispatchKey = "";
     private long lastMemoryDispatchAt = 0L;
-    // Gemini may compile a shortcut only after a recent explicit teaching request.
-    private long shortcutTeachingAuthorizedUntil = 0L;
+    // 0033 deterministic recorded shortcuts own their physical execution.
+    private volatile boolean runtimeShortcutExecuting = false;
+    private volatile long runtimeShortcutGuardUntil = 0L;
     private AudioIncidentRecorder audioIncidentRecorder;
     private volatile PendingCondition pendingCondition = null;
 
@@ -703,79 +704,95 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 || clean.contains("停止簡報") || clean.contains("暫停簡報") || clean.contains("不要翻頁") || clean.contains("先別翻頁") || clean.contains("關閉簡報");
     }
 
-    /** Runtime matches/persists; Gemini only compiles during explicit teaching. */
+    /** 0033: Runtime matches; recorded plans execute without Gemini phone tools. */
     private void processMemoryRuleInput(String inputText) {
         try {
-            if (appContext == null) {
-                Log.w(TAG, "Shortcut 無法儲存：App Context 不可用");
-                reportStage("Shortcut 未儲存：系統尚未就緒");
-                return;
-            }
+            if (appContext == null) return;
             MemoryRuleStore store = new MemoryRuleStore(appContext);
-            MemoryRuleStore.Rule teaching = MemoryRuleStore.parseTeaching(inputText);
-            if (teaching != null) {
-                MemoryRuleStore.Rule saved = store.save(teaching.trigger, teaching.action);
-                MemoryRuleStore.Rule verified = saved == null ? null : store.findExact(saved.trigger);
-                if (verified == null || !saved.action.equals(verified.action)) {
-                    shortcutTeachingAuthorizedUntil = System.currentTimeMillis() + 90_000L;
-                    reportStage("Shortcut 尚未儲存：請由 AI 整理觸發句與操作");
-                    sendInternalAgentDirective("【Shortcut Runtime】使用者正在建立快捷指令。請從最新使用者語句整理 trigger 與 action；缺任何一項只問一次最小澄清。資訊完整後呼叫 create_shortcut(trigger, action, aliases)。aliases 只放非常接近的自然說法，不可擴大語意。在 tool success=true 前不可說已儲存。");
-                } else {
-                    shortcutTeachingAuthorizedUntil = 0L;
-                    if (memoryRuleIndex != null) memoryRuleIndex.refresh();
-                    reportStage("Shortcut 已儲存：「" + saved.trigger + "」");
-                    sendInternalAgentDirective("【Shortcut Runtime】已永久儲存快捷指令：觸發「" + saved.trigger + "」，任務「" + saved.action + "」。目前這句是教學，不要立刻執行；只簡短確認『快捷指令已儲存』。");
-                }
-                return;
-            }
+
             if (isMemoryRuleRequest(inputText)) {
-                shortcutTeachingAuthorizedUntil = System.currentTimeMillis() + 90_000L;
-                reportStage("Shortcut 教學模式：等待 AI 整理 trigger / action");
-                sendInternalAgentDirective("【Shortcut Runtime 教學授權】使用者明確要求建立快捷指令／規則。若最新語句已包含 trigger 與 action，直接呼叫 create_shortcut；若不完整，只問一句：『你想用哪一句話觸發，要我做什麼？』收到答案後呼叫 create_shortcut。可提供 0~3 個非常接近的 aliases。不要建立傳訊息、刪除、付款/購買、帳戶修改、密碼/OTP 或掛斷類快捷指令。");
+                try {
+                    FloatingBubbleManager.getInstance(appContext).showCompactStatus(
+                            "快捷指令由 Runtime 管理",
+                            "請點懸浮泡泡 → 紅色錄製按鈕，實際操作後再按一次完成");
+                } catch (Exception ignored) {}
+                sendInternalAgentDirective(
+                        "【0033 Shortcut UI】使用者想建立/記住快捷指令。"
+                        + "不要呼叫任何建立規則或儲存工具，也不要聲稱已儲存。"
+                        + "只簡短告訴使用者：從懸浮泡泡按『錄製快捷指令』，完成操作後再按一次即可設定觸發句。");
                 return;
             }
-            MemoryRuleIndex.Match matched = memoryRuleIndex == null ? null : memoryRuleIndex.findBest(inputText);
+
+            MemoryRuleIndex.Match matched = memoryRuleIndex == null
+                    ? null : memoryRuleIndex.findBest(inputText);
             if (matched == null && memoryRuleIndex == null) {
                 MemoryRuleStore.Rule exact = store.findExact(inputText);
-                if (exact != null) matched = new MemoryRuleIndex.Match(exact, "EXACT", 1.0, exact.trigger);
+                if (exact != null) {
+                    matched = new MemoryRuleIndex.Match(exact, "EXACT", 1.0, exact.trigger);
+                }
             }
-            if (matched != null && matched.rule != null) {
-                MemoryRuleStore.Rule rule = matched.rule;
-                String dispatchKey = TextMatch.caseFold(rule.id + "|" + matched.mode);
-                long now = System.currentTimeMillis();
-                if (dispatchKey.equals(lastMemoryDispatchKey) && now - lastMemoryDispatchAt < 2500L) return;
-                lastMemoryDispatchKey = dispatchKey;
-                lastMemoryDispatchAt = now;
-                store.recordMatch(rule.id, matched.mode);
-                if (memoryRuleIndex != null) memoryRuleIndex.refresh();
-                if (!MemoryRuleStore.containsProhibitedShortcutAction(rule.action)) userActionScope.updateFromTrustedAction(rule.action);
-                reportStage("Shortcut 命中：「" + rule.trigger + "」 · " + matched.mode);
-                sendInternalAgentDirective("【Shortcut Runtime 命中】Runtime 已確認使用者目前語句命中快捷指令。主觸發：「" + rule.trigger + "」；matchMode=" + matched.mode + "；confidence=" + matched.confidence + "。現在要完成的任務是：「" + rule.action + "」。不要重新判斷是否應命中，也不要再詢問觸發意圖；直接依正常 Observe→Action→Verify 執行。仍必須遵守最新使用者授權、安全政策與 Runtime 拒絕。");
+            if (matched == null || matched.rule == null) return;
+
+            MemoryRuleStore.Rule rule = matched.rule;
+            String dispatchKey = TextMatch.caseFold(rule.id + "|" + matched.mode);
+            long now = System.currentTimeMillis();
+            if (dispatchKey.equals(lastMemoryDispatchKey)
+                    && now - lastMemoryDispatchAt < 2500L) return;
+            lastMemoryDispatchKey = dispatchKey;
+            lastMemoryDispatchAt = now;
+
+            store.recordMatch(rule.id, matched.mode);
+            if (memoryRuleIndex != null) memoryRuleIndex.refresh();
+
+            if (ShortcutPlanStore.isPlanAction(rule.action)) {
+                if (runtimeShortcutExecuting || ShortcutExecutionRuntime.isRunning()) {
+                    reportStage("Shortcut 已在執行中，忽略重複觸發");
+                    return;
+                }
+
+                final String planId = ShortcutPlanStore.planIdFromAction(rule.action);
+                runtimeShortcutExecuting = true;
+                runtimeShortcutGuardUntil = Long.MAX_VALUE;
+                reportStage("Runtime Shortcut 命中：「" + rule.trigger + "」 · " + matched.mode);
+                sendInternalAgentDirective(
+                        "【Runtime Shortcut】已由 Android Runtime 接管執行。"
+                        + "你不得呼叫任何手機 mutation tool、不得重新規劃或重複操作；"
+                        + "保持簡短並等待手機畫面結果。");
+
+                ShortcutExecutionRuntime.executePlanAsync(
+                        appContext,
+                        planId,
+                        new ShortcutExecutionRuntime.Callback() {
+                            @Override public void onComplete(boolean success, String detail) {
+                                runtimeShortcutExecuting = false;
+                                runtimeShortcutGuardUntil = System.currentTimeMillis() + 1800L;
+                                reportStage((success ? "Runtime Shortcut 完成：" : "Runtime Shortcut 失敗：")
+                                        + detail);
+                                try {
+                                    FloatingBubbleManager.getInstance(appContext).showCompactStatus(
+                                            success ? "✓ 快捷指令完成" : "✕ 快捷指令失敗",
+                                            detail);
+                                } catch (Exception ignored) {}
+                            }
+                        });
+                return;
             }
-        } catch (Exception error) { Log.w(TAG, "Shortcut 處理失敗：" + error.getMessage()); }
+
+            if (!MemoryRuleStore.containsProhibitedShortcutAction(rule.action)) {
+                userActionScope.updateFromTrustedAction(rule.action);
+            }
+            reportStage("Legacy Shortcut 命中：「" + rule.trigger + "」 · " + matched.mode);
+            sendInternalAgentDirective(
+                    "【Legacy Shortcut 命中】Runtime 已確認觸發。現在要完成的任務是：「"
+                    + rule.action + "」。依正常 Observe→Action→Verify 執行，仍遵守全部安全政策。");
+        } catch (Exception error) {
+            Log.w(TAG, "Shortcut 處理失敗：" + error.getMessage());
+        }
     }
 
     private MemoryRuleStore memoryRuleStore() throws Exception {
         if (appContext == null) throw new Exception("App Context 不可用，無法保存 Memory Rule");
         return new MemoryRuleStore(appContext);
-    }
-
-    private JSONObject createShortcut(JSONObject args) throws Exception {
-        if (System.currentTimeMillis() > shortcutTeachingAuthorizedUntil) {
-            return new JSONObject().put("success", false).put("error", "SHORTCUT_CREATE_NOT_AUTHORIZED")
-                    .put("message", "只有使用者最近明確要求建立快捷指令／規則時才能儲存。");
-        }
-        String trigger = args.optString("trigger", "").trim();
-        String action = args.optString("action", "").trim();
-        JSONArray aliases = args.optJSONArray("aliases");
-        MemoryRuleStore.Rule saved = memoryRuleStore().save(trigger, action, aliases);
-        if (saved == null) return new JSONObject().put("success", false).put("error", "SHORTCUT_VALIDATION_FAILED")
-                .put("message", "觸發句/操作不完整，或操作包含傳訊息、刪除、付款、帳戶修改、密碼/OTP、掛斷等不允許的快捷動作。");
-        shortcutTeachingAuthorizedUntil = 0L;
-        if (memoryRuleIndex != null) memoryRuleIndex.refresh();
-        return new JSONObject().put("success", true).put("shortcutId", saved.id)
-                .put("trigger", saved.trigger).put("action", saved.action)
-                .put("aliases", new JSONArray(saved.aliases)).put("message", "快捷指令已永久儲存。");
     }
 
     private JSONObject listMemoryRules() throws Exception {
@@ -875,15 +892,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 .put("package_name", new JSONObject().put("type", "STRING").put("description", "Optional exact package name if known from previous candidate list"));
         tools.put(new JSONObject().put("name", "launch_app").put("description", "Open an installed Android app directly by name (e.g. 'Binance', 'LINE', 'Chrome', 'Settings') or by ordinal index (e.g. 第一個/1). Always use this instead of looking for icons on launcher.")
                 .put("parameters", new JSONObject().put("type", "OBJECT").put("properties", launchProperties)));
-        tools.put(new JSONObject().put("name", "list_memory_rules").put("description", "List persisted Runtime Shortcuts / legacy Memory Rules when the user asks what has been remembered."));
-        tools.put(new JSONObject().put("name", "create_shortcut")
-                .put("description", "Compile and persist a user-requested shortcut. Runtime accepts this only after a recent explicit user request to create/remember a rule or shortcut. Do not call proactively. Shortcuts cannot encode sending messages, deletion, payments/purchases, account changes, credentials/OTP, or hang-up.")
-                .put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject()
-                        .put("trigger", new JSONObject().put("type", "STRING").put("description", "Primary short phrase the user will say to trigger this shortcut"))
-                        .put("action", new JSONObject().put("type", "STRING").put("description", "Concrete non-sensitive phone task to perform"))
-                        .put("aliases", new JSONObject().put("type", "ARRAY").put("items", new JSONObject().put("type", "STRING"))
-                                .put("description", "Optional 0-3 close alternate trigger phrasings; never broad semantic concepts")))
-                        .put("required", new JSONArray().put("trigger").put("action"))));
         tools.put(new JSONObject().put("name", "press_key").put("description", "Trigger an Android system key or action.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("key", new JSONObject().put("type", "STRING").put("enum", new JSONArray().put("HOME").put("BACK").put("RECENTS").put("NOTIFICATIONS").put("QUICK_SETTINGS").put("POWER_DIALOG")))).put("required", new JSONArray().put("key"))));
         tools.put(new JSONObject().put("name", "inspect_ui").put("description",
                 "Read the current Android screen state before and after phone actions. "
@@ -983,6 +991,14 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         final String name = call.optString("name", "unknown");
         final JSONObject args = call.optJSONObject("args") == null ? new JSONObject() : call.optJSONObject("args");
 
+        if ((runtimeShortcutExecuting
+                || System.currentTimeMillis() < runtimeShortcutGuardUntil)
+                && isMutationTool(name)) {
+            sendBlockedToolResponse(id, name,
+                    "RUNTIME_SHORTCUT_OWNS_EXECUTION：已錄製快捷指令正在由 Runtime 執行，禁止 Gemini 重複操作。");
+            return;
+        }
+
         final AgentTaskRecord stabilityTask = peekActiveAgentTask();
         final JSONObject stabilityBlock = agentStabilityPreflight(stabilityTask, name, args);
         if (stabilityBlock != null && stabilityTask != null) {
@@ -1046,7 +1062,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             else if ("list_active_schedules".equals(name)) result = listSchedules();
             else if ("cancel_schedule".equals(name)) result = cancelSchedule(args);
             else if ("save_memory_rule".equals(name)) result.put("success", false).put("error", "MEMORY_RULE_WRITES_ARE_RUNTIME_ONLY");
-            else if ("create_shortcut".equals(name)) result = createShortcut(args);
             else if ("list_memory_rules".equals(name)) result = listMemoryRules();
             else if ("end_voice_session".equals(name)) {
                 if (!userActionScope.consumeEndCallAuthorization()) {
@@ -1151,7 +1166,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 || "teach_ui_element".equals(name)
                 || "list_active_schedules".equals(name)
                 || "list_memory_rules".equals(name)
-                || "create_shortcut".equals(name)
                 || "list_decks".equals(name)
                 || "get_deck_card".equals(name)
                 || "list_deck_images".equals(name);

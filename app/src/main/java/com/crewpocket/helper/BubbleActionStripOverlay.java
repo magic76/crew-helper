@@ -39,6 +39,8 @@ final class BubbleActionStripOverlay {
     private static final int ICON_HANGUP = 2;
     private static final int ICON_CONSOLE = 3;
     private static final int ICON_INTERRUPT = 4;
+    private static final int ICON_RECORD = 5;
+    private static final int ICON_UNDO = 6;
 
     private final Context context;
     private final WindowManager windowManager;
@@ -112,7 +114,31 @@ final class BubbleActionStripOverlay {
             row.addView(interrupt, itemParams());
         }
 
-        int itemCount = live ? 3 : 2;
+        final ShortcutRecorderRuntime recorder =
+                ShortcutRecorderRuntime.getInstance(context);
+        final boolean recording = recorder.isRecording();
+
+        IconButton record = iconButton(ICON_RECORD);
+        record.setContentDescription(recording
+                ? "完成錄製快捷指令" : "開始錄製快捷指令");
+        record.setOnClickListener(v -> {
+            dismiss();
+            if (recording) recorder.finishAndOpenEditor();
+            else recorder.start();
+        });
+        row.addView(record, itemParams());
+
+        if (recording) {
+            IconButton undo = iconButton(ICON_UNDO);
+            undo.setContentDescription("復原上一個錄製步驟");
+            undo.setOnClickListener(v -> {
+                recorder.undo();
+                dismiss();
+            });
+            row.addView(undo, itemParams());
+        }
+
+        int itemCount = (live ? 3 : 2) + 1 + (recording ? 1 : 0);
         int stripWidth = dp(50);
         int stripHeight = dp(12) + itemCount * dp(42);
 
@@ -203,6 +229,8 @@ final class BubbleActionStripOverlay {
                     ? Color.rgb(251, 113, 133)
                     : icon == ICON_INTERRUPT
                     ? Color.rgb(250, 204, 21)
+                    : icon == ICON_RECORD
+                    ? Color.rgb(248, 113, 113)
                     : Color.WHITE);
             paint.setStrokeWidth(2.2f * d);
             paint.setStyle(Paint.Style.STROKE);
@@ -238,6 +266,22 @@ final class BubbleActionStripOverlay {
                 canvas.drawRoundRect(
                         new RectF(cx - 6*d, cy - 6*d, cx + 6*d, cy + 6*d),
                         2*d, 2*d, paint);
+            } else if (icon == ICON_RECORD) {
+                paint.setStyle(Paint.Style.FILL);
+                canvas.drawCircle(cx, cy, 6*d, paint);
+                paint.setStyle(Paint.Style.STROKE);
+                canvas.drawCircle(cx, cy, 9*d, paint);
+            } else if (icon == ICON_UNDO) {
+                paint.setStyle(Paint.Style.STROKE);
+                RectF undoArc = new RectF(cx - 8*d, cy - 8*d, cx + 8*d, cy + 8*d);
+                canvas.drawArc(undoArc, 35, 285, false, paint);
+                paint.setStyle(Paint.Style.FILL);
+                android.graphics.Path arrow = new android.graphics.Path();
+                arrow.moveTo(cx - 9*d, cy - 3*d);
+                arrow.lineTo(cx - 3*d, cy - 8*d);
+                arrow.lineTo(cx - 2*d, cy);
+                arrow.close();
+                canvas.drawPath(arrow, paint);
             }
         }
     }

@@ -675,8 +675,9 @@ public class FloatingBubbleManager {
         if (bubbleView == null || bubbleParams == null) return;
         try {
             int screenHeight = windowManager.getDefaultDisplay().getHeight();
-            // 0017: vertical rail is taller: 2 icons when idle, 3 during Live.
-            int itemCount = NativeLiveService.isActive() ? 3 : 2;
+            // 0033: rail includes Recorder, plus Undo while recording.
+            int itemCount = (NativeLiveService.isActive() ? 3 : 2) + 1
+                    + (ShortcutRecorderRuntime.getInstance(context).isRecording() ? 1 : 0);
             int shortcutHeight = dp(12) + itemCount * dp(42);
             int requiredBottom =
                     bubbleParams.y + bubbleSize

@@ -81,7 +81,7 @@ public class CorrectionRulesActivity extends Activity {
         content.addView(summary);
 
         Button addMemoryRule = new Button(this);
-        addMemoryRule.setText(I18n.get(this, "＋ 新增快捷指令", "+ Add Shortcut"));
+        addMemoryRule.setText(I18n.get(this, "● 錄製快捷指令", "● Record Shortcut"));
         addMemoryRule.setAllCaps(false);
         addMemoryRule.setTextColor(CrewTheme.TEXT_PRIMARY);
         addMemoryRule.setBackground(CrewTheme.createCard(
@@ -98,8 +98,8 @@ public class CorrectionRulesActivity extends Activity {
         if (rules.isEmpty() && memoryRules.isEmpty()) {
             TextView empty = new TextView(this);
             empty.setText(I18n.get(this,
-                    "目前還沒有記錄。\n修正操作時按「打斷」並教它正確做法；建立規則時說「記住一條規則：以後我說『…』，就幫我『…』」。",
-                    "No learned records yet.\nUse Interrupt to correct an action, or say: 'Remember a rule: when I say …, do …'."));
+                    "目前還沒有記錄。\n修正操作時按「打斷」；建立快捷指令請按上方「錄製快捷指令」，再到其他 App 實際操作。",
+                    "No learned records yet.\nUse Interrupt to correct an action, or Record Shortcut and perform the real steps in other apps."));
             empty.setTextSize(13);
             empty.setTextColor(CrewTheme.TEXT_SECONDARY);
             empty.setPadding(dp(14), dp(16), dp(14), dp(16));
@@ -157,6 +157,7 @@ public class CorrectionRulesActivity extends Activity {
                                             int which) {
                                         store.clearAll();
                                         memoryStore.clearAll();
+                                        new ShortcutPlanStore(CorrectionRulesActivity.this).clearAll();
                                         render();
                                     }
                                 })
@@ -184,60 +185,19 @@ public class CorrectionRulesActivity extends Activity {
         content.addView(title);
     }
 
-    /** Direct creation is deterministic; voice phrasing remains an optional shortcut. */
+    /** 0033: creation starts a user-driven recording session; no AI compiler. */
     private void showAddMemoryRuleDialog() {
-        LinearLayout form = new LinearLayout(this);
-        form.setOrientation(LinearLayout.VERTICAL);
-        int padding = dp(20);
-        form.setPadding(padding, dp(8), padding, 0);
-
-        TextView note = new TextView(this);
-        note.setText(I18n.get(this,
-                "輸入你要說的觸發句，以及助理應執行的操作。規則不會保存密碼、OTP 或訊息內容。",
-                "Enter the phrase you will say and the action the assistant should perform. Passwords, OTPs and message content are not stored."));
-        note.setTextSize(12);
-        note.setTextColor(CrewTheme.TEXT_SECONDARY);
-        form.addView(note);
-
-        final EditText trigger = new EditText(this);
-        trigger.setHint(I18n.get(this, "例如：開 V App", "Example: Open V App"));
-        trigger.setSingleLine(true);
-        trigger.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
-        form.addView(trigger, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
-        final EditText action = new EditText(this);
-        action.setHint(I18n.get(this, "例如：開啟 WEAApp", "Example: Open WEAApp"));
-        action.setMinLines(2);
-        action.setGravity(Gravity.TOP | Gravity.START);
-        action.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
-        form.addView(action, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
-        new android.app.AlertDialog.Builder(this)
-                .setTitle(I18n.get(this, "新增快捷指令", "Add Shortcut"))
-                .setView(form)
-                .setNegativeButton(I18n.get(this, "取消", "Cancel"), null)
-                .setPositiveButton(I18n.get(this, "儲存快捷指令", "Save Shortcut"),
-                        new DialogInterface.OnClickListener() {
-                            @Override public void onClick(DialogInterface dialog, int which) {
-                                MemoryRuleStore.Rule saved = memoryStore.save(
-                                        trigger.getText().toString(), action.getText().toString());
-                                if (saved == null) {
-                                    Toast.makeText(CorrectionRulesActivity.this,
-                                            I18n.get(CorrectionRulesActivity.this,
-                                                    "未儲存：請填寫觸發句與非敏感操作內容。",
-                                                    "Not saved: enter a trigger and a non-sensitive action."),
-                                            Toast.LENGTH_LONG).show();
-                                    return;
-                                }
-                                Toast.makeText(CorrectionRulesActivity.this,
-                                        I18n.get(CorrectionRulesActivity.this,
-                                                "快捷指令已儲存", "Shortcut saved"), Toast.LENGTH_SHORT).show();
-                                render();
-                            }
-                        })
-                .show();
+        ShortcutRecorderRuntime recorder = ShortcutRecorderRuntime.getInstance(this);
+        if (!recorder.start()) {
+            Toast.makeText(this,
+                    "無法開始錄製；請確認無障礙服務已啟用。",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        Toast.makeText(this,
+                "已開始錄製。請操作手機，完成後從懸浮泡泡按紅色錄製按鈕。",
+                Toast.LENGTH_LONG).show();
+        moveTaskToBack(true);
     }
 
     private View buildMemoryRuleCard(final MemoryRuleStore.Rule rule) {
@@ -252,7 +212,15 @@ public class CorrectionRulesActivity extends Activity {
         TextView action = new TextView(this);
         String usage = rule.triggerCount > 0
                 ? "\n使用 " + rule.triggerCount + " 次 · " + rule.lastMatchMode : "";
-        action.setText("→ " + rule.action + usage);
+        String displayAction = rule.action;
+        if (ShortcutPlanStore.isPlanAction(rule.action)) {
+            ShortcutPlanStore.Plan plan = new ShortcutPlanStore(this)
+                    .get(ShortcutPlanStore.planIdFromAction(rule.action));
+            displayAction = plan == null
+                    ? "錄製快捷操作 · 內容遺失"
+                    : "錄製快捷操作 · " + plan.steps.length() + " 步";
+        }
+        action.setText("→ " + displayAction + usage);
         action.setTextColor(CrewTheme.TEXT_SECONDARY); action.setTextSize(12); action.setPadding(0, dp(5), 0, 0); card.addView(action);
         card.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View view) { showMemoryRuleDialog(rule); } });
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -260,14 +228,61 @@ public class CorrectionRulesActivity extends Activity {
     }
 
     private void showMemoryRuleDialog(final MemoryRuleStore.Rule rule) {
+        String displayAction = rule.action;
+        if (ShortcutPlanStore.isPlanAction(rule.action)) {
+            ShortcutPlanStore.Plan plan = new ShortcutPlanStore(this)
+                    .get(ShortcutPlanStore.planIdFromAction(rule.action));
+            displayAction = plan == null
+                    ? "錄製快捷操作內容已遺失"
+                    : ShortcutPlanStore.describeSteps(plan.steps);
+        }
+        final String message = I18n.get(this,
+                "觸發：" + rule.trigger + "\n\n執行：\n" + displayAction,
+                "Trigger: " + rule.trigger + "\n\nAction:\n" + displayAction);
+
         new android.app.AlertDialog.Builder(this)
                 .setTitle(I18n.get(this, "快捷指令", "Shortcut"))
-                .setMessage(I18n.get(this, "觸發：" + rule.trigger + "\n\n執行：" + rule.action,
-                        "Trigger: " + rule.trigger + "\n\nAction: " + rule.action))
-                .setPositiveButton(I18n.get(this, rule.enabled ? "停用" : "啟用", rule.enabled ? "Disable" : "Enable"),
-                        new DialogInterface.OnClickListener() { @Override public void onClick(DialogInterface dialog, int which) { memoryStore.setEnabled(rule.id, !rule.enabled); render(); } })
+                .setMessage(message)
+                .setPositiveButton(I18n.get(this,
+                                rule.enabled ? "停用" : "啟用",
+                                rule.enabled ? "Disable" : "Enable"),
+                        new DialogInterface.OnClickListener() {
+                            @Override public void onClick(DialogInterface dialog, int which) {
+                                memoryStore.setEnabled(rule.id, !rule.enabled);
+                                render();
+                            }
+                        })
                 .setNegativeButton(I18n.get(this, "刪除", "Delete"),
-                        new DialogInterface.OnClickListener() { @Override public void onClick(DialogInterface dialog, int which) { memoryStore.delete(rule.id); render(); } })
+                        new DialogInterface.OnClickListener() {
+                            @Override public void onClick(DialogInterface dialog, int which) {
+                                if (ShortcutPlanStore.isPlanAction(rule.action)) {
+                                    new ShortcutPlanStore(CorrectionRulesActivity.this)
+                                            .delete(ShortcutPlanStore.planIdFromAction(rule.action));
+                                }
+                                memoryStore.delete(rule.id);
+                                render();
+                            }
+                        })
+                .setNeutralButton(I18n.get(this, "測試", "Test"),
+                        new DialogInterface.OnClickListener() {
+                            @Override public void onClick(DialogInterface dialog, int which) {
+                                if (!ShortcutPlanStore.isPlanAction(rule.action)) {
+                                    Toast.makeText(CorrectionRulesActivity.this,
+                                            "舊版 AI Shortcut 請直接用觸發句測試。",
+                                            Toast.LENGTH_LONG).show();
+                                    return;
+                                }
+                                ShortcutExecutionRuntime.executePlanAsync(
+                                        CorrectionRulesActivity.this,
+                                        ShortcutPlanStore.planIdFromAction(rule.action),
+                                        new ShortcutExecutionRuntime.Callback() {
+                                            @Override public void onComplete(boolean success, String detail) {
+                                                Toast.makeText(CorrectionRulesActivity.this,
+                                                        detail, Toast.LENGTH_LONG).show();
+                                            }
+                                        });
+                            }
+                        })
                 .show();
     }
 
