@@ -950,28 +950,55 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
     private JSONArray buildToolDeclarations() throws Exception {
         JSONArray tools = new JSONArray();
-        JSONObject launchProperties = new JSONObject()
-                .put("app", new JSONObject().put("type", "STRING").put("description", "Visible app name, for example Binance, Chrome, Settings, or ordinal like '第一個', '1'"))
-                .put("index", new JSONObject().put("type", "INTEGER").put("description", "Optional 1-based index (e.g. 1 for 第一個, 2 for 第二個) if user selected from previously listed matches"))
-                .put("package_name", new JSONObject().put("type", "STRING").put("description", "Optional exact package name if known from previous candidate list"));
-        tools.put(new JSONObject().put("name", "launch_app").put("description", "Open an installed Android app directly by name (e.g. 'Binance', 'LINE', 'Chrome', 'Settings') or by ordinal index (e.g. 第一個/1). Always use this instead of looking for icons on launcher.")
-                .put("parameters", new JSONObject().put("type", "OBJECT").put("properties", launchProperties)));
-        tools.put(new JSONObject().put("name", "press_key").put("description", "Trigger an Android system key or action.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("key", new JSONObject().put("type", "STRING").put("enum", new JSONArray().put("HOME").put("BACK").put("RECENTS").put("NOTIFICATIONS").put("QUICK_SETTINGS").put("POWER_DIALOG")))).put("required", new JSONArray().put("key"))));
+        JSONObject phoneActionProperties = new JSONObject()
+                .put("action", new JSONObject().put("type", "STRING")
+                        .put("enum", new JSONArray()
+                                .put("OPEN_APP").put("TAP").put("FOCUS").put("TYPE")
+                                .put("SCROLL").put("BACK").put("HOME").put("RECENTS")
+                                .put("NOTIFICATIONS").put("QUICK_SETTINGS"))
+                        .put("description", "Choose exactly one semantic next action; Runtime decides Android implementation."))
+                .put("target", new JSONObject().put("type", "STRING")
+                        .put("description", "Human semantic target or App name. Examples: Google, Search, Wi-Fi, first result. Do not pass coordinates/resource IDs."))
+                .put("text", new JSONObject().put("type", "STRING")
+                        .put("description", "Only for TYPE. Exact text to enter; TYPE never submits a message."))
+                .put("direction", new JSONObject().put("type", "STRING")
+                        .put("enum", new JSONArray().put("up").put("down").put("left").put("right"))
+                        .put("description", "Only for SCROLL."))
+                .put("distance", new JSONObject().put("type", "STRING")
+                        .put("enum", new JSONArray().put("short").put("normal").put("long").put("page"))
+                        .put("description", "Optional SCROLL distance."));
+        tools.put(new JSONObject().put("name", "phone_action")
+                .put("description",
+                        "Perform ONE semantic phone action. Think only about WHAT should happen next, not selectors, coordinates, resource IDs, Accessibility implementation, or fallback choice. Runtime resolves and verifies it. Use OPEN_APP/TAP/FOCUS/TYPE/SCROLL/BACK/HOME/RECENTS/NOTIFICATIONS/QUICK_SETTINGS. Real message sending is NOT here; use send_text only with explicit send authorization.")
+                .put("parameters", new JSONObject().put("type", "OBJECT")
+                        .put("properties", phoneActionProperties)
+                        .put("required", new JSONArray().put("action"))));
         tools.put(new JSONObject().put("name", "inspect_ui").put("description",
-                "Read the current Android screen state before and after phone actions. "
-                + "Returns visible UI plus semantic elements and actions currently available. "
-                + "Use returned elements and CLICK/TYPE/SCROLL actions instead of guessing labels or coordinates."));
-        tools.put(new JSONObject().put("name", "tap_element").put("description", "Tap a semantic UI element by its element id (e.g. 'e_1a2b3c'). Always prefer this over coordinate or label guessing.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("element_id", new JSONObject().put("type", "STRING").put("description", "The element ID returned from inspect_ui or auto-observe"))).put("required", new JSONArray().put("element_id"))));
-        tools.put(new JSONObject().put("name", "wait").put("description", "Wait for screen condition to be met (e.g. screen_change, element_appears, element_disappears). Runtime polls automatically and returns the latest screen state.")
+                "Observe the current phone state when the target/state is unclear or Runtime requires observation after a failed action. Read the important semantic elements, then choose exactly one phone_action. Do not reason about coordinates or Android selector implementation."));
+        tools.put(new JSONObject().put("name", "wait").put("description",
+                "Wait for a screen condition after an asynchronous action. Runtime polls and returns the latest state.")
                 .put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject()
-                        .put("condition", new JSONObject().put("type", "STRING").put("enum", new JSONArray().put("screen_change").put("element_appears").put("element_disappears")).put("description", "Condition to wait for (default screen_change)"))
-                        .put("element_id", new JSONObject().put("type", "STRING").put("description", "Optional element id when waiting for element_appears / element_disappears"))
-                        .put("timeout_ms", new JSONObject().put("type", "INTEGER").put("description", "Maximum wait time in milliseconds (default 5000, max 15000)")))));
-        tools.put(new JSONObject().put("name", "tap_screen").put("description", "Tap a button or UI element using its semantic label, description, resource viewId, or coordinates. Prefer tap_element over tap_screen.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("label", new JSONObject().put("type", "STRING").put("description", "The button, app icon, or text label to tap")).put("id", new JSONObject().put("type", "STRING").put("description", "Optional resource viewId (e.g. 'send_btn')")).put("x", new JSONObject().put("type", "NUMBER").put("description", "Optional X coordinate for vision fallback")).put("y", new JSONObject().put("type", "NUMBER").put("description", "Optional Y coordinate for vision fallback")).put("coordinate_space", new JSONObject().put("type", "STRING").put("enum", new JSONArray().put("image").put("normalized_1000").put("screen"))))));
-        tools.put(new JSONObject().put("name", "swipe_screen").put("description", "Scroll or swipe the phone screen. Direction: up (scroll down), down (scroll up), left, right. Distance: short, normal, long.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("direction", new JSONObject().put("type", "STRING").put("enum", new JSONArray().put("up").put("down").put("left").put("right"))).put("distance", new JSONObject().put("type", "STRING").put("enum", new JSONArray().put("short").put("normal").put("long").put("page")))).put("required", new JSONArray().put("direction"))));
-        tools.put(new JSONObject().put("name", "type_text").put("description", "Enter requested text without submitting. Search fields: type the query and inspect results; opening results needs separate permission. Message composer: use send_text only with explicit sending authorization.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("target", new JSONObject().put("type", "STRING").put("description", "Input field hint or label")).put("text", new JSONObject().put("type", "STRING").put("description", "The text to type"))).put("required", new JSONArray().put("text"))));
-        tools.put(new JSONObject().put("name", "send_text").put("description", "Atomically type, submit exactly once, and locally verify a message/reply. Runtime accepts only a latest-turn explicit message-send command; vague tell/say/transfer wording is not permission. For a named recipient Runtime must verify that recipient in the current chat header before sending. Search/find/open never imply permission. On authorization/recipient failure ask one short clarification. On SEND_NOT_VERIFIED stop and never resend.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("text", new JSONObject().put("type", "STRING").put("description", "Exact message text to send"))).put("required", new JSONArray().put("text"))));
-        tools.put(new JSONObject().put("name", "teach_ui_element").put("description", "Ask the user to teach an unresolved UI element. For COMPOSER_SEND the composer must contain text so the real send control is visible. Runtime manages anchor-relative learning; never replay old absolute coordinates.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("role", new JSONObject().put("type", "STRING").put("description", "The semantic role to teach, e.g. 'COMPOSER_SEND', 'SEARCH_SUBMIT', 'CONFIRM', 'NEXT'"))).put("required", new JSONArray().put("role"))));
+                        .put("condition", new JSONObject().put("type", "STRING")
+                                .put("enum", new JSONArray().put("screen_change").put("element_appears").put("element_disappears"))
+                                .put("description", "Condition to wait for (default screen_change)"))
+                        .put("element_id", new JSONObject().put("type", "STRING")
+                                .put("description", "Optional element id only when inspect_ui explicitly returned one for a wait condition."))
+                        .put("timeout_ms", new JSONObject().put("type", "INTEGER")
+                                .put("description", "Maximum wait milliseconds (default 5000, max 15000)")))));
+        tools.put(new JSONObject().put("name", "send_text").put("description",
+                "SECURE SPECIAL CASE: atomically type, submit exactly once, and locally verify a real message/reply. Runtime accepts only a latest-turn explicit message-send command and verifies recipient when required. Search/open/type never imply send permission. On failure do not resend.")
+                .put("parameters", new JSONObject().put("type", "OBJECT")
+                        .put("properties", new JSONObject()
+                                .put("text", new JSONObject().put("type", "STRING")
+                                        .put("description", "Exact message text to send")))
+                        .put("required", new JSONArray().put("text"))));
+        tools.put(new JSONObject().put("name", "teach_ui_element").put("description",
+                "Only when Runtime/semantic resolution cannot identify a stable UI element and user teaching is necessary. Runtime manages structural learning; never ask the user for coordinates.")
+                .put("parameters", new JSONObject().put("type", "OBJECT")
+                        .put("properties", new JSONObject()
+                                .put("role", new JSONObject().put("type", "STRING")
+                                        .put("description", "Semantic role, e.g. COMPOSER_SEND, SEARCH_SUBMIT, CONFIRM, NEXT")))
+                        .put("required", new JSONArray().put("role"))));
         tools.put(new JSONObject().put("name", "schedule_reminder").put("description", "Set a countdown timer / reminder in seconds. When time is up, the assistant vibrates and announces the message.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("delay_seconds", new JSONObject().put("type", "NUMBER").put("description", "Delay in seconds, e.g. 300 for 5 minutes")).put("message", new JSONObject().put("type", "STRING").put("description", "Reminder text to speak when timer expires")).put("label", new JSONObject().put("type", "STRING").put("description", "Short label for the timer"))).put("required", new JSONArray().put("delay_seconds"))));
         tools.put(new JSONObject().put("name", "start_screen_monitor").put("description", "Start periodic background screen checks or wait until a specific condition/text appears on screen.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("interval_seconds", new JSONObject().put("type", "NUMBER").put("description", "Interval between checks in seconds (e.g. 60)")).put("duration_minutes", new JSONObject().put("type", "NUMBER").put("description", "Total monitoring duration in minutes (default 10)")).put("target_condition", new JSONObject().put("type", "STRING").put("description", "Optional text/word to look for on screen (e.g. '已送達', '完成')")).put("label", new JSONObject().put("type", "STRING").put("description", "Short task name"))).put("required", new JSONArray().put("interval_seconds"))));
         tools.put(new JSONObject().put("name", "list_active_schedules").put("description", "List all currently active timers, background screen monitors, and countdowns with their remaining time.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject())));
@@ -1052,13 +1079,29 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
     private void executeSingleTool(final JSONObject call) {
         final String id = call.optString("id", "tool_" + System.nanoTime());
-        final String name = call.optString("name", "unknown");
-        final JSONObject args = call.optJSONObject("args") == null ? new JSONObject() : call.optJSONObject("args");
+        final String requestedName = call.optString("name", "unknown");
+        final JSONObject requestedArgs = call.optJSONObject("args") == null
+                ? new JSONObject() : call.optJSONObject("args");
+        // 0034: model-facing semantic action -> existing trusted Runtime tool.
+        final SemanticPhoneAction.Resolution semantic;
+        try {
+            semantic = SemanticPhoneAction.resolve(requestedName, requestedArgs);
+        } catch (Exception error) {
+            JSONObject failure = new JSONObject();
+            try {
+                failure.put("success", false).put("stepResult", "STEP_FAILED")
+                        .put("error", "SEMANTIC_ACTION_RESOLUTION_FAILED");
+            } catch (Exception ignored) {}
+            try { sendToolResponse(id, requestedName, failure); } catch (Exception ignored) {}
+            return;
+        }
+        final String name = semantic.runtimeName;
+        final JSONObject args = semantic.runtimeArgs;
 
         if ((runtimeShortcutExecuting
                 || System.currentTimeMillis() < runtimeShortcutGuardUntil)
                 && isMutationTool(name)) {
-            sendBlockedToolResponse(id, name,
+            sendBlockedToolResponse(id, requestedName,
                     "RUNTIME_SHORTCUT_OWNS_EXECUTION：已錄製快捷指令正在由 Runtime 執行，禁止 Gemini 重複操作。");
             return;
         }
@@ -1068,7 +1111,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if (stabilityBlock != null && stabilityTask != null) {
             try {
                 stabilityTask.addStep(name, stabilityBlock);
-                sendToolResponse(id, name, stabilityBlock);
+                sendToolResponse(id, requestedName, stabilityBlock);
                 if (stabilityTask.blockedReason != null) {
                     requestAgentConclusion(stabilityTask, stabilityTask.blockedReason);
                 } else {
@@ -1082,11 +1125,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
         final AgentTaskRecord task = beginAgentStep(name, args);
         if (task == null) {
-            sendBlockedToolResponse(id, name, "Agent 任務已停止，請以目前資訊作結論。");
+            sendBlockedToolResponse(id, requestedName, "Agent 任務已停止，請以目前資訊作結論。");
             return;
         }
         if (task.blockedReason != null) {
-            sendBlockedToolResponse(id, name, task.blockedReason);
+            sendBlockedToolResponse(id, requestedName, task.blockedReason);
             requestAgentConclusion(task, task.blockedReason);
             return;
         }
@@ -1110,6 +1153,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 else if ("press_key".equals(learnedName)) result = pressKey(learnedArgs);
                 else result.put("success", false).put("error", "LEARNED_CORRECTION_UNSUPPORTED");
             }
+            else if (SemanticPhoneAction.ERROR_TOOL.equals(name)) result = args;
             else if ("take_screenshot".equals(name)) result = captureAndSendScreen();
             else if ("inspect_ui".equals(name)) result = inspectUi(args);
             else if ("tap_element".equals(name)) result = tapSemanticElement(args);
@@ -1131,13 +1175,13 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 if (!userActionScope.consumeEndCallAuthorization()) {
                     JSONObject blocked = runtimeBlocked("END_CALL_NOT_AUTHORIZED", "請使用者明確說結束通話；關閉視窗或再見不代表掛斷。");
                     task.addStep(name, blocked);
-                    sendToolResponse(id, name, blocked);
+                    sendToolResponse(id, requestedName, blocked);
                     task.awaitingModel = true;
                     scheduleAgentResponseWatchdog(task);
                     return;
                 }
                 result.put("success", true).put("message", "語音通話即將結束");
-                sendToolResponse(id, name, result);
+                sendToolResponse(id, requestedName, result);
                 finishAgentTask(task, "通話結束", "");
                 new Handler(Looper.getMainLooper()).postDelayed(new Runnable() { @Override public void run() { stop(); } }, 1200);
                 return;
@@ -1176,9 +1220,13 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 CorrectionLearningRuntime.afterMutation(
                         name, args, result, beforeCorrectionContext, correctionDecision);
             }
+            if (semantic.semantic) {
+                result.put("semanticAction", semantic.semanticAction)
+                        .put("resolvedByRuntime", name);
+            }
             updateAgentStabilityAfterResult(task, name, args, result);
             task.addStep(name, result);
-            sendToolResponse(id, name, result);
+            sendToolResponse(id, requestedName, result);
             if (task.blockedReason != null) {
                 requestAgentConclusion(task, task.blockedReason);
             } else {
@@ -2120,7 +2168,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 }
             }
             return new JSONObject().put("success", false).put("status", "MULTIPLE_MATCHES").put("candidates", candidates)
-                    .put("error", prompt.toString().trim()).put("instruction", "只詢問使用者要開第幾個；回答後再呼叫 launch_app(index=...)。");
+                    .put("error", prompt.toString().trim()).put("instruction", "只詢問使用者要開第幾個；回答後再呼叫 phone_action(action=OPEN_APP,target=使用者選的序號)。");
         }
         return reply;
     }
