@@ -38,11 +38,15 @@ final class AppCatalog {
     }
 
     private final Context context;
+    private final AppAliasStore aliasStore;
     private final Object lock = new Object();
     private ArrayList<Entry> entries = new ArrayList<Entry>();
     private long loadedAtMs = 0L;
 
-    AppCatalog(Context context) { this.context = context.getApplicationContext(); }
+    AppCatalog(Context context) {
+        this.context = context.getApplicationContext();
+        this.aliasStore = new AppAliasStore(this.context);
+    }
 
     void prewarm() {
         new Thread(new Runnable() {
@@ -52,6 +56,19 @@ final class AppCatalog {
 
     Resolution resolve(String query) {
         long started = System.currentTimeMillis();
+        AppAliasStore.Entry alias = aliasStore.resolve(query);
+        if (alias != null) {
+            try {
+                if (context.getPackageManager().getLaunchIntentForPackage(alias.packageName) != null) {
+                    Entry chosen = new Entry(alias.label.isEmpty() ? query : alias.label, alias.packageName);
+                    ArrayList<Entry> one = new ArrayList<Entry>();
+                    one.add(chosen);
+                    return new Resolution(Resolution.FOUND, chosen, one,
+                            System.currentTimeMillis() - started);
+                }
+                aliasStore.delete(query);
+            } catch (Exception ignored) {}
+        }
         ensureFresh(false);
         Resolution result = resolveCached(query, started);
         if (Resolution.NOT_FOUND.equals(result.status)) {

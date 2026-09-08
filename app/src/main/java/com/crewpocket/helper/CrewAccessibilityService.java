@@ -55,6 +55,9 @@ public class CrewAccessibilityService extends AccessibilityService {
     private LearnedUiMappingStore learnedUiMappingStore;
     private UiTeachOverlay uiTeachOverlay;
     private AppCatalog appCatalog;
+    private volatile String lastTextInputMethod = "NONE";
+    private volatile String lastTextInputFailure = "";
+    private volatile boolean lastTextInputVerified = false;
 
     public static boolean isServiceRunning() { return instance != null; }
     public static CrewAccessibilityService getInstance() {
@@ -679,7 +682,11 @@ public class CrewAccessibilityService extends AccessibilityService {
                 }
                 // Never echo user-entered text back into the model/tool result.
                 responseJson = "{\"success\":" + typeSuccess[0]
-                        + ",\"action\":\"TYPE\",\"textLength\":" + fText.length() + "}";
+                        + ",\"action\":\"TYPE\",\"textLength\":" + fText.length()
+                        + ",\"method\":\"" + jsonEscape(lastTextInputMethod) + "\""
+                        + ",\"verified\":" + lastTextInputVerified
+                        + (typeSuccess[0] ? "" : ",\"error\":\"" + jsonEscape(lastTextInputFailure) + "\"")
+                        + "}";
             } else if (path.startsWith("/send_text")) {
                 final String textToSend = getJsonString(body, "text");
                 if (textToSend == null || textToSend.length() == 0) {
@@ -1513,38 +1520,168 @@ public class CrewAccessibilityService extends AccessibilityService {
     }
 
     private boolean performSetText(String text) {
-        if (text == null) return false;
+        lastTextInputMethod = "NONE";
+        lastTextInputFailure = "";
+        lastTextInputVerified = false;
+        if (text == null) {
+            lastTextInputFailure = "EMPTY_TEXT";
+            return false;
+        }
+
         AccessibilityNodeInfo root = getRootInActiveWindow();
-        if (root == null) return false;
+        if (root == null) {
+            lastTextInputFailure = "NO_ACTIVE_WINDOW";
+            return false;
+        }
+        AccessibilityNodeInfo target = null;
         try {
-            // First check input-focused node
-            AccessibilityNodeInfo target = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
+            target = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
+            if (target == null || !isEditableCandidate(target)) {
+                if (target != null) { target.recycle(); target = null; }
+                target = findFocusedEditableNode(root);
+            }
+            if (target == null) target = findEditableNode(root);
             if (target == null) {
-                target = findEditableNode(root);
+                lastTextInputFailure = "NO_EDITABLE_TARGET";
+                return false;
             }
-            if (target != null) {
-                if (SensitiveDataGuard.isHardBlockedInput(target)) {
-                    target.recycle();
-                    return false;
-                }
-                target.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
-                android.os.Bundle args = new android.os.Bundle();
-                args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text);
-                boolean success = target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
-                try {
-                    android.os.Bundle selArgs = new android.os.Bundle();
-                    selArgs.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, text.length());
-                    selArgs.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, text.length());
-                    target.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selArgs);
-                } catch (Exception ignored) {}
-                target.recycle();
-                return success;
+            if (SensitiveDataGuard.isHardBlockedInput(target)) {
+                lastTextInputFailure = "SENSITIVE_INPUT_BLOCKED";
+                return false;
             }
-        } catch (Exception ignored) {}
-        finally {
+
+            target.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
+
+            android.os.Bundle args = new android.os.Bundle();
+            args.putCharSequence(
+                    AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text);
+            boolean setAccepted = target.performAction(
+                    AccessibilityNodeInfo.ACTION_SET_TEXT, args);
+            if (setAccepted) {
+                lastTextInputMethod = "ACTION_SET_TEXT";
+                lastTextInputVerified = refreshAndMatches(target, text);
+                moveCursorToEnd(target, text.length());
+                return true;
+            }
+
+            // Jetpack Compose / custom editors such as some Google Keep builds
+            // can expose an editable node while rejecting ACTION_SET_TEXT.
+            // Paste is a standard Accessibility fallback and keeps typing local.
+            boolean pasteAccepted = pasteIntoTarget(target, text);
+            if (pasteAccepted) {
+                lastTextInputMethod = "ACTION_PASTE";
+                lastTextInputVerified = refreshAndContains(target, text);
+                moveCursorToEnd(target, safeTextLength(target));
+                return true;
+            }
+
+            lastTextInputFailure = "SET_TEXT_AND_PASTE_REJECTED";
+            return false;
+        } catch (Exception error) {
+            lastTextInputFailure = "TEXT_INPUT_EXCEPTION_"
+                    + error.getClass().getSimpleName();
+            return false;
+        } finally {
+            if (target != null) try { target.recycle(); } catch (Exception ignored) {}
             root.recycle();
         }
-        return false;
+    }
+
+    private boolean isEditableCandidate(AccessibilityNodeInfo node) {
+        if (node == null) return false;
+        CharSequence cls = node.getClassName();
+        return node.isEditable() || (cls != null
+                && cls.toString().toLowerCase(Locale.ROOT).contains("edittext"));
+    }
+
+    private AccessibilityNodeInfo findFocusedEditableNode(AccessibilityNodeInfo node) {
+        if (node == null) return null;
+        if (isEditableCandidate(node) && node.isFocused()) {
+            return AccessibilityNodeInfo.obtain(node);
+        }
+        int count = node.getChildCount();
+        for (int i = 0; i < count; i++) {
+            AccessibilityNodeInfo child = node.getChild(i);
+            if (child == null) continue;
+            try {
+                AccessibilityNodeInfo hit = findFocusedEditableNode(child);
+                if (hit != null) return hit;
+            } finally {
+                child.recycle();
+            }
+        }
+        return null;
+    }
+
+    private boolean pasteIntoTarget(AccessibilityNodeInfo target, String text) {
+        android.content.ClipboardManager clipboard = null;
+        android.content.ClipData previous = null;
+        boolean hadPrevious = false;
+        try {
+            clipboard = (android.content.ClipboardManager)
+                    getSystemService(Context.CLIPBOARD_SERVICE);
+            if (clipboard == null) return false;
+            try {
+                hadPrevious = clipboard.hasPrimaryClip();
+                if (hadPrevious) previous = clipboard.getPrimaryClip();
+            } catch (Exception ignored) {}
+
+            clipboard.setPrimaryClip(
+                    android.content.ClipData.newPlainText("Crew Helper input", text));
+            target.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
+            return target.performAction(AccessibilityNodeInfo.ACTION_PASTE);
+        } catch (Exception ignored) {
+            return false;
+        } finally {
+            if (clipboard != null) {
+                try {
+                    if (hadPrevious && previous != null) clipboard.setPrimaryClip(previous);
+                    else clipboard.setPrimaryClip(
+                            android.content.ClipData.newPlainText("", ""));
+                } catch (Exception ignored) {}
+            }
+        }
+    }
+
+    private boolean refreshAndMatches(AccessibilityNodeInfo target, String expected) {
+        try {
+            target.refresh();
+            CharSequence value = target.getText();
+            return value != null && expected.equals(value.toString());
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private boolean refreshAndContains(AccessibilityNodeInfo target, String expected) {
+        try {
+            target.refresh();
+            CharSequence value = target.getText();
+            return value != null && value.toString().contains(expected);
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private int safeTextLength(AccessibilityNodeInfo target) {
+        try {
+            target.refresh();
+            CharSequence value = target.getText();
+            return value == null ? 0 : value.length();
+        } catch (Exception ignored) {
+            return 0;
+        }
+    }
+
+    private void moveCursorToEnd(AccessibilityNodeInfo target, int end) {
+        try {
+            android.os.Bundle selArgs = new android.os.Bundle();
+            selArgs.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT,
+                    Math.max(0, end));
+            selArgs.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT,
+                    Math.max(0, end));
+            target.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selArgs);
+        } catch (Exception ignored) {}
     }
 
     private AccessibilityNodeInfo findEditableNode(AccessibilityNodeInfo node) {

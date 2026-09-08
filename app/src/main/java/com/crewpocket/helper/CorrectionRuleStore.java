@@ -300,6 +300,7 @@ final class CorrectionRuleStore {
                 putShort(out, "key", args.optString("key", ""), 32);
             } else if ("launch_app".equals(t)) {
                 putShort(out, "app", args.optString("app", ""), 100);
+                putShort(out, "package_name", args.optString("package_name", ""), 180);
                 if (args.has("index")) out.put("index", args.optInt("index", -1));
             }
         } catch (Exception ignored) {}

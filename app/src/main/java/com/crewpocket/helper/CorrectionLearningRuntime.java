@@ -46,6 +46,7 @@ final class CorrectionLearningRuntime {
     }
 
     private static CorrectionRuleStore store;
+    private static AppAliasStore appAliasStore;
     private static MutationSnapshot lastMutation;
     private static MutationSnapshot pendingWrong;
     private static long pendingStartedAt;
@@ -54,7 +55,9 @@ final class CorrectionLearningRuntime {
 
     static synchronized void init(Context context) {
         if (context == null) return;
-        store = new CorrectionRuleStore(context.getApplicationContext());
+        Context app = context.getApplicationContext();
+        store = new CorrectionRuleStore(app);
+        appAliasStore = new AppAliasStore(app);
     }
 
     private static synchronized boolean ensureInitialized() {
@@ -97,6 +100,12 @@ final class CorrectionLearningRuntime {
             return Decision.none(requestedTool, requestedArgs);
         }
         if (!ensureInitialized()) {
+            return Decision.none(requestedTool, requestedArgs);
+        }
+
+        // App identity is global. 0030 resolves corrected app names through
+        // AppAliasStore instead of replaying screen-bound launch corrections.
+        if ("launch_app".equals(requestedTool)) {
             return Decision.none(requestedTool, requestedArgs);
         }
 
@@ -158,11 +167,6 @@ final class CorrectionLearningRuntime {
         current.atMs = System.currentTimeMillis();
 
         if (pendingWrong != null && success) {
-            boolean sameOriginalScreen =
-                    pendingWrong.packageName.equals(current.packageName)
-                    && pendingWrong.screenFingerprint.equals(
-                            current.screenFingerprint);
-
             String effectiveTool =
                     decision != null && decision.applied
                             ? decision.toolName
@@ -171,6 +175,40 @@ final class CorrectionLearningRuntime {
                     decision != null && decision.applied
                             ? decision.args
                             : requestedArgs;
+
+            // 0030: launch correction is an alias-learning signal, not a
+            // same-screen gesture correction. Example: wrong query "Foo" opens
+            // App A, user corrects, then verified launch opens package B. Persist
+            // Foo -> package B globally so future launches bypass model guessing.
+            if ("launch_app".equals(pendingWrong.requestedTool)
+                    && "launch_app".equals(effectiveTool)) {
+                String alias = pendingWrong.requestedArgs.optString("app", "").trim();
+                String pkg = result == null ? "" : result.optString("package", "").trim();
+                if (pkg.isEmpty()) pkg = effectiveArgs.optString("package_name", "").trim();
+                String label = result == null ? "" : result.optString("app",
+                        result.optString("label", "")).trim();
+                String wrongPkg = pendingWrong.requestedArgs
+                        .optString("package_name", "").trim();
+                boolean packageChanged = wrongPkg.isEmpty() || !wrongPkg.equals(pkg);
+                if (!alias.isEmpty() && !pkg.isEmpty() && packageChanged
+                        && appAliasStore != null) {
+                    AppAliasStore.Entry learned = appAliasStore.save(alias, pkg, label);
+                    if (learned != null) {
+                        showStatus("已學會 App 名稱",
+                                "「" + learned.alias + "」→ "
+                                        + (learned.label.isEmpty() ? learned.packageName : learned.label));
+                        pendingWrong = null;
+                        pendingStartedAt = 0L;
+                        lastMutation = current;
+                        return;
+                    }
+                }
+            }
+
+            boolean sameOriginalScreen =
+                    pendingWrong.packageName.equals(current.packageName)
+                    && pendingWrong.screenFingerprint.equals(
+                            current.screenFingerprint);
 
             String wrongSignature =
                     CorrectionRuleStore.signature(

@@ -62,8 +62,7 @@ final class SensitiveDataGuard {
     static boolean isHardBlockedInput(AccessibilityNodeInfo node) {
         return node != null && (node.isPassword() || isPasswordInputType(node.getInputType())
                 || containsSensitiveFieldMarker(node.getViewIdResourceName())
-                || containsSensitiveFieldMarker(String.valueOf(node.getContentDescription()))
-                || (node.isEditable() && containsSensitiveFieldMarker(String.valueOf(node.getText()))));
+                || containsSensitiveFieldMarker(String.valueOf(node.getContentDescription())));
     }
 
     static boolean isBlockedAction(AccessibilityNodeInfo node) {
