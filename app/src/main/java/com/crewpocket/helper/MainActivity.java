@@ -452,7 +452,10 @@ public class MainActivity extends Activity {
         nav.setOrientation(LinearLayout.HORIZONTAL);
         nav.setGravity(Gravity.CENTER);
         nav.setPadding(dp(8), dp(6), dp(8), dp(8));
-        nav.setBackground(CrewTheme.createCard(this, CrewTheme.BG_SURFACE, CrewTheme.BORDER_SUBTLE, 0));
+        // The navigation rail is a full-width surface, not a card: its old
+        // outline drew unwanted borders along both screen edges. Individual
+        // tabs retain their own selected-state outline below.
+        nav.setBackgroundColor(CrewTheme.BG_SURFACE);
 
         String[] labels = new String[]{
             I18n.get(this, "🎙️ 助理", "🎙️ Assistant"),

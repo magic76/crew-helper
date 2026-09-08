@@ -114,31 +114,7 @@ final class BubbleActionStripOverlay {
             row.addView(interrupt, itemParams());
         }
 
-        final ShortcutRecorderRuntime recorder =
-                ShortcutRecorderRuntime.getInstance(context);
-        final boolean recording = recorder.isRecording();
-
-        IconButton record = iconButton(ICON_RECORD);
-        record.setContentDescription(recording
-                ? "完成錄製快捷指令" : "開始錄製快捷指令");
-        record.setOnClickListener(v -> {
-            dismiss();
-            if (recording) recorder.finishAndOpenEditor();
-            else recorder.start();
-        });
-        row.addView(record, itemParams());
-
-        if (recording) {
-            IconButton undo = iconButton(ICON_UNDO);
-            undo.setContentDescription("復原上一個錄製步驟");
-            undo.setOnClickListener(v -> {
-                recorder.undo();
-                dismiss();
-            });
-            row.addView(undo, itemParams());
-        }
-
-        int itemCount = (live ? 3 : 2) + 1 + (recording ? 1 : 0);
+        int itemCount = live ? 3 : 2;
         int stripWidth = dp(50);
         int stripHeight = dp(12) + itemCount * dp(42);
 

@@ -315,7 +315,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             userActionScope.updateFromUserText(text.trim());
             boolean correctionInput = correctionWindowActive && System.currentTimeMillis() <= correctionWindowUntil;
             if (correctionInput) consumeCorrectionWindowOnUserSpeech(text.trim());
-            if (!correctionInput) processMemoryRuleInput(text.trim());
             JSONObject part = new JSONObject().put("text", text.trim());
             JSONObject turn = new JSONObject().put("role", "user").put("parts", new JSONArray().put(part));
             boolean sent = webSocket.send(new JSONObject().put("clientContent", new JSONObject()
@@ -633,9 +632,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             boolean correctionInput = correctionWindowActive
                     && System.currentTimeMillis() <= correctionWindowUntil;
             consumeCorrectionWindowOnUserSpeech(completeUserInput);
-            if (!correctionInput) {
-                processMemoryRuleInput(completeUserInput);
-            }
         }
 
         JSONObject toolCall = response.optJSONObject("toolCall");

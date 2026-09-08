@@ -107,7 +107,6 @@ public class CrewAccessibilityService extends AccessibilityService {
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
         try {
-            ShortcutRecorderRuntime.getInstance(this).onAccessibilityEvent(event);
         } catch (Exception error) {
             Log.w(TAG, "Shortcut recorder event ignored: " + error.getMessage());
         }

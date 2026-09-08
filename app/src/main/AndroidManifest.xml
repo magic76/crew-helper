@@ -63,11 +63,6 @@
             android:exported="false" />
 
         <activity
-            android:name=".ShortcutRecorderActivity"
-            android:screenOrientation="portrait"
-            android:exported="false" />
-
-        <activity
             android:name=".DeckActivity"
             android:screenOrientation="portrait"
             android:exported="false" />

@@ -51,9 +51,7 @@ public class CorrectionRulesActivity extends Activity {
         setContentView(scroll);
 
         TextView title = new TextView(this);
-        title.setText(I18n.get(this,
-                "🧠 已學習操作與快捷指令",
-                "🧠 Learned Operations & Shortcuts"));
+        title.setText(I18n.get(this, "🧠 已學習操作修正", "🧠 Learned Corrections"));
         title.setTextSize(23);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         title.setTextColor(CrewTheme.TEXT_PRIMARY);
@@ -61,8 +59,8 @@ public class CorrectionRulesActivity extends Activity {
 
         TextView desc = new TextView(this);
         desc.setText(I18n.get(this,
-                "包含單步修正與你明確建立的快捷指令；舊 Memory Rule 會自動相容。不保存密碼、OTP 或訊息內容。",
-                "Contains verified corrections and explicitly created shortcuts. Legacy Memory Rules remain compatible. Passwords, OTPs and message contents are not stored."));
+                "只保留已驗證的單步操作修正；不保存密碼、OTP 或訊息內容。",
+                "Contains verified one-step corrections only. Passwords, OTPs and message contents are not stored."));
         desc.setTextSize(12);
         desc.setTextColor(CrewTheme.TEXT_SECONDARY);
         desc.setPadding(0, dp(6), 0, dp(16));
@@ -72,16 +70,14 @@ public class CorrectionRulesActivity extends Activity {
 
         TextView summary = new TextView(this);
         summary.setText(I18n.get(this,
-                "修正 " + rules.size() + " 條 · 快捷指令 " + memoryStore.count()
-                        + " 條 · 啟用 " + (store.enabledCount() + memoryStore.enabledCount()) + " 條",
-                rules.size() + " corrections · " + memoryStore.count() + " shortcuts · "
-                        + (store.enabledCount() + memoryStore.enabledCount()) + " enabled"));
+                "修正 " + rules.size() + " 條 · 啟用 " + store.enabledCount() + " 條",
+                rules.size() + " corrections · " + store.enabledCount() + " enabled"));
         summary.setTextSize(11);
         summary.setTextColor(CrewTheme.TEAL_300);
         summary.setPadding(0, 0, 0, dp(12));
         content.addView(summary);
 
-        Button addAppShortcut = new Button(this);
+        /*Button addAppShortcut = new Button(this);
         addAppShortcut.setText(I18n.get(this, "＋ 新增開啟 App 指令", "+ Add Open-App Command"));
         addAppShortcut.setAllCaps(false);
         addAppShortcut.setTextColor(CrewTheme.TEXT_PRIMARY);
@@ -107,14 +103,13 @@ public class CorrectionRulesActivity extends Activity {
         LinearLayout.LayoutParams addAutomationLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(44));
         addAutomationLp.setMargins(0, 0, 0, dp(12));
-        content.addView(addAutomation, addAutomationLp);
+        content.addView(addAutomation, addAutomationLp);*/
 
-        List<MemoryRuleStore.Rule> memoryRules = memoryStore.list();
-        if (rules.isEmpty() && memoryRules.isEmpty()) {
+        if (rules.isEmpty()) {
             TextView empty = new TextView(this);
             empty.setText(I18n.get(this,
-                    "目前還沒有記錄。最常用的需求請按「新增開啟 App 指令」；多步操作才使用進階錄製。",
-                    "No learned records yet. Use Add Open-App Command for common tasks; use advanced recording only for multi-step automation."));
+                    "目前還沒有已驗證的操作修正。助理做錯時按「打斷」並教它正確做法。",
+                    "No verified corrections yet. Interrupt an incorrect action and teach the correct one."));
             empty.setTextSize(13);
             empty.setTextColor(CrewTheme.TEXT_SECONDARY);
             empty.setPadding(dp(14), dp(16), dp(14), dp(16));
@@ -127,10 +122,6 @@ public class CorrectionRulesActivity extends Activity {
             return;
         }
 
-        if (!memoryRules.isEmpty()) {
-            addGroupTitle(I18n.get(this, "快捷指令", "SHORTCUTS"));
-            for (final MemoryRuleStore.Rule rule : memoryRules) content.addView(buildMemoryRuleCard(rule));
-        }
         if (!rules.isEmpty()) addGroupTitle(I18n.get(this, "單步修正", "CORRECTIONS"));
         for (final CorrectionRuleStore.Rule rule : rules) {
             content.addView(buildRuleCard(rule));
