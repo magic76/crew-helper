@@ -141,6 +141,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private volatile long runtimeShortcutGuardUntil = 0L;
     private AudioIncidentRecorder audioIncidentRecorder;
     private volatile PendingCondition pendingCondition = null;
+    private final Object pendingChoiceLock = new Object();
+    private PendingUiChoice pendingUiChoice;
 
     NativeGeminiLiveClient(String apiKey, Listener listener) { this(apiKey, "", AppConfig.DEFAULT_VOICE, "auto", 35, "warm", "", 55, "call", listener); }
     NativeGeminiLiveClient(String apiKey, String serverUrl, Listener listener) { this(apiKey, serverUrl, AppConfig.DEFAULT_VOICE, "auto", 35, "warm", "", 55, "call", listener); }
@@ -663,6 +665,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             }
 
             listener.onTranscript("你", completeUserInput);
+            if (consumePendingUiChoiceVoice(completeUserInput)) return;
             if (isStopAgentTaskPhrase(completeUserInput)) {
                 cancelAgentTask("使用者語音停止任務");
             }
@@ -1845,7 +1848,16 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 if (nodeClick.optBoolean("success")) {
                     nodeClick.put("resolvedFrom", "ui_node_action");
                     workingContext.recordAction("tap_screen", "submitted");
-                    return autoObserveAfterMutation(nodeClick, "tap_screen");
+                    JSONObject observed = autoObserveAfterMutation(nodeClick, "tap_screen");
+                    // The legacy resolver uses broad contains-matching. A true
+                    // ACTION_CLICK can therefore target a stale/nearby control.
+                    // If it produced no new screen, let the user select from
+                    // exact current semantic elements rather than retrying it.
+                    if (!label.isEmpty() && observed.optBoolean("success", false)
+                            && !observed.optBoolean("screenChanged", false)) {
+                        return offerPendingUiChoice(label, "點擊後畫面沒有變化");
+                    }
+                    return observed;
                 }
                 JSONObject nodesResp = helperGet("/nodes");
                 if (nodesResp.optBoolean("success")) {
@@ -1874,7 +1886,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         }
 
         if (targetX < 0 || targetY < 0) {
-            return new JSONObject().put("success", false).put("error", "找不到指定點擊目標或座標");
+            return offerPendingUiChoice(label, "找不到指定點擊目標或座標");
         }
 
         // 📐 2. Explicit coordinate conversion.  The visual frame sent to the
@@ -1899,7 +1911,163 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         reply.put("resolvedFrom", resolvedFromNode ? "ui_node" : (coordinateSpace.isEmpty() ? "legacy" : coordinateSpace));
         reply.put("visionSize", lastVisionWidth + "x" + lastVisionHeight).put("screenSize", lastScreenWidth + "x" + lastScreenHeight);
         workingContext.recordAction("tap_screen", reply.optBoolean("success", false) ? "submitted" : "failed");
-        return autoObserveAfterMutation(reply, "tap_screen");
+        JSONObject observed = autoObserveAfterMutation(reply, "tap_screen");
+        // Accessibility sometimes refuses a semantic click, while a raw touch
+        // is merely accepted by the gesture injector.  That is not evidence
+        // that the requested control worked.  Offer the fresh on-screen choices
+        // immediately instead of letting the model repeat the same stale tap.
+        if (resolvedFromNode && !label.isEmpty()
+                && observed.optBoolean("success", false)
+                && !observed.optBoolean("screenChanged", false)) {
+            return offerPendingUiChoice(label, "點擊後畫面沒有變化");
+        }
+        return observed;
+    }
+
+    /** Builds a short, fresh list from the current semantic screen. No raw tree leaks to UI. */
+    private JSONObject offerPendingUiChoice(String requestedTarget, String reason) throws Exception {
+        // A search field/suggestion page is an input state, not a location
+        // disambiguation state. Showing choices here made Maps ask the user
+        // which query to type, before the query had even been committed.
+        if (userActionScope.isSearchInProgress() || isGenericChoiceTarget(requestedTarget)) {
+            return new JSONObject().put("success", false).put("stepResult", "STEP_FAILED")
+                    .put("error", "UI_TARGET_NOT_CONFIRMED")
+                    .put("instruction", userActionScope.isSearchInProgress()
+                            ? "搜尋仍在輸入或提交中；先完成搜尋並等待實際結果，不要顯示選擇卡或點搜尋建議。"
+                            : "這是一般控制項而非可供使用者選擇的結果；先重新觀察畫面並改用其他方法。");
+        }
+        JSONObject screen = readSemanticScreenQuietly();
+        JSONArray elements = screen == null ? null : screen.optJSONArray("elements");
+        ArrayList<PendingUiChoice.Option> options = new ArrayList<PendingUiChoice.Option>();
+        if (elements != null) {
+            ArrayList<JSONObject> candidates = new ArrayList<JSONObject>();
+            for (int i = 0; i < elements.length(); i++) {
+                JSONObject e = elements.optJSONObject(i);
+                if (e == null || !e.optBoolean("enabled", true) || e.optBoolean("editable", false)
+                        || e.optBoolean("sensitive", false)) continue;
+                String label = e.optString("label", "").trim();
+                String hint = e.optString("semanticHint", "").trim();
+                if (label.isEmpty()) label = hint;
+                // Maps (and several Material search UIs) put a long
+                // accessibility instruction on the clickable suggestion
+                // container. The useful place/result name is often a plain
+                // text child; semantic_tap can safely climb to its clickable
+                // ancestor, so prefer that child instead.
+                if (label.isEmpty() || SensitiveDataGuard.REDACTED.equals(label)
+                        || isChoiceNoise(label)) continue;
+                String meta = label + " " + hint + " " + e.optString("viewId", "");
+                if (UserActionScope.looksLikeSendTarget(meta) && !userActionScope.canSend()) continue;
+                e = new JSONObject(e.toString());
+                e.put("choiceLabel", label);
+                e.put("choiceScore", choiceScore(requestedTarget, meta));
+                candidates.add(e);
+            }
+            java.util.Collections.sort(candidates, new java.util.Comparator<JSONObject>() {
+                @Override public int compare(JSONObject a, JSONObject b) {
+                    return b.optInt("choiceScore") - a.optInt("choiceScore");
+                }
+            });
+            java.util.HashSet<String> labels = new java.util.HashSet<String>();
+            for (JSONObject e : candidates) {
+                String label = e.optString("choiceLabel", "");
+                if (!labels.add(label.toLowerCase(Locale.ROOT))) continue;
+                options.add(new PendingUiChoice.Option(e.optString("id", ""), label, e.optString("role", "")));
+                if (options.size() >= 4) break;
+            }
+        }
+        if (options.isEmpty()) return new JSONObject().put("success", false)
+                .put("stepResult", "STEP_FAILED").put("error", reason)
+                .put("instruction", "目前畫面沒有可安全辨識的選項；請使用者自行操作，或改用截圖／教導模式。");
+        final PendingUiChoice pending = new PendingUiChoice(
+                screen == null ? "" : screen.optString("fingerprint", ""), options);
+        synchronized (pendingChoiceLock) { pendingUiChoice = pending; }
+        String choiceTitle = userActionScope.hasCommittedSearch()
+                ? "選擇搜尋結果" : "請選擇下一步";
+        FloatingBubbleManager.getInstance(appContext).showPendingChoices(choiceTitle, options,
+                new FloatingBubbleManager.PendingChoiceCallback() {
+                    @Override public void onChoice(String elementId) { NativeLiveService.selectPendingUiChoice(elementId); }
+                    @Override public void onCancel() { NativeLiveService.cancelPendingUiChoice(); }
+                });
+        JSONArray compact = new JSONArray();
+        for (int i = 0; i < options.size(); i++) compact.put((i + 1) + ". " + options.get(i).label);
+        return new JSONObject().put("success", false).put("stepResult", "STEP_FAILED")
+                .put("error", "USER_CHOICE_REQUIRED").put("choices", compact)
+                .put("instruction", "已在泡泡顯示選項；等待使用者點選或說第一個、第二個、選項名稱、取消。請勿繼續點擊。");
+    }
+
+    private int choiceScore(String target, String metadata) {
+        String wanted = target == null ? "" : target.toLowerCase(Locale.ROOT).trim();
+        String value = metadata == null ? "" : metadata.toLowerCase(Locale.ROOT);
+        if (!wanted.isEmpty() && value.contains(wanted)) return 1000;
+        if (wanted.contains("導航") && (value.contains("directions") || value.contains("route") || value.contains("路線"))) return 900;
+        if (wanted.contains("開始") && (value.contains("start") || value.contains("開始導航"))) return 900;
+        return value.contains("search") || value.contains("搜尋") ? 250 : 100;
+    }
+
+    private boolean isChoiceNoise(String label) {
+        String value = label == null ? "" : label.toLowerCase(Locale.ROOT).trim();
+        return value.contains("啟用即可在搜尋列輸入建議")
+                || value.contains("启用即可在搜索栏输入建议")
+                || value.contains("在搜尋列輸入建議")
+                || value.contains("在搜索栏输入建议")
+                || value.contains("enable to type a suggestion")
+                || value.contains("search bar suggestion");
+    }
+
+    private boolean isGenericChoiceTarget(String target) {
+        String value = target == null ? "" : target.toLowerCase(Locale.ROOT).trim();
+        return value.isEmpty() || value.equals("search") || value.equals("搜尋")
+                || value.equals("搜索") || value.equals("back") || value.equals("返回")
+                || value.equals("close") || value.equals("取消") || value.equals("open");
+    }
+
+    boolean selectPendingUiChoice(final String elementId) {
+        final PendingUiChoice pending;
+        final PendingUiChoice.Option chosen;
+        synchronized (pendingChoiceLock) {
+            pending = pendingUiChoice;
+            if (pending == null || pending.expired()) { pendingUiChoice = null; return false; }
+            PendingUiChoice.Option found = null;
+            for (PendingUiChoice.Option option : pending.options) {
+                if (option.elementId.equals(elementId)) { found = option; break; }
+            }
+            if (found == null) return false;
+            chosen = found; pendingUiChoice = null;
+        }
+        FloatingBubbleManager.getInstance(appContext).hidePendingChoices();
+        new Thread(new Runnable() {
+            @Override public void run() {
+                try {
+                    JSONObject screen = readSemanticScreenQuietly();
+                    if (screen == null || !pending.fingerprint.equals(screen.optString("fingerprint", ""))) {
+                        sendInternalAgentDirective("【Runtime 選擇已失效】畫面已改變，沒有點擊舊選項。請依目前畫面重新判斷。");
+                        return;
+                    }
+                    JSONObject result = tapSemanticElement(new JSONObject().put("element_id", chosen.elementId));
+                    sendInternalAgentDirective("【使用者已選擇】「" + chosen.label + "」；Runtime 執行結果："
+                            + (result.optBoolean("success", false) ? "成功" : "未成功") + "。請根據最新畫面繼續任務。");
+                } catch (Exception ignored) {
+                    sendInternalAgentDirective("【使用者選擇】執行失敗，請重新觀察目前畫面後再判斷。");
+                }
+            }
+        }, "CrewPendingUiChoice").start();
+        return true;
+    }
+
+    void cancelPendingUiChoice(String reason) {
+        synchronized (pendingChoiceLock) { pendingUiChoice = null; }
+        FloatingBubbleManager.getInstance(appContext).hidePendingChoices();
+        sendInternalAgentDirective("【使用者取消選擇】" + (reason == null ? "" : reason) + "；停止目前點擊，請簡短詢問下一步。");
+    }
+
+    private boolean consumePendingUiChoiceVoice(String utterance) {
+        PendingUiChoice pending;
+        synchronized (pendingChoiceLock) { pending = pendingUiChoice; }
+        if (pending == null) return false;
+        if (pending.expired()) { cancelPendingUiChoice("選項逾時"); return false; }
+        if (pending.isCancel(utterance)) { cancelPendingUiChoice("使用者語音取消"); return true; }
+        PendingUiChoice.Option option = pending.resolveVoice(utterance);
+        return option != null && selectPendingUiChoice(option.elementId);
     }
 
     private JSONObject tapSemanticElement(JSONObject args) throws Exception {

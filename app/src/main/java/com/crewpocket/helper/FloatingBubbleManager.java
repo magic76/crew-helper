@@ -39,6 +39,7 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 import org.json.JSONObject;
 
@@ -65,6 +66,9 @@ public class FloatingBubbleManager {
     private WindowManager.LayoutParams compactStatusParams = null;
     private FloatingPanelController compactStatusController = null;
     private Runnable compactStatusAutoHideRunnable = null;
+    private View pendingChoiceView = null;
+    private WindowManager.LayoutParams pendingChoiceParams = null;
+    private Runnable pendingChoiceTimeout = null;
     private static final long MINI_STATUS_AUTO_HIDE_MS = 1800L;
     private static class DockIconButton extends View {
         public static final int ICON_CAMERA = 1;
@@ -348,6 +352,108 @@ public class FloatingBubbleManager {
                 compactStatusController = null;
             }
         });
+    }
+
+    interface PendingChoiceCallback { void onChoice(String elementId); void onCancel(); }
+
+    /** Shows only when automation needs a human decision; it is not a permanent control. */
+    public void showPendingChoices(final String title,
+                                   final List<PendingUiChoice.Option> options,
+                                   final PendingChoiceCallback callback) {
+        mainHandler.post(new Runnable() {
+            @Override public void run() {
+                hidePendingChoicesInternal();
+                if (!canDrawOverlays() || options == null || options.isEmpty()) return;
+                LinearLayout card = new LinearLayout(context);
+                card.setOrientation(LinearLayout.VERTICAL);
+                card.setPadding(dp(14), dp(12), dp(14), dp(12));
+                GradientDrawable bg = new GradientDrawable();
+                bg.setColor(Color.argb(248, 15, 23, 42));
+                bg.setCornerRadius(dp(20));
+                bg.setStroke(dp(1), Color.parseColor("#334155"));
+                card.setBackground(bg);
+                card.setElevation(dp(14));
+
+                TextView heading = new TextView(context);
+                heading.setText(title == null ? "請選擇下一步" : title);
+                heading.setTextColor(Color.WHITE);
+                heading.setTextSize(14);
+                heading.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+                card.addView(heading);
+                TextView hint = new TextView(context);
+                hint.setText("可直接點選，或說「第一個／取消」");
+                hint.setTextColor(Color.parseColor("#94A3B8"));
+                hint.setTextSize(11);
+                hint.setPadding(0, dp(3), 0, dp(7));
+                card.addView(hint);
+                for (int i = 0; i < options.size() && i < 4; i++) {
+                    final PendingUiChoice.Option option = options.get(i);
+                    TextView button = new TextView(context);
+                    button.setText((i + 1) + ". " + option.label);
+                    button.setTextColor(Color.parseColor("#E0F2FE"));
+                    button.setTextSize(14);
+                    button.setGravity(Gravity.CENTER_VERTICAL);
+                    button.setMinHeight(dp(48));
+                    button.setPadding(dp(12), 0, dp(12), 0);
+                    GradientDrawable buttonBg = new GradientDrawable();
+                    buttonBg.setColor(Color.parseColor("#172554"));
+                    buttonBg.setCornerRadius(dp(12));
+                    buttonBg.setStroke(dp(1), Color.parseColor("#1D4ED8"));
+                    button.setBackground(buttonBg);
+                    button.setContentDescription("選擇 " + (i + 1) + "：" + option.label);
+                    button.setOnClickListener(new View.OnClickListener() {
+                        @Override public void onClick(View v) {
+                            hidePendingChoicesInternal();
+                            if (callback != null) callback.onChoice(option.elementId);
+                        }
+                    });
+                    LinearLayout.LayoutParams optionLp = new LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.MATCH_PARENT, dp(48));
+                    optionLp.setMargins(0, dp(3), 0, 0);
+                    card.addView(button, optionLp);
+                }
+                TextView cancel = new TextView(context);
+                cancel.setText("取消");
+                cancel.setGravity(Gravity.CENTER);
+                cancel.setTextColor(Color.parseColor("#CBD5E1"));
+                cancel.setTextSize(12);
+                cancel.setMinHeight(dp(40));
+                cancel.setOnClickListener(new View.OnClickListener() {
+                    @Override public void onClick(View v) {
+                        hidePendingChoicesInternal();
+                        if (callback != null) callback.onCancel();
+                    }
+                });
+                card.addView(cancel);
+                WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
+                        dp(296), WindowManager.LayoutParams.WRAP_CONTENT,
+                        Build.VERSION.SDK_INT >= 26 ? 2038 : WindowManager.LayoutParams.TYPE_PHONE,
+                        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                        PixelFormat.TRANSLUCENT);
+                lp.gravity = Gravity.TOP | Gravity.START;
+                lp.x = dp(16); lp.y = dp(92);
+                try {
+                    windowManager.addView(card, lp);
+                    pendingChoiceView = card; pendingChoiceParams = lp;
+                    pendingChoiceTimeout = new Runnable() {
+                        @Override public void run() {
+                            hidePendingChoicesInternal();
+                            if (callback != null) callback.onCancel();
+                        }
+                    };
+                    mainHandler.postDelayed(pendingChoiceTimeout, PendingUiChoice.TTL_MS);
+                } catch (Exception ignored) { hidePendingChoicesInternal(); }
+            }
+        });
+    }
+
+    public void hidePendingChoices() { mainHandler.post(new Runnable() { @Override public void run() { hidePendingChoicesInternal(); } }); }
+
+    private void hidePendingChoicesInternal() {
+        if (pendingChoiceTimeout != null) mainHandler.removeCallbacks(pendingChoiceTimeout);
+        pendingChoiceTimeout = null;
+        View old = pendingChoiceView; pendingChoiceView = null; pendingChoiceParams = null;
+        if (old != null) try { windowManager.removeViewImmediate(old); } catch (Exception ignored) {}
     }
 
     private static android.os.PowerManager.WakeLock appWakeLock = null;

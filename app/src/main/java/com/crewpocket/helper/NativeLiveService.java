@@ -731,6 +731,15 @@ public class NativeLiveService extends Service {
 
     static boolean interruptAiSpeech() { return interruptForCorrection(); }
 
+    static boolean selectPendingUiChoice(String elementId) {
+        return instance != null && instance.client != null
+                && instance.client.selectPendingUiChoice(elementId);
+    }
+
+    static void cancelPendingUiChoice() {
+        if (instance != null && instance.client != null) instance.client.cancelPendingUiChoice("使用者取消選擇");
+    }
+
     static boolean toggleVoiceInterruption() {
         if (instance != null && instance.client != null) {
             boolean current = instance.client.isVoiceInterruptionAllowed();

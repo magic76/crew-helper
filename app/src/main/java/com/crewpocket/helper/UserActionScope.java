@@ -97,6 +97,17 @@ final class UserActionScope {
         return searchIntent;
     }
 
+    /** Search suggestions are not results and must never trigger a result picker. */
+    synchronized boolean isSearchInProgress() {
+        expireIfNeeded();
+        return searchIntent && !searchCommitted;
+    }
+
+    synchronized boolean hasCommittedSearch() {
+        expireIfNeeded();
+        return searchIntent && searchCommitted;
+    }
+
     synchronized boolean markSearchQueryEntered() {
         expireIfNeeded();
         if (!searchIntent) return false;
