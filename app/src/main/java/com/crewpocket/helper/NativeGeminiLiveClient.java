@@ -2023,6 +2023,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             JSONObject selected = tapSemanticElement(
                     new JSONObject().put("element_id",
                             only.optString("elementId", "")));
+            if (selected.optBoolean("success", false)) {
+                userActionScope.markSearchResultSelected(
+                        only.optString("label", ""));
+            }
             selected.put("searchSelection", "AUTO_SELECTED")
                     .put("selectedSearchResult", only.optString("label", ""))
                     .put("continuation", userActionScope.searchContinuation())
@@ -2194,6 +2198,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
                     JSONObject result = tapSemanticElement(
                             new JSONObject().put("element_id", chosen.elementId));
+
+                    if (result.optBoolean("success", false)) {
+                        userActionScope.markSearchResultSelected(chosen.label);
+                    }
 
                     workingContext.setPendingTask("");
                     String continuation = pending.continuation.isEmpty()
@@ -2850,6 +2858,22 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         String text = args == null ? "" : args.optString("text", "").trim();
         if (text.isEmpty()) return new JSONObject().put("success", false)
                 .put("error", "EMPTY_SEARCH_QUERY");
+
+        // A trustworthy result has already been opened for this same spoken
+        // request. Weak models often repeat SEARCH after seeing a fresh Maps
+        // page; never let that erase the successful state with a new query.
+        if (userActionScope.hasSelectedSearchResult()) {
+            return new JSONObject()
+                    .put("success", true)
+                    .put("action", "APP_SEARCH")
+                    .put("searchTransaction", "RESULT_ALREADY_SELECTED")
+                    .put("selectedSearchResult", userActionScope.selectedSearchResult())
+                    .put("continuation", userActionScope.searchContinuation())
+                    .put("taskState", "IN_PROGRESS")
+                    .put("instruction",
+                            "Runtime 已成功選定搜尋結果；禁止重新搜尋或再次輸入查詢。"
+                            + "請依目前 Maps 畫面執行 continuation（例如導航）。");
+        }
 
         userActionScope.markSearchQueryEntered();
         JSONObject reply = helperPost("/search_in_app", new JSONObject().put("query", text));

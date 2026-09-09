@@ -21,6 +21,8 @@ final class UserActionScope {
     private String searchContinuation = "";
     private boolean searchQueryEntered;
     private boolean searchCommitted;
+    private boolean searchResultSelected;
+    private String selectedSearchResult = "";
     private long updatedAtMs;
     private boolean endCallAuthorized;
 
@@ -84,6 +86,8 @@ final class UserActionScope {
         openSearchResultAuthorized = openResult || grant.authorized;
         searchQueryEntered = false;
         searchCommitted = false;
+        searchResultSelected = false;
+        selectedSearchResult = "";
         updatedAtMs = System.currentTimeMillis();
     }
 
@@ -124,6 +128,17 @@ final class UserActionScope {
         return searchIntent && searchCommitted;
     }
 
+    /** A Maps result was opened successfully; the next action must continue it. */
+    synchronized boolean hasSelectedSearchResult() {
+        expireIfNeeded();
+        return searchIntent && searchCommitted && searchResultSelected;
+    }
+
+    synchronized String selectedSearchResult() {
+        expireIfNeeded();
+        return selectedSearchResult == null ? "" : selectedSearchResult;
+    }
+
     synchronized boolean shouldSelectSearchResult() {
         expireIfNeeded();
         return searchIntent && searchCommitted && searchResultSelectionRequested;
@@ -148,6 +163,15 @@ final class UserActionScope {
         searchQueryEntered = true;
         searchCommitted = true;
         return isSearchOnlyLocked();
+    }
+
+    synchronized void markSearchResultSelected(String label) {
+        expireIfNeeded();
+        if (!searchIntent) return;
+        searchQueryEntered = true;
+        searchCommitted = true;
+        searchResultSelected = true;
+        selectedSearchResult = label == null ? "" : label.trim();
     }
 
     synchronized boolean shouldBlockAdditionalTextEntry() {
@@ -201,6 +225,8 @@ final class UserActionScope {
         searchContinuation = "";
         searchQueryEntered = false;
         searchCommitted = false;
+        searchResultSelected = false;
+        selectedSearchResult = "";
     }
 
     static boolean looksLikeSendTarget(String metadata) {
