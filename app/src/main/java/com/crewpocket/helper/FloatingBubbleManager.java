@@ -70,6 +70,7 @@ public class FloatingBubbleManager {
     private WindowManager.LayoutParams pendingChoiceParams = null;
     private Runnable pendingChoiceTimeout = null;
     private static final long MINI_STATUS_AUTO_HIDE_MS = 1800L;
+    private static final int BUBBLE_SIZE_DP = 48;
     private static class DockIconButton extends View {
         public static final int ICON_CAMERA = 1;
         public static final int ICON_SCREEN = 2;
@@ -593,7 +594,7 @@ public class FloatingBubbleManager {
             dockAnimator.cancel();
         }
         int screenWidth = windowManager.getDefaultDisplay().getWidth();
-        int bSize = bubbleParams.width > 0 ? bubbleParams.width : dp(40);
+        int bSize = bubbleParams.width > 0 ? bubbleParams.width : dp(BUBBLE_SIZE_DP);
         int targetX = (bubbleParams.x < screenWidth / 2) ? dp(4) : (screenWidth - bSize - dp(4));
 
         bubbleParams.x = targetX;
@@ -608,7 +609,7 @@ public class FloatingBubbleManager {
         if (NativeLiveService.isActive() || nativeLiveRequested) return;
 
         int screenWidth = windowManager.getDefaultDisplay().getWidth();
-        int bSize = bubbleParams.width > 0 ? bubbleParams.width : dp(40);
+        int bSize = bubbleParams.width > 0 ? bubbleParams.width : dp(BUBBLE_SIZE_DP);
 
         final int startX = bubbleParams.x;
         final int endX = (startX < screenWidth / 2) ? - (bSize * 55 / 100) : (screenWidth - (bSize * 45 / 100));
@@ -656,7 +657,7 @@ public class FloatingBubbleManager {
                         ? 2038 
                         : WindowManager.LayoutParams.TYPE_PHONE;
 
-                    int size = dp(40);
+                    int size = dp(BUBBLE_SIZE_DP);
                     bubbleParams = new WindowManager.LayoutParams(
                         size, size,
                         overlayType,
@@ -765,7 +766,7 @@ public class FloatingBubbleManager {
         try {
             int screenWidth = windowManager.getDefaultDisplay().getWidth();
             int screenHeight = windowManager.getDefaultDisplay().getHeight();
-            int bSize = bubbleParams.width > 0 ? bubbleParams.width : dp(40);
+            int bSize = bubbleParams.width > 0 ? bubbleParams.width : dp(BUBBLE_SIZE_DP);
             int topLimit = getStatusBarHeight() + dp(4);
             int bottomLimit = screenHeight - dp(64);
 
@@ -781,9 +782,8 @@ public class FloatingBubbleManager {
         if (bubbleView == null || bubbleParams == null) return;
         try {
             int screenHeight = windowManager.getDefaultDisplay().getHeight();
-            // 0033: rail includes Recorder, plus Undo while recording.
-            int itemCount = (NativeLiveService.isActive() ? 3 : 2) + 1
-                    + (ShortcutRecorderRuntime.getInstance(context).isRecording() ? 1 : 0);
+            // 0039: the compact rail contains exactly 2 idle / 3 Live actions.
+            int itemCount = NativeLiveService.isActive() ? 3 : 2;
             int shortcutHeight = dp(12) + itemCount * dp(42);
             int requiredBottom =
                     bubbleParams.y + bubbleSize
@@ -802,7 +802,7 @@ public class FloatingBubbleManager {
         if (bubbleActionStrip == null) {
             bubbleActionStrip = new BubbleActionStripOverlay(context);
         }
-        int size = bubbleParams.width > 0 ? bubbleParams.width : dp(40);
+        int size = bubbleParams.width > 0 ? bubbleParams.width : dp(BUBBLE_SIZE_DP);
         if (!bubbleActionStrip.isShowing()) {
             ensureShortcutRoomBelow(size);
         }
@@ -942,7 +942,7 @@ public class FloatingBubbleManager {
                 }
                 if (bubbleActionStrip != null && bubbleActionStrip.isShowing()
                         && bubbleParams != null) {
-                    int size = bubbleParams.width > 0 ? bubbleParams.width : dp(40);
+                    int size = bubbleParams.width > 0 ? bubbleParams.width : dp(BUBBLE_SIZE_DP);
                     ensureShortcutRoomBelow(size);
                     bubbleActionStrip.refresh(
                             bubbleParams.x,
@@ -2269,85 +2269,171 @@ public class FloatingBubbleManager {
         @Override
         protected void onDraw(Canvas canvas) {
             super.onDraw(canvas);
-            float cx = getWidth() / 2f;
-            float cy = getHeight() / 2f;
-            float radius = (Math.min(getWidth(), getHeight()) / 2f) - 2.5f;
+            final float cx = getWidth() / 2f;
+            final float cy = getHeight() / 2f;
+            final float radius = (Math.min(getWidth(), getHeight()) / 2f) - 2.5f;
+            final float pulse = 0.5f + 0.5f * (float) Math.sin(
+                    Math.toRadians(rotationAngle * 2f));
 
-            // ── 1. Deep Glassmorphism Radial Gradient Background (Slate 900 -> Slate 950) ──
-            int[] coreColors = new int[]{
-                Color.parseColor("#1E293B"), // Slate 800 (Highlight center)
-                Color.parseColor("#0F172A"), // Slate 900
-                Color.parseColor("#020617")  // Slate 950 (Deep edge)
-            };
-            float[] corePositions = new float[]{0.0f, 0.65f, 1.0f};
-            android.graphics.RadialGradient coreGrad = new android.graphics.RadialGradient(
-                cx, cy * 0.9f, radius, coreColors, corePositions, android.graphics.Shader.TileMode.CLAMP
-            );
-            bgPaint.setShader(coreGrad);
-            canvas.drawCircle(cx, cy, radius, bgPaint);
+            int coreCenter;
+            int coreMid;
+            int coreEdge;
+            int waveLeft;
+            int waveRight;
+            int waveAlpha;
 
-            // ── 2. Rotating Conic/Sweep Gradient Border (Identical to Web) ──
-            matrix.setRotate(rotationAngle, cx, cy);
-            SweepGradient currentGradient;
-            if (nativeVoiceState == 2) {
-                currentGradient = speakingSweepGradient;
-            } else if (nativeVoiceState == 3) {
-                currentGradient = errorSweepGradient;
+            if (nativeVoiceState == 3) {
+                coreCenter = Color.parseColor("#FFF1F2");
+                coreMid = Color.parseColor("#FB7185");
+                coreEdge = Color.parseColor("#BE123C");
+                waveLeft = Color.parseColor("#FB7185");
+                waveRight = Color.parseColor("#F59E0B");
+                waveAlpha = 230;
+            } else if (nativeVoiceState == 2) {
+                coreCenter = Color.parseColor("#FFFFFF");
+                coreMid = Color.parseColor("#C084FC");
+                coreEdge = Color.parseColor("#6D28D9");
+                waveLeft = Color.parseColor("#60A5FA");
+                waveRight = Color.parseColor("#C084FC");
+                waveAlpha = 235;
             } else if (nativeVoiceState == 1) {
-                currentGradient = activeSweepGradient;
+                coreCenter = Color.parseColor("#FFFFFF");
+                coreMid = Color.parseColor("#22D3EE");
+                coreEdge = Color.parseColor("#4F46E5");
+                waveLeft = Color.parseColor("#22D3EE");
+                waveRight = Color.parseColor("#818CF8");
+                waveAlpha = 205 + Math.round(50f * pulse);
             } else if (isFlowing) {
-                currentGradient = rainbowSweepGradient;
+                coreCenter = Color.parseColor("#FFFFFF");
+                coreMid = Color.parseColor("#38BDF8");
+                coreEdge = Color.parseColor("#A855F7");
+                waveLeft = Color.parseColor("#38BDF8");
+                waveRight = Color.parseColor("#C084FC");
+                waveAlpha = 235;
             } else {
-                currentGradient = idleSweepGradient;
+                // IDLE is alive but quiet: subdued blue-violet instead of a
+                // microphone icon that falsely suggests continuous recording.
+                coreCenter = Color.parseColor("#E0F2FE");
+                coreMid = Color.parseColor("#60A5FA");
+                coreEdge = Color.parseColor("#6366F1");
+                waveLeft = Color.parseColor("#38BDF8");
+                waveRight = Color.parseColor("#818CF8");
+                waveAlpha = 118;
             }
 
-            if (currentGradient != null) {
-                currentGradient.setLocalMatrix(matrix);
-                ringPaint.setShader(currentGradient);
-                ringPaint.setStrokeWidth(4.2f);
+            // 0039 LISTENING CORE — dark, low-interference circular glass base.
+            android.graphics.RadialGradient baseGradient =
+                    new android.graphics.RadialGradient(
+                            cx - radius * 0.08f,
+                            cy - radius * 0.10f,
+                            radius,
+                            new int[]{
+                                    Color.parseColor("#172554"),
+                                    Color.parseColor("#071426"),
+                                    Color.parseColor("#020617")
+                            },
+                            new float[]{0f, 0.68f, 1f},
+                            android.graphics.Shader.TileMode.CLAMP);
+            bgPaint.setShader(baseGradient);
+            bgPaint.setAlpha(245);
+            canvas.drawCircle(cx, cy, radius, bgPaint);
+            bgPaint.setShader(null);
+            bgPaint.setAlpha(255);
+
+            // A very thin animated rim keeps existing state motion without
+            // competing visually with the central listening core.
+            matrix.setRotate(rotationAngle, cx, cy);
+            SweepGradient rimGradient = nativeVoiceState == 3
+                    ? errorSweepGradient
+                    : nativeVoiceState == 2
+                    ? speakingSweepGradient
+                    : nativeVoiceState == 1
+                    ? activeSweepGradient
+                    : isFlowing
+                    ? rainbowSweepGradient
+                    : idleSweepGradient;
+            if (rimGradient != null) {
+                rimGradient.setLocalMatrix(matrix);
+                ringPaint.setShader(rimGradient);
+                ringPaint.setStyle(Paint.Style.STROKE);
+                ringPaint.setStrokeWidth(Math.max(1.4f, radius * 0.055f));
+                ringPaint.setAlpha(nativeVoiceState == 0 && !isFlowing ? 105 : 175);
                 canvas.drawOval(ringBounds, ringPaint);
             }
 
-            // ── 3. Perfectly Centered Crisp Microphone (Web Style) ──
-            Paint mic = new Paint(Paint.ANTI_ALIAS_FLAG);
-            if (nativeVoiceState == 2) {
-                mic.setColor(Color.parseColor("#F3E8FF"));
-            } else if (nativeVoiceState == 3) {
-                mic.setColor(Color.parseColor("#FFF1F2"));
-            } else if (nativeVoiceState == 1) {
-                mic.setColor(Color.parseColor("#FFFFFF")); // Pure White in Call
-            } else {
-                mic.setColor(Color.parseColor("#FFFFFF")); // Pure Crisp White in Idle
+            // Soft glow behind the orb.
+            ringPaint.setShader(null);
+            glowPaint.setShader(null);
+            glowPaint.setStyle(Paint.Style.FILL);
+            glowPaint.setColor(coreMid);
+            glowPaint.setAlpha(nativeVoiceState == 0 && !isFlowing
+                    ? 35 : 55 + Math.round(25f * pulse));
+            final float orbRadius = radius * 0.43f;
+            canvas.drawCircle(cx, cy, orbRadius * 1.42f, glowPaint);
+
+            // Central listening orb.
+            android.graphics.RadialGradient orbGradient =
+                    new android.graphics.RadialGradient(
+                            cx - orbRadius * 0.30f,
+                            cy - orbRadius * 0.34f,
+                            orbRadius * 1.35f,
+                            new int[]{coreCenter, coreMid, coreEdge},
+                            new float[]{0f, 0.48f, 1f},
+                            android.graphics.Shader.TileMode.CLAMP);
+            bgPaint.setShader(orbGradient);
+            bgPaint.setAlpha(255);
+            canvas.drawCircle(cx, cy, orbRadius, bgPaint);
+            bgPaint.setShader(null);
+
+            // Listening waves: visible state language instead of a microphone.
+            android.graphics.LinearGradient waveGradient =
+                    new android.graphics.LinearGradient(
+                            cx - radius, cy,
+                            cx + radius, cy,
+                            waveLeft, waveRight,
+                            android.graphics.Shader.TileMode.CLAMP);
+            ringPaint.setShader(waveGradient);
+            ringPaint.setStyle(Paint.Style.STROKE);
+            ringPaint.setStrokeCap(Paint.Cap.ROUND);
+            ringPaint.setAlpha(waveAlpha);
+
+            RectF innerWave = new RectF(
+                    cx - radius * 0.75f, cy - radius * 0.75f,
+                    cx + radius * 0.75f, cy + radius * 0.75f);
+            ringPaint.setStrokeWidth(Math.max(2.1f, radius * 0.105f));
+            canvas.drawArc(innerWave, 112f, 136f, false, ringPaint);
+            canvas.drawArc(innerWave, -68f, 136f, false, ringPaint);
+
+            RectF outerWave = new RectF(
+                    cx - radius * 0.98f, cy - radius * 0.98f,
+                    cx + radius * 0.98f, cy + radius * 0.98f);
+            ringPaint.setStrokeWidth(Math.max(1.7f, radius * 0.080f));
+            ringPaint.setAlpha(Math.max(72, waveAlpha - 42));
+            canvas.drawArc(outerWave, 120f, 120f, false, ringPaint);
+            canvas.drawArc(outerWave, -60f, 120f, false, ringPaint);
+
+            // Small specular point gives the orb depth at launcher/bubble size.
+            ringPaint.setShader(null);
+            glowPaint.setStyle(Paint.Style.FILL);
+            glowPaint.setColor(Color.WHITE);
+            glowPaint.setAlpha(nativeVoiceState == 0 && !isFlowing ? 118 : 185);
+            canvas.drawCircle(
+                    cx - orbRadius * 0.28f,
+                    cy - orbRadius * 0.31f,
+                    Math.max(1.2f, orbRadius * 0.115f),
+                    glowPaint);
+
+            if (isSuccessFlash) {
+                ringPaint.setStyle(Paint.Style.STROKE);
+                ringPaint.setStrokeWidth(Math.max(1.3f, radius * 0.055f));
+                ringPaint.setColor(Color.WHITE);
+                ringPaint.setAlpha(190);
+                canvas.drawCircle(cx, cy, radius * 0.88f, ringPaint);
             }
 
-            // Geometry mathematically centered around (cx, cy)
-            float halfH = radius * 0.52f;
-            float capW = radius * 0.36f;
-            float capH = radius * 0.56f;
-            float capTop = cy - halfH;
-            float capBottom = capTop + capH;
-
-            // 3a. Solid Capsule Body
-            mic.setStyle(Paint.Style.FILL);
-            canvas.drawRoundRect(cx - capW / 2f, capTop, cx + capW / 2f, capBottom, capW / 2f, capW / 2f, mic);
-
-            // 3b. U-Shape Cradle Arc
-            mic.setStyle(Paint.Style.STROKE);
-            mic.setStrokeWidth(3.4f);
-            mic.setStrokeCap(Paint.Cap.ROUND);
-            float cradleRadius = radius * 0.34f;
-            float cradleTop = capTop + capH * 0.38f;
-            float cradleBottom = capBottom + radius * 0.16f;
-            RectF cradleRect = new RectF(cx - cradleRadius, cradleTop, cx + cradleRadius, cradleBottom);
-            canvas.drawArc(cradleRect, 0, 180, false, mic);
-
-            // 3c. Vertical Stem
-            float stemBottom = cy + halfH;
-            canvas.drawLine(cx, cradleBottom, cx, stemBottom, mic);
-
-            // 3d. Horizontal Base Foot
-            float footSpan = radius * 0.22f;
-            canvas.drawLine(cx - footSpan, stemBottom, cx + footSpan, stemBottom, mic);
+            ringPaint.setShader(null);
+            ringPaint.setAlpha(255);
+            glowPaint.setAlpha(255);
         }
     }
 }
