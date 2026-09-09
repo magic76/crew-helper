@@ -218,6 +218,7 @@ public class FloatingBubbleManager {
     private TextView voiceSensitivityButton = null;
     private TextView voicePresetButton = null;
     private TextView voiceOutputButton = null;
+    private TextView voiceTeachSendButton = null;
     private TextView voiceSettingsToggleButton = null;
     private LinearLayout voiceSettingsPanel = null;
     private TextView voiceStopAgentButton = null;
@@ -1201,6 +1202,33 @@ public class FloatingBubbleManager {
                     voiceSettingsChoices.setGravity(Gravity.CENTER_VERTICAL);
                     voiceSettingsChoices.setPadding(0, 0, 0, dp(8));
                     voiceSettingsPanel.addView(voiceSettingsChoices);
+
+                    // User-initiated per-app send-button teaching. It records
+                    // only the composer send control, never arbitrary actions.
+                    voiceTeachSendButton = makeVoiceSettingButton();
+                    voiceTeachSendButton.setText("⌁ 教導目前 App 的送出鍵");
+                    voiceTeachSendButton.setContentDescription("教導目前 App 的送出按鈕");
+                    voiceTeachSendButton.setOnClickListener(new View.OnClickListener() {
+                        @Override public void onClick(View v) {
+                            // The voice-control window otherwise sits above the
+                            // target chat and hides the input/send area.
+                            hideVoiceControls();
+                            mainHandler.postDelayed(new Runnable() {
+                                @Override public void run() {
+                                    CrewAccessibilityService service = CrewAccessibilityService.getInstance();
+                                    if (service == null) {
+                                        Toast.makeText(context, "無障礙服務尚未啟用", Toast.LENGTH_SHORT).show();
+                                    } else if (!service.beginTeachElement("COMPOSER_SEND")) {
+                                        Toast.makeText(context, "請先在目前聊天輸入框放入文字", Toast.LENGTH_SHORT).show();
+                                    }
+                                }
+                            }, 160L);
+                        }
+                    });
+                    LinearLayout.LayoutParams teachLp = new LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.MATCH_PARENT, dp(42));
+                    teachLp.setMargins(0, 0, 0, dp(8));
+                    voiceSettingsPanel.addView(voiceTeachSendButton, teachLp);
                     dock.addView(voiceSettingsPanel);
 
                     voiceStopAgentButton = makeVoiceSettingButton();
@@ -1494,6 +1522,10 @@ public class FloatingBubbleManager {
             boolean media = "media".equals(AppConfig.getAudioOutput(context));
             voiceOutputButton.setText("🔊 輸出 ›");
             applyVoiceSettingStyle(voiceOutputButton, media ? Color.parseColor("#164E63") : Color.parseColor("#3F1D5B"), media ? Color.parseColor("#22D3EE") : Color.parseColor("#C084FC"), Color.WHITE);
+        }
+        if (voiceTeachSendButton != null) {
+            applyVoiceSettingStyle(voiceTeachSendButton,
+                    Color.parseColor("#172554"), Color.parseColor("#2563EB"), Color.parseColor("#DBEAFE"));
         }
         if (voiceSettingsToggleButton != null) {
             applyVoiceSettingStyle(voiceSettingsToggleButton, Color.parseColor("#1E293B"), Color.parseColor("#475569"), Color.parseColor("#CBD5E1"));

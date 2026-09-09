@@ -1407,10 +1407,10 @@ public class CrewAccessibilityService extends AccessibilityService {
         if (uiTeachOverlay == null) uiTeachOverlay = new UiTeachOverlay(this);
         FloatingBubbleManager fb = FloatingBubbleManager.getInstance();
         if (fb != null) {
-            fb.showCompactStatus("第 1 步：請點基準點（建議點輸入框）", "");
+            fb.showCompactStatus("第 1 步：保持鍵盤展開，點輸入框", "");
         }
         return uiTeachOverlay.show(
-            "第 1 步：請點基準點（建議點輸入框）",
+            "第 1 步：保持鍵盤展開，點輸入框",
             new UiTeachOverlay.Callback() {
                 @Override
                 public void onPicked(int screenX, int screenY) {
@@ -1506,11 +1506,25 @@ public class CrewAccessibilityService extends AccessibilityService {
             }
             return false;
         }
-        if (activeComposer != null) activeComposer.recycle();
+        // Teaching must see the exact same layout that Runtime sees after it
+        // inserts text. Restore focus before adding our non-focusable overlay;
+        // this gives the target app a moment to show its IME and move Send.
+        boolean composerFocused = false;
+        if (activeComposer != null) {
+            try { composerFocused = activeComposer.performAction(AccessibilityNodeInfo.ACTION_FOCUS); }
+            catch (Exception ignored) {}
+            activeComposer.recycle();
+        }
         if (root != null) root.recycle();
 
         if ("COMPOSER_SEND".equalsIgnoreCase(requestedRole)) {
-            return beginTeachAnchoredElement(requestedRole);
+            final boolean focusRequested = composerFocused;
+            mainHandler.postDelayed(new Runnable() {
+                @Override public void run() {
+                    beginTeachAnchoredElement(requestedRole);
+                }
+            }, focusRequested ? 260L : 120L);
+            return true;
         }
 
         if (uiTeachOverlay == null) uiTeachOverlay = new UiTeachOverlay(this);

@@ -364,13 +364,14 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 return true;
             }
             userActionScope.updateFromUserText(input);
+            listener.onTranscript("你", input);
+            if (handleRuntimeSendFromCurrentTurn()) return true;
             boolean correctionInput = correctionWindowActive && System.currentTimeMillis() <= correctionWindowUntil;
             if (correctionInput) consumeCorrectionWindowOnUserSpeech(text.trim());
             JSONObject part = new JSONObject().put("text", text.trim());
             JSONObject turn = new JSONObject().put("role", "user").put("parts", new JSONArray().put(part));
             boolean sent = webSocket.send(new JSONObject().put("clientContent", new JSONObject()
                     .put("turns", new JSONArray().put(turn)).put("turnComplete", true)).toString());
-            if (sent) listener.onTranscript("你", text.trim());
             return sent;
         } catch (Exception error) {
             Log.e(TAG, "文字訊息傳送失敗", error);
@@ -691,6 +692,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             }
 
             userActionScope.updateFromUserText(completeUserInput);
+            if (handleRuntimeSendFromCurrentTurn()) return;
             if (isStopAgentTaskPhrase(completeUserInput)) {
                 cancelAgentTask("使用者語音停止任務");
             }
@@ -1627,6 +1629,51 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             JSONObject turn = new JSONObject().put("role", "user").put("parts", new JSONArray().put(part));
             webSocket.send(new JSONObject().put("clientContent", new JSONObject().put("turns", new JSONArray().put(turn)).put("turnComplete", true)).toString());
         } catch (Exception error) { Log.w(TAG, "Agent 結論指令傳送失敗：" + error.getMessage()); }
+    }
+
+    /**
+     * Own the narrow, predictable message path in Runtime.  A weak live model
+     * must not be asked to remember a recipient and message after it has asked
+     * the user for confirmation: that caused a new "確認" turn to erase the
+     * original request and repeatedly ask again.
+     */
+    private boolean handleRuntimeSendFromCurrentTurn() {
+        final UserActionScope.SendDraft direct = userActionScope.consumeDirectSendDraft();
+        if (direct != null) {
+            dispatchRuntimeSend(direct, false);
+            return true;
+        }
+        final UserActionScope.SendDraft confirmed = userActionScope.consumeConfirmedSendDraft();
+        if (confirmed != null) {
+            dispatchRuntimeSend(confirmed, true);
+            return true;
+        }
+        if (userActionScope.hasAwaitingSendConfirmation()) {
+            sendInternalAgentDirective("【Runtime 傳訊確認】已收到一則待傳訊息。只問一次「要傳給指定對象嗎？」；不要呼叫工具、不要重述內容。使用者說確認/是/送出才會由 Runtime 執行；說取消則放棄。");
+            return true;
+        }
+        return false;
+    }
+
+    private void dispatchRuntimeSend(final UserActionScope.SendDraft draft, final boolean confirmed) {
+        listener.onStatus(confirmed ? "正在送出已確認訊息…" : "正在送出訊息…");
+        new Thread(new Runnable() {
+            @Override public void run() {
+                try {
+                    JSONObject reply = submitTextToPhone(draft.text, draft.recipient);
+                    boolean success = reply.optBoolean("success", false);
+                    String error = reply.optString("error", "");
+                    listener.onStatus(success ? "訊息已送出" : "訊息未送出：" + (error.isEmpty() ? "無法確認送出" : error));
+                    sendInternalAgentDirective(success
+                            ? "【Runtime 傳訊結果】已驗證並送出訊息。請只用一句話告知使用者已送出。"
+                            : "【Runtime 傳訊結果】訊息沒有送出；原因是 " + (error.isEmpty() ? "Runtime 未確認成功" : error) + "。請只用一句話說明，不要假裝已送出，也不要再次要求同一個確認。");
+                } catch (Exception error) {
+                    Log.w(TAG, "Runtime confirmed send failed", error);
+                    listener.onStatus("訊息未送出");
+                    sendInternalAgentDirective("【Runtime 傳訊結果】訊息沒有送出。請只用一句話告知使用者，不要假裝成功。");
+                }
+            }
+        }, "CrewRuntimeSend").start();
     }
 
     private void scheduleDeckAutoAdvance() {
@@ -2913,31 +2960,32 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                     "最新一句沒有明確要求傳訊息、發訊息、回覆或送出目前訊息；Runtime 已阻止送出。");
         }
 
-        if (userActionScope.requiresRecipientVerification()) {
-            String recipient = userActionScope.authorizedRecipient();
-            if (recipient.isEmpty()) {
-                return runtimeBlocked("SEND_RECIPIENT_NOT_EXPLICIT",
-                        "使用者雖然明確要求傳訊息，但沒有可驗證的收件人。請只問要傳給誰。");
-            }
+        String recipient = userActionScope.requiresRecipientVerification()
+                ? userActionScope.authorizedRecipient() : "";
+        if (userActionScope.requiresRecipientVerification() && recipient.isEmpty()) {
+            return runtimeBlocked("SEND_RECIPIENT_NOT_EXPLICIT",
+                    "使用者雖然明確要求傳訊息，但沒有可驗證的收件人。請只問要傳給誰。");
+        }
+        JSONObject reply = submitTextToPhone(text, recipient);
+        userActionScope.consumeSendAuthorization();
+        return reply;
+    }
+
+    private JSONObject submitTextToPhone(String text, String recipient) throws Exception {
+        String target = recipient == null ? "" : recipient.trim();
+        if (!target.isEmpty()) {
             JSONObject currentScreen = readSemanticScreenQuietly();
             SendRecipientVerifier.Result recipientCheck =
-                    SendRecipientVerifier.verify(currentScreen, recipient);
+                    SendRecipientVerifier.verify(currentScreen, target);
             if (!recipientCheck.verified) {
-                Log.w(TAG, "0028 send blocked: recipient not verified (" + recipientCheck.reason + ")");
+                Log.w(TAG, "send blocked: recipient not verified (" + recipientCheck.reason + ")");
                 return runtimeBlocked("SEND_RECIPIENT_NOT_VERIFIED",
-                        "目前畫面無法確認是指定收件人的聊天室。不要送出；重新 inspect_ui/進入正確聊天室，或請使用者確認。");
+                        "目前畫面無法確認是指定收件人的聊天室。不要送出；進入正確聊天室後再試。");
             }
         }
-
-        JSONObject reply = helperPost(
-                "/send_text",
-                new JSONObject().put("text", text));
+        JSONObject reply = helperPost("/send_text", new JSONObject().put("text", text));
         // Runtime deliberately does not echo plaintext back to Gemini.
         reply.put("textLength", text.length());
-        String sendError = reply.optString("error", "").toUpperCase(Locale.ROOT);
-        if (reply.optBoolean("success", false) || sendError.contains("SEND_NOT_VERIFIED")) {
-            userActionScope.consumeSendAuthorization();
-        }
         workingContext.recordAction("send_text", reply.optBoolean("success", false) ? "submitted" : "failed");
         return reply;
     }

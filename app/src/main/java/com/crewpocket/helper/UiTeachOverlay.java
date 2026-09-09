@@ -77,12 +77,8 @@ final class UiTeachOverlay {
         cp.topMargin = dp(64);
         root.addView(chip, cp);
 
-        // Explicit escape hatch. This prevents accidental Teach/Settings entry
-        // from trapping the user in a full-screen overlay.
-        // IMPORTANT: Cancel is placed at BOTTOM CENTER, not top-right.
-        // Reason: in chat apps (e.g. Wea), the send button is at bottom-right.
-        // Having Cancel at top-right caused users to accidentally tap it when
-        // trying to teach the send button, recording the wrong top-right coordinate.
+        // Explicit escape hatch. Keep it away from the bottom composer and
+        // send control, which are exactly what the user is trying to teach.
         TextView cancel = new TextView(context);
         cancel.setText("❌  取消教學");
         cancel.setTextColor(Color.WHITE);
@@ -100,9 +96,11 @@ final class UiTeachOverlay {
                 new android.widget.FrameLayout.LayoutParams(
                         WindowManager.LayoutParams.WRAP_CONTENT,
                         WindowManager.LayoutParams.WRAP_CONTENT);
-        // Bottom-center: far from typical send/submit button positions in chat apps
-        cancelParams.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
-        cancelParams.bottomMargin = dp(64);
+        // Upper-middle leaves both the bottom composer/send bar and the top
+        // app controls unobscured on chat apps.
+        cancelParams.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+        cancelParams.topMargin = Math.round(
+                context.getResources().getDisplayMetrics().heightPixels * 0.40f);
         root.addView(cancel, cancelParams);
 
         // IMPORTANT: consume cancel touch here so root's generic teaching tap
@@ -132,7 +130,11 @@ final class UiTeachOverlay {
                 WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.MATCH_PARENT,
                 overlayType(),
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                // Do not take input focus away from the target app.  If this
+                // overlay becomes focused Android hides the IME, making the
+                // learned send layout differ from the real post-TYPE layout.
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
                         | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                 PixelFormat.TRANSLUCENT);
         lp.gravity = Gravity.TOP | Gravity.START;

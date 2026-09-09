@@ -11,6 +11,7 @@ package com.crewpocket.helper;
  */
 final class UserActionScope {
     private static final long SCOPE_TTL_MS = 120_000L;
+    private static final long SEND_CONFIRMATION_TTL_MS = 30_000L;
 
     private boolean sendAuthorized;
     private boolean sendRecipientRequired;
@@ -25,6 +26,19 @@ final class UserActionScope {
     private String selectedSearchResult = "";
     private long updatedAtMs;
     private boolean endCallAuthorized;
+    /** A small Runtime-owned message draft. It is never persisted. */
+    static final class SendDraft {
+        final String recipient;
+        final String text;
+        SendDraft(String recipient, String text) {
+            this.recipient = recipient == null ? "" : recipient.trim();
+            this.text = text == null ? "" : text.trim();
+        }
+    }
+    private SendDraft directSendDraft;
+    private SendDraft awaitingSendConfirmation;
+    private boolean pendingSendConfirmed;
+    private long pendingSendAtMs;
 
     private static final class SendGrant {
         boolean authorized;
@@ -47,8 +61,51 @@ final class UserActionScope {
         update(action);
     }
 
+    synchronized SendDraft consumeDirectSendDraft() {
+        expireIfNeeded();
+        SendDraft draft = directSendDraft;
+        directSendDraft = null;
+        return draft;
+    }
+
+    synchronized SendDraft consumeConfirmedSendDraft() {
+        expireIfNeeded();
+        if (!pendingSendConfirmed || awaitingSendConfirmation == null) return null;
+        SendDraft draft = awaitingSendConfirmation;
+        clearPendingSendDraft();
+        return draft;
+    }
+
+    synchronized boolean hasAwaitingSendConfirmation() {
+        expireIfNeeded();
+        return awaitingSendConfirmation != null && !pendingSendConfirmed;
+    }
+
     private void update(String text) {
         String value = normalize(text);
+
+        // A confirmation is meaningful only while there is one short-lived,
+        // Runtime-captured draft.  Do this before clearing normal turn grants:
+        // otherwise "確認" becomes a new empty intent and the weak model asks
+        // the same question forever.
+        if (awaitingSendConfirmation != null) {
+            if (isSendConfirmation(value)) {
+                pendingSendConfirmed = true;
+                sendAuthorized = true;
+                sendRecipientRequired = true;
+                sendRecipient = awaitingSendConfirmation.recipient;
+                updatedAtMs = System.currentTimeMillis();
+                return;
+            }
+            if (isSendCancellation(value)) {
+                clearActionGrants();
+                updatedAtMs = System.currentTimeMillis();
+                return;
+            }
+            // Any other new sentence replaces the pending send. Never apply an
+            // old confirmation to a later task.
+            clearPendingSendDraft();
+        }
 
         // Fail closed on negated / hypothetical / explanatory discussions.
         if (containsAny(value, "不要", "別", "不用", "取消", "停止", "怎麼", "如何", "如果", "假如",
@@ -57,6 +114,9 @@ final class UserActionScope {
             updatedAtMs = System.currentTimeMillis();
             return;
         }
+
+        SendDraft direct = parseDirectSendDraft(text);
+        SendDraft confirmable = direct == null ? parseConfirmableSendDraft(text) : null;
 
         endCallAuthorized = value.matches("(?:請|幫我|请|帮我)?(?:結束通話|结束通话|掛斷電話|挂断电话|退出語音助理|退出语音助理)(?:吧|謝謝|谢谢)?")
                 || value.matches("(?:please)?(?:endthecall|hangup|exitthevoiceassistant)(?:please)?");
@@ -75,6 +135,12 @@ final class UserActionScope {
         sendAuthorized = grant.authorized;
         sendRecipientRequired = grant.recipientRequired;
         sendRecipient = grant.recipient;
+        directSendDraft = direct;
+        if (confirmable != null) {
+            awaitingSendConfirmation = confirmable;
+            pendingSendConfirmed = false;
+            pendingSendAtMs = System.currentTimeMillis();
+        }
         searchIntent = search;
         // App launch ("open Maps, search X") must not silently authorize
         // opening a search result. Only a post-search open/select or navigation
@@ -212,6 +278,10 @@ final class UserActionScope {
             clearActionGrants();
             updatedAtMs = 0L;
         }
+        if (awaitingSendConfirmation != null
+                && (System.currentTimeMillis() - pendingSendAtMs > SEND_CONFIRMATION_TTL_MS)) {
+            clearPendingSendDraft();
+        }
     }
 
     private void clearActionGrants() {
@@ -227,6 +297,49 @@ final class UserActionScope {
         searchCommitted = false;
         searchResultSelected = false;
         selectedSearchResult = "";
+        directSendDraft = null;
+        clearPendingSendDraft();
+    }
+
+    private void clearPendingSendDraft() {
+        awaitingSendConfirmation = null;
+        pendingSendConfirmed = false;
+        pendingSendAtMs = 0L;
+    }
+
+    private static boolean isSendConfirmation(String value) {
+        return value.matches("(?:確認|确定|是|好|可以|送出|傳送|发送|發送|yes|confirm|send)");
+    }
+
+    private static boolean isSendCancellation(String value) {
+        return value.matches("(?:取消|不要|別送|别送|停止|cancel|stop)");
+    }
+
+    /**
+     * Fully explicit grammar is handled by Runtime, not a model tool choice:
+     * "傳給 WEA：晚點見" / "傳訊息給 WEA 說晚點見".
+     */
+    private static SendDraft parseDirectSendDraft(String raw) {
+        if (raw == null) return null;
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile(
+                "^\\s*(?:請|请|幫我|帮我)?\\s*(?:傳|传|發|发)(?:訊息|讯息|消息)?\\s*(?:給|给)\\s*([^\\s：:，,。！？!]+)\\s*(?:說|说|內容|内容|[:：])\\s*(.+?)\\s*$")
+                .matcher(raw);
+        if (!matcher.matches()) return null;
+        String recipient = cleanRecipient(matcher.group(1));
+        String body = matcher.group(2) == null ? "" : matcher.group(2).trim();
+        return recipient.isEmpty() || body.isEmpty() ? null : new SendDraft(recipient, body);
+    }
+
+    /** Natural but less explicit wording gets exactly one Runtime confirmation. */
+    private static SendDraft parseConfirmableSendDraft(String raw) {
+        if (raw == null) return null;
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile(
+                "^\\s*(?:請|请|幫我|帮我)?\\s*(?:跟|向|對|对|告訴|告诉)\\s*([^\\s：:，,。！？!]+)\\s*(?:說|说|[:：])\\s*(.+?)\\s*$")
+                .matcher(raw);
+        if (!matcher.matches()) return null;
+        String recipient = cleanRecipient(matcher.group(1));
+        String body = matcher.group(2) == null ? "" : matcher.group(2).trim();
+        return recipient.isEmpty() || body.isEmpty() ? null : new SendDraft(recipient, body);
     }
 
     static boolean looksLikeSendTarget(String metadata) {
