@@ -581,10 +581,9 @@ public class FloatingBubbleManager {
     }
 
     public void scheduleAutoDock() {
+        // The 48dp Listening Core is intentionally small enough to remain
+        // available. Do not fade or push it half off-screen after idle.
         autoDockHandler.removeCallbacks(autoDockRunnable);
-        if (bubbleView != null && !isDocked) {
-            autoDockHandler.postDelayed(autoDockRunnable, 3000);
-        }
     }
 
     public void wakeBubbleFromDock() {
@@ -604,40 +603,8 @@ public class FloatingBubbleManager {
     }
 
     public void autoDockBubble() {
-        if (bubbleView == null || bubbleParams == null || isDocked) return;
-        // Revised 0015: never half-hide during an active/requested Live call.
-        if (NativeLiveService.isActive() || nativeLiveRequested) return;
-
-        int screenWidth = windowManager.getDefaultDisplay().getWidth();
-        int bSize = bubbleParams.width > 0 ? bubbleParams.width : dp(BUBBLE_SIZE_DP);
-
-        final int startX = bubbleParams.x;
-        final int endX = (startX < screenWidth / 2) ? - (bSize * 55 / 100) : (screenWidth - (bSize * 45 / 100));
-
-        if (dockAnimator != null && dockAnimator.isRunning()) {
-            dockAnimator.cancel();
-        }
-
-        dockAnimator = ValueAnimator.ofFloat(0f, 1f);
-        dockAnimator.setDuration(350);
-        dockAnimator.setInterpolator(new DecelerateInterpolator());
-        dockAnimator.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
-            @Override
-            public void onAnimationUpdate(ValueAnimator animation) {
-                float frac = (float) animation.getAnimatedValue();
-                if (bubbleView == null || bubbleParams == null) return;
-                bubbleParams.x = (int) (startX + (endX - startX) * frac);
-                bubbleView.setAlpha(1.0f - 0.60f * frac); // Smoothly fades from 1.0 to 0.40 (Ghost Mode)
-                try { windowManager.updateViewLayout(bubbleView, bubbleParams); } catch (Exception ignored) {}
-            }
-        });
-        dockAnimator.addListener(new AnimatorListenerAdapter() {
-            @Override
-            public void onAnimationEnd(Animator animation) {
-                isDocked = true;
-            }
-        });
-        dockAnimator.start();
+        // Kept as a harmless compatibility entry point for older callers.
+        // Docking is disabled so the floating assistant remains visible.
     }
 
     public void showBubble() {

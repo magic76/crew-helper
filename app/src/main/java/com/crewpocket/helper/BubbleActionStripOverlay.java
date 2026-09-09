@@ -25,7 +25,9 @@ import android.widget.LinearLayout;
  * Functionality is unchanged; only visual hierarchy/order is simplified.
  */
 final class BubbleActionStripOverlay {
-    static final int ACTION_STRIP_GAP_DP = 12;
+    // Leave clear separation from the Listening Core; the action rail begins
+    // 30dp lower than the original 0039 layout.
+    static final int ACTION_STRIP_GAP_DP = 37;
 
     interface Actions {
         void onToggleCall();
