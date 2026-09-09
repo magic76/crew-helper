@@ -83,6 +83,15 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private volatile int lastScreenWidth = 1;
     private volatile int lastScreenHeight = 1;
     private final Set<String> handledToolCalls = new HashSet<String>();
+    /**
+     * A Gemini Live function-call may be re-delivered while its first copy is
+     * still queued.  This set coalesces that transport-level duplicate.  It is
+     * deliberately scoped by userIntentGeneration, so a later user command is
+     * never suppressed by an earlier command's de-duplication state.
+     */
+    private final Set<String> inFlightToolSignatures = new HashSet<String>();
+    private final java.util.HashMap<String, String> primaryToolCallSignatures = new java.util.HashMap<String, String>();
+    private final java.util.HashMap<String, ArrayList<ToolResponseRecipient>> coalescedToolCallRecipients = new java.util.HashMap<String, ArrayList<ToolResponseRecipient>>();
     // Phone tasks routinely need several semantic actions plus model turns.
     // Observation/verification calls do not consume the mutation-action budget.
     private static final long AGENT_TASK_TIMEOUT_MS = 180_000L;
@@ -120,6 +129,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private final WorkingContext workingContext = new WorkingContext();
     private final UserActionScope userActionScope = new UserActionScope();
     private String authorizationTranscript = "";
+    // Incremented for every finalized user utterance (and typed instruction).
+    // Tool calls retain the generation that created them, preventing an old
+    // model turn from mutating the phone after the user has changed their mind.
+    private long userIntentGeneration = 0L;
     private MemoryRuleIndex memoryRuleIndex;
     private String lastMemoryDispatchKey = "";
     private long lastMemoryDispatchAt = 0L;
@@ -307,10 +320,32 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         }
     }
 
+    /** Start a fresh user intent. Never carry repeat-loop state across it. */
+    private void beginNewUserIntent() {
+        synchronized (agentLock) {
+            userIntentGeneration++;
+            // Calls that have not started belong to the old utterance.  An
+            // executing call is additionally guarded by its generation below.
+            pendingToolCalls.clear();
+            // Old queued calls no longer deserve a response after the user has
+            // supplied a new goal. Their in-flight de-duplication state must
+            // not grow for the duration of a long Live session either.
+            inFlightToolSignatures.clear();
+            primaryToolCallSignatures.clear();
+            coalescedToolCallRecipients.clear();
+        }
+        supersedeActiveAgentTaskForNewUserInstruction();
+        Log.d(TAG, "新的使用者意圖：generation=" + userIntentGeneration);
+    }
+
+    private boolean isCurrentUserIntent(long generation) {
+        synchronized (agentLock) { return generation == userIntentGeneration; }
+    }
+
     boolean sendText(String text) {
         if (!running || webSocket == null || text == null || text.trim().isEmpty()) return false;
         try {
-            supersedeActiveAgentTaskForNewUserInstruction();
+            beginNewUserIntent();
             if (audioIncidentRecorder != null) audioIncidentRecorder.markTypedInput(text.trim());
             userActionScope.updateFromUserText(text.trim());
             boolean correctionInput = correctionWindowActive && System.currentTimeMillis() <= correctionWindowUntil;
@@ -612,8 +647,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         String completeUserInput = "";
         if (inputTranscript != null && !inputTranscript.optString("text").trim().isEmpty()) {
             completeUserInput = inputTranscript.optString("text").trim();
-            boolean newUserTurn = authorizationTranscript.isEmpty();
-            if (newUserTurn) supersedeActiveAgentTaskForNewUserInstruction();
+            // inputTranscription is Gemini Live's finalized utterance. Treat
+            // every such event as a new user intent; never let a prior tool
+            // loop's transcript bookkeeping decide whether it may override.
+            beginNewUserIntent();
 
             authorizationTranscript = completeUserInput;
             if (authorizationTranscript.length() > 4096) {
@@ -661,7 +698,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         // Finalized input was already processed before tool calls above.
         JSONObject outputTranscript = server.optJSONObject("outputTranscription");
         if (outputTranscript == null) outputTranscript = server.optJSONObject("output_transcription");
-        if (outputTranscript != null && !outputTranscript.optString("text").isEmpty()) listener.onTranscript("Gemini", outputTranscript.optString("text"));
+        if (outputTranscript != null && !outputTranscript.optString("text").isEmpty()
+                && !shouldWithholdUnverifiedAgentReply()) {
+            listener.onTranscript("Gemini", outputTranscript.optString("text"));
+        }
         JSONObject turn = server.optJSONObject("modelTurn");
         if (turn == null) turn = server.optJSONObject("model_turn");
         if (turn != null) {
@@ -670,7 +710,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             // Continuous camera/screen frames must not arrive while Gemini is
             // producing this answer, otherwise they can trigger a duplicate turn.
             visualHoldUntil = System.currentTimeMillis() + 1800;
-            if (!interruptedCurrentTurn) {
+            // A model sometimes treats an accepted click/type as the end of a
+            // task.  Do not play that premature conclusion: Runtime needs one
+            // explicit post-action screen observation before an agent answer.
+            boolean withholdForVerification = shouldWithholdUnverifiedAgentReply();
+            if (!interruptedCurrentTurn && !withholdForVerification) {
                 if (!aiSpeaking) {
                     aiSpeaking = true;
                     listener.onSpeakingChanged(true);
@@ -687,6 +731,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                         listener.onTranscript("Gemini", modelText);
                     }
                 }
+            } else if (withholdForVerification) {
+                Log.d(TAG, "暫緩未驗證的 Agent 回覆，等待 inspect_ui 證據");
             }
         }
         if (server.optBoolean("turnComplete", server.optBoolean("turn_complete", false))) {
@@ -970,7 +1016,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                         .put("properties", phoneActionProperties)
                         .put("required", new JSONArray().put("action"))));
         tools.put(new JSONObject().put("name", "inspect_ui").put("description",
-                "Observe the current phone state when the target/state is unclear or Runtime requires observation after a failed action. Read the important semantic elements, then choose exactly one phone_action. Do not reason about coordinates or Android selector implementation."));
+                "FALLBACK OBSERVATION ONLY. Do NOT call after STEP_OK when result.after.fresh=true; Runtime already auto-observed the new screen. Call inspect_ui only when there is no trustworthy current/after state, Runtime explicitly requires observation after STEP_FAILED, or semantics are insufficient. It returns a compact screen for exactly one next phone_action."));
         tools.put(new JSONObject().put("name", "wait").put("description",
                 "Wait for a screen condition after an asynchronous action. Runtime polls and returns the latest state.")
                 .put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject()
@@ -1049,8 +1095,38 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private void executeToolAsync(final JSONObject call) {
         final String id = call.optString("id", "tool_" + System.nanoTime());
         synchronized (handledToolCalls) { if (!handledToolCalls.add(id)) return; }
-        synchronized (agentLock) { pendingToolCalls.add(call); }
+        try {
+            synchronized (agentLock) {
+                final long generation = userIntentGeneration;
+                final String signature = generation + "|" + buildIncomingToolSignature(call);
+                // Gemini can emit the same function call twice in one streamed
+                // response with distinct ids.  Coalesce it while it is pending
+                // or executing; this is not a model-loop failure.
+                if (!inFlightToolSignatures.add(signature)) {
+                    ArrayList<ToolResponseRecipient> recipients = coalescedToolCallRecipients.get(signature);
+                    if (recipients == null) {
+                        recipients = new ArrayList<ToolResponseRecipient>();
+                        coalescedToolCallRecipients.put(signature, recipients);
+                    }
+                    recipients.add(new ToolResponseRecipient(id, call.optString("name", "unknown")));
+                    Log.d(TAG, "合併同輪重送工具呼叫：" + signature);
+                    return;
+                }
+                primaryToolCallSignatures.put(id, signature);
+                call.put("_crew_intent_generation", generation);
+                call.put("_crew_inflight_signature", signature);
+                pendingToolCalls.add(call);
+            }
+        } catch (Exception error) {
+            Log.w(TAG, "工具呼叫排程失敗", error);
+            return;
+        }
         drainToolQueue();
+    }
+
+    private String buildIncomingToolSignature(JSONObject call) {
+        JSONObject args = call.optJSONObject("args");
+        return call.optString("name", "unknown") + ":" + (args == null ? "{}" : args.toString());
     }
 
     private void drainToolQueue() {
@@ -1065,6 +1141,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 try {
                     executeSingleTool(call);
                 } finally {
+                    synchronized (agentLock) {
+                        inFlightToolSignatures.remove(call.optString("_crew_inflight_signature", ""));
+                    }
                     activeToolThread = null;
                     synchronized (agentLock) { toolWorkerRunning = false; }
                     drainToolQueue();
@@ -1078,6 +1157,14 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         final String requestedName = call.optString("name", "unknown");
         final JSONObject requestedArgs = call.optJSONObject("args") == null
                 ? new JSONObject() : call.optJSONObject("args");
+        final long callIntentGeneration = call.optLong("_crew_intent_generation", -1L);
+        if (!isCurrentUserIntent(callIntentGeneration)) {
+            // The user has already spoken a new command.  Do not execute a
+            // queued mutation from the old turn, and do not create a new task
+            // record that would inherit its repeat counter.
+            sendBlockedToolResponse(id, requestedName, "使用者已有新指令，舊操作已取消。");
+            return;
+        }
         // 0034: model-facing semantic action -> existing trusted Runtime tool.
         final SemanticPhoneAction.Resolution semantic;
         try {
@@ -1122,6 +1209,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         final AgentTaskRecord task = beginAgentStep(name, args);
         if (task == null) {
             sendBlockedToolResponse(id, requestedName, "Agent 任務已停止，請以目前資訊作結論。");
+            return;
+        }
+        if (!isCurrentUserIntent(callIntentGeneration) || task.cancelled || task.finished) {
+            sendBlockedToolResponse(id, requestedName, "使用者已有新指令，舊操作已取消。");
             return;
         }
         if (task.blockedReason != null) {
@@ -1220,6 +1311,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 result.put("semanticAction", semantic.semanticAction)
                         .put("resolvedByRuntime", name);
             }
+            updateTaskCompletionContract(task, name, result);
             updateAgentStabilityAfterResult(task, name, args, result);
             task.addStep(name, result);
             sendToolResponse(id, requestedName, result);
@@ -1277,6 +1369,43 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 || "list_decks".equals(name)
                 || "get_deck_card".equals(name)
                 || "list_deck_images".equals(name);
+    }
+
+    /**
+     * Keep action execution separate from task completion. Runtime already
+     * auto-observes every mutation; its compact fresh after view is valid
+     * evidence. An explicit inspect_ui remains the fallback if that view is
+     * unavailable or a failed action demands another observation.
+     */
+    private void updateTaskCompletionContract(AgentTaskRecord task, String name, JSONObject result) {
+        if (task == null || result == null) return;
+        synchronized (agentLock) {
+            if (task.cancelled || task.finished) return;
+            boolean succeeded = result.optBoolean("success", false)
+                    || "STEP_OK".equals(result.optString("stepResult", ""));
+            try {
+                if (isMutationTool(name) && succeeded) {
+                    JSONObject after = result.optJSONObject("after");
+                    boolean freshAfter = after != null && after.optBoolean("fresh", false)
+                            && "AUTO_AFTER_ACTION".equals(after.optString("source", ""));
+                    task.requiresPostActionInspection = !freshAfter;
+                    task.postActionInspectionPrompted = false;
+                    result.put("actionStatus", "EXECUTED")
+                            .put("taskState", freshAfter ? "EVIDENCE_AVAILABLE" : "IN_PROGRESS")
+                            .put("completionEvidence", freshAfter
+                                    ? "AUTO_AFTER_ACTION"
+                                    : "PENDING_POST_ACTION_INSPECTION")
+                            .put("nextRequirement", freshAfter
+                                    ? "Use the fresh compact after state to choose the next action; STEP_OK is not whole-task completion."
+                                    : "Call inspect_ui once and use the actual post-action screen before concluding.");
+                } else if ("inspect_ui".equals(name) && succeeded && task.requiresPostActionInspection) {
+                    task.requiresPostActionInspection = false;
+                    task.postActionInspectionPrompted = false;
+                    result.put("taskState", "EVIDENCE_AVAILABLE")
+                            .put("completionEvidence", "CURRENT_SCREEN_INSPECTED");
+                }
+            } catch (Exception ignored) {}
+        }
     }
 
     private boolean isMutationTool(String name) {
@@ -1509,10 +1638,35 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         synchronized (agentLock) { if (activeAgentTask != null && activeAgentTask.awaitingModel) activeAgentTask.finalReply += text; }
     }
 
+    private boolean shouldWithholdUnverifiedAgentReply() {
+        synchronized (agentLock) {
+            return activeAgentTask != null && !activeAgentTask.finished
+                    && !activeAgentTask.cancelled
+                    && activeAgentTask.requiresPostActionInspection;
+        }
+    }
+
     private void finishAgentTaskIfAwaitingModel() {
         AgentTaskRecord task;
         synchronized (agentLock) { task = activeAgentTask; }
-        if (task != null && task.awaitingModel && !task.finished) finishAgentTask(task, task.blockedReason == null ? "任務完成" : task.blockedReason, task.finalReply);
+        if (task == null || !task.awaitingModel || task.finished) return;
+        if (task.requiresPostActionInspection) {
+            requestPostActionInspection(task);
+            return;
+        }
+        finishAgentTask(task, task.blockedReason == null ? "任務完成" : task.blockedReason, task.finalReply);
+    }
+
+    private void requestPostActionInspection(AgentTaskRecord task) {
+        synchronized (agentLock) {
+            if (activeAgentTask != task || task.finished || task.cancelled
+                    || !task.requiresPostActionInspection || task.postActionInspectionPrompted) return;
+            task.postActionInspectionPrompted = true;
+            task.awaitingModel = true;
+            task.status = "正在驗證上一個操作的實際畫面";
+        }
+        reportStage(task.status);
+        sendInternalAgentDirective("【Runtime 必要驗證】上一個手機操作只代表動作已執行，尚未證明任務完成。現在必須呼叫 inspect_ui，根據回傳的實際畫面決定下一步；在取得該證據前，不要對使用者作答或作結論。");
     }
 
     private void finishAgentTask(AgentTaskRecord task, String reason, String finalReply) {
@@ -1983,7 +2137,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                     .put("screenChanged", changed);
 
             if (after != null && after.optBoolean("success", false)) {
-                actionResult.put("after", after);
+                actionResult.put("after", ModelScreenView.compact(after, "AUTO_AFTER_ACTION"));
             }
 
             // Remove legacy verification fields that can contradict the reconciled result
@@ -2021,7 +2175,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             workingContext.observe(reply.optString("package", ""), latestSemanticFingerprint, reply.optString("stableScreenKey", ""));
             try { reply.put("runtimeContext", workingContext.toModelJson()); } catch (Exception ignored) {}
         }
-        return reply;
+        return ModelScreenView.compact(reply, "EXPLICIT_INSPECT");
     }
 
     private JSONObject inspectUiLegacy() throws Exception {
@@ -2422,10 +2576,29 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if (DeckRepository.hasActiveDeck() && (name.contains("deck"))) {
             result.put("modeInstructions", LivePrompt.DECK);
         }
-        JSONObject item = new JSONObject().put("response", new JSONObject().put("result", result)).put("id", id).put("name", name);
-        if (webSocket == null || !webSocket.send(new JSONObject().put("toolResponse", new JSONObject().put("functionResponses", new JSONArray().put(item))).toString())) {
+        JSONArray responses = new JSONArray();
+        responses.put(new JSONObject().put("response", new JSONObject().put("result", result)).put("id", id).put("name", name));
+        synchronized (agentLock) {
+            String signature = primaryToolCallSignatures.remove(id);
+            if (signature != null) {
+                ArrayList<ToolResponseRecipient> duplicates = coalescedToolCallRecipients.remove(signature);
+                if (duplicates != null) {
+                    for (ToolResponseRecipient duplicate : duplicates) {
+                        responses.put(new JSONObject().put("response", new JSONObject().put("result", result))
+                                .put("id", duplicate.id).put("name", duplicate.name));
+                    }
+                }
+            }
+        }
+        if (webSocket == null || !webSocket.send(new JSONObject().put("toolResponse", new JSONObject().put("functionResponses", responses)).toString())) {
             throw new Exception("工具結果無法傳回 Gemini");
         }
+    }
+
+    private static final class ToolResponseRecipient {
+        final String id;
+        final String name;
+        ToolResponseRecipient(String id, String name) { this.id = id; this.name = name; }
     }
 
     private void startAudio() {
@@ -2735,6 +2908,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         String finalReply = "";
         boolean awaitingModel;
         boolean watchdogPrompted;
+        boolean requiresPostActionInspection;
+        boolean postActionInspectionPrompted;
         boolean cancelled;
         boolean finished;
         AgentTaskRecord(String id) { taskId = id; }
