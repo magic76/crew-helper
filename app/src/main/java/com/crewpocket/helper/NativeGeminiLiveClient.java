@@ -762,7 +762,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                     }
                 }
             } else if (withholdForVerification) {
-                Log.d(TAG, "暫緩未驗證的 Agent 回覆，等待 inspect_ui 證據");
+                Log.d(TAG, "暫緩未驗證的 Agent 回覆，等待 Runtime 自動驗證");
             }
         }
         if (server.optBoolean("turnComplete", server.optBoolean("turn_complete", false))) {
@@ -1027,23 +1027,22 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         JSONObject phoneActionProperties = new JSONObject()
                 .put("action", new JSONObject().put("type", "STRING")
                         .put("enum", new JSONArray()
-                                .put("OPEN_APP").put("SEARCH").put("TAP").put("FOCUS").put("TYPE")
-                                .put("SCROLL").put("BACK").put("HOME").put("RECENTS")
-                                .put("NOTIFICATIONS").put("QUICK_SETTINGS"))
+                                .put("OPEN_APP").put("SEARCH").put("TAP").put("TYPE")
+                                .put("SCROLL").put("BACK").put("HOME"))
                         .put("description", "Choose exactly one semantic next action; Runtime decides Android implementation."))
                 .put("target", new JSONObject().put("type", "STRING")
                         .put("description", "Human semantic target or App name. Examples: Google, Search, Wi-Fi, first result. Do not pass coordinates/resource IDs."))
                 .put("text", new JSONObject().put("type", "STRING")
                         .put("description", "For TYPE exact text to enter; for SEARCH the query. TYPE never submits a message."))
                 .put("direction", new JSONObject().put("type", "STRING")
-                        .put("enum", new JSONArray().put("up").put("down").put("left").put("right"))
-                        .put("description", "Only for SCROLL."))
+                        .put("enum", new JSONArray().put("forward").put("backward").put("left").put("right"))
+                        .put("description", "Only for SCROLL. forward=next/later content; backward=previous/earlier content."))
                 .put("distance", new JSONObject().put("type", "STRING")
                         .put("enum", new JSONArray().put("short").put("normal").put("long").put("page"))
                         .put("description", "Optional SCROLL distance."));
         tools.put(new JSONObject().put("name", "phone_action")
                 .put("description",
-                        "Perform ONE semantic phone action. Think only about WHAT should happen next, not selectors, coordinates, resource IDs, Accessibility implementation, or fallback choice. Runtime resolves and verifies it. For any request to search/find inside the current App, use SEARCH with text=query; Runtime finds the search control, focuses it, verifies text entry and submits it. Use OPEN_APP/SEARCH/TAP/FOCUS/TYPE/SCROLL/BACK/HOME/RECENTS/NOTIFICATIONS/QUICK_SETTINGS. Real message sending is NOT here; use send_text only with explicit send authorization.")
+                        "Perform exactly ONE semantic phone step. Available actions: OPEN_APP, SEARCH, TAP, TYPE, SCROLL, BACK, HOME. Runtime owns selectors, focus, waiting, observation, vision fallback, retries and Android implementation. SEARCH is one complete Runtime transaction; do not manually TAP search then TYPE. TYPE never submits a real message. Use send_text only for an explicitly authorized real message.")
                 .put("parameters", new JSONObject().put("type", "OBJECT")
                         .put("properties", phoneActionProperties)
                         .put("required", new JSONArray().put("action"))));
@@ -1121,8 +1120,53 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 .put("facts", stringArraySchema).put("items", stringArraySchema);
         tools.put(new JSONObject().put("name", "insert_deck_card").put("description", "Insert one supplementary card after the current or another future card when the user asks for a missing explanation. The inserted card becomes part of the remaining presentation.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("after_card_id", new JSONObject().put("type", "STRING")).put("card", new JSONObject().put("type", "OBJECT").put("properties", insertedCardProperties))).put("required", new JSONArray().put("after_card_id").put("card"))));
         tools.put(new JSONObject().put("name", "remove_future_deck_card").put("description", "Remove a not-yet-presented card that is now redundant. Current and already presented cards are locked.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("card_id", new JSONObject().put("type", "STRING"))).put("required", new JSONArray().put("card_id"))));
-        return tools;
+        return filterModelFacingTools(tools);
     }
+
+    /**
+     * 0041 Minimal Tool Surface.
+     *
+     * Keep legacy implementations compiled and callable by Runtime, but do not
+     * expose them to the Live model during ordinary phone control.
+     */
+    private JSONArray filterModelFacingTools(JSONArray declared) {
+        JSONArray exposed = new JSONArray();
+        final boolean deckMode = DeckRepository.hasActiveDeck();
+        try {
+            for (int i = 0; i < declared.length(); i++) {
+                JSONObject tool = declared.optJSONObject(i);
+                if (tool == null) continue;
+                String name = tool.optString("name", "");
+                if (isCoreModelTool(name) || (deckMode && isDeckModelTool(name))) {
+                    exposed.put(tool);
+                }
+            }
+        } catch (Exception ignored) {}
+        Log.i(TAG, "0041 model tool surface: "
+                + exposed.length() + (deckMode ? " (deck mode)" : " (normal phone mode)"));
+        return exposed;
+    }
+
+    private boolean isCoreModelTool(String name) {
+        return "phone_action".equals(name)
+                || "send_text".equals(name)
+                || "end_voice_session".equals(name);
+    }
+
+    private boolean isDeckModelTool(String name) {
+        return "list_decks".equals(name)
+                || "open_deck".equals(name)
+                || "get_deck_card".equals(name)
+                || "present_deck_card".equals(name)
+                || "advance_deck".equals(name)
+                || "create_ephemeral_deck".equals(name)
+                || "list_deck_images".equals(name)
+                || "attach_deck_image".equals(name)
+                || "update_deck_card".equals(name)
+                || "insert_deck_card".equals(name)
+                || "remove_future_deck_card".equals(name);
+    }
+
 
     private void executeToolAsync(final JSONObject call) {
         final String id = call.optString("id", "tool_" + System.nanoTime());
@@ -1443,7 +1487,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                             ? "AUTO_AFTER_ACTION" : "PENDING_POST_ACTION_INSPECTION");
                     if (!result.has("nextRequirement")) result.put("nextRequirement", freshAfter
                             ? "Use the fresh compact after state to choose the next action; STEP_OK is not whole-task completion."
-                            : "Call inspect_ui once and use the actual post-action screen before concluding.");
+                            : "Runtime owns post-action verification. Do not call another tool merely to observe; wait for Runtime evidence before concluding.");
                 } else if ("inspect_ui".equals(name) && succeeded && task.requiresPostActionInspection) {
                     task.requiresPostActionInspection = false;
                     task.postActionInspectionPrompted = false;
@@ -1512,8 +1556,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             String code = "";
             String instruction = "";
             if (task.requireObservationAfterFailure || semanticObserveRequired) {
-                code = "OBSERVE_REQUIRED_AFTER_FAILURE";
-                instruction = "上一個操作失敗或驗證不足。先呼叫 inspect_ui 一次，再依最新畫面改用不同方法；不要直接重做 mutation。";
+                code = "RUNTIME_OBSERVATION_UNAVAILABLE";
+                instruction = "Runtime 尚未取得可信的最新畫面；禁止繼續 mutation。請簡短回報目前卡點，不要猜測或重複操作。";
+                task.blockedReason = "Runtime 無法取得可信的最新畫面，停止本次 Agent loop。";
             } else {
                 String signature = buildAgentSignature(name, args);
                 if (!task.lastFailedMutationSignature.isEmpty()
@@ -1599,8 +1644,14 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             task.failedMutationScreenFingerprint = latestSemanticFingerprint;
             task.consecutiveMutationFailures++;
 
-            if (!blocksOutcomeReconciliation(result)) {
-                task.requireObservationAfterFailure = true;
+            JSONObject after = result.optJSONObject("after");
+            boolean freshAfter = after != null && after.optBoolean("fresh", false);
+            if (freshAfter) {
+                task.requireObservationAfterFailure = false;
+                task.stabilityBlocks = 0;
+            } else if (!blocksOutcomeReconciliation(result)) {
+                task.requireObservationAfterFailure = false;
+                task.blockedReason = "Runtime 無法取得失敗後的最新畫面，已停止繼續自動操作；請回報目前卡點。";
             }
 
             if (task.consecutiveMutationFailures >= 3) {
@@ -1794,16 +1845,58 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         finishAgentTask(task, task.blockedReason == null ? "任務完成" : task.blockedReason, task.finalReply);
     }
 
-    private void requestPostActionInspection(AgentTaskRecord task) {
+    private void requestPostActionInspection(final AgentTaskRecord task) {
         synchronized (agentLock) {
             if (activeAgentTask != task || task.finished || task.cancelled
                     || !task.requiresPostActionInspection || task.postActionInspectionPrompted) return;
             task.postActionInspectionPrompted = true;
-            task.awaitingModel = true;
-            task.status = "正在驗證上一個操作的實際畫面";
+            task.awaitingModel = false;
+            task.status = "Runtime 正在驗證上一個操作的實際畫面";
         }
         reportStage(task.status);
-        sendInternalAgentDirective("【Runtime 必要驗證】上一個手機操作只代表動作已執行，尚未證明任務完成。現在必須呼叫 inspect_ui，根據回傳的實際畫面決定下一步；在取得該證據前，不要對使用者作答或作結論。");
+
+        new Thread(new Runnable() {
+            @Override public void run() {
+                JSONObject raw = readSemanticScreenQuietly();
+                if (raw != null && raw.optBoolean("success", false)) {
+                    String fp = raw.optString("fingerprint", "");
+                    latestSemanticFingerprint = fp;
+                    semanticObserveRequired = false;
+                    workingContext.observe(raw.optString("package", ""), fp,
+                            raw.optString("stableScreenKey", ""));
+
+                    JSONObject compact = ModelScreenView.compact(raw, "RUNTIME_VERIFY");
+                    try { compact.put("runtimeContext", workingContext.toModelJson()); }
+                    catch (Exception ignored) {}
+
+                    String summary = compact.toString();
+                    if (summary.length() > 2600) summary = summary.substring(0, 2600);
+
+                    synchronized (agentLock) {
+                        if (activeAgentTask != task || task.finished || task.cancelled) return;
+                        task.requiresPostActionInspection = false;
+                        task.postActionInspectionPrompted = false;
+                        task.awaitingModel = true;
+                        task.watchdogPrompted = false;
+                        task.status = "Runtime 已完成畫面驗證，等待模型依證據決定下一步";
+                    }
+                    reportStage(task.status);
+                    sendInternalAgentDirective(
+                            "【Runtime 自動驗證】上一個操作後的最新畫面=" + summary
+                            + "。這是 Runtime 已取得的證據；不要呼叫 inspect_ui/wait/screenshot。"
+                            + "若原始任務尚未完成，只選一個下一步 phone_action；若已完成才簡短作答。");
+                    scheduleAgentResponseWatchdog(task);
+                } else {
+                    synchronized (agentLock) {
+                        if (activeAgentTask != task || task.finished || task.cancelled) return;
+                        task.requiresPostActionInspection = false;
+                        task.postActionInspectionPrompted = false;
+                        task.blockedReason = "Runtime 無法取得操作後的可信畫面，停止繼續自動操作。";
+                    }
+                    requestAgentConclusion(task, task.blockedReason);
+                }
+            }
+        }, "CrewRuntimePostActionVerify").start();
     }
 
     private void finishAgentTask(AgentTaskRecord task, String reason, String finalReply) {

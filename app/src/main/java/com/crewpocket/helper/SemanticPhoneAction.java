@@ -65,13 +65,17 @@ final class SemanticPhoneAction {
         }
 
         if ("SCROLL".equals(action)) {
-            if (direction.isEmpty()) direction = "up";
-            if (!("up".equals(direction) || "down".equals(direction)
-                    || "left".equals(direction) || "right".equals(direction))) {
+            if (direction.isEmpty()) direction = "forward";
+            String runtimeDirection = direction;
+            if ("forward".equals(direction)) runtimeDirection = "up";
+            else if ("backward".equals(direction)) runtimeDirection = "down";
+            if (!("up".equals(runtimeDirection) || "down".equals(runtimeDirection)
+                    || "left".equals(runtimeDirection) || "right".equals(runtimeDirection))) {
                 return error(action, "BAD_SCROLL_DIRECTION",
-                        "SCROLL direction 只能是 up/down/left/right。");
+                        "SCROLL direction 只能是 forward/backward/left/right。");
             }
-            JSONObject out = new JSONObject().put("direction", direction);
+            JSONObject out = new JSONObject().put("direction", runtimeDirection)
+                    .put("semantic_direction", direction);
             if (!distance.isEmpty()) out.put("distance", distance);
             return mapped(action, "swipe_screen", out);
         }
