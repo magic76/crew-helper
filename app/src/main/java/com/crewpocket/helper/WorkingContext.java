@@ -58,7 +58,24 @@ final class WorkingContext {
         } catch (Exception ignored) {}
         return out;
     }
-    synchronized JSONObject toModelJson() { JSONObject out=new JSONObject(); try { if(!currentApp.isEmpty())out.put("currentApp",currentApp); if(!currentScreenFingerprint.isEmpty())out.put("currentScreen",currentScreenFingerprint); if(!lastResult.isEmpty())out.put("lastResult",lastResult); if(!pendingTask.isEmpty())out.put("pendingTask",pendingTask); } catch(Exception ignored){} return out; }
+    synchronized JSONObject toModelJson() {
+        JSONObject out = new JSONObject();
+        try {
+            if (!userGoal.isEmpty()) out.put("goal", userGoal);
+            if (!currentApp.isEmpty()) out.put("currentApp", currentApp);
+            if (!currentScreenFingerprint.isEmpty()) out.put("currentScreen", currentScreenFingerprint);
+
+            if (!lastActions.isEmpty()) {
+                JSONArray actions = new JSONArray();
+                for (String action : lastActions) actions.put(action);
+                out.put("lastActions", actions);
+            }
+
+            if (!lastResult.isEmpty()) out.put("lastResult", lastResult);
+            if (!pendingTask.isEmpty()) out.put("pendingTask", pendingTask);
+        } catch (Exception ignored) {}
+        return out;
+    }
     synchronized void resetTransientForNewGoal() { userGoal=""; previousScreenFingerprint=""; lastResult=""; pendingTask=""; lastActions.clear(); }
 
     synchronized void clear() {

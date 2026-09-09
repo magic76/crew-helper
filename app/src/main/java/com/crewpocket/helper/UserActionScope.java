@@ -282,12 +282,24 @@ final class UserActionScope {
         String raw = TextMatch.caseFold(text == null ? "" : text).trim();
         String value = normalize(raw);
 
-        boolean currentComposer = containsAny(value,
+        // Explicit submit of the CURRENT composer. These phrases authorize
+        // pressing Send for the already-prepared message without inventing a
+        // recipient. "幫我送出訊息" is a real send instruction, not a vague
+        // conversational phrase such as "跟他說".
+        boolean currentComposerVerb = containsAny(value,
                 "送出這則訊息", "送出这则讯息", "送出這則消息", "送出这则消息",
                 "傳送這則訊息", "传送这则讯息", "發送這則訊息", "发送这则讯息",
-                "送出目前訊息", "送出当前讯息", "sendthismessage", "sendcurrentmessage");
+                "送出目前訊息", "送出当前讯息",
+                "送出訊息", "送出讯息", "送出消息",
+                "把訊息送出", "把讯息送出", "把消息送出",
+                "sendthismessage", "sendcurrentmessage");
 
-        boolean explicitMessageVerb = containsAny(value,
+        // If the same utterance names a recipient, do NOT use the current-
+        // composer shortcut: preserve recipient verification.
+        boolean recipientMentioned = hasExplicitRecipientMarker(raw);
+        boolean currentComposer = currentComposerVerb && !recipientMentioned;
+
+        boolean explicitMessageVerb = currentComposerVerb || containsAny(value,
                 "傳訊息", "传讯息", "傳消息", "传消息",
                 "發訊息", "发讯息", "發消息", "发消息",
                 "傳送訊息", "传送讯息", "傳送消息", "传送消息",
@@ -306,6 +318,19 @@ final class UserActionScope {
         out.recipientRequired = true;
         out.recipient = extractRecipient(raw);
         return out;
+    }
+
+    private static boolean hasExplicitRecipientMarker(String raw) {
+        if (raw == null || raw.trim().isEmpty()) return false;
+        String folded = TextMatch.caseFold(raw);
+
+        int giveAt = firstIndex(raw, "給", "给");
+        if (giveAt >= 0 && giveAt + 1 < raw.length()) {
+            String afterGive = raw.substring(giveAt + 1).trim();
+            // "給我把訊息送出" means "send it for me", not recipient=我.
+            if (!afterGive.startsWith("我")) return true;
+        }
+        return folded.contains(" to ");
     }
 
     private static String extractRecipient(String raw) {

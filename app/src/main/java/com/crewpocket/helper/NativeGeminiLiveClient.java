@@ -338,6 +338,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             coalescedToolCallRecipients.clear();
         }
         supersedeActiveAgentTaskForNewUserInstruction();
+        // Keep current app/screen, but never feed a new goal the previous
+        // task's actions/results/pending state.
+        workingContext.resetTransientForNewGoal();
         Log.d(TAG, "新的使用者意圖：generation=" + userIntentGeneration);
     }
 
@@ -355,6 +358,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             if (hasPendingUiChoice()) clearPendingUiChoiceSilently();
 
             beginNewUserIntent();
+            workingContext.setGoalHint(input);
             if (processMemoryRuleInput(input)) {
                 listener.onTranscript("你", input);
                 return true;
@@ -672,6 +676,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             if (hasPendingUiChoice()) clearPendingUiChoiceSilently();
 
             beginNewUserIntent();
+            workingContext.setGoalHint(completeUserInput);
 
             // Runtime-owned App/recorded shortcuts must claim the finalized
             // utterance before same-frame Gemini tool calls can compete with
@@ -2300,19 +2305,26 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             if (met) {
                 latestSemanticFingerprint = fp;
                 semanticObserveRequired = false;
-                workingContext.observe(last.optString("package", ""), fp, last.optString("stableScreenKey", ""));
+                workingContext.observe(last.optString("package", ""), fp,
+                        last.optString("stableScreenKey", ""));
                 workingContext.setPendingTask("");
                 pendingCondition = null;
+
+                JSONObject compact = ModelScreenView.compact(last, "WAIT_CONDITION");
                 try {
-                    last.put("conditionMet", true)
-                        .put("condition", type.name())
-                        .put("runtimeContext", workingContext.toModelJson());
+                    compact.put("conditionMet", true)
+                           .put("condition", type.name())
+                           .put("runtimeContext", workingContext.toModelJson());
                 } catch (Exception ignored) {}
-                return last;
+                return compact;
             }
         }
 
-        JSONObject out = last == null ? new JSONObject() : last;
+        JSONObject raw = last == null ? new JSONObject() : last;
+        pendingCondition = null;
+        workingContext.setPendingTask("");
+
+        JSONObject out = ModelScreenView.compact(raw, "WAIT_TIMEOUT");
         try {
             out.put("success", true)
                .put("conditionMet", false)
@@ -2320,8 +2332,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                .put("timeout", true)
                .put("runtimeContext", workingContext.toModelJson());
         } catch (Exception ignored) {}
-        pendingCondition = null;
-        workingContext.setPendingTask("");
         return out;
     }
 

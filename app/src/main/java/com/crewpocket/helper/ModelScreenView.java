@@ -76,6 +76,7 @@ final class ModelScreenView {
     }
 
     private static int importance(JSONObject element) {
+        if (!element.optBoolean("enabled", true)) return 0;
         int score = 0;
         String label = element.optString("label", "").trim();
         String hint = element.optString("semanticHint", "").trim();
@@ -98,19 +99,32 @@ final class ModelScreenView {
         try {
             String role = source.optString("role", "");
             String label = clip(source.optString("label", ""));
-            String hint = clip(source.optString("semanticHint", ""));
+
+            // Runtime keeps semanticHint/viewId/focus/selection/sensitive/bounds
+            // in the full SemanticScreenState. The model only needs identity,
+            // human label, semantic role and what it can do next.
             if (includeId) copyString(source, out, "id");
             if (!role.isEmpty()) out.put("role", role);
             if (!label.isEmpty()) out.put("label", label);
-            if (!hint.isEmpty()) out.put("hint", hint);
-            if (source.optBoolean("editable", false)) out.put("editable", true);
-            if (source.optBoolean("clickable", false)) out.put("clickable", true);
-            if (source.optBoolean("scrollable", false)) out.put("scrollable", true);
-            if (source.optBoolean("focused", false)) out.put("focused", true);
-            if (source.optBoolean("selected", false)) out.put("selected", true);
-            if (!source.optBoolean("enabled", true)) out.put("enabled", false);
+
+            String can = capabilities(source);
+            if (!can.isEmpty()) out.put("can", can);
         } catch (Exception ignored) {}
         return out;
+    }
+
+    private static String capabilities(JSONObject source) {
+        StringBuilder can = new StringBuilder();
+        if (source.optBoolean("clickable", false)) can.append("click");
+        if (source.optBoolean("editable", false)) {
+            if (can.length() > 0) can.append("|");
+            can.append("type");
+        }
+        if (source.optBoolean("scrollable", false)) {
+            if (can.length() > 0) can.append("|");
+            can.append("scroll");
+        }
+        return can.toString();
     }
 
     private static void copyString(JSONObject from, JSONObject to, String key) {
