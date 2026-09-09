@@ -17,6 +17,8 @@ final class UserActionScope {
     private String sendRecipient = "";
     private boolean searchIntent;
     private boolean openSearchResultAuthorized;
+    private boolean searchResultSelectionRequested;
+    private String searchContinuation = "";
     private boolean searchQueryEntered;
     private boolean searchCommitted;
     private long updatedAtMs;
@@ -58,14 +60,28 @@ final class UserActionScope {
                 || value.matches("(?:please)?(?:endthecall|hangup|exitthevoiceassistant)(?:please)?");
 
         SendGrant grant = parseSendGrant(text);
-        boolean search = hasSearchIntent(value);
-        boolean open = hasExplicitOpenIntent(value);
+        boolean navigation = hasNavigationIntent(value);
+        boolean search = hasSearchIntent(value) || navigation;
+        // A Maps result picker is safe only after Runtime has proved that real
+        // result rows exist (not autocomplete suggestions). Let it be offered
+        // for an ordinary search as well: the user still has to explicitly
+        // choose a row before anything is opened. Navigation/open wording only
+        // authorizes automatic continuation after that choice.
+        boolean resultSelection = search;
+        boolean openResult = navigation || hasPostSearchOpenIntent(value);
 
         sendAuthorized = grant.authorized;
         sendRecipientRequired = grant.recipientRequired;
         sendRecipient = grant.recipient;
         searchIntent = search;
-        openSearchResultAuthorized = open || grant.authorized;
+        // App launch ("open Maps, search X") must not silently authorize
+        // opening a search result. Only a post-search open/select or navigation
+        // continuation grants result selection.
+        searchResultSelectionRequested = resultSelection;
+        searchContinuation = navigation
+                ? "NAVIGATE"
+                : (openResult ? "OPEN_RESULT" : "RESULT_DETAILS");
+        openSearchResultAuthorized = openResult || grant.authorized;
         searchQueryEntered = false;
         searchCommitted = false;
         updatedAtMs = System.currentTimeMillis();
@@ -106,6 +122,16 @@ final class UserActionScope {
     synchronized boolean hasCommittedSearch() {
         expireIfNeeded();
         return searchIntent && searchCommitted;
+    }
+
+    synchronized boolean shouldSelectSearchResult() {
+        expireIfNeeded();
+        return searchIntent && searchCommitted && searchResultSelectionRequested;
+    }
+
+    synchronized String searchContinuation() {
+        expireIfNeeded();
+        return searchContinuation == null ? "" : searchContinuation;
     }
 
     synchronized boolean markSearchQueryEntered() {
@@ -171,6 +197,8 @@ final class UserActionScope {
         endCallAuthorized = false;
         searchIntent = false;
         openSearchResultAuthorized = false;
+        searchResultSelectionRequested = false;
+        searchContinuation = "";
         searchQueryEntered = false;
         searchCommitted = false;
     }
@@ -210,6 +238,38 @@ final class UserActionScope {
                 "打開", "打开", "開啟", "开启", "點開", "点开",
                 "進入", "进入", "點進", "点进", "選擇", "选择",
                 "open", "enter", "select", "click", "tap");
+    }
+
+    private static boolean hasNavigationIntent(String value) {
+        return containsAny(value,
+                "導航", "导航", "帶我去", "带我去", "前往", "路線到", "路线到",
+                "navigate", "navigation", "directions", "route", "goto", "takeme");
+    }
+
+    /**
+     * Result-opening permission must appear after the search phrase. This keeps
+     * "open Google Maps, search Grand Palace" search-only, while allowing
+     * "search Grand Palace then open/select it".
+     */
+    private static boolean hasPostSearchOpenIntent(String value) {
+        int searchAt = indexOfAny(value,
+                "搜尋", "搜索", "查找", "找一下", "幫我找", "帮我找",
+                "search", "find", "lookup");
+        if (searchAt < 0) return false;
+        String tail = value.substring(searchAt);
+        return hasExplicitOpenIntent(tail);
+    }
+
+    private static int indexOfAny(String value, String... needles) {
+        if (value == null || value.isEmpty()) return -1;
+        int best = -1;
+        for (String needle : needles) {
+            String n = normalize(needle);
+            if (n.isEmpty()) continue;
+            int at = value.indexOf(n);
+            if (at >= 0 && (best < 0 || at < best)) best = at;
+        }
+        return best;
     }
 
     /**

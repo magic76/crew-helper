@@ -23,6 +23,7 @@ import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityWindowInfo;
 import android.util.Log;
 import org.json.JSONArray;
+import org.json.JSONObject;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -714,6 +715,78 @@ public class CrewAccessibilityService extends AccessibilityService {
                     try { commitLock.wait(1800); } catch (Exception ignored) {}
                 }
                 responseJson = commitResult[0];
+            } else if (path.startsWith("/search_in_app")) {
+                final String query = getJsonString(body, "query");
+                final String[] searchResult = new String[]{
+                        "{\"success\":false,\"action\":\"APP_SEARCH\",\"error\":\"TIMEOUT\"}"};
+                final Object searchLock = new Object();
+                final Runnable[] retry = new Runnable[1];
+                retry[0] = new Runnable() {
+                    @Override public void run() {
+                        try {
+                            JSONObject result = AppSearchRuntime.execute(
+                                    CrewAccessibilityService.this,
+                                    query == null ? "" : query);
+                            if ("WAITING_FOR_FOCUS".equals(result.optString("state", ""))) {
+                                mainHandler.postDelayed(new Runnable() {
+                                    @Override public void run() {
+                                        try {
+                                            JSONObject followUp = AppSearchRuntime.execute(
+                                                    CrewAccessibilityService.this,
+                                                    query == null ? "" : query);
+                                            if ("WAITING_FOR_FOCUS".equals(followUp.optString("state", ""))) {
+                                                try {
+                                                    followUp.put("success", false)
+                                                            .put("error", "SEARCH_INPUT_FOCUS_TIMEOUT")
+                                                            .put("instruction", "搜尋入口已點擊但沒有出現可輸入欄位；不要假裝已輸入。");
+                                                } catch (Exception ignored) {}
+                                            }
+                                            searchResult[0] = followUp.toString();
+                                        } finally {
+                                            synchronized (searchLock) { searchLock.notify(); }
+                                        }
+                                    }
+                                }, 420L);
+                                return;
+                            }
+                            searchResult[0] = result.toString();
+                        } catch (Exception error) {
+                            searchResult[0] = "{\"success\":false,\"action\":\"APP_SEARCH\",\"error\":\"RUNTIME_ERROR\"}";
+                        } finally {
+                            synchronized (searchLock) { searchLock.notify(); }
+                        }
+                    }
+                };
+                mainHandler.post(retry[0]);
+                synchronized (searchLock) {
+                    try { searchLock.wait(2600); } catch (Exception ignored) {}
+                }
+                responseJson = searchResult[0];
+            } else if (path.startsWith("/search_result_candidates")) {
+                final String query = getJsonString(body, "query");
+                final String[] selectionResult = new String[]{
+                        "{\"success\":true,\"state\":\"WAITING_RESULTS\",\"reason\":\"TIMEOUT\"}"};
+                final Object selectionLock = new Object();
+                mainHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            selectionResult[0] = SearchResultSelectionRuntime
+                                    .analyze(CrewAccessibilityService.this,
+                                            query == null ? "" : query)
+                                    .toString();
+                        } catch (Exception error) {
+                            selectionResult[0] =
+                                    "{\"success\":true,\"state\":\"WAITING_RESULTS\",\"reason\":\"RUNTIME_ERROR\"}";
+                        } finally {
+                            synchronized (selectionLock) { selectionLock.notify(); }
+                        }
+                    }
+                });
+                synchronized (selectionLock) {
+                    try { selectionLock.wait(1800); } catch (Exception ignored) {}
+                }
+                responseJson = selectionResult[0];
             } else if (path.startsWith("/send_text")) {
                 final String textToSend = getJsonString(body, "text");
                 if (textToSend == null || textToSend.length() == 0) {
@@ -1612,6 +1685,11 @@ public class CrewAccessibilityService extends AccessibilityService {
             if (target != null) try { target.recycle(); } catch (Exception ignored) {}
             root.recycle();
         }
+    }
+
+    /** Runtime search must never report success unless the text is observable. */
+    boolean performSetTextVerified(String text) {
+        return performSetText(text) && lastTextInputVerified;
     }
 
     private boolean isEditableCandidate(AccessibilityNodeInfo node) {

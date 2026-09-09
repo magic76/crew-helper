@@ -57,6 +57,13 @@ final class SemanticPhoneAction {
             return mapped(action, "type_text", out);
         }
 
+        if ("SEARCH".equals(action)) {
+            String query = !text.isEmpty() ? text : target;
+            if (query.isEmpty()) return error(action, "SEARCH_NEEDS_QUERY",
+                    "SEARCH 需要 text=要搜尋的文字。");
+            return mapped(action, "search_current_app", new JSONObject().put("text", query));
+        }
+
         if ("SCROLL".equals(action)) {
             if (direction.isEmpty()) direction = "up";
             if (!("up".equals(direction) || "down".equals(direction)
@@ -76,7 +83,7 @@ final class SemanticPhoneAction {
         }
 
         return error(action, "UNKNOWN_SEMANTIC_ACTION",
-                "只支援 OPEN_APP/TAP/FOCUS/TYPE/SCROLL/BACK/HOME/RECENTS/NOTIFICATIONS/QUICK_SETTINGS。");
+                "只支援 OPEN_APP/SEARCH/TAP/FOCUS/TYPE/SCROLL/BACK/HOME/RECENTS/NOTIFICATIONS/QUICK_SETTINGS。");
     }
 
     private static Resolution mapped(String action, String runtimeName, JSONObject args) {
