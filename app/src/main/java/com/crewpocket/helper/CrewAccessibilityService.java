@@ -692,6 +692,28 @@ public class CrewAccessibilityService extends AccessibilityService {
                         + ",\"verified\":" + lastTextInputVerified
                         + (typeSuccess[0] ? "" : ",\"error\":\"" + jsonEscape(lastTextInputFailure) + "\"")
                         + "}";
+            } else if (path.startsWith("/commit_search")) {
+                final String[] commitResult = new String[]{
+                        "{\"success\":false,\"action\":\"SEARCH_COMMIT\",\"error\":\"TIMEOUT\"}"};
+                final Object commitLock = new Object();
+                mainHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            commitResult[0] = SearchCommitRuntime
+                                    .commit(CrewAccessibilityService.this).toString();
+                        } catch (Exception error) {
+                            commitResult[0] =
+                                    "{\"success\":false,\"action\":\"SEARCH_COMMIT\",\"error\":\"RUNTIME_ERROR\"}";
+                        } finally {
+                            synchronized (commitLock) { commitLock.notify(); }
+                        }
+                    }
+                });
+                synchronized (commitLock) {
+                    try { commitLock.wait(1800); } catch (Exception ignored) {}
+                }
+                responseJson = commitResult[0];
             } else if (path.startsWith("/send_text")) {
                 final String textToSend = getJsonString(body, "text");
                 if (textToSend == null || textToSend.length() == 0) {

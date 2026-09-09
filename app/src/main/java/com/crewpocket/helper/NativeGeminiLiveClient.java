@@ -2035,6 +2035,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
     private long mutationSettleDelayMs(String actionName) {
         if ("launch_app".equals(actionName)) return 650L;
+        if ("search_commit".equals(actionName)) return 700L;
         if ("press_key".equals(actionName)) return 320L;
         if ("type_text".equals(actionName)) return 260L;
         if ("swipe_screen".equals(actionName)) return 220L;
@@ -2410,13 +2411,59 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             reply.put("message", "已在輸入框輸入文字");
         }
         workingContext.recordAction("type", reply.optBoolean("success", false) ? "submitted" : "failed");
-        JSONObject observed = autoObserveAfterMutation(reply, "type_text");
-        if (observed.optBoolean("success", false) && userActionScope.markSearchQueryEntered()) {
-            observed.put("taskBoundary", "SEARCH_RESULTS_ONLY");
-            observed.put("instruction",
-                    "最新任務只要求搜尋；現在只觀察並回報搜尋結果，不要打開結果、群組、聊天室，也不要傳訊息。");
+
+        // 0036 Search Transaction:
+        // Query entry is not the end of a search. If the latest user intent is
+        // actually SEARCH, Runtime commits the focused search field itself so
+        // a weak model does not need another tool call for the keyboard Search.
+        if (reply.optBoolean("success", false) && userActionScope.shouldAutoCommitSearch()) {
+            userActionScope.markSearchQueryEntered();
+
+            JSONObject commit;
+            try {
+                commit = helperPost("/commit_search", new JSONObject());
+            } catch (Exception error) {
+                commit = new JSONObject().put("success", false)
+                        .put("action", "SEARCH_COMMIT")
+                        .put("error", "SEARCH_COMMIT_BRIDGE_FAILED");
+            }
+
+            if (commit.optBoolean("success", false)) {
+                workingContext.recordAction("search_commit", "submitted");
+                JSONObject observed = autoObserveAfterMutation(commit, "search_commit");
+                boolean searchOnlyBoundary = userActionScope.markSearchCommitted();
+
+                observed.put("searchTransaction", "COMMITTED")
+                        .put("typed", true)
+                        .put("committed", true)
+                        .put("searchCommitMethod", commit.optString("method", "RUNTIME"));
+
+                if (searchOnlyBoundary) {
+                    observed.put("taskBoundary", "SEARCH_RESULTS_ONLY");
+                    observed.put("instruction",
+                            "Runtime 已提交搜尋。最新任務只要求搜尋：使用 fresh after 回報結果並停止；"
+                            + "不要再按搜尋鍵、不要任意打開另一個結果/群組/聊天室，也不要傳訊息。");
+                }
+                return observed;
+            }
+
+            // Text entry succeeded but the search itself did not. Keep the task
+            // explicitly IN_PROGRESS instead of treating TYPE as whole-task completion.
+            workingContext.recordAction("search_commit", "failed");
+            JSONObject observed = autoObserveAfterMutation(reply, "type_text");
+            observed.put("searchTransaction", "PENDING_COMMIT")
+                    .put("searchCommitError",
+                            commit.optString("error", "SEARCH_COMMIT_FAILED"))
+                    .put("taskState", "IN_PROGRESS")
+                    .put("completionEvidence", "SEARCH_QUERY_TYPED_NOT_COMMITTED")
+                    .put("nextRequirement",
+                            "搜尋文字已輸入但尚未提交；只可使用明確 Search/Go/Enter 提交控制，或回報 Runtime 無法提交。")
+                    .put("instruction",
+                            "不要把 autocomplete suggestion 當成已完成搜尋，也不要因為搜尋而進聊天室或傳訊息。");
+            return observed;
         }
-        return observed;
+
+        return autoObserveAfterMutation(reply, "type_text");
     }
 
     private JSONObject sendTextToPhone(JSONObject args) throws Exception {

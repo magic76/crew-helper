@@ -18,6 +18,7 @@ final class UserActionScope {
     private boolean searchIntent;
     private boolean openSearchResultAuthorized;
     private boolean searchQueryEntered;
+    private boolean searchCommitted;
     private long updatedAtMs;
     private boolean endCallAuthorized;
 
@@ -66,6 +67,7 @@ final class UserActionScope {
         searchIntent = search;
         openSearchResultAuthorized = open || grant.authorized;
         searchQueryEntered = false;
+        searchCommitted = false;
         updatedAtMs = System.currentTimeMillis();
     }
 
@@ -90,11 +92,25 @@ final class UserActionScope {
         sendRecipient = "";
     }
 
+    synchronized boolean shouldAutoCommitSearch() {
+        expireIfNeeded();
+        return searchIntent;
+    }
+
     synchronized boolean markSearchQueryEntered() {
         expireIfNeeded();
-        if (!isSearchOnlyLocked()) return false;
+        if (!searchIntent) return false;
         searchQueryEntered = true;
+        searchCommitted = false;
         return true;
+    }
+
+    synchronized boolean markSearchCommitted() {
+        expireIfNeeded();
+        if (!searchIntent) return false;
+        searchQueryEntered = true;
+        searchCommitted = true;
+        return isSearchOnlyLocked();
     }
 
     synchronized boolean shouldBlockAdditionalTextEntry() {
@@ -107,13 +123,21 @@ final class UserActionScope {
         if (!isSearchOnlyLocked() || openSearchResultAuthorized) return false;
 
         String meta = normalize(metadata);
-        if (isSearchControl(meta)) return false;
 
-        // Before query entry, an unlabeled icon/coordinate tap may be needed
-        // to expose search. Labeled non-search targets are still blocked.
-        if (!searchQueryEntered) return !coordinateOnly;
+        // Before query entry Runtime may need to expose/focus the search UI.
+        if (!searchQueryEntered) {
+            if (isSearchControl(meta)) return false;
+            return !coordinateOnly;
+        }
 
-        // After query entry, search-only has reached its task boundary.
+        // Query text is not completion. Until Runtime commits the search, only
+        // a semantic Search/Go/Enter control may be used as a fallback.
+        if (!searchCommitted) {
+            return !isSearchCommitControl(meta);
+        }
+
+        // Once search is committed, search-only reached its task boundary.
+        // Block even another Search-key tap so weak models cannot double-submit.
         return true;
     }
 
@@ -137,6 +161,7 @@ final class UserActionScope {
         searchIntent = false;
         openSearchResultAuthorized = false;
         searchQueryEntered = false;
+        searchCommitted = false;
     }
 
     static boolean looksLikeSendTarget(String metadata) {
@@ -153,6 +178,13 @@ final class UserActionScope {
                 "search", "query", "filter", "搜尋", "搜索", "查找",
                 "clear", "clearquery", "clear_query", "清除",
                 "back", "返回", "cancel", "取消", "close", "關閉", "关闭");
+    }
+
+    static boolean isSearchCommitControl(String metadata) {
+        String value = normalize(metadata);
+        return containsAny(value,
+                "search", "query", "搜尋", "搜索", "查找",
+                "imeaction", "go", "enter", "前往", "確定", "确定", "完成");
     }
 
     private static boolean hasSearchIntent(String value) {
