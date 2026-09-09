@@ -39,6 +39,8 @@ import okio.ByteString;
 /** Gemini Live backed by OkHttp's production WebSocket implementation. */
 final class NativeGeminiLiveClient extends WebSocketListener {
     private static final String TAG = "CrewNativeLive";
+    /** Internal-only token; not a user message and not part of the tool schema. */
+    private static final String PENDING_SEND_CONFIRM_TOKEN = "__RUNTIME_PENDING_SEND_CONFIRM__";
     interface Listener {
         void onStatus(String text);
         void onStopped(String reason);
@@ -1257,6 +1259,13 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         final String name = semantic.runtimeName;
         final JSONObject args = semantic.runtimeArgs;
 
+        if (userActionScope.hasPendingSendLlmReview()
+                && isMutationTool(name) && !"send_text".equals(name)) {
+            sendBlockedToolResponse(id, requestedName,
+                    "PENDING_SEND_LLM_DECISION：Runtime 正在等待 LLM 對使用者確認語句作受限判斷；禁止其他操作。");
+            return;
+        }
+
         if ((runtimeShortcutExecuting
                 || System.currentTimeMillis() < runtimeShortcutGuardUntil)
                 && isMutationTool(name)) {
@@ -1748,6 +1757,20 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         final UserActionScope.SendDraft confirmed = userActionScope.consumeConfirmedSendDraft();
         if (confirmed != null) {
             dispatchRuntimeSend(confirmed, true);
+            return true;
+        }
+        String llmReviewUtterance = userActionScope.consumePendingSendLlmReviewUtterance();
+        if (!llmReviewUtterance.isEmpty()) {
+            if (llmReviewUtterance.length() > 120) {
+                llmReviewUtterance = llmReviewUtterance.substring(0, 120);
+            }
+            sendInternalAgentDirective(
+                    "【Runtime 待傳訊確認判斷】存在一則 30 秒內的待傳草稿。使用者剛說：「"
+                    + llmReviewUtterance
+                    + "」。只判斷這句是否明確同意送出：若是，唯一允許的動作是呼叫 send_text，"
+                    + "text 必須完全等於 " + PENDING_SEND_CONFIRM_TOKEN
+                    + "；Runtime 會使用保留草稿，忽略該 token。若是否定或不確定，不得呼叫工具，"
+                    + "只簡短請使用者回答確認或取消。不要重述草稿內容。");
             return true;
         }
         if (userActionScope.hasAwaitingSendConfirmation()) {
@@ -3114,6 +3137,14 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
     private JSONObject sendTextToPhone(JSONObject args) throws Exception {
         String text = args.optString("text", "");
+        if (PENDING_SEND_CONFIRM_TOKEN.equals(text)) {
+            UserActionScope.SendDraft pending = userActionScope.consumeLlmApprovedSendDraft();
+            if (pending == null) {
+                return runtimeBlocked("NO_PENDING_SEND_FOR_LLM_CONFIRMATION",
+                        "沒有待確認的傳訊草稿；Runtime 已阻止送出。");
+            }
+            return submitTextToPhone(pending.text, pending.recipient);
+        }
         if (text.isEmpty()) {
             return new JSONObject().put("success", false).put("error", "EMPTY_TEXT");
         }

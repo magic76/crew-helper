@@ -39,6 +39,9 @@ final class UserActionScope {
     private SendDraft awaitingSendConfirmation;
     private boolean pendingSendConfirmed;
     private long pendingSendAtMs;
+    /** One short user phrase awaiting a constrained LLM yes/no classification. */
+    private String pendingSendLlmReviewUtterance = "";
+    private boolean pendingSendLlmDecisionInFlight;
 
     private static final class SendGrant {
         boolean authorized;
@@ -81,6 +84,26 @@ final class UserActionScope {
         return awaitingSendConfirmation != null && !pendingSendConfirmed;
     }
 
+    synchronized String consumePendingSendLlmReviewUtterance() {
+        expireIfNeeded();
+        String utterance = pendingSendLlmReviewUtterance;
+        pendingSendLlmReviewUtterance = "";
+        return utterance == null ? "" : utterance;
+    }
+
+    synchronized boolean hasPendingSendLlmReview() {
+        expireIfNeeded();
+        return awaitingSendConfirmation != null && pendingSendLlmDecisionInFlight;
+    }
+
+    synchronized SendDraft consumeLlmApprovedSendDraft() {
+        expireIfNeeded();
+        if (awaitingSendConfirmation == null || pendingSendConfirmed) return null;
+        SendDraft draft = awaitingSendConfirmation;
+        clearPendingSendDraft();
+        return draft;
+    }
+
     private void update(String text) {
         String value = normalize(text);
 
@@ -99,6 +122,15 @@ final class UserActionScope {
             }
             if (isSendCancellation(value)) {
                 clearActionGrants();
+                updatedAtMs = System.currentTimeMillis();
+                return;
+            }
+            if (isPotentialSendConfirmation(value)) {
+                // Keep the draft in Runtime. The client gives the LLM only a
+                // constrained yes/no decision; it never receives send power
+                // outside this short-lived pending transaction.
+                pendingSendLlmReviewUtterance = text == null ? "" : text.trim();
+                pendingSendLlmDecisionInFlight = true;
                 updatedAtMs = System.currentTimeMillis();
                 return;
             }
@@ -305,14 +337,27 @@ final class UserActionScope {
         awaitingSendConfirmation = null;
         pendingSendConfirmed = false;
         pendingSendAtMs = 0L;
+        pendingSendLlmReviewUtterance = "";
+        pendingSendLlmDecisionInFlight = false;
     }
 
     private static boolean isSendConfirmation(String value) {
-        return value.matches("(?:確認|确定|是|好|可以|送出|傳送|发送|發送|yes|confirm|send)");
+        return value.matches("(?:(?:請|请|幫我|帮我|我)?(?:確認|确定)(?:送出|傳送|发送|發送)?|"
+                + "(?:請|请|幫我|帮我)?(?:是|對|对|好的|好啊|好|可以|可以了|送出|傳送|发送|發送)|"
+                + "yes|confirm|send)");
     }
 
     private static boolean isSendCancellation(String value) {
         return value.matches("(?:取消|不要|別送|别送|停止|cancel|stop)");
+    }
+
+    private static boolean isPotentialSendConfirmation(String value) {
+        if (value == null || value.length() < 2 || value.length() > 24) return false;
+        // A new task must replace the draft rather than being handed to the
+        // LLM confirmation classifier.
+        return !containsAny(value,
+                "打開", "打开", "開啟", "开启", "搜尋", "搜索", "查找", "導航", "导航",
+                "傳給", "传给", "訊息", "讯息", "消息", "search", "open", "navigate");
     }
 
     /**
