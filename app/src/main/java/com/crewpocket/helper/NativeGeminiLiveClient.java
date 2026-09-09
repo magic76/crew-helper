@@ -1221,10 +1221,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             return;
         }
 
-        if ((hasPendingUiChoice() || pendingChoiceExecuting)
-                && isMutationTool(name)) {
-            sendBlockedToolResponse(id, requestedName,
-                    "WAITING_USER_CHOICE：Runtime 正在等待或執行使用者的搜尋結果選擇；禁止 Gemini 重複點擊。");
+        if (hasPendingUiChoice() || pendingChoiceExecuting) {
+            // Choice is a Runtime-owned pause, not another model turn. Return
+            // the same authoritative state for every speculative call, but do
+            // not execute even observation calls while the user is deciding.
+            sendWaitingUserToolResponse(id, requestedName);
             return;
         }
 
@@ -1355,7 +1356,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             updateAgentStabilityAfterResult(task, name, args, result);
             task.addStep(name, result);
             sendToolResponse(id, requestedName, result);
-            if (task.blockedReason != null) {
+            if (isWaitingForUserResult(result)) {
+                suspendAgentTaskForUserChoice(task);
+            } else if (task.blockedReason != null) {
                 requestAgentConclusion(task, task.blockedReason);
             } else {
                 task.awaitingModel = true;
@@ -1421,6 +1424,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if (task == null || result == null) return;
         synchronized (agentLock) {
             if (task.cancelled || task.finished) return;
+            // Search/choice and other Runtime subsystems own their task
+            // contract.  Never turn WAITING_USER into EVIDENCE_AVAILABLE just
+            // because the underlying mutation itself returned STEP_OK.
+            if (hasAuthoritativeTaskState(result)) return;
             boolean succeeded = result.optBoolean("success", false)
                     || "STEP_OK".equals(result.optString("stepResult", ""));
             try {
@@ -1430,14 +1437,13 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                             && "AUTO_AFTER_ACTION".equals(after.optString("source", ""));
                     task.requiresPostActionInspection = !freshAfter;
                     task.postActionInspectionPrompted = false;
-                    result.put("actionStatus", "EXECUTED")
-                            .put("taskState", freshAfter ? "EVIDENCE_AVAILABLE" : "IN_PROGRESS")
-                            .put("completionEvidence", freshAfter
-                                    ? "AUTO_AFTER_ACTION"
-                                    : "PENDING_POST_ACTION_INSPECTION")
-                            .put("nextRequirement", freshAfter
-                                    ? "Use the fresh compact after state to choose the next action; STEP_OK is not whole-task completion."
-                                    : "Call inspect_ui once and use the actual post-action screen before concluding.");
+                    result.put("actionStatus", "EXECUTED");
+                    if (!result.has("taskState")) result.put("taskState", freshAfter ? "EVIDENCE_AVAILABLE" : "IN_PROGRESS");
+                    if (!result.has("completionEvidence")) result.put("completionEvidence", freshAfter
+                            ? "AUTO_AFTER_ACTION" : "PENDING_POST_ACTION_INSPECTION");
+                    if (!result.has("nextRequirement")) result.put("nextRequirement", freshAfter
+                            ? "Use the fresh compact after state to choose the next action; STEP_OK is not whole-task completion."
+                            : "Call inspect_ui once and use the actual post-action screen before concluding.");
                 } else if ("inspect_ui".equals(name) && succeeded && task.requiresPostActionInspection) {
                     task.requiresPostActionInspection = false;
                     task.postActionInspectionPrompted = false;
@@ -1457,6 +1463,41 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 || "search_current_app".equals(name)
                 || "send_text".equals(name)
                 || "press_key".equals(name);
+    }
+
+    private boolean hasAuthoritativeTaskState(JSONObject result) {
+        String state = result.optString("taskState", "");
+        return "WAITING_USER".equals(state) || "IN_PROGRESS".equals(state)
+                || "BLOCKED".equals(state);
+    }
+
+    private boolean isWaitingForUserResult(JSONObject result) {
+        return "WAITING_USER".equals(result.optString("taskState", "")) || hasPendingUiChoice();
+    }
+
+    private void suspendAgentTaskForUserChoice(AgentTaskRecord task) {
+        synchronized (agentLock) {
+            if (activeAgentTask != task || task.finished || task.cancelled) return;
+            task.awaitingModel = false;
+            task.waitingForUser = true;
+            task.status = "等待使用者選擇搜尋結果";
+            clearAgentResponseWatchdogLocked();
+        }
+        reportStage(task.status);
+    }
+
+    private void resumeAgentTaskAfterUserChoice() {
+        AgentTaskRecord task;
+        synchronized (agentLock) {
+            task = activeAgentTask;
+            if (task == null || task.finished || task.cancelled || !task.waitingForUser) return;
+            task.waitingForUser = false;
+            task.awaitingModel = true;
+            task.watchdogPrompted = false;
+            task.status = "使用者已選擇結果，正在繼續任務";
+            scheduleAgentResponseWatchdog(task);
+        }
+        reportStage(task.status);
     }
 
     private AgentTaskRecord peekActiveAgentTask() {
@@ -1578,6 +1619,16 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private void sendBlockedToolResponse(String id, String name, String reason) {
         try { sendToolResponse(id, name, new JSONObject().put("success", false).put("agentStopped", true).put("error", reason)); }
         catch (Exception ignored) {}
+    }
+
+    private void sendWaitingUserToolResponse(String id, String name) {
+        try {
+            sendToolResponse(id, name, new JSONObject()
+                    .put("success", true)
+                    .put("stepResult", "STEP_OK")
+                    .put("taskState", "WAITING_USER")
+                    .put("instruction", "Runtime 正在等待使用者選擇結果；禁止任何工具操作，直到使用者選擇或取消。"));
+        } catch (Exception ignored) {}
     }
 
     private void requestAgentConclusion(AgentTaskRecord task, String reason) {
@@ -2070,19 +2121,19 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             JSONObject selected = tapSemanticElement(
                     new JSONObject().put("element_id",
                             only.optString("elementId", "")));
-            if (selected.optBoolean("success", false)) {
+            boolean verifiedOpen = isSearchResultOpenVerified(selected);
+            if (verifiedOpen) {
                 userActionScope.markSearchResultSelected(
                         only.optString("label", ""));
             }
-            selected.put("searchSelection", "AUTO_SELECTED")
+            selected.put("searchSelection", verifiedOpen ? "RESULT_OPEN_VERIFIED" : "RESULT_SELECTION_DISPATCHED")
                     .put("selectedSearchResult", only.optString("label", ""))
                     .put("continuation", userActionScope.searchContinuation())
-                    .put("taskState", selected.optBoolean("success", false)
-                            ? "IN_PROGRESS" : "BLOCKED")
+                    .put("taskState", "IN_PROGRESS")
                     .put("instruction",
-                            selected.optBoolean("success", false)
-                            ? "Runtime 已選定唯一高可信搜尋結果。不要重新搜尋；依最新畫面繼續原始 continuation。"
-                            : "唯一結果無法安全點開；停止重試並回報卡點。");
+                            verifiedOpen
+                            ? "Runtime 已確認唯一搜尋結果已打開。不要重新搜尋；依最新畫面繼續原始 continuation。"
+                            : "結果點擊已送出但尚未證明已打開；不要宣告已選定、不要重新搜尋，先依最新畫面驗證。 ");
             return selected;
         }
 
@@ -2246,7 +2297,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                     JSONObject result = tapSemanticElement(
                             new JSONObject().put("element_id", chosen.elementId));
 
-                    if (result.optBoolean("success", false)) {
+                    boolean verifiedOpen = isSearchResultOpenVerified(result);
+                    if (verifiedOpen) {
                         userActionScope.markSearchResultSelected(chosen.label);
                     }
 
@@ -2260,14 +2312,22 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                     if (afterSummary.length() > 2600) {
                         afterSummary = afterSummary.substring(0, 2600);
                     }
+                    // The user has made the choice and Runtime has completed
+                    // tap + fresh observation. Resume the model regardless of
+                    // verification outcome; only RESULT_OPEN_VERIFIED may
+                    // advance the search state, while dispatched stays an
+                    // in-progress verification task.
+                    pendingChoiceExecuting = false;
+                    resumeAgentTaskAfterUserChoice();
                     sendInternalAgentDirective(
-                            "【Runtime 搜尋結果已選擇】使用者選了「"
+                            "【Runtime 搜尋結果選擇】使用者選了「"
                             + chosen.label + "」。Runtime 執行："
-                            + (result.optBoolean("success", false) ? "成功" : "未成功")
+                            + (verifiedOpen ? "RESULT_OPEN_VERIFIED" : "RESULT_SELECTION_DISPATCHED")
                             + "；continuation=" + continuation
                             + "；latestAfter=" + afterSummary
-                            + "。若成功，直接依 latestAfter 繼續原始任務，不要重新搜尋；"
-                            + "若未成功，停止重複點擊並回報卡點。");
+                            + (verifiedOpen
+                            ? "。已確認結果頁打開；直接依 latestAfter 繼續原始任務，不要重新搜尋。"
+                            : "。尚未確認結果頁打開；停止重複點擊與重新搜尋，先依 latestAfter 驗證。"));
                 } catch (Exception ignored) {
                     workingContext.setPendingTask("");
                     sendInternalAgentDirective(
@@ -2291,6 +2351,15 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 "【使用者取消搜尋結果選擇】"
                 + (reason == null ? "" : reason)
                 + "；停止目前結果選擇，不要繼續點擊。");
+    }
+
+    /** A dispatched Maps/UI tap is not evidence that the result page opened. */
+    private boolean isSearchResultOpenVerified(JSONObject result) {
+        if (result == null || !result.optBoolean("success", false)) return false;
+        if ("PENDING".equals(result.optString("verification", ""))) return false;
+        if (!result.optBoolean("screenChanged", false)) return false;
+        JSONObject after = result.optJSONObject("after");
+        return after != null && after.optBoolean("fresh", false);
     }
 
     private JSONObject tapSemanticElement(JSONObject args) throws Exception {
@@ -3439,6 +3508,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         String endReason = "";
         String finalReply = "";
         boolean awaitingModel;
+        boolean waitingForUser;
         boolean watchdogPrompted;
         boolean requiresPostActionInspection;
         boolean postActionInspectionPrompted;
