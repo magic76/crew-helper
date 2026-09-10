@@ -96,6 +96,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     // Observation/verification calls do not consume the mutation-action budget.
     private static final long AGENT_TASK_TIMEOUT_MS = 180_000L;
     private static final long AGENT_FINAL_RESPONSE_WAIT_MS = 12_000L;
+    private static final int AGENT_FINAL_SPEECH_MAX_RETRIES = 2;
     private static final int AGENT_MAX_TOOL_RUNS = 8;
     private static final int AGENT_MAX_MUTATION_ACTIONS = 15;
     private static final int AGENT_MAX_SCREENSHOTS = 3;
@@ -696,13 +697,15 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             }
         }
 
+        boolean responseHasToolCall = false;
         JSONObject toolCall = response.optJSONObject("toolCall");
         if (toolCall == null) toolCall = response.optJSONObject("tool_call");
         if (toolCall != null) {
             authorizationTranscript = "";
             JSONArray calls = toolCall.optJSONArray("functionCalls");
             if (calls == null) calls = toolCall.optJSONArray("function_calls");
-            if (calls != null) {
+            if (calls != null && calls.length() > 0) {
+                responseHasToolCall = true;
                 clearAgentResponseWatchdog();
                 for (int i = 0; i < calls.length(); i++) executeToolAsync(calls.getJSONObject(i));
             }
@@ -725,6 +728,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if (outputTranscript == null) outputTranscript = server.optJSONObject("output_transcription");
         if (outputTranscript != null && !outputTranscript.optString("text").isEmpty()
                 && !shouldWithholdUnverifiedAgentReply()) {
+            if (!responseHasToolCall) markAgentUserVisibleReplyProduced();
             listener.onTranscript("Gemini", outputTranscript.optString("text"));
         }
         JSONObject turn = server.optJSONObject("modelTurn");
@@ -749,10 +753,18 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                     JSONObject part = parts.getJSONObject(i);
                     JSONObject inline = part.optJSONObject("inlineData");
                     if (inline == null) inline = part.optJSONObject("inline_data");
-                    if (inline != null && inline.optString("data").length() > 0) enqueueAudio(Base64.decode(inline.getString("data"), Base64.DEFAULT));
+                    if (inline != null && inline.optString("data").length() > 0) {
+                        enqueueAudio(Base64.decode(inline.getString("data"), Base64.DEFAULT));
+                        if (!responseHasToolCall && !agentMuted) {
+                            markAgentUserVisibleReplyProduced();
+                        }
+                    }
                     if (part.optString("text").length() > 0) {
                         String modelText = part.optString("text");
-                        appendAgentFinalText(modelText);
+                        if (!responseHasToolCall) {
+                            appendAgentFinalText(modelText);
+                            markAgentUserVisibleReplyProduced();
+                        }
                         listener.onTranscript("Gemini", modelText);
                     }
                 }
@@ -771,7 +783,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 aiSpeaking = false;
                 listener.onSpeakingChanged(false);
             }
-            finishAgentTaskIfAwaitingModel();
+            if (!responseHasToolCall) finishAgentTaskIfAwaitingModel();
             if (deckAutoAdvanceActive && DeckRepository.hasActiveDeck() && !interruptedCurrentTurn && !agentMuted) {
                 scheduleDeckAutoAdvance();
             }
@@ -1420,6 +1432,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 task = activeAgentTask;
                 task.awaitingModel = true;
                 task.watchdogPrompted = false;
+                task.userVisibleReplyProducedSinceLastAction = false;
+                task.finalSpeechRetryCount = 0;
                 task.status = status == null ? "使用者已完成選擇" : status;
             }
         }
@@ -1457,6 +1471,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 task.incrementTool(name);
                 if (mutation) task.mutationActions++;
                 task.awaitingModel = false;
+                task.userVisibleReplyProducedSinceLastAction = false;
+                task.finalSpeechRetryCount = 0;
                 task.status = "Agent 第 " + task.steps + " / " + agentMaxSteps + " 步：正在執行「" + name + "」";
                 reportStage(task.status);
             }
@@ -1663,10 +1679,13 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
     private void requestAgentConclusion(AgentTaskRecord task, String reason) {
         task.awaitingModel = true;
+        task.userVisibleReplyProducedSinceLastAction = false;
+        task.finalSpeechRetryCount = 0;
         task.status = reason;
         reportStage(reason);
         sendInternalAgentDirective("【Agent 系統狀態】" + reason
                 + " 不要再呼叫工具；請以目前已知的工具結果，向使用者給出清楚、簡短的最終結論。"
+                + "這個 active task 不可靜默結束；必須輸出一個簡短 AUDIO 回覆。"
                 + "不要說『抱歉』或『對不起』；直接說明已完成的部分與目前唯一卡點。");
     }
 
@@ -1759,7 +1778,23 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     }
 
     private void appendAgentFinalText(String text) {
-        synchronized (agentLock) { if (activeAgentTask != null && activeAgentTask.awaitingModel) activeAgentTask.finalReply += text; }
+        synchronized (agentLock) {
+            if (activeAgentTask != null && activeAgentTask.awaitingModel) {
+                activeAgentTask.finalReply += text;
+            }
+        }
+    }
+
+    private void markAgentUserVisibleReplyProduced() {
+        synchronized (agentLock) {
+            if (activeAgentTask != null
+                    && activeAgentTask.awaitingModel
+                    && !activeAgentTask.finished
+                    && !activeAgentTask.cancelled) {
+                activeAgentTask.userVisibleReplyProducedSinceLastAction = true;
+                activeAgentTask.finalSpeechRetryCount = 0;
+            }
+        }
     }
 
     private boolean shouldWithholdUnverifiedAgentReply() {
@@ -1778,7 +1813,49 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             requestPostActionInspection(task);
             return;
         }
-        finishAgentTask(task, task.blockedReason == null ? "任務完成" : task.blockedReason, task.finalReply);
+        if (!agentMuted && !task.userVisibleReplyProducedSinceLastAction) {
+            requestFinalSpeechOrNextTool(task);
+            return;
+        }
+        finishAgentTask(task,
+                task.blockedReason == null ? "任務完成" : task.blockedReason,
+                task.finalReply);
+    }
+
+    /**
+     * 0045 Final Speech Contract.
+     * Silent termination is rejected: either speak one short final result or
+     * continue with exactly one next tool.
+     */
+    private void requestFinalSpeechOrNextTool(AgentTaskRecord task) {
+        int attempt;
+        synchronized (agentLock) {
+            if (activeAgentTask != task || task.finished || task.cancelled
+                    || !task.awaitingModel) return;
+
+            if (task.finalSpeechRetryCount >= AGENT_FINAL_SPEECH_MAX_RETRIES) {
+                task.status = "Agent 操作已結束，但 Gemini 未產生最終語音";
+                reportStage(task.status);
+                finishAgentTask(task, "最終語音未產生", task.finalReply);
+                return;
+            }
+
+            task.finalSpeechRetryCount++;
+            attempt = task.finalSpeechRetryCount;
+            task.watchdogPrompted = false;
+            clearAgentResponseWatchdogLocked();
+            task.status = "等待最終語音或下一個必要動作（" + attempt
+                    + "/" + AGENT_FINAL_SPEECH_MAX_RETRIES + "）";
+        }
+
+        reportStage(task.status);
+        sendInternalAgentDirective(
+                "【FINAL TURN REQUIRED】上一個 active Agent turn 沒有產生使用者可聽見的最終回覆，"
+                + "也沒有下一個工具動作。現在只能二選一："
+                + "如果任務已完成，立刻用 AUDIO 說一句簡短結果，且不要再呼叫工具；"
+                + "如果任務尚未完成，保持安靜並只呼叫一個下一步工具。"
+                + "不得再次空白結束，也不要敘述 Runtime 中間步驟。");
+        scheduleAgentResponseWatchdog(task);
     }
 
     private void requestPostActionInspection(AgentTaskRecord task) {
@@ -3273,7 +3350,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 if (!task.cancelled && !task.finished && task.blockedReason == null
                         && task.steps < agentMaxSteps && remainingMs > 0) {
                     result.put("speechPolicy",
-                            "SILENT_INTERMEDIATE: This is an internal tool result. Do not speak, apologize, summarize, or conclude. Read the result and choose the next tool only.");
+                            "CONTINUE_SILENT_OR_FINISH_SPOKEN: If another action is needed, stay silent and call exactly one next tool. If current evidence completes the user's request, call no more tools and give exactly one short spoken final result. Never end an active task silently.");
                 }
             }
         }
@@ -3612,6 +3689,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         String finalReply = "";
         boolean awaitingModel;
         boolean watchdogPrompted;
+        boolean userVisibleReplyProducedSinceLastAction;
+        int finalSpeechRetryCount;
         boolean requiresPostActionInspection;
         boolean postActionInspectionPrompted;
         boolean cancelled;
@@ -3630,7 +3709,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 json.put("taskId", taskId).put("goalId", goalId).put("goalTaskIndex", goalTaskIndex)
                         .put("startedAt", startedAt).put("steps", new JSONArray(stepsSummary))
                         .put("stepCount", steps).put("mutationActions", mutationActions)
-                        .put("endReason", endReason).put("finalReply", finalReply).put("status", status);
+                        .put("endReason", endReason).put("finalReply", finalReply).put("status", status)
+                        .put("userVisibleReplyProduced", userVisibleReplyProducedSinceLastAction)
+                        .put("finalSpeechRetryCount", finalSpeechRetryCount);
             } catch (Exception ignored) {}
             return json;
         }
