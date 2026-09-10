@@ -202,6 +202,15 @@ public class NativeLiveService extends Service {
     };
 
     static boolean isActive() { return active; }
+
+    /** Text from the floating Live console follows the identical user-turn path as speech. */
+    static boolean sendTypedLiveInstruction(String text) {
+        NativeLiveService live = instance;
+        if (!active || live == null || live.client == null || text == null || text.trim().isEmpty()) {
+            return false;
+        }
+        return live.client.sendText(text.trim());
+    }
     static boolean isAlwaysOnRunning() {
         return serviceRunning && instance != null && instance.alwaysOnEnabled;
     }

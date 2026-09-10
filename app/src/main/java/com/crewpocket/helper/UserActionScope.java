@@ -18,6 +18,9 @@ final class UserActionScope {
     private boolean searchIntent;
     private boolean openSearchResultAuthorized;
     private boolean searchResultSelectionRequested;
+    /** Zero-based explicit result choice from the current spoken request. */
+    private int requestedSearchResultOrdinal = -1;
+    private String activeSearchQuery = "";
     private String searchContinuation = "";
     private boolean searchQueryEntered;
     private boolean searchCommitted;
@@ -100,6 +103,7 @@ final class UserActionScope {
         // opening a search result. Only a post-search open/select or navigation
         // continuation grants result selection.
         searchResultSelectionRequested = resultSelection;
+        requestedSearchResultOrdinal = requestedResultOrdinal(value);
         searchContinuation = navigation
                 ? "NAVIGATE"
                 : (openResult ? "OPEN_RESULT" : "RESULT_DETAILS");
@@ -164,9 +168,36 @@ final class UserActionScope {
         return searchIntent && searchCommitted && searchResultSelectionRequested;
     }
 
+    /** Intent survives a bridge false-negative until Runtime proves commit. */
+    synchronized boolean hasSearchResultSelectionRequest() {
+        expireIfNeeded();
+        return searchIntent && searchResultSelectionRequested;
+    }
+
     synchronized String searchContinuation() {
         expireIfNeeded();
         return searchContinuation == null ? "" : searchContinuation;
+    }
+
+    synchronized int requestedSearchResultOrdinal() {
+        expireIfNeeded();
+        return requestedSearchResultOrdinal;
+    }
+
+    synchronized void setActiveSearchQuery(String query) {
+        expireIfNeeded();
+        activeSearchQuery = query == null ? "" : query.trim();
+    }
+
+    synchronized String activeSearchQuery() {
+        expireIfNeeded();
+        return activeSearchQuery == null ? "" : activeSearchQuery;
+    }
+
+    synchronized boolean isSearchResultSelectionPending() {
+        expireIfNeeded();
+        return searchIntent && searchResultSelectionRequested
+                && !searchResultSelected && !activeSearchQuery().isEmpty();
     }
 
     synchronized boolean markSearchQueryEntered() {
@@ -242,6 +273,8 @@ final class UserActionScope {
         searchIntent = false;
         openSearchResultAuthorized = false;
         searchResultSelectionRequested = false;
+        requestedSearchResultOrdinal = -1;
+        activeSearchQuery = "";
         searchContinuation = "";
         searchQueryEntered = false;
         searchCommitted = false;
@@ -306,6 +339,15 @@ final class UserActionScope {
         return containsAny(value,
                 "導航", "导航", "帶我去", "带我去", "前往", "路線到", "路线到",
                 "navigate", "navigation", "directions", "route", "goto", "takeme");
+    }
+
+    private static int requestedResultOrdinal(String value) {
+        if (value == null || value.isEmpty()) return -1;
+        if (containsAny(value, "第一個", "第1個", "第一項", "first", "1st")) return 0;
+        if (containsAny(value, "第二個", "第2個", "第二項", "second", "2nd")) return 1;
+        if (containsAny(value, "第三個", "第3個", "第三項", "third", "3rd")) return 2;
+        if (containsAny(value, "第四個", "第4個", "第四項", "fourth", "4th")) return 3;
+        return -1;
     }
 
     /**

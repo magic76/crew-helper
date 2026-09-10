@@ -25,6 +25,7 @@ import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
+import android.view.inputmethod.EditorInfo;
 import android.view.animation.DecelerateInterpolator;
 import android.view.animation.LinearInterpolator;
 import android.widget.Button;
@@ -1062,10 +1063,13 @@ public class FloatingBubbleManager {
                             dockWidth,
                             WindowManager.LayoutParams.WRAP_CONTENT,
                             overlayType,
-                            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                                    | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                            // The Live console includes an optional typed-turn
+                            // composer, so it must be able to receive IME focus.
+                            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                                    | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                             PixelFormat.TRANSLUCENT
                     );
+                    voiceControlParams.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE;
                     // Revised 0015: normalize to TOP|START so the existing
                     // FloatingPanelController can drag + persist position.
                     voiceControlParams.gravity = Gravity.TOP | Gravity.START;
@@ -1357,6 +1361,69 @@ public class FloatingBubbleManager {
                     voiceTranscriptText.setMaxLines(2);
                     voiceTranscriptText.setPadding(dp(4), dp(7), dp(4), 0);
                     dock.addView(voiceTranscriptText, new LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+                    // Typed instructions deliberately enter NativeGeminiLiveClient.sendText(),
+                    // the same pipeline used by a finalized speech transcript.  This makes
+                    // the console a reliable way to reproduce and verify Agent behavior.
+                    LinearLayout typedRow = new LinearLayout(context);
+                    typedRow.setOrientation(LinearLayout.HORIZONTAL);
+                    typedRow.setGravity(Gravity.CENTER_VERTICAL);
+                    typedRow.setPadding(dp(2), dp(9), dp(2), 0);
+
+                    final EditText typedInput = new EditText(context);
+                    typedInput.setTextSize(13);
+                    typedInput.setSingleLine(true);
+                    typedInput.setMaxLines(1);
+                    typedInput.setImeOptions(EditorInfo.IME_ACTION_SEND);
+                    typedInput.setHint("輸入指令，與語音同一路徑");
+                    typedInput.setHintTextColor(Color.parseColor("#64748B"));
+                    typedInput.setTextColor(Color.WHITE);
+                    typedInput.setPadding(dp(12), 0, dp(10), 0);
+                    GradientDrawable typedBg = new GradientDrawable();
+                    typedBg.setColor(Color.parseColor("#E60B1220"));
+                    typedBg.setCornerRadius(dp(14));
+                    typedBg.setStroke(dp(1), Color.parseColor("#334155"));
+                    typedInput.setBackground(typedBg);
+                    typedInput.setContentDescription("輸入 Live 指令");
+                    typedRow.addView(typedInput, new LinearLayout.LayoutParams(0, dp(44), 1f));
+
+                    final TextView typedSend = new TextView(context);
+                    typedSend.setText("➤");
+                    typedSend.setTextSize(20);
+                    typedSend.setGravity(Gravity.CENTER);
+                    typedSend.setTextColor(Color.WHITE);
+                    typedSend.setContentDescription("送出文字指令");
+                    GradientDrawable typedSendBg = new GradientDrawable();
+                    typedSendBg.setColor(Color.parseColor("#0D9488"));
+                    typedSendBg.setCornerRadius(dp(14));
+                    typedSend.setBackground(typedSendBg);
+                    View.OnClickListener submitTyped = new View.OnClickListener() {
+                        @Override public void onClick(View v) {
+                            String instruction = typedInput.getText().toString().trim();
+                            if (instruction.isEmpty()) return;
+                            if (!NativeLiveService.sendTypedLiveInstruction(instruction)) {
+                                Toast.makeText(context, "請先開始 Live 通話並等待連線", Toast.LENGTH_SHORT).show();
+                                return;
+                            }
+                            typedInput.setText("");
+                            vibrateShort();
+                        }
+                    };
+                    typedSend.setOnClickListener(submitTyped);
+                    typedInput.setOnEditorActionListener(new TextView.OnEditorActionListener() {
+                        @Override public boolean onEditorAction(TextView v, int actionId, android.view.KeyEvent event) {
+                            if (actionId == EditorInfo.IME_ACTION_SEND) {
+                                submitTyped.onClick(typedSend);
+                                return true;
+                            }
+                            return false;
+                        }
+                    });
+                    LinearLayout.LayoutParams typedSendLp = new LinearLayout.LayoutParams(dp(48), dp(44));
+                    typedSendLp.setMargins(dp(7), 0, 0, 0);
+                    typedRow.addView(typedSend, typedSendLp);
+                    dock.addView(typedRow, new LinearLayout.LayoutParams(
                             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
                     voiceControlView = dock;
                     voiceControlController = new FloatingPanelController(

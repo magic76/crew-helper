@@ -83,6 +83,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private volatile int lastVisionHeight = 1;
     private volatile int lastScreenWidth = 1;
     private volatile int lastScreenHeight = 1;
+    /** A vision coordinate is valid only against the exact, recent frame the model saw. */
+    private volatile long visionActionFrameId;
+    private volatile long visionActionFrameAtMs;
+    private volatile boolean visionSearchFallbackApproved;
+    private volatile boolean visionTapExecuting;
     private final Set<String> handledToolCalls = new HashSet<String>();
     /**
      * A Gemini Live function-call may be re-delivered while its first copy is
@@ -100,6 +105,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private static final int AGENT_MAX_TOOL_RUNS = 8;
     private static final int AGENT_MAX_MUTATION_ACTIONS = 15;
     private static final int AGENT_MAX_SCREENSHOTS = 3;
+    private static final int AGENT_MAX_VISION_TAPS = 2;
+    private static final long VISION_ACTION_FRAME_TTL_MS = 10_000L;
     // Navigation is deliberately repeatable during a presentation. All other
     // tools keep the conservative 3-run default safety limit.
     private static final int AGENT_DECK_NAV_MAX_RUNS = 16;
@@ -436,7 +443,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 listener.onTranscript("你", input);
                 return true;
             }
-            if (!continuation) userActionScope.updateFromUserText(input);
+            if (!continuation) {
+                visionSearchFallbackApproved = false;
+                userActionScope.updateFromUserText(input);
+            }
             listener.onTranscript("你", input);
             if (!continuation && handleRuntimeSendFromCurrentTurn()) return true;
             boolean correctionInput = correctionWindowActive && System.currentTimeMillis() <= correctionWindowUntil;
@@ -771,6 +781,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             }
 
             if (!continuation) {
+                visionSearchFallbackApproved = false;
                 userActionScope.updateFromUserText(completeUserInput);
                 if (handleRuntimeSendFromCurrentTurn()) return;
             }
@@ -1127,6 +1138,17 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 .put("parameters", new JSONObject().put("type", "OBJECT")
                         .put("properties", phoneActionProperties)
                         .put("required", new JSONArray().put("action"))));
+        tools.put(new JSONObject().put("name", "view_screen").put("description",
+                "Controlled visual fallback. Use only when Runtime says semantic result selection is unsupported or current Accessibility semantics are insufficient. Captures one current screen frame and returns a short-lived frame_id. Never use this to replace normal Runtime search selection.")
+                .put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject())));
+        tools.put(new JSONObject().put("name", "vision_tap").put("description",
+                "Controlled visual fallback tap. Only after a successful view_screen in this same moment, using its unexpired frame_id and normalized x/y (0-1000). One exact visible target only. Runtime verifies after the tap. Never use while Runtime owns a pending search-result selection, and never retry blindly.")
+                .put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject()
+                        .put("frame_id", new JSONObject().put("type", "INTEGER").put("description", "The exact frame_id returned by the latest view_screen."))
+                        .put("x", new JSONObject().put("type", "INTEGER").put("description", "Horizontal coordinate normalized 0-1000."))
+                        .put("y", new JSONObject().put("type", "INTEGER").put("description", "Vertical coordinate normalized 0-1000."))
+                        .put("label", new JSONObject().put("type", "STRING").put("description", "Short visible target label used only for safety and logs.")))
+                        .put("required", new JSONArray().put("frame_id").put("x").put("y"))));
         tools.put(new JSONObject().put("name", "inspect_ui").put("description",
                 "FALLBACK OBSERVATION ONLY. Do NOT call after STEP_OK when result.after.fresh=true and verification is not PENDING; Runtime already auto-observed the new screen. Call inspect_ui only when there is no trustworthy current/after state, verification=PENDING, Runtime explicitly requires observation after STEP_FAILED, or semantics are insufficient. It returns a compact screen for exactly one next phone_action."));
         tools.put(new JSONObject().put("name", "wait").put("description",
@@ -1231,6 +1253,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private boolean isCoreModelTool(String name) {
         return "phone_action".equals(name)
                 || "send_text".equals(name)
+                || "view_screen".equals(name)
+                || "vision_tap".equals(name)
                 || "end_voice_session".equals(name);
     }
 
@@ -1407,6 +1431,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             }
             else if (SemanticPhoneAction.ERROR_TOOL.equals(name)) result = args;
             else if ("take_screenshot".equals(name)) result = captureAndSendScreen();
+            else if ("view_screen".equals(name)) result = requestVisionScreen();
+            else if ("vision_tap".equals(name)) result = tapFromVision(args);
             else if ("inspect_ui".equals(name)) result = inspectUi(args);
             else if ("tap_element".equals(name)) result = tapSemanticElement(args);
             else if ("wait".equals(name)) result = waitForCondition(args);
@@ -1512,7 +1538,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             if (System.currentTimeMillis() - task.startedAt > AGENT_TASK_TIMEOUT_MS) task.blockedReason = "本次 Agent 任務已逾時（180 秒），請以目前已知結果作結論。";
             else if (task.steps >= agentMaxSteps) task.blockedReason = "已達本次自動執行步數上限（" + agentMaxSteps + " 步），請以目前已知結果作結論。";
             else if (!observation && signature.equals(task.lastSignature)) task.blockedReason = "偵測到相同動作與參數連續重複呼叫，請先重新觀察畫面並改用替代方案。";
-            else if ("take_screenshot".equals(name) && task.getToolCount(name) >= AGENT_MAX_SCREENSHOTS) task.blockedReason = "截圖已達本次任務上限，請改用 Accessibility 畫面狀態或作結論。";
+            else if (("take_screenshot".equals(name) || "view_screen".equals(name)) && task.getToolCount(name) >= AGENT_MAX_SCREENSHOTS) task.blockedReason = "截圖已達本次任務上限，請改用 Accessibility 畫面狀態或作結論。";
+            else if ("vision_tap".equals(name) && task.getToolCount(name) >= AGENT_MAX_VISION_TAPS) task.blockedReason = "視覺點擊已達本次任務上限，請依驗證結果作結論或請使用者協助。";
             else if (!observation && task.getToolCount(name) >= maxRunsForTool(name)) task.blockedReason = "工具「" + name + "」已達本次任務最多 " + maxRunsForTool(name) + " 次執行限制，請改用替代方案或作結論。";
             else if (mutation && task.mutationActions >= AGENT_MAX_MUTATION_ACTIONS) task.blockedReason = "已達本次任務實際操作上限（" + AGENT_MAX_MUTATION_ACTIONS + " 次），請以目前結果作結論。";
             if (task.blockedReason == null) {
@@ -1532,6 +1559,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private boolean isObservationTool(String name) {
         return "inspect_ui".equals(name)
                 || "wait".equals(name)
+                || "view_screen".equals(name)
                 || "teach_ui_element".equals(name)
                 || "list_active_schedules".equals(name)
                 || "list_memory_rules".equals(name)
@@ -1591,6 +1619,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 || "type_text".equals(name)
                 || "search_current_app".equals(name)
                 || "send_text".equals(name)
+                || "vision_tap".equals(name)
                 || "press_key".equals(name);
     }
 
@@ -2134,6 +2163,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             return runtimeBlocked("SEND_NOT_AUTHORIZED_BY_LATEST_USER_TURN",
                     "最新一句沒有明確要求傳送/回覆訊息；禁止點擊 Send。");
         }
+        if (!pendingChoiceExecuting && !visionTapExecuting
+                && userActionScope.isSearchResultSelectionPending()) {
+            return resumeRuntimeSearchSelection();
+        }
         if (!pendingChoiceExecuting
                 && userActionScope.shouldBlockTapForSearch(tapMeta, label.isEmpty() && id.isEmpty())) {
             return runtimeBlocked("SEARCH_SCOPE_RESULT_OPEN_NOT_AUTHORIZED",
@@ -2245,7 +2278,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
         String state = analysis.optString("state", "");
         if ("UNSUPPORTED".equals(state)) {
-            return observed.put("searchSelectionRuntime", "UNSUPPORTED_FOR_PACKAGE");
+            return observed.put("searchSelectionRuntime", "UNSUPPORTED_FOR_PACKAGE")
+                    .put("taskState", "IN_PROGRESS")
+                    .put("instruction",
+                            "Runtime 尚未能讀到可排序的搜尋結果列；禁止泛用 TAP 或重新搜尋，等待結果列或使用視覺 fallback。");
         }
 
         if (!"READY".equals(state)) {
@@ -2267,6 +2303,17 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                     .put("taskState", "IN_PROGRESS");
         }
 
+        int requestedOrdinal = userActionScope.requestedSearchResultOrdinal();
+        if (requestedOrdinal >= 0 && requestedOrdinal < count) {
+            JSONObject requested = rawOptions.optJSONObject(requestedOrdinal);
+            if (requested == null) {
+                return observed.put("searchSelection", "WAITING_RESULTS")
+                        .put("taskState", "IN_PROGRESS");
+            }
+            return selectSearchResultCandidate(requested, observed,
+                    "使用者明確指定第 " + (requestedOrdinal + 1) + " 筆結果");
+        }
+
         if (count == 1) {
             JSONObject only = rawOptions.optJSONObject(0);
             boolean strong = only != null
@@ -2282,23 +2329,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                                 "只找到一個結果列，但名稱與查詢不夠吻合；Runtime 不會猜。請簡短請使用者確認或說更完整名稱。");
             }
 
-            JSONObject selected = tapSemanticElement(
-                    new JSONObject().put("element_id",
-                            only.optString("elementId", "")));
-            boolean verifiedOpen = isSearchResultOpenVerified(selected);
-            if (verifiedOpen) {
-                userActionScope.markSearchResultSelected(
-                        only.optString("label", ""));
-            }
-            selected.put("searchSelection", verifiedOpen ? "RESULT_OPEN_VERIFIED" : "RESULT_SELECTION_DISPATCHED")
-                    .put("selectedSearchResult", only.optString("label", ""))
-                    .put("continuation", userActionScope.searchContinuation())
-                    .put("taskState", "IN_PROGRESS")
-                    .put("instruction",
-                            verifiedOpen
-                            ? "Runtime 已確認唯一搜尋結果已打開。不要重新搜尋；依最新畫面繼續原始 continuation。"
-                            : "結果點擊已送出但尚未證明已打開；不要宣告已選定、不要重新搜尋，先依最新畫面驗證。 ");
-            return selected;
+            return selectSearchResultCandidate(only, observed, "唯一高信心搜尋結果");
         }
 
         ArrayList<PendingUiChoice.Option> options =
@@ -2368,6 +2399,36 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 .put("choices", compact)
                 .put("instruction",
                         "已顯示「選擇搜尋結果」。等待使用者點選或說第一個/第二個/結果名稱；等待期間禁止任何手機 mutation。");
+    }
+
+    /** Uses the just-read candidate element; never delegates an ordinal to model TAP. */
+    private JSONObject selectSearchResultCandidate(JSONObject candidate,
+                                                    JSONObject observed,
+                                                    String selectionReason) throws Exception {
+        String elementId = candidate == null ? "" : candidate.optString("elementId", "");
+        String label = candidate == null ? "" : candidate.optString("label", "");
+        if (elementId.isEmpty()) {
+            return observed.put("searchSelection", "WAITING_RESULTS")
+                    .put("taskState", "IN_PROGRESS");
+        }
+        pendingChoiceExecuting = true;
+        JSONObject selected;
+        try {
+            selected = tapSemanticElement(new JSONObject().put("element_id", elementId));
+        } finally {
+            pendingChoiceExecuting = false;
+        }
+        boolean verifiedOpen = isSearchResultOpenVerified(selected);
+        if (verifiedOpen) userActionScope.markSearchResultSelected(label);
+        selected.put("searchSelection", verifiedOpen ? "RESULT_OPEN_VERIFIED" : "RESULT_SELECTION_DISPATCHED")
+                .put("selectedSearchResult", label)
+                .put("selectionReason", selectionReason)
+                .put("continuation", userActionScope.searchContinuation())
+                .put("taskState", "IN_PROGRESS")
+                .put("instruction", verifiedOpen
+                        ? "Runtime 已確認指定搜尋結果已打開。不要重新搜尋；依最新畫面繼續原始 continuation。"
+                        : "Runtime 已點擊剛解析的搜尋結果，但尚未證明已打開；不要重新搜尋或泛用 TAP，先依最新畫面驗證。");
+        return selected;
     }
 
     private boolean hasPendingUiChoice() {
@@ -2526,6 +2587,16 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         return after != null && after.optBoolean("fresh", false);
     }
 
+    /** Keeps model TAP out of a search transaction until Runtime owns a result. */
+    private JSONObject resumeRuntimeSearchSelection() throws Exception {
+        String query = userActionScope.activeSearchQuery();
+        JSONObject observed = readSemanticScreenQuietly();
+        if (observed == null) observed = new JSONObject();
+        observed.put("searchTransaction", "RUNTIME_SELECTION_PENDING")
+                .put("taskState", "IN_PROGRESS");
+        return resolveCommittedSearchSelection(query, observed);
+    }
+
     private JSONObject tapSemanticElement(JSONObject args) throws Exception {
         String elementId = args == null ? "" : args.optString("element_id", "").trim();
         if (elementId.isEmpty()) return new JSONObject().put("success", false).put("error", "MISSING_ELEMENT_ID");
@@ -2534,6 +2605,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if (UserActionScope.looksLikeSendTarget(elementMeta) && !userActionScope.canSend()) {
             return runtimeBlocked("SEND_NOT_AUTHORIZED_BY_LATEST_USER_TURN",
                     "最新一句沒有明確要求傳送/回覆訊息；禁止點擊 Send。");
+        }
+        if (!pendingChoiceExecuting && !visionTapExecuting
+                && userActionScope.isSearchResultSelectionPending()) {
+            return resumeRuntimeSearchSelection();
         }
         if (!pendingChoiceExecuting
                 && userActionScope.shouldBlockTapForSearch(elementMeta, elementMeta.isEmpty())) {
@@ -3155,12 +3230,41 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                             + "請依目前 Maps 畫面執行 continuation（例如導航）。");
         }
 
+        // The first result tap may still be visually settling.  A weak model
+        // often responds to that transient state by issuing SEARCH again,
+        // which erases a perfectly good Maps detail page.  This is an active
+        // Runtime transaction, so re-observe/select it instead of touching
+        // the search field. A new user utterance resets UserActionScope and
+        // is therefore not blocked by this guard.
+        if (userActionScope.isSearchResultSelectionPending()) {
+            return resumeRuntimeSearchSelection()
+                    .put("searchTransaction", "RESULT_SELECTION_PENDING")
+                    .put("instruction",
+                            "搜尋結果選擇仍在驗證中；禁止重新搜尋或重新輸入查詢。"
+                            + "Runtime 會依目前畫面繼續驗證或提供受控視覺 fallback。");
+        }
+
         userActionScope.markSearchQueryEntered();
+        userActionScope.setActiveSearchQuery(text);
         JSONObject reply = helperPost("/search_in_app", new JSONObject().put("query", text));
         workingContext.recordAction("app_search",
                 reply.optBoolean("success", false) ? "submitted" : "failed");
         JSONObject observed = autoObserveAfterMutation(reply, "search_current_app");
         if (!reply.optBoolean("success", false)) {
+            // The bridge can time out after Android already accepted the input.
+            // autoObserveAfterMutation may already have reconciled that raw
+            // false-negative to STEP_OK from a fresh post-action screen. That
+            // is a committed search transaction too; otherwise weak models
+            // escape into generic TAP while Maps is displaying results.
+            boolean reconciledCommitted = observed.optBoolean("success", false)
+                    && "STEP_OK".equals(observed.optString("stepResult", ""));
+            if (userActionScope.hasSearchResultSelectionRequest()
+                    && reconciledCommitted) {
+                userActionScope.markSearchCommitted();
+                observed.put("searchTransaction", "COMMIT_UNCONFIRMED")
+                        .put("taskState", "IN_PROGRESS");
+                return resolveCommittedSearchSelection(text, observed);
+            }
             observed.put("instruction",
                     "Runtime 沒有確認文字輸入成功；請依 after 最新畫面改用不同方法，不要宣稱已搜尋。");
             return observed;
@@ -3179,6 +3283,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                     .put("typed", true).put("committed", false)
                     .put("taskState", "IN_PROGRESS")
                     .put("instruction", "搜尋文字已確認輸入；請根據 after 畫面判斷是否已有結果或可用搜尋鍵。");
+            if (userActionScope.shouldSelectSearchResult()) {
+                return resolveCommittedSearchSelection(text, observed);
+            }
         }
         return observed;
     }
@@ -3280,6 +3387,82 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if (path.isEmpty()) return new JSONObject().put("success", false).put("error", "截圖未提供檔案路徑");
         if (!sendImageFile(path, true)) return new JSONObject().put("success", false).put("error", "截圖已取得，但 Gemini 連線不可用");
         return new JSONObject().put("success", true).put("silent", capture.optBoolean("silent")).put("message", "最新手機螢幕已傳送，請只依這張畫面回答。");
+    }
+
+    /** Gives the model one expiring visual reference; it is not a general screen-stream. */
+    private JSONObject requestVisionScreen() throws Exception {
+        if (hasPendingUiChoice() || pendingChoiceExecuting) {
+            return new JSONObject().put("success", false).put("taskState", "WAITING_USER")
+                    .put("error", "WAITING_FOR_USER_CHOICE")
+                    .put("instruction", "使用者正在選擇搜尋結果；不可改用視覺點擊。");
+        }
+        if (userActionScope.isSearchResultSelectionPending()) {
+            JSONObject selection = resumeRuntimeSearchSelection();
+            if (!"UNSUPPORTED_FOR_PACKAGE".equals(
+                    selection.optString("searchSelectionRuntime", ""))) {
+                return selection.put("visionFallback", "DEFERRED_TO_RUNTIME_SELECTION");
+            }
+            // Accessibility has explicitly yielded. Permit a tightly scoped
+            // visual alternative for this one search transaction only.
+            visionSearchFallbackApproved = true;
+        }
+        JSONObject result = captureAndSendScreen();
+        if (!result.optBoolean("success", false)) return result;
+        long frameId = ++visionActionFrameId;
+        visionActionFrameAtMs = System.currentTimeMillis();
+        return result.put("frame_id", frameId)
+                .put("coordinate_space", "normalized_1000")
+                .put("expires_in_ms", VISION_ACTION_FRAME_TTL_MS)
+                .put("instruction", "只可對這張剛傳送的畫面使用一次 vision_tap；螢幕一變或逾時就重新查看。正常搜尋結果優先交給 Runtime 選擇器。");
+    }
+
+    /** Converts a fresh visual coordinate into the existing guarded tap path. */
+    private JSONObject tapFromVision(JSONObject args) throws Exception {
+        if (hasPendingUiChoice() || pendingChoiceExecuting) {
+            return new JSONObject().put("success", false).put("taskState", "WAITING_USER")
+                    .put("error", "WAITING_FOR_USER_CHOICE");
+        }
+        if (userActionScope.isSearchResultSelectionPending() && !visionSearchFallbackApproved) {
+            return resumeRuntimeSearchSelection().put("visionTap", "BLOCKED_RUNTIME_SELECTION_OWNS_SEARCH");
+        }
+        long requestedFrame = args == null ? -1L : args.optLong("frame_id", -1L);
+        long age = System.currentTimeMillis() - visionActionFrameAtMs;
+        if (requestedFrame <= 0L || requestedFrame != visionActionFrameId || age < 0L
+                || age > VISION_ACTION_FRAME_TTL_MS) {
+            return new JSONObject().put("success", false).put("stepResult", "STEP_FAILED")
+                    .put("error", "VISION_FRAME_EXPIRED")
+                    .put("instruction", "畫面參考已過期或不符；先 view_screen，禁止依舊畫面座標點擊。");
+        }
+        int x = args.optInt("x", -1);
+        int y = args.optInt("y", -1);
+        String label = args.optString("label", "").trim();
+        if (x < 0 || x > 1000 || y < 0 || y > 1000) {
+            return new JSONObject().put("success", false).put("stepResult", "STEP_FAILED")
+                    .put("error", "INVALID_VISION_COORDINATES");
+        }
+        if (ActionSafetyPolicy.blocks(label)) {
+            return runtimeBlocked("VISION_TAP_SENSITIVE_TARGET",
+                    "視覺點擊目標涉及敏感操作，請交由使用者手動完成。");
+        }
+        // Consume before dispatch: one frame cannot be replayed into repeated taps.
+        visionActionFrameAtMs = 0L;
+        JSONObject result;
+        visionTapExecuting = true;
+        try {
+            result = tap(new JSONObject().put("x", x).put("y", y)
+                    .put("coordinate_space", "normalized_1000").put("label", label));
+        } finally {
+            visionTapExecuting = false;
+        }
+        if (userActionScope.isSearchResultSelectionPending()
+                && isSearchResultOpenVerified(result)) {
+            userActionScope.markSearchResultSelected(label);
+            visionSearchFallbackApproved = false;
+            result.put("searchSelection", "RESULT_OPEN_VERIFIED")
+                    .put("continuation", userActionScope.searchContinuation());
+        }
+        result.put("visionFrameId", requestedFrame).put("visionTap", "DISPATCHED");
+        return result;
     }
 
     private boolean sendImageFile(String path, boolean isScreenFrame) throws Exception {
