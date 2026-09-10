@@ -4,6 +4,9 @@ import android.content.Context;
 import android.content.SharedPreferences;
 
 public class AppConfig {
+    /** A/B switch: change to false and rebuild to restore legacy conversation handling. */
+    public static final boolean SIMPLE_CONVERSATION_MODE = true;
+
     public static final String PREFS_NAME = "crew_helper_config";
     public static final String KEY_GEMINI_API_KEY = "gemini_api_key";
     public static final String KEY_SERVER_URL = "custom_server_url";

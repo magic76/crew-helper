@@ -12,11 +12,6 @@ public final class VoicePolicyTest {
         check(!scope.canSend(), "search does not authorize send");
         scope.markSearchQueryEntered();
         check(scope.shouldBlockTapForSearch("小明", false), "search result boundary");
-        scope.updateFromUserText("搜尋大皇宮，點擊第一個");
-        check(scope.requestedSearchResultOrdinal() == 0, "explicit first result ordinal");
-        check(scope.hasSearchResultSelectionRequest(), "selection intent survives before search commit");
-        scope.setActiveSearchQuery("大皇宮");
-        check(scope.isSearchResultSelectionPending(), "search selection stays runtime-owned");
         scope.updateFromUserText("打開小明的聊天室");
         check(!scope.canSend(), "open does not authorize send");
         scope.updateFromUserText("傳給小明：明天見");

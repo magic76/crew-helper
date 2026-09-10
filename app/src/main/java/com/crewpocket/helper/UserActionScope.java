@@ -67,6 +67,11 @@ final class UserActionScope {
         return draft;
     }
 
+    // Compatibility with the Runtime send path. This simplified-conversation
+    // bundle does not retain a second-turn confirmation draft.
+    synchronized SendDraft consumeConfirmedSendDraft() { return null; }
+    synchronized boolean hasAwaitingSendConfirmation() { return false; }
+
     private void update(String text) {
         String value = normalize(text);
 
