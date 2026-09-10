@@ -11,7 +11,6 @@ package com.crewpocket.helper;
  */
 final class UserActionScope {
     private static final long SCOPE_TTL_MS = 120_000L;
-    private static final long SEND_CONFIRMATION_TTL_MS = 30_000L;
 
     private boolean sendAuthorized;
     private boolean sendRecipientRequired;
@@ -36,12 +35,6 @@ final class UserActionScope {
         }
     }
     private SendDraft directSendDraft;
-    private SendDraft awaitingSendConfirmation;
-    private boolean pendingSendConfirmed;
-    private long pendingSendAtMs;
-    /** One short user phrase awaiting a constrained LLM yes/no classification. */
-    private String pendingSendLlmReviewUtterance = "";
-    private boolean pendingSendLlmDecisionInFlight;
 
     private static final class SendGrant {
         boolean authorized;
@@ -71,73 +64,8 @@ final class UserActionScope {
         return draft;
     }
 
-    synchronized SendDraft consumeConfirmedSendDraft() {
-        expireIfNeeded();
-        if (!pendingSendConfirmed || awaitingSendConfirmation == null) return null;
-        SendDraft draft = awaitingSendConfirmation;
-        clearPendingSendDraft();
-        return draft;
-    }
-
-    synchronized boolean hasAwaitingSendConfirmation() {
-        expireIfNeeded();
-        return awaitingSendConfirmation != null && !pendingSendConfirmed;
-    }
-
-    synchronized String consumePendingSendLlmReviewUtterance() {
-        expireIfNeeded();
-        String utterance = pendingSendLlmReviewUtterance;
-        pendingSendLlmReviewUtterance = "";
-        return utterance == null ? "" : utterance;
-    }
-
-    synchronized boolean hasPendingSendLlmReview() {
-        expireIfNeeded();
-        return awaitingSendConfirmation != null && pendingSendLlmDecisionInFlight;
-    }
-
-    synchronized SendDraft consumeLlmApprovedSendDraft() {
-        expireIfNeeded();
-        if (awaitingSendConfirmation == null || pendingSendConfirmed) return null;
-        SendDraft draft = awaitingSendConfirmation;
-        clearPendingSendDraft();
-        return draft;
-    }
-
     private void update(String text) {
         String value = normalize(text);
-
-        // A confirmation is meaningful only while there is one short-lived,
-        // Runtime-captured draft.  Do this before clearing normal turn grants:
-        // otherwise "確認" becomes a new empty intent and the weak model asks
-        // the same question forever.
-        if (awaitingSendConfirmation != null) {
-            if (isSendConfirmation(value)) {
-                pendingSendConfirmed = true;
-                sendAuthorized = true;
-                sendRecipientRequired = true;
-                sendRecipient = awaitingSendConfirmation.recipient;
-                updatedAtMs = System.currentTimeMillis();
-                return;
-            }
-            if (isSendCancellation(value)) {
-                clearActionGrants();
-                updatedAtMs = System.currentTimeMillis();
-                return;
-            }
-            if (isPotentialSendConfirmation(value)) {
-                // Keep the draft in Runtime. The client gives the LLM only a
-                // constrained yes/no decision; it never receives send power
-                // outside this short-lived pending transaction.
-                pendingSendLlmReviewUtterance = text == null ? "" : text.trim();
-                pendingSendLlmDecisionInFlight = true;
-                updatedAtMs = System.currentTimeMillis();
-                return;
-            }
-            // Any other new sentence replaces the pending send. Never apply an
-            // old confirmation to a later task.
-            clearPendingSendDraft();
-        }
 
         // Fail closed on negated / hypothetical / explanatory discussions.
         if (containsAny(value, "不要", "別", "不用", "取消", "停止", "怎麼", "如何", "如果", "假如",
@@ -148,7 +76,6 @@ final class UserActionScope {
         }
 
         SendDraft direct = parseDirectSendDraft(text);
-        SendDraft confirmable = direct == null ? parseConfirmableSendDraft(text) : null;
 
         endCallAuthorized = value.matches("(?:請|幫我|请|帮我)?(?:結束通話|结束通话|掛斷電話|挂断电话|退出語音助理|退出语音助理)(?:吧|謝謝|谢谢)?")
                 || value.matches("(?:please)?(?:endthecall|hangup|exitthevoiceassistant)(?:please)?");
@@ -168,11 +95,6 @@ final class UserActionScope {
         sendRecipientRequired = grant.recipientRequired;
         sendRecipient = grant.recipient;
         directSendDraft = direct;
-        if (confirmable != null) {
-            awaitingSendConfirmation = confirmable;
-            pendingSendConfirmed = false;
-            pendingSendAtMs = System.currentTimeMillis();
-        }
         searchIntent = search;
         // App launch ("open Maps, search X") must not silently authorize
         // opening a search result. Only a post-search open/select or navigation
@@ -310,10 +232,6 @@ final class UserActionScope {
             clearActionGrants();
             updatedAtMs = 0L;
         }
-        if (awaitingSendConfirmation != null
-                && (System.currentTimeMillis() - pendingSendAtMs > SEND_CONFIRMATION_TTL_MS)) {
-            clearPendingSendDraft();
-        }
     }
 
     private void clearActionGrants() {
@@ -330,34 +248,6 @@ final class UserActionScope {
         searchResultSelected = false;
         selectedSearchResult = "";
         directSendDraft = null;
-        clearPendingSendDraft();
-    }
-
-    private void clearPendingSendDraft() {
-        awaitingSendConfirmation = null;
-        pendingSendConfirmed = false;
-        pendingSendAtMs = 0L;
-        pendingSendLlmReviewUtterance = "";
-        pendingSendLlmDecisionInFlight = false;
-    }
-
-    private static boolean isSendConfirmation(String value) {
-        return value.matches("(?:(?:請|请|幫我|帮我|我)?(?:確認|确定)(?:送出|傳送|发送|發送)?|"
-                + "(?:請|请|幫我|帮我)?(?:是|對|对|好的|好啊|好|可以|可以了|送出|傳送|发送|發送)|"
-                + "yes|confirm|send)");
-    }
-
-    private static boolean isSendCancellation(String value) {
-        return value.matches("(?:取消|不要|別送|别送|停止|cancel|stop)");
-    }
-
-    private static boolean isPotentialSendConfirmation(String value) {
-        if (value == null || value.length() < 2 || value.length() > 24) return false;
-        // A new task must replace the draft rather than being handed to the
-        // LLM confirmation classifier.
-        return !containsAny(value,
-                "打開", "打开", "開啟", "开启", "搜尋", "搜索", "查找", "導航", "导航",
-                "傳給", "传给", "訊息", "讯息", "消息", "search", "open", "navigate");
     }
 
     /**
@@ -368,18 +258,6 @@ final class UserActionScope {
         if (raw == null) return null;
         java.util.regex.Matcher matcher = java.util.regex.Pattern.compile(
                 "^\\s*(?:請|请|幫我|帮我)?\\s*(?:傳|传|發|发)(?:訊息|讯息|消息)?\\s*(?:給|给)\\s*([^\\s：:，,。！？!]+)\\s*(?:說|说|內容|内容|[:：])\\s*(.+?)\\s*$")
-                .matcher(raw);
-        if (!matcher.matches()) return null;
-        String recipient = cleanRecipient(matcher.group(1));
-        String body = matcher.group(2) == null ? "" : matcher.group(2).trim();
-        return recipient.isEmpty() || body.isEmpty() ? null : new SendDraft(recipient, body);
-    }
-
-    /** Natural but less explicit wording gets exactly one Runtime confirmation. */
-    private static SendDraft parseConfirmableSendDraft(String raw) {
-        if (raw == null) return null;
-        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile(
-                "^\\s*(?:請|请|幫我|帮我)?\\s*(?:跟|向|對|对|告訴|告诉)\\s*([^\\s：:，,。！？!]+)\\s*(?:說|说|[:：])\\s*(.+?)\\s*$")
                 .matcher(raw);
         if (!matcher.matches()) return null;
         String recipient = cleanRecipient(matcher.group(1));

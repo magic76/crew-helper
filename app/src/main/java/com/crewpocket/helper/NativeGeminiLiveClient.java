@@ -40,7 +40,6 @@ import okio.ByteString;
 final class NativeGeminiLiveClient extends WebSocketListener {
     private static final String TAG = "CrewNativeLive";
     /** Internal-only token; not a user message and not part of the tool schema. */
-    private static final String PENDING_SEND_CONFIRM_TOKEN = "__RUNTIME_PENDING_SEND_CONFIRM__";
     interface Listener {
         void onStatus(String text);
         void onStopped(String reason);
@@ -340,10 +339,76 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             coalescedToolCallRecipients.clear();
         }
         supersedeActiveAgentTaskForNewUserInstruction();
-        // Keep current app/screen, but never feed a new goal the previous
-        // task's actions/results/pending state.
-        workingContext.resetTransientForNewGoal();
         Log.d(TAG, "新的使用者意圖：generation=" + userIntentGeneration);
+    }
+
+    /** Short follow-ups should retain the active task instead of erasing its evidence. */
+    private boolean isLikelyTaskContinuation(String input) {
+        if (input == null || !hasActiveAgentTask()) return false;
+        String value = TextMatch.caseFold(input).replaceAll("[\\s，,。！？!？:：]", "");
+        if (value.isEmpty() || value.length() > 28) return false;
+        return value.matches("(?:第?[一二三四五六七八九0-9]+個?|first|second|third|[1-9])")
+                || value.matches("(?:繼續|继续|下一步|下一個|下一个|上一個|上一个|這個|这个|那個|那个|對|对|好|可以|不要這個|不要这个|不是這個|不是这个)")
+                || value.startsWith("改成") || value.startsWith("改為") || value.startsWith("改为");
+    }
+
+    private void beginTaskContinuation(String input) {
+        synchronized (agentLock) {
+            userIntentGeneration++;
+            pendingToolCalls.clear();
+            inFlightToolSignatures.clear();
+            primaryToolCallSignatures.clear();
+            coalescedToolCallRecipients.clear();
+            if (activeAgentTask != null && !activeAgentTask.finished) {
+                activeAgentTask.status = "使用者補充目前任務";
+            }
+        }
+        workingContext.setPendingTask("承接：" + (input == null ? "" : input.trim()));
+        touchConversationGoal(workingContext.toModelJson().optString("goal", ""));
+        Log.d(TAG, "承接目前使用者意圖：generation=" + userIntentGeneration);
+    }
+
+    private void injectContinuationContext() {
+        JSONObject snapshot = workingContext.toModelJson();
+        String compact = snapshot.toString();
+        if (compact.length() > 1000) compact = compact.substring(0, 1000);
+        sendInternalAgentDirective("【Runtime 任務承接】使用者剛說的是目前任務的承接／修正，不是新任務。"
+                + "保留原目標與已驗證結果。當前任務摘要=" + compact
+                + "。只依此與最新使用者語句決定一個下一步，不要重新開始。 ");
+    }
+
+    String getAgentDebugSummary() {
+        JSONObject context = workingContext.toModelJson();
+        synchronized (agentLock) {
+            String goal = context.optString("goal", "—");
+            String app = context.optString("currentApp", "—");
+            String pending = context.optString("pendingTask", "");
+            String actions = renderActionHistory(context.optJSONArray("lastActions"));
+            if (activeAgentTask == null || activeAgentTask.finished) {
+                return "任務：待命\n目標：" + goal + "\nApp：" + app + "\n最近：" + actions;
+            }
+            AgentTaskRecord task = activeAgentTask;
+            String state = task.status == null || task.status.isEmpty()
+                    ? (task.waitingForUser ? "等待你的選擇"
+                    : (task.awaitingModel ? "模型正在決定下一步" : "Runtime 執行中"))
+                    : task.status;
+            return "任務：" + task.taskId + " · " + task.steps + "/" + agentMaxSteps
+                    + "\n目標：" + goal + "\n階段：" + state
+                    + "\nApp：" + app + "\n最近：" + actions
+                    + (pending.isEmpty() ? "" : "\n承接：" + pending);
+        }
+    }
+
+    private static String renderActionHistory(JSONArray actions) {
+        if (actions == null || actions.length() == 0) return "—";
+        StringBuilder text = new StringBuilder();
+        for (int i = 0; i < actions.length(); i++) {
+            String action = actions.optString(i, "");
+            if (action.isEmpty()) continue;
+            if (text.length() > 0) text.append(" → ");
+            text.append(action);
+        }
+        return text.length() == 0 ? "—" : text.toString();
     }
 
     private boolean isCurrentUserIntent(long generation) {
@@ -359,15 +424,21 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             if (consumePendingUiChoiceInput(input)) return true;
             if (hasPendingUiChoice()) clearPendingUiChoiceSilently();
 
-            beginNewUserIntent();
-            workingContext.setGoalHint(input);
-            if (processMemoryRuleInput(input)) {
+            boolean continuation = isLikelyTaskContinuation(input);
+            if (continuation) {
+                beginTaskContinuation(input);
+                injectContinuationContext();
+            } else {
+                beginNewUserIntent();
+                workingContext.beginNewGoal(input);
+            }
+            if (!continuation && processMemoryRuleInput(input)) {
                 listener.onTranscript("你", input);
                 return true;
             }
-            userActionScope.updateFromUserText(input);
+            if (!continuation) userActionScope.updateFromUserText(input);
             listener.onTranscript("你", input);
-            if (handleRuntimeSendFromCurrentTurn()) return true;
+            if (!continuation && handleRuntimeSendFromCurrentTurn()) return true;
             boolean correctionInput = correctionWindowActive && System.currentTimeMillis() <= correctionWindowUntil;
             if (correctionInput) consumeCorrectionWindowOnUserSpeech(text.trim());
             JSONObject part = new JSONObject().put("text", text.trim());
@@ -678,23 +749,31 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             // Any other utterance replaces the pending choice/task.
             if (hasPendingUiChoice()) clearPendingUiChoiceSilently();
 
-            beginNewUserIntent();
-            workingContext.setGoalHint(completeUserInput);
+            boolean continuation = isLikelyTaskContinuation(completeUserInput);
+            if (continuation) {
+                beginTaskContinuation(completeUserInput);
+                injectContinuationContext();
+            } else {
+                beginNewUserIntent();
+                workingContext.beginNewGoal(completeUserInput);
+            }
 
             // Runtime-owned App/recorded shortcuts must claim the finalized
             // utterance before same-frame Gemini tool calls can compete with
             // them. This call was accidentally omitted from the transcript
             // entry point, which made saved App commands (for example WEA)
             // look as though they had never been learned.
-            if (processMemoryRuleInput(completeUserInput)) return;
+            if (!continuation && processMemoryRuleInput(completeUserInput)) return;
 
             authorizationTranscript = completeUserInput;
             if (authorizationTranscript.length() > 4096) {
                 authorizationTranscript = authorizationTranscript.substring(0, 4096);
             }
 
-            userActionScope.updateFromUserText(completeUserInput);
-            if (handleRuntimeSendFromCurrentTurn()) return;
+            if (!continuation) {
+                userActionScope.updateFromUserText(completeUserInput);
+                if (handleRuntimeSendFromCurrentTurn()) return;
+            }
             if (isStopAgentTaskPhrase(completeUserInput)) {
                 cancelAgentTask("使用者語音停止任務");
             }
@@ -1259,13 +1338,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         final String name = semantic.runtimeName;
         final JSONObject args = semantic.runtimeArgs;
 
-        if (userActionScope.hasPendingSendLlmReview()
-                && isMutationTool(name) && !"send_text".equals(name)) {
-            sendBlockedToolResponse(id, requestedName,
-                    "PENDING_SEND_LLM_DECISION：Runtime 正在等待 LLM 對使用者確認語句作受限判斷；禁止其他操作。");
-            return;
-        }
-
         if ((runtimeShortcutExecuting
                 || System.currentTimeMillis() < runtimeShortcutGuardUntil)
                 && isMutationTool(name)) {
@@ -1450,6 +1522,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 if (mutation) task.mutationActions++;
                 task.awaitingModel = false;
                 task.status = "Agent 第 " + task.steps + " / " + agentMaxSteps + " 步：正在執行「" + name + "」";
+                workingContext.setPendingTask("");
                 reportStage(task.status);
             }
             return task;
@@ -1742,46 +1815,18 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         } catch (Exception error) { Log.w(TAG, "Agent 結論指令傳送失敗：" + error.getMessage()); }
     }
 
-    /**
-     * Own the narrow, predictable message path in Runtime.  A weak live model
-     * must not be asked to remember a recipient and message after it has asked
-     * the user for confirmation: that caused a new "確認" turn to erase the
-     * original request and repeatedly ask again.
-     */
+    /** Own the narrow, predictable direct-message path in Runtime. */
     private boolean handleRuntimeSendFromCurrentTurn() {
         final UserActionScope.SendDraft direct = userActionScope.consumeDirectSendDraft();
         if (direct != null) {
-            dispatchRuntimeSend(direct, false);
-            return true;
-        }
-        final UserActionScope.SendDraft confirmed = userActionScope.consumeConfirmedSendDraft();
-        if (confirmed != null) {
-            dispatchRuntimeSend(confirmed, true);
-            return true;
-        }
-        String llmReviewUtterance = userActionScope.consumePendingSendLlmReviewUtterance();
-        if (!llmReviewUtterance.isEmpty()) {
-            if (llmReviewUtterance.length() > 120) {
-                llmReviewUtterance = llmReviewUtterance.substring(0, 120);
-            }
-            sendInternalAgentDirective(
-                    "【Runtime 待傳訊確認判斷】存在一則 30 秒內的待傳草稿。使用者剛說：「"
-                    + llmReviewUtterance
-                    + "」。只判斷這句是否明確同意送出：若是，唯一允許的動作是呼叫 send_text，"
-                    + "text 必須完全等於 " + PENDING_SEND_CONFIRM_TOKEN
-                    + "；Runtime 會使用保留草稿，忽略該 token。若是否定或不確定，不得呼叫工具，"
-                    + "只簡短請使用者回答確認或取消。不要重述草稿內容。");
-            return true;
-        }
-        if (userActionScope.hasAwaitingSendConfirmation()) {
-            sendInternalAgentDirective("【Runtime 傳訊確認】已收到一則待傳訊息。只問一次「要傳給指定對象嗎？」；不要呼叫工具、不要重述內容。使用者說確認/是/送出才會由 Runtime 執行；說取消則放棄。");
+            dispatchRuntimeSend(direct);
             return true;
         }
         return false;
     }
 
-    private void dispatchRuntimeSend(final UserActionScope.SendDraft draft, final boolean confirmed) {
-        listener.onStatus(confirmed ? "正在送出已確認訊息…" : "正在送出訊息…");
+    private void dispatchRuntimeSend(final UserActionScope.SendDraft draft) {
+        listener.onStatus("正在送出訊息…");
         new Thread(new Runnable() {
             @Override public void run() {
                 try {
@@ -3137,14 +3182,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
     private JSONObject sendTextToPhone(JSONObject args) throws Exception {
         String text = args.optString("text", "");
-        if (PENDING_SEND_CONFIRM_TOKEN.equals(text)) {
-            UserActionScope.SendDraft pending = userActionScope.consumeLlmApprovedSendDraft();
-            if (pending == null) {
-                return runtimeBlocked("NO_PENDING_SEND_FOR_LLM_CONFIRMATION",
-                        "沒有待確認的傳訊草稿；Runtime 已阻止送出。");
-            }
-            return submitTextToPhone(pending.text, pending.recipient);
-        }
         if (text.isEmpty()) {
             return new JSONObject().put("success", false).put("error", "EMPTY_TEXT");
         }

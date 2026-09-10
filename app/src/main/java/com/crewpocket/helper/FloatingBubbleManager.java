@@ -226,6 +226,7 @@ public class FloatingBubbleManager {
     private TextView voiceStatusText = null;
     private TextView voiceMeterText = null;
     private TextView voiceTranscriptText = null;
+    private TextView voiceAgentDebugText = null;
     private View dialogView = null;
     private WindowManager.LayoutParams bubbleParams = null;
     private WindowManager.LayoutParams dialogParams = null;
@@ -1023,6 +1024,9 @@ public class FloatingBubbleManager {
             boolean activeTask = NativeLiveService.hasActiveAgentTask();
             voiceStopAgentButton.setVisibility(activeTask ? View.VISIBLE : View.GONE);
         }
+        if (voiceAgentDebugText != null) {
+            voiceAgentDebugText.setText(NativeLiveService.getAgentDebugSummary());
+        }
     }
 
     private void updateVoiceTranscriptUi() {
@@ -1098,6 +1102,16 @@ public class FloatingBubbleManager {
                     title.setTextColor(Color.parseColor("#38BDF8"));
                     headerRow.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
+                    // A dedicated handle makes it obvious that this floating
+                    // console can be repositioned without stealing button taps.
+                    TextView dragHandle = new TextView(context);
+                    dragHandle.setText("⠿");
+                    dragHandle.setTextSize(19);
+                    dragHandle.setGravity(Gravity.CENTER);
+                    dragHandle.setTextColor(Color.parseColor("#64748B"));
+                    dragHandle.setContentDescription("拖曳移動控制台");
+                    headerRow.addView(dragHandle, new LinearLayout.LayoutParams(dp(34), dp(32)));
+
                     voiceInterruptionButton = new TextView(context);
                     voiceInterruptionButton.setTextSize(11);
                     voiceInterruptionButton.setPadding(dp(8), dp(3), dp(8), dp(3));
@@ -1169,6 +1183,27 @@ public class FloatingBubbleManager {
                     voiceMeterText.setTextColor(Color.parseColor("#CBD5E1"));
                     voiceMeterText.setPadding(dp(4), dp(4), dp(4), dp(8));
                     dock.addView(voiceMeterText, new LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+                    TextView debugLabel = new TextView(context);
+                    debugLabel.setText("任務除錯");
+                    debugLabel.setTextSize(10);
+                    debugLabel.setTextColor(Color.parseColor("#64748B"));
+                    debugLabel.setPadding(dp(4), 0, dp(4), dp(2));
+                    dock.addView(debugLabel, new LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+                    voiceAgentDebugText = new TextView(context);
+                    voiceAgentDebugText.setTextSize(10);
+                    voiceAgentDebugText.setTextColor(Color.parseColor("#A5B4FC"));
+                    voiceAgentDebugText.setMaxLines(6);
+                    voiceAgentDebugText.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                    voiceAgentDebugText.setPadding(dp(8), dp(6), dp(8), dp(7));
+                    GradientDrawable debugBg = new GradientDrawable();
+                    debugBg.setColor(Color.parseColor("#331E293B"));
+                    debugBg.setCornerRadius(dp(12));
+                    debugBg.setStroke(dp(1), Color.parseColor("#334C5F7A"));
+                    voiceAgentDebugText.setBackground(debugBg);
+                    dock.addView(voiceAgentDebugText, new LinearLayout.LayoutParams(
                             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
                     voiceSettingsPanel = new LinearLayout(context);
@@ -1331,7 +1366,7 @@ public class FloatingBubbleManager {
                             dock,
                             voiceControlParams);
                     voiceControlController.restorePosition();
-                    voiceControlController.attachDragHandle(title);
+                    voiceControlController.attachDragHandle(dragHandle);
                     windowManager.addView(dock, voiceControlParams);
                     refreshVoiceControls();
                     updateVoiceTelemetryUi();
@@ -1369,6 +1404,7 @@ public class FloatingBubbleManager {
                 voiceStatusText = null;
                 voiceMeterText = null;
                 voiceTranscriptText = null;
+                voiceAgentDebugText = null;
             }
         });
     }

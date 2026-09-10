@@ -765,6 +765,12 @@ public class NativeLiveService extends Service {
         return instance != null && instance.client != null && instance.client.hasActiveAgentTask();
     }
 
+    static String getAgentDebugSummary() {
+        return instance != null && instance.client != null
+                ? instance.client.getAgentDebugSummary()
+                : "任務：待命\n目標：—\nApp：—\n最近：—";
+    }
+
     static boolean isAiSpeaking() {
         return instance != null && instance.client != null && instance.client.isAiSpeaking();
     }
