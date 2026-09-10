@@ -3,7 +3,7 @@ package com.crewpocket.helper;
 import org.json.JSONObject;
 import java.util.Locale;
 
-/** 0034: model chooses WHAT; Runtime maps it to existing trusted tools. */
+/** Model chooses WHAT; Runtime maps it to existing trusted tools. */
 final class SemanticPhoneAction {
     static final String TOOL_NAME = "phone_action";
     static final String ERROR_TOOL = "semantic_action_error";
@@ -42,9 +42,9 @@ final class SemanticPhoneAction {
             return mapped(action, "launch_app", new JSONObject().put("app", target));
         }
 
-        if ("TAP".equals(action) || "FOCUS".equals(action)) {
+        if ("TAP".equals(action)) {
             if (target.isEmpty()) return error(action, "TARGET_REQUIRED",
-                    action + " 需要目前畫面上的語意 target。");
+                    "TAP 需要目前畫面上的語意 target。");
             return mapped(action, "tap_screen",
                     new JSONObject().put("label", target).put("semantic_action", action));
         }
@@ -76,14 +76,12 @@ final class SemanticPhoneAction {
             return mapped(action, "swipe_screen", out);
         }
 
-        if ("BACK".equals(action) || "HOME".equals(action)
-                || "RECENTS".equals(action) || "NOTIFICATIONS".equals(action)
-                || "QUICK_SETTINGS".equals(action)) {
+        if ("BACK".equals(action) || "HOME".equals(action)) {
             return mapped(action, "press_key", new JSONObject().put("key", action));
         }
 
         return error(action, "UNKNOWN_SEMANTIC_ACTION",
-                "只支援 OPEN_APP/SEARCH/TAP/FOCUS/TYPE/SCROLL/BACK/HOME/RECENTS/NOTIFICATIONS/QUICK_SETTINGS。");
+                "只支援 OPEN_APP/SEARCH/TAP/TYPE/SCROLL/BACK/HOME。");
     }
 
     private static Resolution mapped(String action, String runtimeName, JSONObject args) {

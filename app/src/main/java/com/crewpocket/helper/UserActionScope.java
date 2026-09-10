@@ -1,21 +1,22 @@
 package com.crewpocket.helper;
 
 /**
- * 0028: deterministic latest-turn action boundary.
+ * Deterministic latest-turn action boundary.
  *
- * Send authorization is deliberately narrow:
- * - search/open/type never imply sending;
- * - vague phrases such as "跟他說", "告訴他", "傳給..." do not grant send;
- * - a named-recipient send stores only the current-turn recipient token in RAM;
- * - the grant is consumed after one send/uncertain-send attempt.
+ * 0042 current-screen messaging:
+ * - Runtime never resolves, remembers, searches for, or verifies a recipient;
+ * - message sending applies only to the composer already visible on screen;
+ * - TYPE never implies Send;
+ * - an explicit current-turn send verb grants exactly one send attempt;
+ * - named-recipient messaging is intentionally unsupported for this mode.
  */
 final class UserActionScope {
     private static final long SCOPE_TTL_MS = 120_000L;
 
     private boolean sendAuthorized;
-    private boolean sendRecipientRequired;
-    private String sendRecipient = "";
     private boolean messageTransactionHandled;
+    private boolean namedRecipientMessagingUnsupported;
+
     private boolean searchIntent;
     private boolean openSearchResultAuthorized;
     private boolean searchResultSelectionRequested;
@@ -26,12 +27,6 @@ final class UserActionScope {
     private String selectedSearchResult = "";
     private long updatedAtMs;
     private boolean endCallAuthorized;
-
-    private static final class SendGrant {
-        boolean authorized;
-        boolean recipientRequired;
-        String recipient = "";
-    }
 
     synchronized boolean consumeEndCallAuthorization() {
         expireIfNeeded();
@@ -62,30 +57,22 @@ final class UserActionScope {
         endCallAuthorized = value.matches("(?:請|幫我|请|帮我)?(?:結束通話|结束通话|掛斷電話|挂断电话|退出語音助理|退出语音助理)(?:吧|謝謝|谢谢)?")
                 || value.matches("(?:please)?(?:endthecall|hangup|exitthevoiceassistant)(?:please)?");
 
-        SendGrant grant = parseSendGrant(text);
         boolean navigation = hasNavigationIntent(value);
         boolean search = hasSearchIntent(value) || navigation;
-        // A Maps result picker is safe only after Runtime has proved that real
-        // result rows exist (not autocomplete suggestions). Let it be offered
-        // for an ordinary search as well: the user still has to explicitly
-        // choose a row before anything is opened. Navigation/open wording only
-        // authorizes automatic continuation after that choice.
         boolean resultSelection = search;
         boolean openResult = navigation || hasPostSearchOpenIntent(value);
 
-        sendAuthorized = grant.authorized;
-        sendRecipientRequired = grant.recipientRequired;
-        sendRecipient = grant.recipient;
+        namedRecipientMessagingUnsupported = isNamedRecipientMessagingRequest(text);
+        sendAuthorized = !namedRecipientMessagingUnsupported
+                && hasCurrentScreenSendIntent(text);
         messageTransactionHandled = false;
+
         searchIntent = search;
-        // App launch ("open Maps, search X") must not silently authorize
-        // opening a search result. Only a post-search open/select or navigation
-        // continuation grants result selection.
         searchResultSelectionRequested = resultSelection;
         searchContinuation = navigation
                 ? "NAVIGATE"
                 : (openResult ? "OPEN_RESULT" : "RESULT_DETAILS");
-        openSearchResultAuthorized = openResult || grant.authorized;
+        openSearchResultAuthorized = openResult;
         searchQueryEntered = false;
         searchCommitted = false;
         searchResultSelected = false;
@@ -98,20 +85,20 @@ final class UserActionScope {
         return sendAuthorized;
     }
 
+    synchronized void consumeSendAuthorization() {
+        sendAuthorized = false;
+    }
+
+    /**
+     * Compatibility stubs for old callers outside the active Live path.
+     * Recipient routing is intentionally disabled.
+     */
     synchronized boolean requiresRecipientVerification() {
-        expireIfNeeded();
-        return sendAuthorized && sendRecipientRequired;
+        return false;
     }
 
     synchronized String authorizedRecipient() {
-        expireIfNeeded();
-        return sendRecipient == null ? "" : sendRecipient;
-    }
-
-    synchronized void consumeSendAuthorization() {
-        sendAuthorized = false;
-        sendRecipientRequired = false;
-        sendRecipient = "";
+        return "";
     }
 
     /** A single explicit-send turn owns one atomic transaction, never a tap loop. */
@@ -122,6 +109,11 @@ final class UserActionScope {
     synchronized boolean shouldBlockFurtherMessageMutation() {
         expireIfNeeded();
         return messageTransactionHandled;
+    }
+
+    synchronized boolean blocksNamedRecipientMessagingAction() {
+        expireIfNeeded();
+        return namedRecipientMessagingUnsupported;
     }
 
     synchronized boolean shouldAutoCommitSearch() {
@@ -210,7 +202,6 @@ final class UserActionScope {
         }
 
         // Once search is committed, search-only reached its task boundary.
-        // Block even another Search-key tap so weak models cannot double-submit.
         return true;
     }
 
@@ -228,9 +219,8 @@ final class UserActionScope {
 
     private void clearActionGrants() {
         sendAuthorized = false;
-        sendRecipientRequired = false;
-        sendRecipient = "";
         messageTransactionHandled = false;
+        namedRecipientMessagingUnsupported = false;
         endCallAuthorized = false;
         searchIntent = false;
         openSearchResultAuthorized = false;
@@ -245,7 +235,7 @@ final class UserActionScope {
     static boolean looksLikeSendTarget(String metadata) {
         String value = normalize(metadata);
         return containsAny(value,
-                "composer_send", "messagesend", "message_send", "action_send",
+                "send", "composer_send", "messagesend", "message_send", "action_send",
                 "send_btn", "send_button", "paper_plane", "paperplane",
                 "傳送", "传送", "發送", "发送", "送出");
     }
@@ -285,11 +275,6 @@ final class UserActionScope {
                 "navigate", "navigation", "directions", "route", "goto", "takeme");
     }
 
-    /**
-     * Result-opening permission must appear after the search phrase. This keeps
-     * "open Google Maps, search Grand Palace" search-only, while allowing
-     * "search Grand Palace then open/select it".
-     */
     private static boolean hasPostSearchOpenIntent(String value) {
         int searchAt = indexOfAny(value,
                 "搜尋", "搜索", "查找", "找一下", "幫我找", "帮我找",
@@ -312,134 +297,43 @@ final class UserActionScope {
     }
 
     /**
-     * Explicit send means the utterance itself names the communication action.
-     * A recipient plus a message body (for example "傳給小明：晚點見") is
-     * explicit. A bare "傳給小明" remains ambiguous and does not authorize.
+     * Current-screen-only send intent.
+     *
+     * Examples that authorize:
+     * - 幫我輸入「晚點到」並送出
+     * - 輸入測試123然後發送
+     * - send this message
+     *
+     * Named-recipient commands are rejected before reaching this check.
      */
-    private static SendGrant parseSendGrant(String text) {
-        SendGrant out = new SendGrant();
-        String raw = TextMatch.caseFold(text == null ? "" : text).trim();
+    private static boolean hasCurrentScreenSendIntent(String rawText) {
+        String value = normalize(rawText == null ? "" : rawText);
+        return containsAny(value,
+                "送出", "傳送", "传送", "發送", "发送",
+                "sendthismessage", "sendcurrentmessage",
+                "sendmessage", "sendtext", "send");
+    }
+
+    /**
+     * This mode deliberately does not route messages to people.
+     * The user must manually open the intended chat first.
+     */
+    private static boolean isNamedRecipientMessagingRequest(String rawText) {
+        if (rawText == null || rawText.trim().isEmpty()) return false;
+        String raw = TextMatch.caseFold(rawText).trim();
         String value = normalize(raw);
 
-        // Explicit submit of the CURRENT composer. These phrases authorize
-        // pressing Send for the already-prepared message without inventing a
-        // recipient. "幫我送出訊息" is a real send instruction, not a vague
-        // conversational phrase such as "跟他說".
-        boolean currentComposerVerb = containsAny(value,
-                "送出這則訊息", "送出这则讯息", "送出這則消息", "送出这则消息",
-                "傳送這則訊息", "传送这则讯息", "發送這則訊息", "发送这则讯息",
-                "送出目前訊息", "送出当前讯息",
-                "送出訊息", "送出讯息", "送出消息",
-                "把訊息送出", "把讯息送出", "把消息送出",
-                "sendthismessage", "sendcurrentmessage");
+        boolean recipientVerb = containsAny(value,
+                "傳給", "传给", "發給", "发给",
+                "傳訊息給", "传讯息给", "發訊息給", "发讯息给",
+                "傳消息給", "传消息给", "發消息給", "发消息给",
+                "sendto", "sendmessageto", "sendtextto",
+                "告訴", "告诉");
 
-        // If the same utterance names a recipient, do NOT use the current-
-        // composer shortcut: preserve recipient verification.
-        boolean recipientMentioned = hasExplicitRecipientMarker(raw);
-        boolean currentComposer = currentComposerVerb && !recipientMentioned;
+        boolean conversationalTell = raw.matches(
+                ".*(?:跟|向|對|对)\\s*[^，,。！？!：:]+\\s*(?:說|说).*");
 
-        boolean directRecipientSend = raw.matches(".*(?:傳|传|發|发)(?:給|给)\\s*[^：:,，]+[：:,，]\\s*.+");
-        boolean explicitMessageVerb = currentComposerVerb || directRecipientSend || containsAny(value,
-                "傳訊息", "传讯息", "傳消息", "传消息",
-                "發訊息", "发讯息", "發消息", "发消息",
-                "傳送訊息", "传送讯息", "傳送消息", "传送消息",
-                "發送訊息", "发送讯息", "發送消息", "发送消息",
-                "回覆", "回复",
-                "sendmessage", "sendtext", "sendamsg", "replyto");
-
-        if (!currentComposer && !explicitMessageVerb) return out;
-
-        out.authorized = true;
-        if (currentComposer) {
-            out.recipientRequired = false;
-            return out;
-        }
-
-        out.recipientRequired = true;
-        out.recipient = extractRecipient(raw);
-        return out;
-    }
-
-    private static boolean hasExplicitRecipientMarker(String raw) {
-        if (raw == null || raw.trim().isEmpty()) return false;
-        String folded = TextMatch.caseFold(raw);
-
-        int giveAt = firstIndex(raw, "給", "给");
-        if (giveAt >= 0 && giveAt + 1 < raw.length()) {
-            String afterGive = raw.substring(giveAt + 1).trim();
-            // "給我把訊息送出" means "send it for me", not recipient=我.
-            if (!afterGive.startsWith("我")) return true;
-        }
-        return folded.contains(" to ");
-    }
-
-    private static String extractRecipient(String raw) {
-        if (raw == null) return "";
-        String text = raw.trim();
-
-        // Chinese: 傳訊息給小明說... / 發訊息給小明：...
-        int giveAt = firstIndex(text, "給", "给");
-        if (giveAt >= 0) {
-            String candidate = text.substring(giveAt + 1);
-            candidate = cutAt(candidate, "說", "说", "：", ":", "，", ",", "。", "！", "!", "內容", "内容");
-            return cleanRecipient(candidate);
-        }
-
-        // Chinese: 回覆小明：...
-        int replyAt = firstIndex(text, "回覆", "回复");
-        if (replyAt >= 0) {
-            String candidate = text.substring(replyAt + 2);
-            candidate = candidate.replaceFirst("^(一下|訊息|讯息|消息|給|给)+", "");
-            candidate = cutAt(candidate, "說", "说", "：", ":", "，", ",", "。", "！", "!");
-            return cleanRecipient(candidate);
-        }
-
-        // English: send a message to John saying ...
-        String lower = TextMatch.caseFold(text);
-        int toAt = lower.indexOf(" to ");
-        if (toAt >= 0) {
-            String candidate = text.substring(toAt + 4);
-            candidate = cutAtIgnoreCase(candidate, " saying ", " with ", ":", ",", ".", "!");
-            return cleanRecipient(candidate);
-        }
-
-        return "";
-    }
-
-    private static String cleanRecipient(String value) {
-        String out = value == null ? "" : value.trim();
-        out = out.replaceAll("^[給给對对向\\s]+|[\\s，,。！？!：:]+$", "");
-        String normalized = normalize(out);
-        if (normalized.isEmpty() || normalized.length() > 48) return "";
-        if (containsAny(normalized,
-                "他", "她", "它", "他們", "他们", "她們", "她们", "對方", "对方",
-                "某人", "那個人", "那个人", "him", "her", "them", "someone")) return "";
-        return out;
-    }
-
-    private static int firstIndex(String text, String... tokens) {
-        int result = -1;
-        if (text == null) return -1;
-        for (String token : tokens) {
-            int at = text.indexOf(token);
-            if (at >= 0 && (result < 0 || at < result)) result = at;
-        }
-        return result;
-    }
-
-    private static String cutAt(String text, String... tokens) {
-        int at = firstIndex(text, tokens);
-        return at < 0 ? text : text.substring(0, at);
-    }
-
-    private static String cutAtIgnoreCase(String text, String... tokens) {
-        String lower = TextMatch.caseFold(text == null ? "" : text);
-        int best = -1;
-        for (String token : tokens) {
-            int at = lower.indexOf(TextMatch.caseFold(token));
-            if (at >= 0 && (best < 0 || at < best)) best = at;
-        }
-        return best < 0 ? text : text.substring(0, best);
+        return recipientVerb || conversationalTell;
     }
 
     private static boolean containsAny(String value, String... needles) {
@@ -452,7 +346,7 @@ final class UserActionScope {
     }
 
     private static String normalize(String text) {
-        return TextMatch.caseFold(text)
+        return TextMatch.caseFold(text == null ? "" : text)
                 .replaceAll("[\\s，,。！？!「」『』\\\"'：:；;（）()]", "");
     }
 }

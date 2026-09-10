@@ -1002,9 +1002,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         JSONObject phoneActionProperties = new JSONObject()
                 .put("action", new JSONObject().put("type", "STRING")
                         .put("enum", new JSONArray()
-                                .put("OPEN_APP").put("SEARCH").put("TAP").put("FOCUS").put("TYPE")
-                                .put("SCROLL").put("BACK").put("HOME").put("RECENTS")
-                                .put("NOTIFICATIONS").put("QUICK_SETTINGS"))
+                                .put("OPEN_APP").put("SEARCH").put("TAP").put("TYPE")
+                                .put("SCROLL").put("BACK").put("HOME"))
                         .put("description", "Choose exactly one semantic next action; Runtime decides Android implementation."))
                 .put("target", new JSONObject().put("type", "STRING")
                         .put("description", "Human semantic target or App name. Examples: Google, Search, Wi-Fi, first result. Do not pass coordinates/resource IDs."))
@@ -1018,7 +1017,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                         .put("description", "Optional SCROLL distance."));
         tools.put(new JSONObject().put("name", "phone_action")
                 .put("description",
-                        "Perform ONE semantic phone action. Think only about WHAT should happen next, not selectors, coordinates, resource IDs, Accessibility implementation, or fallback choice. Runtime resolves and verifies it. For any request to search/find inside the current App, use SEARCH with text=query; Runtime finds the search control, focuses it, verifies text entry and submits it. Use OPEN_APP/SEARCH/TAP/FOCUS/TYPE/SCROLL/BACK/HOME/RECENTS/NOTIFICATIONS/QUICK_SETTINGS. Real message sending is NOT here; use send_text only with explicit send authorization.")
+                        "Perform exactly ONE semantic phone step. Available actions: OPEN_APP, SEARCH, TAP, TYPE, SCROLL, BACK, HOME. Runtime owns selectors, focus, Android implementation and verification. SEARCH is one Runtime transaction; do not manually TAP search then TYPE. TYPE never submits a real message. Real message sending is current-screen only through send_text.")
                 .put("parameters", new JSONObject().put("type", "OBJECT")
                         .put("properties", phoneActionProperties)
                         .put("required", new JSONArray().put("action"))));
@@ -1035,7 +1034,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                         .put("timeout_ms", new JSONObject().put("type", "INTEGER")
                                 .put("description", "Maximum wait milliseconds (default 5000, max 15000)")))));
         tools.put(new JSONObject().put("name", "send_text").put("description",
-                "SECURE SPECIAL CASE: use directly for an authorized message send. Runtime atomically focuses the composer, writes the text, finds the send action, submits once, and verifies delivery. Never call TYPE before this tool. Runtime accepts only a latest-turn explicit message-send command and verifies recipient when required. On failure do not resend.")
+                "CURRENT SCREEN ONLY: atomically type the exact text into the composer already visible in the foreground App, submit exactly once, and locally verify the send. Use only when the latest user turn explicitly asks to send now. Never search for, infer, verify, or navigate to a recipient. Named-recipient messaging is unsupported. There is no confirmation turn. Never TYPE first; on failure do not resend.")
                 .put("parameters", new JSONObject().put("type", "OBJECT")
                         .put("properties", new JSONObject()
                                 .put("text", new JSONObject().put("type", "STRING")
@@ -1089,8 +1088,49 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 .put("facts", stringArraySchema).put("items", stringArraySchema);
         tools.put(new JSONObject().put("name", "insert_deck_card").put("description", "Insert one supplementary card after the current or another future card when the user asks for a missing explanation. The inserted card becomes part of the remaining presentation.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("after_card_id", new JSONObject().put("type", "STRING")).put("card", new JSONObject().put("type", "OBJECT").put("properties", insertedCardProperties))).put("required", new JSONArray().put("after_card_id").put("card"))));
         tools.put(new JSONObject().put("name", "remove_future_deck_card").put("description", "Remove a not-yet-presented card that is now redundant. Current and already presented cards are locked.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("card_id", new JSONObject().put("type", "STRING"))).put("required", new JSONArray().put("card_id"))));
-        return tools;
+        return filterModelFacingTools(tools);
     }
+
+    /** 0042: small Live model surface; Runtime capability remains richer internally. */
+    private JSONArray filterModelFacingTools(JSONArray declared) {
+        JSONArray exposed = new JSONArray();
+        boolean deckMode = DeckRepository.hasActiveDeck();
+        for (int i = 0; i < declared.length(); i++) {
+            JSONObject tool = declared.optJSONObject(i);
+            if (tool == null) continue;
+            String name = tool.optString("name", "");
+            if (isNormalPhoneModelTool(name)
+                    || (deckMode && isDeckModelTool(name))) {
+                exposed.put(tool);
+            }
+        }
+        Log.i(TAG, "0042 model tool surface: "
+                + exposed.length()
+                + (deckMode ? " (deck mode)" : " (normal phone mode)"));
+        return exposed;
+    }
+
+    private boolean isNormalPhoneModelTool(String name) {
+        return "phone_action".equals(name)
+                || "inspect_ui".equals(name)
+                || "send_text".equals(name)
+                || "end_voice_session".equals(name);
+    }
+
+    private boolean isDeckModelTool(String name) {
+        return "list_decks".equals(name)
+                || "open_deck".equals(name)
+                || "get_deck_card".equals(name)
+                || "present_deck_card".equals(name)
+                || "advance_deck".equals(name)
+                || "create_ephemeral_deck".equals(name)
+                || "list_deck_images".equals(name)
+                || "attach_deck_image".equals(name)
+                || "update_deck_card".equals(name)
+                || "insert_deck_card".equals(name)
+                || "remove_future_deck_card".equals(name);
+    }
+
 
     private void executeToolAsync(final JSONObject call) {
         final String id = call.optString("id", "tool_" + System.nanoTime());
@@ -1193,6 +1233,21 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 && isMutationTool(name)) {
             sendBlockedToolResponse(id, requestedName,
                     "WAITING_USER_CHOICE：Runtime 正在等待或執行使用者的搜尋結果選擇；禁止 Gemini 重複點擊。");
+            return;
+        }
+
+        if (userActionScope.blocksNamedRecipientMessagingAction()
+                && isMutationTool(name)) {
+            sendBlockedToolResponse(id, requestedName,
+                    "CURRENT_SCREEN_MESSAGING_ONLY：不支援『跟某人說／傳給某人』的自動找人或跨聊天室傳訊。請使用者先自行開到正確聊天室。");
+            return;
+        }
+
+        // For an explicitly authorized send turn, TYPE is the wrong path:
+        // SendTextTransaction owns type + submit + verification atomically.
+        if (userActionScope.canSend() && "type_text".equals(name)) {
+            sendBlockedToolResponse(id, requestedName,
+                    "SEND_TEXT_TRANSACTION_REQUIRED：這句已明確要求送出，請直接使用 send_text，不要先 TYPE。");
             return;
         }
 
@@ -1827,9 +1882,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         boolean resolvedFromNode = false;
 
         String tapMeta = label + " " + id;
-        if (UserActionScope.looksLikeSendTarget(tapMeta) && !userActionScope.canSend()) {
-            return runtimeBlocked("SEND_NOT_AUTHORIZED_BY_LATEST_USER_TURN",
-                    "最新一句沒有明確要求傳送/回覆訊息；禁止點擊 Send。");
+        if (UserActionScope.looksLikeSendTarget(tapMeta)) {
+            return runtimeBlocked("SEND_CONTROL_RUNTIME_OWNED",
+                    "Send 控制由 Runtime 專用 send_text transaction 管理；禁止 phone_action 直接點擊 Send。");
         }
         if (!pendingChoiceExecuting
                 && userActionScope.shouldBlockTapForSearch(tapMeta, label.isEmpty() && id.isEmpty())) {
@@ -2210,9 +2265,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if (elementId.isEmpty()) return new JSONObject().put("success", false).put("error", "MISSING_ELEMENT_ID");
 
         String elementMeta = semanticElementMeta(elementId);
-        if (UserActionScope.looksLikeSendTarget(elementMeta) && !userActionScope.canSend()) {
-            return runtimeBlocked("SEND_NOT_AUTHORIZED_BY_LATEST_USER_TURN",
-                    "最新一句沒有明確要求傳送/回覆訊息；禁止點擊 Send。");
+        if (UserActionScope.looksLikeSendTarget(elementMeta)) {
+            return runtimeBlocked("SEND_CONTROL_RUNTIME_OWNED",
+                    "Send 控制由 Runtime 專用 send_text transaction 管理；禁止 semantic tap 直接點擊 Send。");
         }
         if (!pendingChoiceExecuting
                 && userActionScope.shouldBlockTapForSearch(elementMeta, elementMeta.isEmpty())) {
@@ -2867,42 +2922,30 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     }
 
     private JSONObject sendTextToPhone(JSONObject args) throws Exception {
-        String text = args.optString("text", "");
+        String text = args == null ? "" : args.optString("text", "");
         if (text.isEmpty()) {
             return new JSONObject().put("success", false).put("error", "EMPTY_TEXT");
         }
+        if (userActionScope.blocksNamedRecipientMessagingAction()) {
+            return runtimeBlocked("CURRENT_SCREEN_MESSAGING_ONLY",
+                    "目前只支援對當前畫面已開啟的輸入框操作；不支援自動尋找或驗證收件人。");
+        }
         if (!userActionScope.canSend()) {
-            return runtimeBlocked("SEND_NOT_AUTHORIZED_BY_LATEST_USER_TURN",
-                    "最新一句沒有明確要求傳訊息、發訊息、回覆或送出目前訊息；Runtime 已阻止送出。");
+            return runtimeBlocked("CURRENT_SCREEN_SEND_NOT_AUTHORIZED",
+                    "目前只支援當前畫面輸入框。最新一句必須明確要求送出；TYPE 本身不代表送出。");
         }
 
-        // Consume the one-shot send turn before any verification failure. A
-        // weak model must never escape a failed transaction by tapping random
-        // controls on the same screen; the user's next utterance starts fresh.
+        // One explicit current-screen send instruction owns exactly one atomic
+        // type + submit + verification transaction.
         userActionScope.markMessageTransactionHandled();
-
-        if (userActionScope.requiresRecipientVerification()) {
-            String recipient = userActionScope.authorizedRecipient();
-            if (recipient.isEmpty()) {
-                return runtimeBlocked("SEND_RECIPIENT_NOT_EXPLICIT",
-                        "使用者雖然明確要求傳訊息，但沒有可驗證的收件人。請只問要傳給誰。");
-            }
-            JSONObject currentScreen = readSemanticScreenQuietly();
-            SendRecipientVerifier.Result recipientCheck =
-                    SendRecipientVerifier.verify(currentScreen, recipient);
-            if (!recipientCheck.verified) {
-                Log.w(TAG, "0028 send blocked: recipient not verified (" + recipientCheck.reason + ")");
-                return runtimeBlocked("SEND_RECIPIENT_NOT_VERIFIED",
-                        "目前畫面無法確認是指定收件人的聊天室。不要送出；重新 inspect_ui/進入正確聊天室，或請使用者確認。");
-            }
-        }
+        userActionScope.consumeSendAuthorization();
 
         JSONObject reply = helperPost(
                 "/send_text",
                 new JSONObject().put("text", text));
+
         // Runtime deliberately does not echo plaintext back to Gemini.
         reply.put("textLength", text.length());
-        String sendError = reply.optString("error", "").toUpperCase(Locale.ROOT);
         if (!reply.optBoolean("success", false)) {
             String stage = reply.optString("stage", "UNKNOWN");
             String detail = reply.optString("error", "SEND_FAILED");
@@ -2913,9 +2956,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                         "訊息尚未送出", stage + " · " + detail);
             } catch (Exception ignored) {}
             reply.put("instruction",
-                    "訊息沒有被 Runtime 驗證送出。不要重送或宣告成功；向使用者簡短說明目前卡點。 ");
+                    "Runtime 沒有驗證訊息送出。不要重送、不要改點 Send；簡短回報 stage/error，等待使用者的新指令。");
         }
-        workingContext.recordAction("send_text", reply.optBoolean("success", false) ? "submitted" : "failed");
+
+        workingContext.recordAction("send_text",
+                reply.optBoolean("success", false) ? "submitted" : "failed");
         return reply;
     }
 
