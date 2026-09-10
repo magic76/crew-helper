@@ -134,6 +134,10 @@ final class LearnedUiMappingStore {
         prefs = context.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
     }
 
+    synchronized void clearAll() {
+        prefs.edit().putString(KEY_RULES, "[]").apply();
+    }
+
     synchronized Rule learn(String packageName,
                             String screenSignature,
                             String role,

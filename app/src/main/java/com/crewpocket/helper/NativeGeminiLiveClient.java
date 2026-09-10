@@ -228,15 +228,12 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             cancelAgentTask("使用者打斷，等待修正");
         }
 
-        CorrectionLearningRuntime.beginCorrection();
-
-        correctionWindowActive = true;
-        correctionWindowUntil = System.currentTimeMillis() + CORRECTION_WINDOW_MS;
-        correctionTaskHint = hint;
-        correctionContextPendingInjection = true;
         correctionHandler.removeCallbacks(clearCorrectionWindow);
-        correctionHandler.postDelayed(clearCorrectionWindow, CORRECTION_WINDOW_MS);
-        reportStage("已打斷，等待使用者修正；驗證成功後會記住正確操作");
+        correctionWindowActive = false;
+        correctionWindowUntil = 0L;
+        correctionTaskHint = "";
+        correctionContextPendingInjection = false;
+        reportStage("已打斷，等待下一句指令");
         return true;
     }
 
@@ -359,13 +356,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
             beginNewUserIntent();
             workingContext.setGoalHint(input);
-            if (processMemoryRuleInput(input)) {
-                listener.onTranscript("你", input);
-                return true;
-            }
             userActionScope.updateFromUserText(input);
-            boolean correctionInput = correctionWindowActive && System.currentTimeMillis() <= correctionWindowUntil;
-            if (correctionInput) consumeCorrectionWindowOnUserSpeech(text.trim());
             JSONObject part = new JSONObject().put("text", text.trim());
             JSONObject turn = new JSONObject().put("role", "user").put("parts", new JSONArray().put(part));
             boolean sent = webSocket.send(new JSONObject().put("clientContent", new JSONObject()
@@ -639,10 +630,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         }
         if (response.has("setupComplete") || response.has("setup_complete")) {
             setupReady = true;
-            if (memoryRuleIndex != null) {
-                memoryRuleIndex.refresh();
-                Log.i(TAG, "0028 MemoryRuleIndex ready: " + memoryRuleIndex.count() + " rules");
-            }
             reportStage("🎙️ 已連線，直接說話");
             startAudio();
             return;
@@ -678,13 +665,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             beginNewUserIntent();
             workingContext.setGoalHint(completeUserInput);
 
-            // Runtime-owned App/recorded shortcuts must claim the finalized
-            // utterance before same-frame Gemini tool calls can compete with
-            // them. This call was accidentally omitted from the transcript
-            // entry point, which made saved App commands (for example WEA)
-            // look as though they had never been learned.
-            if (processMemoryRuleInput(completeUserInput)) return;
-
             authorizationTranscript = completeUserInput;
             if (authorizationTranscript.length() > 4096) {
                 authorizationTranscript = authorizationTranscript.substring(0, 4096);
@@ -694,9 +674,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             if (isStopAgentTaskPhrase(completeUserInput)) {
                 cancelAgentTask("使用者語音停止任務");
             }
-            boolean correctionInput = correctionWindowActive
-                    && System.currentTimeMillis() <= correctionWindowUntil;
-            consumeCorrectionWindowOnUserSpeech(completeUserInput);
         }
 
         JSONObject toolCall = response.optJSONObject("toolCall");
@@ -1058,19 +1035,12 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                         .put("timeout_ms", new JSONObject().put("type", "INTEGER")
                                 .put("description", "Maximum wait milliseconds (default 5000, max 15000)")))));
         tools.put(new JSONObject().put("name", "send_text").put("description",
-                "SECURE SPECIAL CASE: atomically type, submit exactly once, and locally verify a real message/reply. Runtime accepts only a latest-turn explicit message-send command and verifies recipient when required. Search/open/type never imply send permission. On failure do not resend.")
+                "SECURE SPECIAL CASE: use directly for an authorized message send. Runtime atomically focuses the composer, writes the text, finds the send action, submits once, and verifies delivery. Never call TYPE before this tool. Runtime accepts only a latest-turn explicit message-send command and verifies recipient when required. On failure do not resend.")
                 .put("parameters", new JSONObject().put("type", "OBJECT")
                         .put("properties", new JSONObject()
                                 .put("text", new JSONObject().put("type", "STRING")
                                         .put("description", "Exact message text to send")))
                         .put("required", new JSONArray().put("text"))));
-        tools.put(new JSONObject().put("name", "teach_ui_element").put("description",
-                "Only when Runtime/semantic resolution cannot identify a stable UI element and user teaching is necessary. Runtime manages structural learning; never ask the user for coordinates.")
-                .put("parameters", new JSONObject().put("type", "OBJECT")
-                        .put("properties", new JSONObject()
-                                .put("role", new JSONObject().put("type", "STRING")
-                                        .put("description", "Semantic role, e.g. COMPOSER_SEND, SEARCH_SUBMIT, CONFIRM, NEXT")))
-                        .put("required", new JSONArray().put("role"))));
         tools.put(new JSONObject().put("name", "schedule_reminder").put("description", "Set a countdown timer / reminder in seconds. When time is up, the assistant vibrates and announces the message.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("delay_seconds", new JSONObject().put("type", "NUMBER").put("description", "Delay in seconds, e.g. 300 for 5 minutes")).put("message", new JSONObject().put("type", "STRING").put("description", "Reminder text to speak when timer expires")).put("label", new JSONObject().put("type", "STRING").put("description", "Short label for the timer"))).put("required", new JSONArray().put("delay_seconds"))));
         tools.put(new JSONObject().put("name", "start_screen_monitor").put("description", "Start periodic background screen checks or wait until a specific condition/text appears on screen.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("interval_seconds", new JSONObject().put("type", "NUMBER").put("description", "Interval between checks in seconds (e.g. 60)")).put("duration_minutes", new JSONObject().put("type", "NUMBER").put("description", "Total monitoring duration in minutes (default 10)")).put("target_condition", new JSONObject().put("type", "STRING").put("description", "Optional text/word to look for on screen (e.g. '已送達', '完成')")).put("label", new JSONObject().put("type", "STRING").put("description", "Short task name"))).put("required", new JSONArray().put("interval_seconds"))));
         tools.put(new JSONObject().put("name", "list_active_schedules").put("description", "List all currently active timers, background screen monitors, and countdowns with their remaining time.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject())));
@@ -1226,6 +1196,12 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             return;
         }
 
+        if (userActionScope.shouldBlockFurtherMessageMutation() && isMutationTool(name)) {
+            sendBlockedToolResponse(id, requestedName,
+                    "MESSAGE_TRANSACTION_ALREADY_HANDLED：本句明確傳送要求已完成一次原子送出交易；禁止再用 type/tap 重試。等待使用者的新指令。");
+            return;
+        }
+
         final AgentTaskRecord stabilityTask = peekActiveAgentTask();
         final JSONObject stabilityBlock = agentStabilityPreflight(stabilityTask, name, args);
         if (stabilityBlock != null && stabilityTask != null) {
@@ -1260,24 +1236,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if (isMutationTool(name) && audioIncidentRecorder != null) {
             audioIncidentRecorder.captureBeforeFirstMutation(task.taskId, name, args);
         }
-        final JSONObject beforeCorrectionContext = workingContext.toJson();
-        final CorrectionLearningRuntime.Decision correctionDecision =
-                CorrectionLearningRuntime.beforeMutation(name, args, beforeCorrectionContext);
-
         JSONObject result = new JSONObject();
         activeToolThread = Thread.currentThread();
         try {
-            if (correctionDecision.applied) {
-                String learnedName = correctionDecision.toolName;
-                JSONObject learnedArgs = correctionDecision.args;
-                if ("tap_element".equals(learnedName)) result = tapSemanticElement(learnedArgs);
-                else if ("tap_screen".equals(learnedName)) result = tap(learnedArgs);
-                else if ("launch_app".equals(learnedName)) result = launchApp(learnedArgs);
-                else if ("swipe_screen".equals(learnedName)) result = swipe(learnedArgs);
-                else if ("press_key".equals(learnedName)) result = pressKey(learnedArgs);
-                else result.put("success", false).put("error", "LEARNED_CORRECTION_UNSUPPORTED");
-            }
-            else if (SemanticPhoneAction.ERROR_TOOL.equals(name)) result = args;
+            if (SemanticPhoneAction.ERROR_TOOL.equals(name)) result = args;
             else if ("take_screenshot".equals(name)) result = captureAndSendScreen();
             else if ("inspect_ui".equals(name)) result = inspectUi(args);
             else if ("tap_element".equals(name)) result = tapSemanticElement(args);
@@ -1289,13 +1251,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             else if ("search_current_app".equals(name)) result = searchCurrentApp(args);
             else if ("send_text".equals(name)) result = sendTextToPhone(args);
             else if ("press_key".equals(name)) result = pressKey(args);
-            else if ("teach_ui_element".equals(name)) result = teachUiElement(args);
             else if ("schedule_reminder".equals(name)) result = scheduleReminder(args);
             else if ("start_screen_monitor".equals(name)) result = startScreenMonitor(args);
             else if ("list_active_schedules".equals(name)) result = listSchedules();
             else if ("cancel_schedule".equals(name)) result = cancelSchedule(args);
-            else if ("save_memory_rule".equals(name)) result.put("success", false).put("error", "MEMORY_RULE_WRITES_ARE_RUNTIME_ONLY");
-            else if ("list_memory_rules".equals(name)) result = listMemoryRules();
             else if ("end_voice_session".equals(name)) {
                 if (!userActionScope.consumeEndCallAuthorization()) {
                     JSONObject blocked = runtimeBlocked("END_CALL_NOT_AUTHORIZED", "請使用者明確說結束通話；關閉視窗或再見不代表掛斷。");
@@ -1342,8 +1301,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             if (task.cancelled) result = new JSONObject().put("success", false).put("cancelled", true).put("error", "使用者已停止任務");
             if (isMutationTool(name)) {
                 normalizeMutationContract(result);
-                CorrectionLearningRuntime.afterMutation(
-                        name, args, result, beforeCorrectionContext, correctionDecision);
             }
             if (semantic.semantic) {
                 result.put("semanticAction", semantic.semanticAction)
@@ -1582,7 +1539,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         task.awaitingModel = true;
         task.status = reason;
         reportStage(reason);
-        sendInternalAgentDirective("【Agent 系統狀態】" + reason + " 不要再呼叫工具；請以目前已知的工具結果，向使用者給出清楚、簡短的最終結論。");
+        sendInternalAgentDirective("【Agent 系統狀態】" + reason
+                + " 不要再呼叫工具；請以目前已知的工具結果，向使用者給出清楚、簡短的最終結論。"
+                + "不要說『抱歉』或『對不起』；直接說明已完成的部分與目前唯一卡點。");
     }
 
     private void scheduleAgentResponseWatchdog(final AgentTaskRecord task) {
@@ -2762,6 +2721,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private JSONObject typeText(JSONObject args) throws Exception {
         String text = args.optString("text", "").trim();
         if (text.isEmpty()) return new JSONObject().put("success", false).put("error", "輸入文字不可為空");
+        // Weak Live models occasionally choose TYPE even though the latest
+        // utterance clearly asks to send.  Upgrade that call to the one safe
+        // Runtime-owned transaction instead of permitting TYPE -> TAP guessing.
+        if (userActionScope.canSend()) return sendTextToPhone(args);
         if (userActionScope.shouldBlockAdditionalTextEntry()) {
             return runtimeBlocked("SEARCH_SCOPE_ADDITIONAL_TEXT_NOT_AUTHORIZED",
                     "搜尋查詢已輸入；最新任務沒有授權進入聊天室或再輸入訊息。");
@@ -2913,6 +2876,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                     "最新一句沒有明確要求傳訊息、發訊息、回覆或送出目前訊息；Runtime 已阻止送出。");
         }
 
+        // Consume the one-shot send turn before any verification failure. A
+        // weak model must never escape a failed transaction by tapping random
+        // controls on the same screen; the user's next utterance starts fresh.
+        userActionScope.markMessageTransactionHandled();
+
         if (userActionScope.requiresRecipientVerification()) {
             String recipient = userActionScope.authorizedRecipient();
             if (recipient.isEmpty()) {
@@ -2935,8 +2903,17 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         // Runtime deliberately does not echo plaintext back to Gemini.
         reply.put("textLength", text.length());
         String sendError = reply.optString("error", "").toUpperCase(Locale.ROOT);
-        if (reply.optBoolean("success", false) || sendError.contains("SEND_NOT_VERIFIED")) {
-            userActionScope.consumeSendAuthorization();
+        if (!reply.optBoolean("success", false)) {
+            String stage = reply.optString("stage", "UNKNOWN");
+            String detail = reply.optString("error", "SEND_FAILED");
+            String diagnostic = "訊息未送出：" + stage + " · " + detail;
+            reportStage(diagnostic);
+            try {
+                FloatingBubbleManager.getInstance(appContext).showCompactStatus(
+                        "訊息尚未送出", stage + " · " + detail);
+            } catch (Exception ignored) {}
+            reply.put("instruction",
+                    "訊息沒有被 Runtime 驗證送出。不要重送或宣告成功；向使用者簡短說明目前卡點。 ");
         }
         workingContext.recordAction("send_text", reply.optBoolean("success", false) ? "submitted" : "failed");
         return reply;
@@ -3055,6 +3032,16 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                         .put("remainingTimeMs", remainingMs)
                         .put("canContinue", !task.cancelled && !task.finished && task.blockedReason == null
                                 && task.steps < agentMaxSteps && remainingMs > 0));
+                // Gemini Live can generate an audible acknowledgement for every
+                // function response.  That turns a recoverable retry into a
+                // stream of "sorry" messages on weaker voice models.  Make the
+                // runtime contract explicit on every in-progress turn instead
+                // of asking the model to infer it from success/error wording.
+                if (!task.cancelled && !task.finished && task.blockedReason == null
+                        && task.steps < agentMaxSteps && remainingMs > 0) {
+                    result.put("speechPolicy",
+                            "SILENT_INTERMEDIATE: This is an internal tool result. Do not speak, apologize, summarize, or conclude. Read the result and choose the next tool only.");
+                }
             }
         }
         if (DeckRepository.hasActiveDeck() && (name.contains("deck"))) {

@@ -58,11 +58,6 @@
             android:exported="false" />
 
         <activity
-            android:name=".CorrectionRulesActivity"
-            android:screenOrientation="portrait"
-            android:exported="false" />
-
-        <activity
             android:name=".DeckActivity"
             android:screenOrientation="portrait"
             android:exported="false" />

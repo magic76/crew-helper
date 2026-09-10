@@ -103,11 +103,13 @@ final class ComposerSendResolver {
     private static int markerScore(String value) {
         if (value == null) return 0;
         if (hasRejectMarker(value)) return 0;
-        if (value.contains("send") || value.contains("發送") || value.contains("送出")
-                || value.contains("傳送")) return 140;
+        if (value.contains("send") || value.contains("發送") || value.contains("发送")
+                || value.contains("送出") || value.contains("傳送") || value.contains("传送")
+                || value.contains("submit") || value.contains("發佈") || value.contains("发布")) return 140;
         if (value.contains("composer_send") || value.contains("message_send")
                 || value.contains("action_send") || value.contains("send_btn")
-                || value.contains("send_button")) return 160;
+                || value.contains("send_button") || value.contains("chat_send")
+                || value.contains("ic_send") || value.contains("button_send")) return 160;
         if (value.contains("arrow_upward") || value.contains("up_arrow")
                 || value.contains("paper_plane")) return 110;
         return 0;
@@ -124,6 +126,12 @@ final class ComposerSendResolver {
                 || v.contains("dismiss")
                 || v.contains("reset")
                 || v.contains("erase")
+                || v.contains("microphone")
+                || v.contains("voice")
+                || v.contains("attach")
+                || v.contains("attachment")
+                || v.contains("emoji")
+                || v.contains("camera")
                 || v.contains("delete")
                 || v.contains("remove")
                 || v.contains("cross")

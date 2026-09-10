@@ -552,11 +552,8 @@ public class CrewAccessibilityService extends AccessibilityService {
                     if (parsed != null && !parsed.isEmpty()) role = parsed;
                 } catch (Exception ignored) {}
                 final String fRole = role;
-                final boolean[] started = new boolean[]{false};
                 mainHandler.post(new Runnable() {
-                    @Override public void run() {
-                        started[0] = beginTeachElement(fRole);
-                    }
+                    @Override public void run() { beginTeachElement(fRole); }
                 });
                 responseJson = "{\"success\":true,\"message\":\"已開啟 UI 教導模式，請點選目標元件\",\"role\":\"" + role + "\"}";
             } else if (path.startsWith("/tap")) {
@@ -1291,57 +1288,39 @@ public class CrewAccessibilityService extends AccessibilityService {
 
     private LearnedUiResolver.Match lastLearnedSendMatch = null;
 
-    /** Finds an unlabeled composer send icon using learned mappings first, then strict metadata/heuristics. */
+    /**
+     * Resolves a manually taught composer-send control before generic semantics.
+     * A rule is scoped to the current app/screen and the composer-with-text state;
+     * it is only clicked once by SendTextTransaction and must still verify.
+     */
     private AccessibilityNodeInfo findLikelySendButton(AccessibilityNodeInfo root) {
         if (root == null) return null;
-
         if (lastLearnedSendMatch != null && lastLearnedSendMatch.node != null) {
             try { lastLearnedSendMatch.node.recycle(); } catch (Exception ignored) {}
         }
         lastLearnedSendMatch = null;
-
-        if (learnedUiMappingStore != null) {
-            try {
-                AccessibilityNodeInfo composer = findActiveEditText(root);
-                if (composer != null
-                        && !"HAS_TEXT".equals(LearnedUiMappingStore.composerState(composer))) {
-                    composer.recycle();
-                    composer = null;
-                }
-                String pkg = root.getPackageName() == null ? "" : root.getPackageName().toString();
-                String sig = ScreenFingerprint.create(root);
-
-                java.util.List<LearnedUiMappingStore.Rule> learnedRules =
-                        learnedUiMappingStore.findRules(pkg, sig, "COMPOSER_SEND");
-
-                LearnedUiResolver.Match anchored =
-                        LearnedUiResolver.resolveAnchored(root, learnedRules);
-                if (anchored != null && anchored.node != null) {
-                    lastLearnedSendMatch = anchored;
-                    if (composer != null) composer.recycle();
-                    return AccessibilityNodeInfo.obtain(anchored.node);
-                }
-
-                LearnedUiResolver.Match learned = composer == null
-                        ? null
-                        : LearnedUiResolver.resolve(root, learnedRules, composer);
-                if (composer != null) composer.recycle();
-
-                if (learned != null && learned.node != null) {
-                    lastLearnedSendMatch = learned;
-                    return AccessibilityNodeInfo.obtain(learned.node);
-                }
-            } catch (Exception ignored) {}
-        }
-
-        AccessibilityNodeInfo resolved = ComposerSendResolver.find(root);
-        if (resolved != null) return resolved;
-
-        // Do NOT use a pure "right side of edit box" compatibility fallback.
-        // It can click clear-text X / close / attachment controls. If the strict
-        // resolver has no confident send target, return null and let the agent
-        // inspect/replan or use vision fallback explicitly.
-        return null;
+        try {
+            AccessibilityNodeInfo composer = findActiveEditText(root);
+            if (composer != null
+                    && !"HAS_TEXT".equals(LearnedUiMappingStore.composerState(composer))) {
+                composer.recycle();
+                composer = null;
+            }
+            String pkg = root.getPackageName() == null ? "" : root.getPackageName().toString();
+            String sig = ScreenFingerprint.create(root);
+            java.util.List<LearnedUiMappingStore.Rule> rules = getLearnedUiMappingStore()
+                    .findRules(pkg, sig, "COMPOSER_SEND");
+            LearnedUiResolver.Match match = LearnedUiResolver.resolveAnchored(root, rules);
+            if (match == null && composer != null) {
+                match = LearnedUiResolver.resolve(root, rules, composer);
+            }
+            if (composer != null) composer.recycle();
+            if (match != null && match.node != null) {
+                lastLearnedSendMatch = match;
+                return AccessibilityNodeInfo.obtain(match.node);
+            }
+        } catch (Exception ignored) {}
+        return ComposerSendResolver.find(root);
     }
 
     void recordLastLearnedSendResult(boolean success) {
@@ -1349,9 +1328,7 @@ public class CrewAccessibilityService extends AccessibilityService {
         lastLearnedSendMatch = null;
         if (match == null) return;
         try {
-            if (learnedUiMappingStore != null && match.rule != null) {
-                learnedUiMappingStore.recordResultByIdentity(match.rule, success);
-            }
+            if (match.rule != null) getLearnedUiMappingStore().recordResultByIdentity(match.rule, success);
         } catch (Exception ignored) {
         } finally {
             if (match.node != null) {

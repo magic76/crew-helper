@@ -15,6 +15,7 @@ final class UserActionScope {
     private boolean sendAuthorized;
     private boolean sendRecipientRequired;
     private String sendRecipient = "";
+    private boolean messageTransactionHandled;
     private boolean searchIntent;
     private boolean openSearchResultAuthorized;
     private boolean searchResultSelectionRequested;
@@ -75,6 +76,7 @@ final class UserActionScope {
         sendAuthorized = grant.authorized;
         sendRecipientRequired = grant.recipientRequired;
         sendRecipient = grant.recipient;
+        messageTransactionHandled = false;
         searchIntent = search;
         // App launch ("open Maps, search X") must not silently authorize
         // opening a search result. Only a post-search open/select or navigation
@@ -110,6 +112,16 @@ final class UserActionScope {
         sendAuthorized = false;
         sendRecipientRequired = false;
         sendRecipient = "";
+    }
+
+    /** A single explicit-send turn owns one atomic transaction, never a tap loop. */
+    synchronized void markMessageTransactionHandled() {
+        messageTransactionHandled = true;
+    }
+
+    synchronized boolean shouldBlockFurtherMessageMutation() {
+        expireIfNeeded();
+        return messageTransactionHandled;
     }
 
     synchronized boolean shouldAutoCommitSearch() {
@@ -218,6 +230,7 @@ final class UserActionScope {
         sendAuthorized = false;
         sendRecipientRequired = false;
         sendRecipient = "";
+        messageTransactionHandled = false;
         endCallAuthorized = false;
         searchIntent = false;
         openSearchResultAuthorized = false;
@@ -300,8 +313,8 @@ final class UserActionScope {
 
     /**
      * Explicit send means the utterance itself names the communication action.
-     * "跟他說 / 告訴他 / 傳給小明" remain conversationally ambiguous and do
-     * NOT authorize a real send.
+     * A recipient plus a message body (for example "傳給小明：晚點見") is
+     * explicit. A bare "傳給小明" remains ambiguous and does not authorize.
      */
     private static SendGrant parseSendGrant(String text) {
         SendGrant out = new SendGrant();
@@ -325,7 +338,8 @@ final class UserActionScope {
         boolean recipientMentioned = hasExplicitRecipientMarker(raw);
         boolean currentComposer = currentComposerVerb && !recipientMentioned;
 
-        boolean explicitMessageVerb = currentComposerVerb || containsAny(value,
+        boolean directRecipientSend = raw.matches(".*(?:傳|传|發|发)(?:給|给)\\s*[^：:,，]+[：:,，]\\s*.+");
+        boolean explicitMessageVerb = currentComposerVerb || directRecipientSend || containsAny(value,
                 "傳訊息", "传讯息", "傳消息", "传消息",
                 "發訊息", "发讯息", "發消息", "发消息",
                 "傳送訊息", "传送讯息", "傳送消息", "传送消息",

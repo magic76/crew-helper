@@ -36,7 +36,6 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        CorrectionLearningRuntime.init(this);
 
         // 🌌 Immersive Dark Status & Navigation Bar
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
@@ -377,26 +376,7 @@ public class MainActivity extends Activity {
                 }
             }));
 
-        // ── 3. Learning & Corrections ──
-        addSectionTitle(pageContent, I18n.get(this, "🧠 學習與修正", "LEARNING & CORRECTIONS"));
-        CorrectionRuleStore correctionStore = new CorrectionRuleStore(this);
-        int correctionTotal = correctionStore.count();
-        int correctionEnabled = correctionStore.enabledCount();
-        String correctionSummary = correctionTotal == 0
-            ? I18n.get(this, "尚未學習修正 · 助理做錯時按「打斷」並教它正確做法",
-                "No corrections learned yet · Interrupt and teach the correct action")
-            : I18n.get(this,
-                "已學習 " + correctionTotal + " 條 · 啟用 " + correctionEnabled + " 條 · 點擊 review / 編輯",
-                correctionTotal + " learned · " + correctionEnabled + " enabled · Tap to review/edit");
-        pageContent.addView(makeActionCard("🧩",
-            I18n.get(this, "已學習操作（Correction Memory）", "Learned Operations (Correction Memory)"),
-            correctionSummary, CrewTheme.TEAL_400, new View.OnClickListener() {
-                @Override public void onClick(View v) {
-                    startActivity(new Intent(MainActivity.this, CorrectionRulesActivity.class));
-                }
-            }));
-
-        // ── 4. System Preferences ──
+        // ── 3. System Preferences ──
         addSectionTitle(pageContent, I18n.get(this, "🌐 系統與連線", "SYSTEM & CONNECTION"));
 
         boolean isStandalone = AppConfig.isStandaloneMode(this);
