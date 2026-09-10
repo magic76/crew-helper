@@ -7,7 +7,9 @@ import java.util.ArrayList;
 
 /** Compact, model-facing projection of Runtime's full semantic screen state. */
 final class ModelScreenView {
-    private static final int MAX_IMPORTANT = 10;
+    // 0043: 10 was occasionally too aggressive and could hide the actual next
+    // control. Keep the projection compact, but allow a little more evidence.
+    private static final int MAX_IMPORTANT = 14;
     private static final int MAX_LABEL = 96;
 
     private static final class Ranked {
@@ -100,9 +102,6 @@ final class ModelScreenView {
             String role = source.optString("role", "");
             String label = clip(source.optString("label", ""));
 
-            // Runtime keeps semanticHint/viewId/focus/selection/sensitive/bounds
-            // in the full SemanticScreenState. The model only needs identity,
-            // human label, semantic role and what it can do next.
             if (includeId) copyString(source, out, "id");
             if (!role.isEmpty()) out.put("role", role);
             if (!label.isEmpty()) out.put("label", label);

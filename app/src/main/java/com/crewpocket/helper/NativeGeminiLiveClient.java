@@ -320,25 +320,47 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         }
     }
 
-    /** Start a fresh user intent. Never carry repeat-loop state across it. */
-    private void beginNewUserIntent() {
+    /**
+     * Start a new finalized user turn without throwing away useful short-term
+     * task continuity. The newest turn is authoritative; rootGoal survives only
+     * inside the existing 45-second conversation-goal window.
+     */
+    private void beginNewUserIntent(String userText) {
+        long now = System.currentTimeMillis();
+        boolean startNewCapsule = conversationGoalId.isEmpty()
+                || now - conversationGoalTouchedAt < 0L
+                || now - conversationGoalTouchedAt > CONVERSATION_GOAL_IDLE_MS;
+
+        if (startNewCapsule) {
+            conversationGoalId = "goal_" + now;
+            conversationGoalTaskIndex = 0;
+            conversationGoalHint = "";
+            conversationGoalTouchedAt = now;
+            workingContext.startNewGoal(userText);
+            consecutiveNoProgress = 0;
+            pendingCondition = null;
+            lastCandidateApps.clear();
+        } else {
+            conversationGoalTouchedAt = now;
+            workingContext.beginUserTurn(userText);
+            // A new user utterance supersedes any old asynchronous wait, even
+            // when it is a follow-up within the same task capsule.
+            pendingCondition = null;
+        }
+
         synchronized (agentLock) {
             userIntentGeneration++;
-            // Calls that have not started belong to the old utterance.  An
+            // Calls that have not started belong to the old utterance. An
             // executing call is additionally guarded by its generation below.
             pendingToolCalls.clear();
-            // Old queued calls no longer deserve a response after the user has
-            // supplied a new goal. Their in-flight de-duplication state must
-            // not grow for the duration of a long Live session either.
             inFlightToolSignatures.clear();
             primaryToolCallSignatures.clear();
             coalescedToolCallRecipients.clear();
         }
+
         supersedeActiveAgentTaskForNewUserInstruction();
-        // Keep current app/screen, but never feed a new goal the previous
-        // task's actions/results/pending state.
-        workingContext.resetTransientForNewGoal();
-        Log.d(TAG, "新的使用者意圖：generation=" + userIntentGeneration);
+        Log.d(TAG, "新的使用者意圖：generation=" + userIntentGeneration
+                + " capsule=" + (startNewCapsule ? "NEW" : "CONTINUE"));
     }
 
     private boolean isCurrentUserIntent(long generation) {
@@ -354,8 +376,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             if (consumePendingUiChoiceInput(input)) return true;
             if (hasPendingUiChoice()) clearPendingUiChoiceSilently();
 
-            beginNewUserIntent();
-            workingContext.setGoalHint(input);
+            beginNewUserIntent(input);
             userActionScope.updateFromUserText(input);
             JSONObject part = new JSONObject().put("text", text.trim());
             JSONObject turn = new JSONObject().put("role", "user").put("parts", new JSONArray().put(part));
@@ -662,8 +683,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             // Any other utterance replaces the pending choice/task.
             if (hasPendingUiChoice()) clearPendingUiChoiceSilently();
 
-            beginNewUserIntent();
-            workingContext.setGoalHint(completeUserInput);
+            beginNewUserIntent(completeUserInput);
 
             authorizationTranscript = completeUserInput;
             if (authorizationTranscript.length() > 4096) {
