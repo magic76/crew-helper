@@ -15,6 +15,8 @@ public final class VoicePolicyTest {
         scope.updateFromUserText("打開小明的聊天室");
         check(!scope.canSend(), "open does not authorize send");
         scope.updateFromUserText("傳給小明：明天見");
+        check(!scope.canSend(), "vague sending phrase requires clarification");
+        scope.updateFromUserText("傳訊息給小明：明天見");
         check(scope.canSend(), "explicit send");
         scope.consumeSendAuthorization();
         check(!scope.canSend(), "send capability consumed");

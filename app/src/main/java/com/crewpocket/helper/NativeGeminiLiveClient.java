@@ -1128,7 +1128,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                         .put("properties", phoneActionProperties)
                         .put("required", new JSONArray().put("action"))));
         tools.put(new JSONObject().put("name", "inspect_ui").put("description",
-                "FALLBACK OBSERVATION ONLY. Do NOT call after STEP_OK when result.after.fresh=true; Runtime already auto-observed the new screen. Call inspect_ui only when there is no trustworthy current/after state, Runtime explicitly requires observation after STEP_FAILED, or semantics are insufficient. It returns a compact screen for exactly one next phone_action."));
+                "FALLBACK OBSERVATION ONLY. Do NOT call after STEP_OK when result.after.fresh=true and verification is not PENDING; Runtime already auto-observed the new screen. Call inspect_ui only when there is no trustworthy current/after state, verification=PENDING, Runtime explicitly requires observation after STEP_FAILED, or semantics are insufficient. It returns a compact screen for exactly one next phone_action."));
         tools.put(new JSONObject().put("name", "wait").put("description",
                 "Wait for a screen condition after an asynchronous action. Runtime polls and returns the latest state.")
                 .put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject()
@@ -1559,11 +1559,14 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             try {
                 if (isMutationTool(name) && succeeded) {
                     JSONObject after = result.optJSONObject("after");
-                    boolean freshAfter = after != null && after.optBoolean("fresh", false)
-                            && "AUTO_AFTER_ACTION".equals(after.optString("source", ""));
+                    boolean verificationPending = "PENDING".equals(result.optString("verification", ""));
+                    boolean freshAfter = PostActionEvidence.usable(
+                            after != null && after.optBoolean("fresh", false),
+                            after == null ? "" : after.optString("source", ""),
+                            verificationPending);
                     task.requiresPostActionInspection = !freshAfter;
                     task.postActionInspectionPrompted = false;
-                    result.put("actionStatus", "EXECUTED");
+                    result.put("actionStatus", verificationPending ? "AWAITING_VERIFICATION" : "EXECUTED");
                     if (!result.has("taskState")) result.put("taskState", freshAfter ? "EVIDENCE_AVAILABLE" : "IN_PROGRESS");
                     if (!result.has("completionEvidence")) result.put("completionEvidence", freshAfter
                             ? "AUTO_AFTER_ACTION" : "PENDING_POST_ACTION_INSPECTION");
