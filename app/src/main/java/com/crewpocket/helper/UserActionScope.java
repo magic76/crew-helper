@@ -24,7 +24,9 @@ final class UserActionScope {
     private boolean searchQueryEntered;
     private boolean searchCommitted;
     private boolean searchResultSelected;
+    private boolean searchResultSelectionDispatched;
     private String selectedSearchResult = "";
+    private String dispatchedSearchResult = "";
     private long updatedAtMs;
     private boolean endCallAuthorized;
 
@@ -76,7 +78,9 @@ final class UserActionScope {
         searchQueryEntered = false;
         searchCommitted = false;
         searchResultSelected = false;
+        searchResultSelectionDispatched = false;
         selectedSearchResult = "";
+        dispatchedSearchResult = "";
         updatedAtMs = System.currentTimeMillis();
     }
 
@@ -138,6 +142,17 @@ final class UserActionScope {
         return searchIntent && searchCommitted && searchResultSelected;
     }
 
+    synchronized boolean hasDispatchedSearchResultSelection() {
+        expireIfNeeded();
+        return searchIntent && searchCommitted
+                && searchResultSelectionDispatched && !searchResultSelected;
+    }
+
+    synchronized String dispatchedSearchResult() {
+        expireIfNeeded();
+        return dispatchedSearchResult == null ? "" : dispatchedSearchResult;
+    }
+
     synchronized String selectedSearchResult() {
         expireIfNeeded();
         return selectedSearchResult == null ? "" : selectedSearchResult;
@@ -158,6 +173,10 @@ final class UserActionScope {
         if (!searchIntent) return false;
         searchQueryEntered = true;
         searchCommitted = false;
+        searchResultSelectionDispatched = false;
+        searchResultSelected = false;
+        dispatchedSearchResult = "";
+        selectedSearchResult = "";
         return true;
     }
 
@@ -169,13 +188,25 @@ final class UserActionScope {
         return isSearchOnlyLocked();
     }
 
+    synchronized void markSearchResultSelectionDispatched(String label) {
+        expireIfNeeded();
+        if (!searchIntent) return;
+        searchQueryEntered = true;
+        searchCommitted = true;
+        searchResultSelectionDispatched = true;
+        searchResultSelected = false;
+        dispatchedSearchResult = label == null ? "" : label.trim();
+    }
+
     synchronized void markSearchResultSelected(String label) {
         expireIfNeeded();
         if (!searchIntent) return;
         searchQueryEntered = true;
         searchCommitted = true;
+        searchResultSelectionDispatched = true;
         searchResultSelected = true;
         selectedSearchResult = label == null ? "" : label.trim();
+        dispatchedSearchResult = "";
     }
 
     synchronized boolean shouldBlockAdditionalTextEntry() {
@@ -229,7 +260,9 @@ final class UserActionScope {
         searchQueryEntered = false;
         searchCommitted = false;
         searchResultSelected = false;
+        searchResultSelectionDispatched = false;
         selectedSearchResult = "";
+        dispatchedSearchResult = "";
     }
 
     static boolean looksLikeSendTarget(String metadata) {
