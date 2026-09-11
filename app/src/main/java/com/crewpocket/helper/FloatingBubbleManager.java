@@ -57,6 +57,9 @@ public class FloatingBubbleManager {
     private final Vibrator vibrator;
 
     private FluidBubbleView bubbleView = null;
+    private LinearLayout bubbleContainer = null;
+    private ValueAnimator bubbleExpandAnimator = null;
+    private int bubbleExpandAnimationGeneration = 0;
     private View voiceControlView = null;
     private boolean voiceControlsOpening = false;
     private WindowManager.LayoutParams voiceControlParams = null;
@@ -630,10 +633,17 @@ public class FloatingBubbleManager {
             dockAnimator.cancel();
             dockAnimator = null;
         }
-        if (bubbleView != null) {
-            try { windowManager.removeView(bubbleView); } catch(Exception e){}
-            bubbleView = null;
+        bubbleExpandAnimationGeneration++;
+        if (bubbleExpandAnimator != null) {
+            bubbleExpandAnimator.cancel();
+            bubbleExpandAnimator = null;
         }
+        if (bubbleContainer != null) {
+            try { windowManager.removeView(bubbleContainer); } catch (Exception ignored) {}
+        }
+        bubbleContainer = null;
+        bubbleView = null;
+        bubbleActionStrip = null;
     }
 
     public boolean isBubbleShowing() {
@@ -648,17 +658,20 @@ public class FloatingBubbleManager {
 
     public void wakeBubbleFromDock() {
         autoDockHandler.removeCallbacks(autoDockRunnable);
-        if (bubbleView == null || bubbleParams == null) return;
+        if (bubbleView == null || bubbleContainer == null || bubbleParams == null) return;
         if (dockAnimator != null && dockAnimator.isRunning()) {
             dockAnimator.cancel();
         }
         int screenWidth = windowManager.getDefaultDisplay().getWidth();
-        int bSize = bubbleParams.width > 0 ? bubbleParams.width : dp(BUBBLE_SIZE_DP);
-        int targetX = (bubbleParams.x < screenWidth / 2) ? dp(4) : (screenWidth - bSize - dp(4));
+        int bSize = dp(BUBBLE_SIZE_DP);
+        int targetX = (bubbleParams.x < screenWidth / 2)
+                ? dp(4)
+                : (screenWidth - bSize - dp(4));
 
         bubbleParams.x = targetX;
         bubbleView.setAlpha(1.0f);
-        try { windowManager.updateViewLayout(bubbleView, bubbleParams); } catch (Exception ignored) {}
+        try { windowManager.updateViewLayout(bubbleContainer, bubbleParams); }
+        catch (Exception ignored) {}
         isDocked = false;
     }
 
@@ -680,26 +693,43 @@ public class FloatingBubbleManager {
             @Override
             public void run() {
                 try {
-                    int overlayType = Build.VERSION.SDK_INT >= 26 
-                        ? 2038 
-                        : WindowManager.LayoutParams.TYPE_PHONE;
+                    int overlayType = Build.VERSION.SDK_INT >= 26
+                            ? 2038
+                            : WindowManager.LayoutParams.TYPE_PHONE;
 
-                    int size = dp(BUBBLE_SIZE_DP);
+                    final int size = dp(BUBBLE_SIZE_DP);
                     bubbleParams = new WindowManager.LayoutParams(
-                        size, size,
-                        overlayType,
-                        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-                        PixelFormat.TRANSLUCENT
-                    );
+                            size,
+                            size,
+                            overlayType,
+                            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                                    | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                            PixelFormat.TRANSLUCENT);
                     bubbleParams.gravity = Gravity.TOP | Gravity.START;
-                    int screenW = windowManager.getDefaultDisplay().getWidth();
+
                     int screenH = windowManager.getDefaultDisplay().getHeight();
                     int safeTop = getStatusBarHeight() + dp(12);
                     bubbleParams.x = dp(4);
                     bubbleParams.y = Math.max(safeTop, screenH / 3);
 
+                    bubbleContainer = new LinearLayout(context);
+                    bubbleContainer.setOrientation(LinearLayout.VERTICAL);
+                    bubbleContainer.setGravity(Gravity.CENTER_HORIZONTAL);
+                    bubbleContainer.setClipChildren(true);
+                    bubbleContainer.setClipToPadding(false);
+
                     bubbleView = new FluidBubbleView(context);
                     bubbleView.setElevation(16f);
+                    bubbleContainer.addView(
+                            bubbleView,
+                            new LinearLayout.LayoutParams(size, size));
+
+                    bubbleActionStrip = new BubbleActionStripOverlay(context);
+                    bubbleContainer.addView(
+                            bubbleActionStrip,
+                            new LinearLayout.LayoutParams(
+                                    size,
+                                    LinearLayout.LayoutParams.WRAP_CONTENT));
 
                     bubbleView.setOnTouchListener(new View.OnTouchListener() {
                         private int initialX, initialY;
@@ -735,27 +765,42 @@ public class FloatingBubbleManager {
                                     float moveDist = (float) Math.hypot(
                                             event.getRawX() - initialTouchX,
                                             event.getRawY() - initialTouchY);
-                                    if (moveDist > 18) {
+                                    if (moveDist > 18 && !moved) {
                                         moved = true;
-                                        if (bubbleActionStrip != null) {
-                                            bubbleActionStrip.dismiss();
-                                        }
+                                        collapseBubbleActions(false);
+                                        initialX = bubbleParams.x;
+                                        initialY = bubbleParams.y;
+                                        initialTouchX = event.getRawX();
+                                        initialTouchY = event.getRawY();
                                     }
-                                    int targetX = initialX + (int) (event.getRawX() - initialTouchX);
-                                    int targetY = initialY + (int) (event.getRawY() - initialTouchY);
-                                    bubbleParams.x = Math.max(leftLimit, Math.min(rightLimit, targetX));
-                                    bubbleParams.y = Math.max(topLimit, Math.min(bottomLimit, targetY));
+
+                                    int targetX = initialX
+                                            + (int) (event.getRawX() - initialTouchX);
+                                    int targetY = initialY
+                                            + (int) (event.getRawY() - initialTouchY);
+                                    bubbleParams.x = Math.max(
+                                            leftLimit,
+                                            Math.min(rightLimit, targetX));
+                                    bubbleParams.y = Math.max(
+                                            topLimit,
+                                            Math.min(bottomLimit, targetY));
                                     bubbleView.setAlpha(1.0f);
                                     isDocked = false;
-                                    windowManager.updateViewLayout(bubbleView, bubbleParams);
+                                    windowManager.updateViewLayout(
+                                            bubbleContainer,
+                                            bubbleParams);
                                     return true;
 
                                 case MotionEvent.ACTION_UP:
                                 case MotionEvent.ACTION_CANCEL:
                                     if (!moved) {
-                                        float dx = Math.abs(event.getRawX() - initialTouchX);
-                                        float dy = Math.abs(event.getRawY() - initialTouchY);
-                                        long duration = System.currentTimeMillis() - touchStartTime;
+                                        float dx = Math.abs(
+                                                event.getRawX() - initialTouchX);
+                                        float dy = Math.abs(
+                                                event.getRawY() - initialTouchY);
+                                        long duration =
+                                                System.currentTimeMillis()
+                                                        - touchStartTime;
                                         if (dx < 18 && dy < 18 && duration < 450) {
                                             vibrateShort();
                                             toggleBubbleActionStrip();
@@ -769,11 +814,14 @@ public class FloatingBubbleManager {
                         }
                     });
 
-                    windowManager.addView(bubbleView, bubbleParams);
+                    windowManager.addView(bubbleContainer, bubbleParams);
                     isDocked = false;
                     scheduleAutoDock();
                     if (onShown != null) onShown.run();
                 } catch (Exception e) {
+                    bubbleContainer = null;
+                    bubbleView = null;
+                    bubbleActionStrip = null;
                     e.printStackTrace();
                 }
             }
@@ -789,67 +837,187 @@ public class FloatingBubbleManager {
     }
 
     private void snapBubbleToEdge() {
-        if (bubbleView == null || bubbleParams == null) return;
+        if (bubbleView == null || bubbleContainer == null || bubbleParams == null) return;
         try {
             int screenWidth = windowManager.getDefaultDisplay().getWidth();
             int screenHeight = windowManager.getDefaultDisplay().getHeight();
-            int bSize = bubbleParams.width > 0 ? bubbleParams.width : dp(BUBBLE_SIZE_DP);
+            int bSize = dp(BUBBLE_SIZE_DP);
             int topLimit = getStatusBarHeight() + dp(4);
-            int bottomLimit = screenHeight - dp(64);
+            int visibleHeight = Math.max(bSize, bubbleParams.height);
+            int bottomLimit = Math.max(
+                    topLimit,
+                    screenHeight - visibleHeight - dp(16));
 
-            // Snap X to left or right margin
-            bubbleParams.x = (bubbleParams.x < screenWidth / 2) ? dp(4) : (screenWidth - bSize - dp(4));
-            // Clamp Y inside safe screen area
-            bubbleParams.y = Math.max(topLimit, Math.min(bottomLimit, bubbleParams.y));
-            windowManager.updateViewLayout(bubbleView, bubbleParams);
+            bubbleParams.x = (bubbleParams.x < screenWidth / 2)
+                    ? dp(4)
+                    : (screenWidth - bSize - dp(4));
+            bubbleParams.y = Math.max(
+                    topLimit,
+                    Math.min(bottomLimit, bubbleParams.y));
+            windowManager.updateViewLayout(bubbleContainer, bubbleParams);
         } catch (Exception ignored) {}
     }
 
     private void ensureShortcutRoomBelow(int bubbleSize) {
-        if (bubbleView == null || bubbleParams == null) return;
+        if (bubbleContainer == null || bubbleParams == null) return;
         try {
             int screenHeight = windowManager.getDefaultDisplay().getHeight();
-            // 0039: the compact rail contains exactly 2 idle / 3 Live actions.
-            int itemCount = NativeLiveService.isActive() ? 3 : 2;
-            int shortcutHeight = dp(8) + itemCount * dp(46);
+            int shortcutHeight = bubbleActionStrip == null
+                    ? dp(94)
+                    : bubbleActionStrip.desiredHeightPx();
             int requiredBottom =
-                    bubbleParams.y + bubbleSize
-                            + dp(BubbleActionStripOverlay.ACTION_STRIP_GAP_DP)
-                            + shortcutHeight + dp(18);
+                    bubbleParams.y + bubbleSize + shortcutHeight + dp(16);
             if (requiredBottom <= screenHeight) return;
+
             int delta = requiredBottom - screenHeight;
             int topLimit = getStatusBarHeight() + dp(4);
-            bubbleParams.y = Math.max(topLimit, bubbleParams.y - delta);
-            windowManager.updateViewLayout(bubbleView, bubbleParams);
+            bubbleParams.y = Math.max(
+                    topLimit,
+                    bubbleParams.y - delta);
+            windowManager.updateViewLayout(bubbleContainer, bubbleParams);
         } catch (Exception ignored) {}
     }
 
     private void toggleBubbleActionStrip() {
-        if (bubbleView == null || bubbleParams == null) return;
-        if (bubbleActionStrip == null) {
-            bubbleActionStrip = new BubbleActionStripOverlay(context);
+        if (bubbleView == null
+                || bubbleContainer == null
+                || bubbleParams == null
+                || bubbleActionStrip == null) {
+            return;
         }
-        int size = bubbleParams.width > 0
-                ? bubbleParams.width
-                : dp(BUBBLE_SIZE_DP);
-        if (!bubbleActionStrip.isShowing()) {
-            ensureShortcutRoomBelow(size);
+
+        if (bubbleActionStrip.isShowing()) {
+            collapseBubbleActions(true);
+        } else {
+            expandBubbleActions();
         }
-        bubbleActionStrip.toggle(
-                bubbleParams.x,
-                bubbleParams.y,
-                size,
-                bubbleActionStripActions());
+    }
+
+    private void expandBubbleActions() {
+        if (bubbleContainer == null
+                || bubbleParams == null
+                || bubbleActionStrip == null) {
+            return;
+        }
+
+        bubbleActionStrip.show(bubbleActionStripActions());
+        ensureShortcutRoomBelow(dp(BUBBLE_SIZE_DP));
+        setBubbleContainerExpandedStyle(true);
+
+        int targetHeight =
+                dp(BUBBLE_SIZE_DP)
+                        + bubbleActionStrip.desiredHeightPx();
+        animateBubbleContainerHeight(targetHeight, 160L, null);
+    }
+
+    private void collapseBubbleActions(boolean animated) {
+        if (bubbleContainer == null
+                || bubbleParams == null
+                || bubbleActionStrip == null
+                || !bubbleActionStrip.isShowing()) {
+            return;
+        }
+
+        Runnable finish = new Runnable() {
+            @Override public void run() {
+                if (bubbleActionStrip != null) {
+                    bubbleActionStrip.dismiss();
+                }
+                setBubbleContainerExpandedStyle(false);
+            }
+        };
+
+        if (animated) {
+            animateBubbleContainerHeight(
+                    dp(BUBBLE_SIZE_DP),
+                    140L,
+                    finish);
+        } else {
+            bubbleExpandAnimationGeneration++;
+            if (bubbleExpandAnimator != null) {
+                bubbleExpandAnimator.cancel();
+                bubbleExpandAnimator = null;
+            }
+            bubbleParams.height = dp(BUBBLE_SIZE_DP);
+            try {
+                windowManager.updateViewLayout(
+                        bubbleContainer,
+                        bubbleParams);
+            } catch (Exception ignored) {}
+            finish.run();
+        }
+    }
+
+    private void setBubbleContainerExpandedStyle(boolean expanded) {
+        if (bubbleContainer == null) return;
+        if (!expanded) {
+            bubbleContainer.setBackground(null);
+            return;
+        }
+
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(Color.argb(232, 15, 23, 42));
+        bg.setCornerRadius(dp(24));
+        bg.setStroke(dp(1), Color.parseColor("#334155"));
+        bubbleContainer.setBackground(bg);
+    }
+
+    private void animateBubbleContainerHeight(
+            int targetHeight,
+            long durationMs,
+            final Runnable endAction) {
+        if (bubbleContainer == null || bubbleParams == null) return;
+
+        final int generation = ++bubbleExpandAnimationGeneration;
+        if (bubbleExpandAnimator != null) {
+            bubbleExpandAnimator.cancel();
+        }
+
+        final int startHeight =
+                bubbleParams.height > 0
+                        ? bubbleParams.height
+                        : dp(BUBBLE_SIZE_DP);
+        if (startHeight == targetHeight) {
+            if (endAction != null) endAction.run();
+            return;
+        }
+
+        bubbleExpandAnimator =
+                ValueAnimator.ofInt(startHeight, targetHeight);
+        bubbleExpandAnimator.setDuration(durationMs);
+        bubbleExpandAnimator.setInterpolator(
+                new DecelerateInterpolator());
+        bubbleExpandAnimator.addUpdateListener(animation -> {
+            if (bubbleContainer == null || bubbleParams == null) return;
+            bubbleParams.height = (Integer) animation.getAnimatedValue();
+            try {
+                windowManager.updateViewLayout(
+                        bubbleContainer,
+                        bubbleParams);
+            } catch (Exception ignored) {}
+        });
+        bubbleExpandAnimator.addListener(
+                new AnimatorListenerAdapter() {
+                    @Override
+                    public void onAnimationEnd(Animator animation) {
+                        if (generation != bubbleExpandAnimationGeneration) return;
+                        bubbleExpandAnimator = null;
+                        if (endAction != null) endAction.run();
+                    }
+                });
+        bubbleExpandAnimator.start();
     }
 
     private BubbleActionStripOverlay.Actions bubbleActionStripActions() {
         return new BubbleActionStripOverlay.Actions() {
             @Override public void onToggleCall() {
+                collapseBubbleActions(false);
                 toggleNativeLive();
                 refreshVoiceControls();
             }
 
             @Override public void onToggleMute() {
+                collapseBubbleActions(false);
                 boolean muted = NativeLiveService.toggleAgentMute();
                 showCompactStatus(
                         muted ? "已靜音" : "已取消靜音",
@@ -858,10 +1026,12 @@ public class FloatingBubbleManager {
             }
 
             @Override public void onOpenConsole() {
+                collapseBubbleActions(false);
                 showVoiceControls();
             }
 
             @Override public void onInterrupt() {
+                collapseBubbleActions(false);
                 if (NativeLiveService.interruptForCorrection()) {
                     showCompactStatus("已打斷", "");
                 }
@@ -873,18 +1043,20 @@ public class FloatingBubbleManager {
     private void refreshBubbleActionStripIfShowing() {
         if (bubbleActionStrip == null
                 || !bubbleActionStrip.isShowing()
+                || bubbleContainer == null
                 || bubbleParams == null) {
             return;
         }
-        int size = bubbleParams.width > 0
-                ? bubbleParams.width
-                : dp(BUBBLE_SIZE_DP);
-        ensureShortcutRoomBelow(size);
-        bubbleActionStrip.refresh(
-                bubbleParams.x,
-                bubbleParams.y,
-                size,
-                bubbleActionStripActions());
+
+        bubbleActionStrip.refresh(bubbleActionStripActions());
+        ensureShortcutRoomBelow(dp(BUBBLE_SIZE_DP));
+        int targetHeight =
+                dp(BUBBLE_SIZE_DP)
+                        + bubbleActionStrip.desiredHeightPx();
+        animateBubbleContainerHeight(
+                targetHeight,
+                100L,
+                null);
     }
 
     // 🌊 Set Water Flow / Thinking State

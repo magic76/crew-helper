@@ -4,29 +4,21 @@ import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
-import android.graphics.PixelFormat;
 import android.graphics.RectF;
 import android.graphics.drawable.GradientDrawable;
-import android.os.Build;
 import android.view.Gravity;
 import android.view.View;
-import android.view.WindowManager;
 import android.widget.LinearLayout;
 
 /**
- * 0049 compact bubble action rail.
+ * 0050 embedded action rail.
  *
- * Idle:
- *   [Start voice] [More]
- *
- * Live:
- *   [Mute / Unmute / Interrupt speaking] [End voice] [More]
- *
- * The first Live icon is stateful so the rail stays at three controls without
- * adding another floating surface.
+ * This is no longer a separate WindowManager overlay. FloatingBubbleManager
+ * keeps this view inside the same window/container as FluidBubbleView, so the
+ * bubble itself expands vertically and the controls feel physically attached.
  */
-final class BubbleActionStripOverlay {
-    static final int ACTION_STRIP_GAP_DP = 8;
+final class BubbleActionStripOverlay extends LinearLayout {
+    static final int ACTION_STRIP_GAP_DP = 0;
 
     interface Actions {
         void onToggleCall();
@@ -43,143 +35,99 @@ final class BubbleActionStripOverlay {
     private static final int ICON_SPEAKER = 6;
 
     private final Context context;
-    private final WindowManager windowManager;
-    private View view;
+    private boolean showing = false;
 
     BubbleActionStripOverlay(Context context) {
+        super(context);
         this.context = context.getApplicationContext();
-        this.windowManager =
-                (WindowManager) this.context.getSystemService(Context.WINDOW_SERVICE);
+        setOrientation(VERTICAL);
+        setGravity(Gravity.CENTER_HORIZONTAL);
+        setPadding(dp(4), dp(2), dp(4), dp(4));
+        setClipToPadding(false);
+        setClipChildren(false);
+        setVisibility(GONE);
+        setBackgroundColor(Color.TRANSPARENT);
     }
 
     boolean isShowing() {
-        return view != null;
+        return showing && getVisibility() == VISIBLE;
     }
 
-    void toggle(int bubbleX, int bubbleY, int bubbleSize, Actions actions) {
-        if (isShowing()) dismiss();
-        else show(bubbleX, bubbleY, bubbleSize, actions);
+    int desiredHeightPx() {
+        int itemCount = NativeLiveService.isActive() ? 3 : 2;
+        return dp(6) + itemCount * dp(44);
     }
 
-    void refresh(int bubbleX, int bubbleY, int bubbleSize, Actions actions) {
+    void show(Actions actions) {
+        showing = true;
+        rebuild(actions);
+        setVisibility(VISIBLE);
+        setAlpha(0f);
+        animate().alpha(1f).setDuration(120L).start();
+    }
+
+    void refresh(Actions actions) {
         if (!isShowing()) return;
-        dismiss();
-        show(bubbleX, bubbleY, bubbleSize, actions);
+        rebuild(actions);
     }
 
-    void show(int bubbleX, int bubbleY, int bubbleSize, final Actions actions) {
-        dismiss();
+    void dismiss() {
+        showing = false;
+        animate().cancel();
+        setAlpha(1f);
+        setVisibility(GONE);
+        removeAllViews();
+    }
+
+    private void rebuild(final Actions actions) {
+        removeAllViews();
 
         final boolean live = NativeLiveService.isActive();
         final boolean speaking = live && NativeLiveService.isAiSpeaking();
         final boolean muted = live && NativeLiveService.isAgentMuted();
 
-        LinearLayout rail = new LinearLayout(context);
-        rail.setOrientation(LinearLayout.VERTICAL);
-        rail.setGravity(Gravity.CENTER);
-        rail.setPadding(dp(4), dp(4), dp(4), dp(4));
-        rail.setClipToPadding(false);
-        rail.setClipChildren(false);
-
-        GradientDrawable railBg = new GradientDrawable();
-        railBg.setColor(Color.argb(224, 15, 23, 42));
-        railBg.setCornerRadius(dp(18));
-        railBg.setStroke(dp(1), Color.parseColor("#334155"));
-        rail.setBackground(railBg);
-        rail.setElevation(dp(12));
-
         if (live) {
             final int primaryIcon =
-                    speaking ? ICON_SPEAKER : (muted ? ICON_MIC_MUTED : ICON_MIC_ACTIVE);
+                    speaking ? ICON_SPEAKER
+                            : (muted ? ICON_MIC_MUTED : ICON_MIC_ACTIVE);
             IconButton primary = iconButton(primaryIcon);
             primary.setContentDescription(
                     speaking ? "打斷助理"
                             : (muted ? "取消靜音" : "麥克風靜音"));
             primary.setOnClickListener(v -> {
-                dismiss();
                 if (actions == null) return;
                 if (speaking) actions.onInterrupt();
                 else actions.onToggleMute();
             });
-            rail.addView(primary, itemParams());
+            addView(primary, itemParams());
 
             IconButton end = iconButton(ICON_HANGUP);
             end.setContentDescription("結束語音通話");
             end.setOnClickListener(v -> {
-                dismiss();
                 if (actions != null) actions.onToggleCall();
             });
-            rail.addView(end, itemParams());
+            addView(end, itemParams());
         } else {
             IconButton start = iconButton(ICON_CALL);
             start.setContentDescription("開始語音對話");
             start.setOnClickListener(v -> {
-                dismiss();
                 if (actions != null) actions.onToggleCall();
             });
-            rail.addView(start, itemParams());
+            addView(start, itemParams());
         }
 
         IconButton more = iconButton(ICON_MORE);
         more.setContentDescription("更多設定");
         more.setOnClickListener(v -> {
-            dismiss();
             if (actions != null) actions.onOpenConsole();
         });
-        rail.addView(more, itemParams());
-
-        int itemCount = live ? 3 : 2;
-        int stripWidth = dp(50);
-        int stripHeight = dp(8) + itemCount * dp(46);
-
-        WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
-                stripWidth,
-                stripHeight,
-                Build.VERSION.SDK_INT >= 26
-                        ? 2038
-                        : WindowManager.LayoutParams.TYPE_PHONE,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                        | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
-                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-                PixelFormat.TRANSLUCENT
-        );
-        lp.gravity = Gravity.TOP | Gravity.START;
-
-        int screenW = context.getResources().getDisplayMetrics().widthPixels;
-        int centeredX = bubbleX + bubbleSize / 2 - stripWidth / 2;
-        lp.x = Math.max(dp(6), Math.min(
-                screenW - stripWidth - dp(6), centeredX));
-        lp.y = bubbleY + bubbleSize + dp(ACTION_STRIP_GAP_DP);
-
-        try {
-            rail.setAlpha(0f);
-            rail.setScaleX(0.92f);
-            rail.setScaleY(0.92f);
-            windowManager.addView(rail, lp);
-            view = rail;
-            rail.animate()
-                    .alpha(1f)
-                    .scaleX(1f)
-                    .scaleY(1f)
-                    .setDuration(140L)
-                    .start();
-        } catch (Exception ignored) {
-            view = null;
-        }
-    }
-
-    void dismiss() {
-        if (view == null) return;
-        View old = view;
-        view = null;
-        try {
-            windowManager.removeViewImmediate(old);
-        } catch (Exception ignored) {}
+        addView(more, itemParams());
     }
 
     private LinearLayout.LayoutParams itemParams() {
         LinearLayout.LayoutParams lp =
-                new LinearLayout.LayoutParams(dp(42), dp(42));
+                new LinearLayout.LayoutParams(dp(40), dp(40));
+        lp.gravity = Gravity.CENTER_HORIZONTAL;
         lp.setMargins(0, dp(2), 0, dp(2));
         return lp;
     }
@@ -189,32 +137,20 @@ final class BubbleActionStripOverlay {
         button.setIcon(icon);
 
         int fill;
-        int stroke;
         if (icon == ICON_SPEAKER) {
-            fill = Color.parseColor("#4D78350F");
-            stroke = Color.parseColor("#D97706");
-        } else if (icon == ICON_MIC_MUTED) {
-            fill = Color.parseColor("#4D4C0519");
-            stroke = Color.parseColor("#BE123C");
-        } else if (icon == ICON_MIC_ACTIVE) {
-            fill = Color.parseColor("#40134E4A");
-            stroke = Color.parseColor("#0F766E");
-        } else if (icon == ICON_HANGUP) {
-            fill = Color.parseColor("#404C0519");
-            stroke = Color.parseColor("#9F1239");
-        } else if (icon == ICON_CALL) {
-            fill = Color.parseColor("#33164E63");
-            stroke = Color.parseColor("#0E7490");
+            fill = Color.argb(72, 120, 53, 15);
+        } else if (icon == ICON_MIC_MUTED || icon == ICON_HANGUP) {
+            fill = Color.argb(58, 76, 5, 25);
+        } else if (icon == ICON_MIC_ACTIVE || icon == ICON_CALL) {
+            fill = Color.argb(52, 19, 78, 74);
         } else {
             fill = Color.TRANSPARENT;
-            stroke = Color.parseColor("#334155");
         }
 
         GradientDrawable bg = new GradientDrawable();
         bg.setShape(GradientDrawable.RECTANGLE);
-        bg.setCornerRadius(dp(13));
+        bg.setCornerRadius(dp(12));
         bg.setColor(fill);
-        bg.setStroke(dp(1), stroke);
         button.setBackground(bg);
         return button;
     }
