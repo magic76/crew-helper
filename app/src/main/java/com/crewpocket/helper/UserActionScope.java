@@ -273,6 +273,65 @@ final class UserActionScope {
                 "傳送", "传送", "發送", "发送", "送出");
     }
 
+    /**
+     * 0052 deterministic fast path for a send-only follow-up.
+     * Keep this intentionally narrow: these phrases contain no new message text,
+     * so Runtime can safely submit only the currently visible composer.
+     */
+    static boolean isStandaloneCurrentScreenSendCommand(String rawText) {
+        String value = normalize(rawText == null ? "" : rawText);
+        if (value.isEmpty()) return false;
+        return value.equals("送出")
+                || value.equals("送出吧")
+                || value.equals("送出去")
+                || value.equals("幫我送出")
+                || value.equals("帮我送出")
+                || value.equals("幫我送出去")
+                || value.equals("帮我送出去")
+                || value.equals("直接送出")
+                || value.equals("請送出")
+                || value.equals("请送出")
+                || value.equals("然後送出")
+                || value.equals("然后送出")
+                || value.equals("那就送出")
+                || value.equals("就送出")
+                || value.equals("好送出")
+                || value.equals("現在送出")
+                || value.equals("现在送出")
+                || value.equals("發送")
+                || value.equals("发送")
+                || value.equals("發送吧")
+                || value.equals("发送吧")
+                || value.equals("幫我發送")
+                || value.equals("帮我发送")
+                || value.equals("直接發送")
+                || value.equals("直接发送")
+                || value.equals("請發送")
+                || value.equals("请发送")
+                || value.equals("然後發送")
+                || value.equals("然后发送")
+                || value.equals("那就發送")
+                || value.equals("那就发送")
+                || value.equals("就發送")
+                || value.equals("就发送")
+                || value.equals("傳送")
+                || value.equals("传送")
+                || value.equals("傳送吧")
+                || value.equals("传送吧")
+                || value.equals("幫我傳送")
+                || value.equals("帮我传送")
+                || value.equals("直接傳送")
+                || value.equals("直接传送")
+                || value.equals("send")
+                || value.equals("sendit")
+                || value.equals("sendnow")
+                || value.equals("sendthis")
+                || value.equals("sendmessage")
+                || value.equals("sendcurrentmessage")
+                || value.equals("pleasesend")
+                || value.equals("sendplease");
+    }
+
     static boolean isSearchControl(String metadata) {
         String value = normalize(metadata);
         return containsAny(value,

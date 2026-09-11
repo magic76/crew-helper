@@ -784,6 +784,14 @@ public class CrewAccessibilityService extends AccessibilityService {
                     try { selectionLock.wait(1800); } catch (Exception ignored) {}
                 }
                 responseJson = selectionResult[0];
+            } else if (path.startsWith("/send_current")) {
+                PolicyEngine.Result policy =
+                        PolicyEngine.evaluate("type", "", "", isActiveInputHardBlocked());
+                if (policy.blocked()) {
+                    writeJsonAndClose(socket, policyBlockJson(policy));
+                    return;
+                }
+                responseJson = performSendCurrentComposerSimple().toString();
             } else if (path.startsWith("/send_text")) {
                 final String textToSend = getJsonString(body, "text");
                 final boolean useExistingComposer =
@@ -1573,6 +1581,172 @@ public class CrewAccessibilityService extends AccessibilityService {
             current = parent;
         }
         return null;
+    }
+
+    /**
+     * 0052 simple SEND_CURRENT primitive.
+     *
+     * Current-screen only:
+     * composer with text -> learned/semantic Send -> IME fallback -> one verify.
+     * No recipient routing, no second click, no retry loop.
+     */
+    private JSONObject performSendCurrentComposerSimple() {
+        AccessibilityNodeInfo root = null;
+        AccessibilityNodeInfo composer = null;
+        AccessibilityNodeInfo send = null;
+        AccessibilityNodeInfo freshRoot = null;
+        AccessibilityNodeInfo freshComposer = null;
+
+        String submittedText = "";
+        String submitMethod = "NONE";
+        boolean submitted = false;
+
+        try {
+            root = getRootInActiveWindow();
+            if (root == null) {
+                return sendCurrentFailure("RESOLVE_COMPOSER", "NO_ACTIVE_WINDOW");
+            }
+
+            composer = findActiveEditText(root);
+            if (composer == null) {
+                return sendCurrentFailure("RESOLVE_COMPOSER", "COMPOSER_NOT_FOUND");
+            }
+            if (SensitiveDataGuard.isHardBlockedInput(composer)) {
+                return sendCurrentFailure("RESOLVE_COMPOSER", "SENSITIVE_INPUT_BLOCKED");
+            }
+
+            CharSequence current = composer.getText();
+            submittedText = current == null ? "" : current.toString();
+            if (submittedText.trim().isEmpty()
+                    || !"HAS_TEXT".equals(LearnedUiMappingStore.composerState(composer))) {
+                return sendCurrentFailure("RESOLVE_COMPOSER", "COMPOSER_EMPTY");
+            }
+
+            SendVerification.Snapshot before =
+                    SendVerification.capture(root, composer);
+
+            send = findLikelySendButton(root);
+            if (send != null) {
+                if (SensitiveDataGuard.isBlockedAction(send)) {
+                    return sendCurrentFailure("SUBMIT", "SENSITIVE_TARGET_BLOCKED");
+                }
+
+                boolean learned = lastLearnedSendMatch != null;
+                try {
+                    // Execute once. Some Accessibility targets return false even
+                    // when the UI accepted the click, so verification is authoritative.
+                    send.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                    submitted = true;
+                    submitMethod = learned ? "LEARNED_SEND" : "SEMANTIC_SEND";
+                } catch (Exception ignored) {}
+            } else if (tryImeSendCurrent(composer)) {
+                submitted = true;
+                submitMethod = "IME_ENTER";
+            }
+
+            if (!submitted) {
+                recordLastLearnedSendResult(false);
+                return sendCurrentFailure("SUBMIT", "SUBMIT_TARGET_NOT_FOUND");
+            }
+
+            try { Thread.sleep(420L); }
+            catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            }
+
+            freshRoot = getRootInActiveWindow();
+            if (freshRoot == null) {
+                recordLastLearnedSendResult(false);
+                return new JSONObject()
+                        .put("success", false)
+                        .put("action", "SEND_CURRENT")
+                        .put("submitted", true)
+                        .put("submitMethod", submitMethod)
+                        .put("stage", "VERIFY")
+                        .put("error", "SEND_UNCERTAIN");
+            }
+
+            freshComposer = findActiveEditText(freshRoot);
+            SendVerification.Snapshot after =
+                    SendVerification.capture(freshRoot, freshComposer);
+            SendVerification.Result verification =
+                    SendVerification.verify(before, after, submittedText);
+
+            boolean success =
+                    verification.state == SendVerification.State.VERIFIED
+                    || verification.state == SendVerification.State.LIKELY;
+            recordLastLearnedSendResult(success);
+
+            JSONObject out = new JSONObject()
+                    .put("success", success)
+                    .put("action", "SEND_CURRENT")
+                    .put("submitted", true)
+                    .put("verified",
+                            verification.state == SendVerification.State.VERIFIED)
+                    .put("submitMethod", submitMethod)
+                    .put("stage", "DONE")
+                    .put("textLength", submittedText.length())
+                    .put("verification", verification.toJson());
+
+            if (!success) {
+                out.put("error", "SEND_UNCERTAIN");
+            }
+            return out;
+        } catch (Exception error) {
+            recordLastLearnedSendResult(false);
+            try {
+                return sendCurrentFailure(
+                        "RUNTIME",
+                        error.getMessage() == null
+                                ? "SEND_CURRENT_FAILED"
+                                : error.getMessage());
+            } catch (Exception ignored) {
+                return new JSONObject();
+            }
+        } finally {
+            if (send != null) try { send.recycle(); } catch (Exception ignored) {}
+            if (freshComposer != null) try { freshComposer.recycle(); } catch (Exception ignored) {}
+            if (freshRoot != null) try { freshRoot.recycle(); } catch (Exception ignored) {}
+            if (composer != null) try { composer.recycle(); } catch (Exception ignored) {}
+            if (root != null) try { root.recycle(); } catch (Exception ignored) {}
+        }
+    }
+
+    private JSONObject sendCurrentFailure(String stage, String error) {
+        JSONObject out = new JSONObject();
+        try {
+            out.put("success", false)
+                    .put("action", "SEND_CURRENT")
+                    .put("submitted", false)
+                    .put("stage", stage)
+                    .put("error", error);
+        } catch (Exception ignored) {}
+        return out;
+    }
+
+    private boolean tryImeSendCurrent(AccessibilityNodeInfo composer) {
+        if (composer == null || Build.VERSION.SDK_INT < 30) return false;
+        try {
+            int imeEnterId = 16908372;
+            try {
+                Object actionObj = AccessibilityNodeInfo.AccessibilityAction.class
+                        .getField("ACTION_IME_ENTER")
+                        .get(null);
+                if (actionObj instanceof AccessibilityNodeInfo.AccessibilityAction) {
+                    imeEnterId =
+                            ((AccessibilityNodeInfo.AccessibilityAction) actionObj)
+                                    .getId();
+                }
+            } catch (Throwable ignored) {}
+
+            for (AccessibilityNodeInfo.AccessibilityAction action
+                    : composer.getActionList()) {
+                if (action != null && action.getId() == imeEnterId) {
+                    return composer.performAction(action.getId());
+                }
+            }
+        } catch (Exception ignored) {}
+        return false;
     }
 
     private SendTextTransaction newSendTextTransaction() {
