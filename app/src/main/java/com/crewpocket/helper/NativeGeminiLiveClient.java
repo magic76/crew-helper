@@ -151,6 +151,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     // server model turn, not one handleJson() invocation.
     private boolean currentModelTurnHadToolCall = false;
     private boolean currentModelTurnProducedSpeech = false;
+    // 0047: transcript text is not audible-output proof.
+    private boolean currentModelTurnReceivedAudio = false;
+    private volatile String lastAudioOutputState = "NONE";
+    private long audioPcmBytesReceived = 0L;
+    private long audioPcmBytesAccepted = 0L;
 
     NativeGeminiLiveClient(String apiKey, Listener listener) { this(apiKey, "", AppConfig.DEFAULT_VOICE, "auto", 35, "warm", "", 55, "call", listener); }
     NativeGeminiLiveClient(String apiKey, String serverUrl, Listener listener) { this(apiKey, serverUrl, AppConfig.DEFAULT_VOICE, "auto", 35, "warm", "", 55, "call", listener); }
@@ -740,9 +745,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if (outputTranscript == null) outputTranscript = server.optJSONObject("output_transcription");
         if (outputTranscript != null && !outputTranscript.optString("text").isEmpty()
                 && !shouldWithholdUnverifiedAgentReply()) {
+            // Bubble text may arrive even when no PCM is played. Keep showing
+            // it, but do not let text satisfy the final-speech contract.
             if (!responseHasToolCall) {
-                markCurrentModelTurnSpeech();
-                markAgentUserVisibleReplyProduced();
+                Log.d(TAG, "0047 transcript received; waiting for Gemini PCM");
             }
             listener.onTranscript("Gemini", outputTranscript.optString("text"));
         }
@@ -769,8 +775,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                     JSONObject inline = part.optJSONObject("inlineData");
                     if (inline == null) inline = part.optJSONObject("inline_data");
                     if (inline != null && inline.optString("data").length() > 0) {
-                        enqueueAudio(Base64.decode(inline.getString("data"), Base64.DEFAULT));
-                        if (!responseHasToolCall && !agentMuted) {
+                        byte[] responsePcm = Base64.decode(inline.getString("data"), Base64.DEFAULT);
+                        noteCurrentModelTurnAudioReceived(responsePcm.length);
+                        boolean audioAccepted = enqueueAudio(responsePcm);
+                        if (!responseHasToolCall && audioAccepted) {
                             markCurrentModelTurnSpeech();
                             markAgentUserVisibleReplyProduced();
                         }
@@ -779,8 +787,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                         String modelText = part.optString("text");
                         if (!responseHasToolCall) {
                             appendAgentFinalText(modelText);
-                            markCurrentModelTurnSpeech();
-                            markAgentUserVisibleReplyProduced();
                         }
                         listener.onTranscript("Gemini", modelText);
                     }
@@ -1812,6 +1818,14 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         }
     }
 
+    private void noteCurrentModelTurnAudioReceived(int bytes) {
+        synchronized (agentLock) {
+            currentModelTurnReceivedAudio = true;
+            audioPcmBytesReceived += Math.max(0, bytes);
+        }
+        Log.d(TAG, "0047 Gemini PCM received: " + bytes + " bytes");
+    }
+
     private void markCurrentModelTurnSpeech() {
         synchronized (agentLock) {
             currentModelTurnProducedSpeech = true;
@@ -1844,6 +1858,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         synchronized (agentLock) {
             currentModelTurnHadToolCall = false;
             currentModelTurnProducedSpeech = false;
+            currentModelTurnReceivedAudio = false;
         }
     }
 
@@ -1910,7 +1925,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                     + "/" + AGENT_FINAL_SPEECH_MAX_RETRIES + "）";
         }
 
-        reportStage(task.status);
+        reportStage(task.status + " · audio=" + lastAudioOutputState
+                + " · pcmReceived=" + audioPcmBytesReceived
+                + " · pcmAccepted=" + audioPcmBytesAccepted);
         sendInternalAgentDirective(
                 "【FINAL TURN REQUIRED】上一個 active Agent turn 沒有產生使用者可聽見的最終回覆，"
                 + "也沒有下一個工具動作。現在只能二選一："
@@ -3556,8 +3573,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             written = player == null ? AudioTrack.ERROR_INVALID_OPERATION : player.write(pcm, 0, pcm.length);
         }
         if (written < 0) {
+            lastAudioOutputState = "AUDIOTRACK_WRITE_FAILED:" + written;
             Log.w(TAG, "AudioTrack 寫入失敗（" + written + "），重建播放軌");
             recoverAudioPlayer();
+        } else if (written > 0) {
+            lastAudioOutputState = "AUDIOTRACK_PLAYING";
         }
     }
 
@@ -3717,16 +3737,42 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         double gateDbfs = gate <= 0.000001 ? -96.0 : Math.max(-96.0, 20.0 * Math.log10(gate));
         listener.onMicrophoneLevel(dbfs, gateDbfs, sending);
     }
-    private void enqueueAudio(byte[] pcm) {
-        if (agentMuted || interruptedCurrentTurn || pcm == null || pcm.length == 0) return;
+    private boolean enqueueAudio(byte[] pcm) {
+        if (pcm == null || pcm.length == 0) {
+            lastAudioOutputState = "EMPTY_PCM";
+            return false;
+        }
+        if (agentMuted) {
+            lastAudioOutputState = "BLOCKED_MUTED";
+            Log.w(TAG, "0047 audio blocked because agentMuted=true");
+            return false;
+        }
+        if (interruptedCurrentTurn) {
+            lastAudioOutputState = "BLOCKED_INTERRUPTED";
+            Log.w(TAG, "0047 audio blocked because interruptedCurrentTurn=true");
+            return false;
+        }
         long durationMs = pcm.length * 1000L / (24000 * 2);
         lastPlaybackActiveAt = Math.max(System.currentTimeMillis(), lastPlaybackActiveAt) + durationMs;
-        if (usingOboeOutput) { NativeOboeOutput.write(pcm); return; }
-        // Preserve current speech instead of blocking the WebSocket callback.
-        if (!audioQueue.offer(pcm)) {
-            audioQueue.poll();
-            if (!audioQueue.offer(pcm)) Log.w(TAG, "音訊佇列已滿，略過過期語音片段");
+        if (usingOboeOutput) {
+            NativeOboeOutput.write(pcm);
+            audioPcmBytesAccepted += pcm.length;
+            lastAudioOutputState = "OBOE_ACCEPTED";
+            return true;
         }
+        boolean accepted = audioQueue.offer(pcm);
+        if (!accepted) {
+            audioQueue.poll();
+            accepted = audioQueue.offer(pcm);
+        }
+        if (accepted) {
+            audioPcmBytesAccepted += pcm.length;
+            lastAudioOutputState = "AUDIOTRACK_QUEUED";
+        } else {
+            lastAudioOutputState = "AUDIOTRACK_QUEUE_FULL";
+            Log.w(TAG, "音訊佇列已滿，略過過期語音片段");
+        }
+        return accepted;
     }
 
     /** Compact in-memory audit record. Raw payloads deliberately never enter transcripts. */
