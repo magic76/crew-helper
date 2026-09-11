@@ -581,6 +581,62 @@ public class CrewAccessibilityService extends AccessibilityService {
                     }
                 });
                 responseJson = "{\"success\":true,\"action\":\"TAP\",\"x\":" + x + ",\"y\":" + y + "}";
+            } else if (path.startsWith("/click_v2")) {
+                final String label = getJsonString(body, "label");
+                final String id = getJsonString(body, "id");
+                final String hint = getJsonString(body, "semanticHint");
+                final String role = getJsonString(body, "role");
+                final String elementId = getJsonString(body, "elementId");
+                PolicyEngine.Result policy = PolicyEngine.evaluate("click", label, id, false);
+                if (policy.blocked()) {
+                    writeJsonAndClose(socket, policyBlockJson(policy));
+                    return;
+                }
+                final JSONObject[] clickResult = new JSONObject[]{new JSONObject().put("success", false).put("error", "BRIDGE_ROUTE_UNAVAILABLE")};
+                final Object clickLock = new Object();
+                mainHandler.post(new Runnable() {
+                    @Override public void run() {
+                        AccessibilityNodeInfo root = getRootInActiveWindow();
+                        UiLocatorV2.Match match = null;
+                        try {
+                            UiTargetSpec spec = UiTargetSpec.builder()
+                                    .actionKind(UiTargetSpec.ActionKind.TAP)
+                                    .label(label).viewId(id).elementId(elementId)
+                                    .semanticHint(hint).role(role).build();
+                            match = UiLocatorV2.resolve(root, spec);
+                            JSONObject out = new JSONObject().put("success", false)
+                                    .put("action", "NODE_CLICK_V2")
+                                    .put("decision", match.decision.name())
+                                    .put("confidence", match.confidence)
+                                    .put("runnerUpConfidence", match.runnerUpConfidence)
+                                    .put("code", match.code)
+                                    .put("source", match.source);
+                            if (match.autoExecutable()) {
+                                boolean clicked = false;
+                                try {
+                                    if (!SensitiveDataGuard.isBlockedAction(match.node)) {
+                                        clicked = match.node.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                                    }
+                                } finally { match.recycle(); match = null; }
+                                out.put("success", clicked);
+                                if (!clicked) out.put("error", "NODE_CLICK_REJECTED");
+                            } else {
+                                out.put("error", match.code);
+                            }
+                            clickResult[0] = out;
+                        } catch (Exception e) {
+                            clickResult[0] = new JSONObject();
+                            try { clickResult[0].put("success", false).put("error", "V2_LOCATOR_ERROR"); }
+                            catch (Exception ignored) {}
+                            if (match != null) match.recycle();
+                        } finally {
+                            if (root != null) root.recycle();
+                            synchronized (clickLock) { clickLock.notify(); }
+                        }
+                    }
+                });
+                synchronized (clickLock) { try { clickLock.wait(1500); } catch (Exception ignored) {} }
+                responseJson = clickResult[0].toString();
             } else if (path.startsWith("/click")) {
                 final String label = getJsonString(body, "label");
                 final String id = getJsonString(body, "id");

@@ -4,20 +4,25 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-/** Immutable append-only ledger record. Keep payloads compact and non-sensitive. */
+/** Immutable append-only ledger record. Payloads must stay compact and non-sensitive. */
 final class AgentEvent {
     enum Type {
         USER_INTENT_ACCEPTED,
         TOOL_QUEUED,
+        ACTION_PREFLIGHT_ALLOWED,
         ACTION_STARTED,
         ACTION_EXECUTED,
         SCREEN_OBSERVED,
+        LOCATOR_RESOLVED,
+        LOCATOR_REJECTED,
+        ACTION_VERIFICATION_PENDING,
         ACTION_VERIFIED,
         ACTION_COMMITTED,
         ACTION_FAILED,
         TOOL_RESULT_SENT,
         MODEL_WAITING,
         USER_WAITING,
+        OBSERVATION_REQUIRED,
         DUPLICATE_IGNORED,
         STALE_ACTION_REJECTED,
         USER_INTERRUPTED,
@@ -56,9 +61,7 @@ final class AgentEvent {
         this.attributes = Collections.unmodifiableMap(new LinkedHashMap<String, String>(attributes));
     }
 
-    static Builder builder(Type type) {
-        return new Builder(type);
-    }
+    static Builder builder(Type type) { return new Builder(type); }
 
     AgentEvent withSequence(long nextSequence) {
         return new AgentEvent(nextSequence, timestampMs, type, generation, goalId, taskId,
@@ -105,9 +108,9 @@ final class AgentEvent {
             return this;
         }
 
-        Builder attr(String key, boolean value) {
-            return attr(key, String.valueOf(value));
-        }
+        Builder attr(String key, boolean value) { return attr(key, String.valueOf(value)); }
+        Builder attr(String key, long value) { return attr(key, String.valueOf(value)); }
+        Builder attr(String key, double value) { return attr(key, String.format(java.util.Locale.ROOT, "%.3f", value)); }
 
         AgentEvent build() {
             return new AgentEvent(0L, timestampMs, type, generation, goalId, taskId,
@@ -115,18 +118,16 @@ final class AgentEvent {
         }
     }
 
-    private static String safe(String value) {
-        return value == null ? "" : value;
-    }
+    private static String safe(String value) { return value == null ? "" : value; }
 
     @Override public String toString() {
-        return "#" + sequence + " " + type +
-                " gen=" + generation +
-                (goalId.isEmpty() ? "" : " goal=" + goalId) +
-                (taskId.isEmpty() ? "" : " task=" + taskId) +
-                (actionId.isEmpty() ? "" : " action=" + actionId) +
-                (toolCallId.isEmpty() ? "" : " tool=" + toolCallId) +
-                (attributes.isEmpty() ? "" : " " + attributes);
+        return "#" + sequence + " " + type
+                + " gen=" + generation
+                + (goalId.isEmpty() ? "" : " goal=" + goalId)
+                + (taskId.isEmpty() ? "" : " task=" + taskId)
+                + (actionId.isEmpty() ? "" : " action=" + actionId)
+                + (toolCallId.isEmpty() ? "" : " tool=" + toolCallId)
+                + (attributes.isEmpty() ? "" : " " + attributes);
     }
 }
 

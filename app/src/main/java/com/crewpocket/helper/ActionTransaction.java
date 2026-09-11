@@ -1,18 +1,22 @@
 package com.crewpocket.helper;
 
 /**
- * One mutation/action lifecycle. v1 records lifecycle only; it does not yet
- * decide whether NativeGeminiLiveClient may execute an action.
+ * Runtime-owned lifecycle for one phone mutation.
+ *
+ * Unlike v1, v2 distinguishes EXECUTED from VERIFIED.  An Android callback or
+ * dispatched gesture is never enough by itself to commit a mutation.
  */
 final class ActionTransaction {
     enum Status {
         CREATED,
+        PREFLIGHT_ALLOWED,
         STARTED,
         EXECUTED,
-        OBSERVED,
+        PENDING_VERIFICATION,
         VERIFIED,
         COMMITTED,
         FAILED,
+        REJECTED,
         CANCELLED
     }
 
@@ -23,6 +27,8 @@ final class ActionTransaction {
         APP_CHANGE,
         FOCUS_CHANGE,
         TEXT_CHANGE,
+        SCROLL_CHANGE,
+        DOMAIN_VERIFIED,
         NO_UI_CHANGE
     }
 
@@ -34,11 +40,14 @@ final class ActionTransaction {
     final String requestedName;
     final String runtimeName;
     final ExpectedEffect expectedEffect;
+    final String actionHash;
     final long createdAtMs;
 
     private Status status = Status.CREATED;
-    private String beforeFingerprint = "";
-    private String afterFingerprint = "";
+    private ActionObservation beforeObservation;
+    private ActionObservation afterObservation;
+    private ExecutionEvidence executionEvidence;
+    private ActionVerificationResult verification;
     private String resultCode = "";
     private long updatedAtMs;
 
@@ -50,7 +59,8 @@ final class ActionTransaction {
                       String requestedName,
                       String runtimeName,
                       ExpectedEffect expectedEffect,
-                      String beforeFingerprint) {
+                      String actionHash,
+                      ActionObservation beforeObservation) {
         this.actionId = safe(actionId);
         this.generation = generation;
         this.goalId = safe(goalId);
@@ -59,42 +69,106 @@ final class ActionTransaction {
         this.requestedName = safe(requestedName);
         this.runtimeName = safe(runtimeName);
         this.expectedEffect = expectedEffect == null ? ExpectedEffect.UNKNOWN : expectedEffect;
-        this.beforeFingerprint = safe(beforeFingerprint);
+        this.actionHash = safe(actionHash);
+        this.beforeObservation = beforeObservation == null
+                ? ActionObservation.unavailable() : beforeObservation;
+        this.afterObservation = ActionObservation.unavailable();
         this.createdAtMs = System.currentTimeMillis();
         this.updatedAtMs = createdAtMs;
     }
 
+    /**
+     * v1 ShadowAgentRuntime source-compatibility constructor.
+     * Remove after the old shadow adapter has been deleted from the app.
+     */
+    @Deprecated
+    ActionTransaction(String actionId,
+                      long generation,
+                      String goalId,
+                      String taskId,
+                      String toolCallId,
+                      String requestedName,
+                      String runtimeName,
+                      ExpectedEffect expectedEffect,
+                      String beforeFingerprint) {
+        this(actionId, generation, goalId, taskId, toolCallId, requestedName, runtimeName,
+                expectedEffect, "", new ActionObservation(
+                        beforeFingerprint != null && !beforeFingerprint.isEmpty(),
+                        "", beforeFingerprint, "", "", "", 0, System.currentTimeMillis()));
+    }
+
     synchronized Status status() { return status; }
-    synchronized String beforeFingerprint() { return beforeFingerprint; }
-    synchronized String afterFingerprint() { return afterFingerprint; }
+    synchronized ActionObservation beforeObservation() { return beforeObservation; }
+    synchronized ActionObservation afterObservation() { return afterObservation; }
+    synchronized ExecutionEvidence executionEvidence() { return executionEvidence; }
+    synchronized ActionVerificationResult verification() { return verification; }
     synchronized String resultCode() { return resultCode; }
     synchronized long updatedAtMs() { return updatedAtMs; }
 
+    synchronized void allowPreflight() {
+        if (status == Status.CREATED) set(Status.PREFLIGHT_ALLOWED);
+    }
+
     synchronized void start() {
-        transition(Status.CREATED, Status.STARTED);
+        if (status == Status.CREATED || status == Status.PREFLIGHT_ALLOWED) set(Status.STARTED);
     }
 
+    /** v1 source compatibility. */
+    @Deprecated
     synchronized void markExecuted() {
-        if (status == Status.STARTED) set(Status.EXECUTED);
+        markExecuted(new ExecutionEvidence(true, false, false, false, false, ""));
     }
 
+    synchronized void markExecuted(ExecutionEvidence evidence) {
+        if (isTerminal()) return;
+        executionEvidence = evidence;
+        if (status == Status.STARTED || status == Status.PREFLIGHT_ALLOWED) set(Status.EXECUTED);
+    }
+
+    /** v1 source compatibility. */
+    @Deprecated
     synchronized void observe(String fingerprint) {
-        if (isTerminal()) return;
-        afterFingerprint = safe(fingerprint);
-        if (status == Status.STARTED || status == Status.EXECUTED) set(Status.OBSERVED);
+        observe(new ActionObservation(
+                fingerprint != null && !fingerprint.isEmpty(),
+                "", fingerprint, "", "", "", 0, System.currentTimeMillis()));
     }
 
+    synchronized void observe(ActionObservation observation) {
+        if (isTerminal() || observation == null) return;
+        afterObservation = observation;
+    }
+
+    /** v1 source compatibility. */
+    @Deprecated
     synchronized void verify(boolean success, String code) {
-        if (isTerminal()) return;
-        resultCode = safe(code);
-        if (success) set(Status.VERIFIED);
+        boolean changed = screenChanged();
+        applyVerification(new ActionVerificationResult(
+                success ? ActionVerificationResult.Status.VERIFIED
+                        : ActionVerificationResult.Status.FAILED,
+                code, changed, false, false, false));
+    }
+
+    /** v1 source compatibility. */
+    @Deprecated
+    synchronized boolean screenChanged() {
+        String before = beforeFingerprint();
+        String after = afterFingerprint();
+        return !before.isEmpty() && !after.isEmpty() && !before.equals(after);
+    }
+
+    synchronized void applyVerification(ActionVerificationResult value) {
+        if (isTerminal() || value == null) return;
+        verification = value;
+        resultCode = safe(value.code);
+        if (value.committed()) set(Status.VERIFIED);
+        else if (value.pending()) set(Status.PENDING_VERIFICATION);
+        else if (value.status == ActionVerificationResult.Status.BLOCKED) set(Status.REJECTED);
+        else if (value.status == ActionVerificationResult.Status.CANCELLED) set(Status.CANCELLED);
         else set(Status.FAILED);
     }
 
     synchronized void commit() {
-        if (status == Status.VERIFIED || status == Status.OBSERVED || status == Status.EXECUTED || status == Status.STARTED) {
-            set(Status.COMMITTED);
-        }
+        if (status == Status.VERIFIED) set(Status.COMMITTED);
     }
 
     synchronized void fail(String code) {
@@ -103,20 +177,40 @@ final class ActionTransaction {
         set(Status.FAILED);
     }
 
+    synchronized void reject(String code) {
+        if (isTerminal()) return;
+        resultCode = safe(code);
+        set(Status.REJECTED);
+    }
+
     synchronized void cancel(String code) {
         if (isTerminal()) return;
         resultCode = safe(code);
         set(Status.CANCELLED);
     }
 
-    synchronized boolean screenChanged() {
-        return !beforeFingerprint.isEmpty()
-                && !afterFingerprint.isEmpty()
-                && !beforeFingerprint.equals(afterFingerprint);
+    synchronized boolean isPendingVerification() {
+        return status == Status.PENDING_VERIFICATION;
     }
 
-    private void transition(Status expected, Status next) {
-        if (status == expected) set(next);
+    synchronized boolean isCommitted() {
+        return status == Status.COMMITTED;
+    }
+
+    synchronized String beforeStableScreenKey() {
+        return beforeObservation == null ? "" : beforeObservation.stableScreenKey;
+    }
+
+    synchronized String afterStableScreenKey() {
+        return afterObservation == null ? "" : afterObservation.stableScreenKey;
+    }
+
+    synchronized String beforeFingerprint() {
+        return beforeObservation == null ? "" : beforeObservation.fingerprint;
+    }
+
+    synchronized String afterFingerprint() {
+        return afterObservation == null ? "" : afterObservation.fingerprint;
     }
 
     private void set(Status value) {
@@ -125,7 +219,10 @@ final class ActionTransaction {
     }
 
     private boolean isTerminal() {
-        return status == Status.COMMITTED || status == Status.FAILED || status == Status.CANCELLED;
+        return status == Status.COMMITTED
+                || status == Status.FAILED
+                || status == Status.REJECTED
+                || status == Status.CANCELLED;
     }
 
     private static String safe(String value) { return value == null ? "" : value; }

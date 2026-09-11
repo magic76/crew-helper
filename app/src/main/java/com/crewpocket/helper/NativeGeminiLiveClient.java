@@ -131,6 +131,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private final UserActionScope userActionScope = new UserActionScope();
     // 0070: observational-only state projection. It must never gate execution.
     private final ShadowAgentRuntime shadowAgentRuntime = new ShadowAgentRuntime();
+    // 0071: authoritative v2 action transaction runtime.
+    private final AgentRuntimeV2 agentRuntimeV2 = new AgentRuntimeV2();
+    private volatile ActionObservation latestActionObservation = ActionObservation.unavailable();
     private String authorizationTranscript = "";
     // Incremented for every finalized user utterance (and typed instruction).
     // Tool calls retain the generation that created them, preventing an old
@@ -195,6 +198,40 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 Log.d(TAG, "AgentLedger " + event.type + " => " + state.phase);
             }
         });
+        agentRuntimeV2.setListener(new AgentLedger.Listener() {
+            @Override public void onEvent(AgentEvent event, AgentState state) {
+                Log.d(TAG, "AgentRuntimeV2 " + event.type + " => " + state.phase);
+            }
+        });
+    }
+
+    private ActionObservation toActionObservation(JSONObject screen) {
+        if (screen == null || !screen.optBoolean("success", false)) {
+            return ActionObservation.unavailable();
+        }
+        String focusedKey = "";
+        String focusedRole = "";
+        JSONArray elements = screen.optJSONArray("elements");
+        if (elements != null) {
+            for (int i = 0; i < elements.length(); i++) {
+                JSONObject element = elements.optJSONObject(i);
+                if (element == null || !element.optBoolean("focused", false)) continue;
+                focusedKey = element.optString("viewId", "") + "|"
+                        + element.optString("semanticHint", "") + "|"
+                        + element.optString("role", "");
+                focusedRole = element.optString("role", "");
+                break;
+            }
+        }
+        return new ActionObservation(
+                true,
+                screen.optString("package", ""),
+                screen.optString("fingerprint", ""),
+                screen.optString("stableScreenKey", ""),
+                focusedKey,
+                focusedRole,
+                elements == null ? 0 : elements.length(),
+                System.currentTimeMillis());
     }
     boolean isRunning() { return running; }
     String getStage() { return stage; }
@@ -226,6 +263,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if (!running) return false;
 
         shadowAgentRuntime.onInterrupted("USER_CORRECTION");
+        agentRuntimeV2.onInterrupted("USER_CORRECTION");
 
         // IMPORTANT: interrupt is a LOCAL CONTROL EVENT, not a conversation turn.
         // Do not call sendInternalAgentDirective() here. Doing so can make Gemini
@@ -335,6 +373,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if (worker != null) worker.interrupt();
         reportStage("Agent 任務已停止：" + task.endReason);
         shadowAgentRuntime.onTaskCancelled(task.taskId, task.endReason);
+        agentRuntimeV2.onTaskCancelled(task.taskId, task.endReason);
         return true;
     }
 
@@ -388,6 +427,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         }
 
         shadowAgentRuntime.onUserIntent(
+                userIntentGeneration, conversationGoalId, shadowTaskId, startNewCapsule);
+        agentRuntimeV2.onUserIntent(
                 userIntentGeneration, conversationGoalId, shadowTaskId, startNewCapsule);
 
         supersedeActiveAgentTaskForNewUserInstruction();
@@ -1352,6 +1393,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 pendingToolCalls.add(call);
                 shadowAgentRuntime.onToolQueued(
                         id, call.optString("name", "unknown"), generation);
+                agentRuntimeV2.onToolQueued(
+                        id, call.optString("name", "unknown"), generation);
             }
         } catch (Exception error) {
             Log.w(TAG, "工具呼叫排程失敗", error);
@@ -1418,6 +1461,36 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         }
         final String name = semantic.runtimeName;
         final JSONObject args = semantic.runtimeArgs;
+
+        AgentRuntimeV2.PreflightResult runtimePreflight = null;
+        if (isMutationTool(name)) {
+            runtimePreflight = agentRuntimeV2.preflight(
+                    callIntentGeneration,
+                    userIntentGeneration,
+                    id,
+                    name,
+                    buildAgentSignature(name, args),
+                    latestActionObservation);
+            if (!runtimePreflight.allowed()) {
+                String code = runtimePreflight.code;
+                if (runtimePreflight.decision == AgentRuntimeV2.PreflightDecision.REQUIRE_OBSERVE) {
+                    JSONObject blocked = runtimeBlocked(
+                            "OBSERVE_REQUIRED",
+                            "上一個相同操作仍待驗證或剛失敗。先 inspect_ui 一次；不要原樣重做 mutation。");
+                    try {
+                        blocked.put("taskState", "IN_PROGRESS");
+                        blocked.put("nextRequirement", "inspect_ui once");
+                        sendToolResponse(id, requestedName, blocked);
+                    } catch (Exception ignored) {}
+                    return;
+                }
+                sendRuntimeV2Blocked(id, requestedName, code,
+                        runtimePreflight.decision == AgentRuntimeV2.PreflightDecision.REJECT_STALE
+                                ? "使用者已有較新的指令；舊操作已取消，不要重試。"
+                                : "相同操作已在目前畫面完成；不要重複執行。", runtimePreflight);
+                return;
+            }
+        }
 
         if ((runtimeShortcutExecuting
                 || runtimeSendCurrentExecuting
@@ -1499,6 +1572,14 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 name,
                 lastObservedScreenFingerprint,
                 ActionTransaction.ExpectedEffect.ANY_OBSERVABLE_CHANGE);
+        if (isMutationTool(name)) {
+            agentRuntimeV2.onActionStarted(
+                    id, callIntentGeneration, conversationGoalId, task.taskId,
+                    requestedName, name,
+                    runtimePreflight == null ? "" : runtimePreflight.actionHash,
+                    ActionExpectation.forRuntimeAction(name),
+                    latestActionObservation);
+        }
         if (isMutationTool(name) && audioIncidentRecorder != null) {
             audioIncidentRecorder.captureBeforeFirstMutation(task.taskId, name, args);
         }
@@ -1585,6 +1666,13 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             if (semantic.semantic) {
                 result.put("semanticAction", semantic.semanticAction)
                         .put("resolvedByRuntime", name);
+            }
+            if (isMutationTool(name)) {
+                ExecutionEvidence evidence = executionEvidenceFromResult(name, result);
+                agentRuntimeV2.onActionExecuted(id, evidence);
+                ActionVerificationResult verification = agentRuntimeV2.verifyAndRecord(
+                        id, evidence, latestActionObservation);
+                applyV2VerificationContract(result, verification);
             }
             updateTaskCompletionContract(task, name, result);
             updateAgentStabilityAfterResult(task, name, args, result);
@@ -1868,6 +1956,58 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private void sendBlockedToolResponse(String id, String name, String reason) {
         try { sendToolResponse(id, name, new JSONObject().put("success", false).put("agentStopped", true).put("error", reason)); }
         catch (Exception ignored) {}
+    }
+
+    private void sendRuntimeV2Blocked(String id, String name, String code,
+                                      String instruction, AgentRuntimeV2.PreflightResult preflight) {
+        try {
+            JSONObject blocked = runtimeBlocked(code, instruction);
+            blocked.put("verificationStatus", "BLOCKED");
+            blocked.put("runtimeV2", true);
+            sendToolResponse(id, name, blocked);
+        } catch (Exception ignored) {}
+    }
+
+    private ExecutionEvidence executionEvidenceFromResult(String name, JSONObject result) {
+        boolean blocked = result != null && (result.optBoolean("blockedByRuntime", false)
+                || result.has("policy"));
+        boolean cancelled = result != null && result.optBoolean("cancelled", false);
+        boolean runtimeVerified = result != null && (result.optBoolean("verified", false)
+                || ("search_current_app".equals(name) && result.optBoolean("committed", false)));
+        JSONObject verification = result == null ? null : result.optJSONObject("verification");
+        if (verification != null) {
+            String state = verification.optString("state", "");
+            runtimeVerified = runtimeVerified || "VERIFIED".equals(state) || "LIKELY".equals(state);
+        }
+        boolean delayed = "launch_app".equals(name)
+                || (("tap_screen".equals(name) || "tap_element".equals(name))
+                    && SearchResultSelectionRuntime.MAPS_PACKAGE.equals(latestActionObservation.packageName));
+        return new ExecutionEvidence(
+                result != null && result.optBoolean("success", false),
+                runtimeVerified,
+                blocked,
+                cancelled,
+                delayed,
+                result == null ? "NO_RESULT" : result.optString("error", ""));
+    }
+
+    private void applyV2VerificationContract(JSONObject result,
+                                             ActionVerificationResult verification) {
+        if (result == null || verification == null) return;
+        try {
+            result.put("verificationStatus", verification.status.name());
+            result.put("verificationCode", verification.code);
+            if (verification.committed()) {
+                result.put("success", true).put("stepResult", "STEP_OK");
+            } else if (verification.pending()) {
+                result.put("success", true).put("stepResult", "STEP_PENDING")
+                        .put("taskState", "IN_PROGRESS")
+                        .put("verification", "PENDING")
+                        .put("nextRequirement", "Call inspect_ui once before another mutation.");
+            } else {
+                result.put("success", false).put("stepResult", "STEP_FAILED");
+            }
+        } catch (Exception ignored) {}
     }
 
     private void requestAgentConclusion(AgentTaskRecord task, String reason) {
@@ -2344,7 +2484,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         // 🎯 1. Let Android activate the matching Accessibility node directly.
         if (!label.isEmpty() || !id.isEmpty()) {
             try {
-                JSONObject nodeClick = helperPost("/click", new JSONObject().put("label", label).put("id", id));
+                JSONObject nodeClick = helperPost("/click_v2", new JSONObject().put("label", label).put("id", id).put("actionKind", "TAP"));
+                if (!nodeClick.optBoolean("success") && "BRIDGE_ROUTE_UNAVAILABLE".equals(nodeClick.optString("error"))) {
+                    nodeClick = helperPost("/click", new JSONObject().put("label", label).put("id", id));
+                }
                 if (nodeClick.optBoolean("success")) {
                     nodeClick.put("resolvedFrom", "ui_node_action");
                     workingContext.recordAction("tap_screen", "submitted");
@@ -3061,6 +3204,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             if (after != null && after.optBoolean("success", false)) {
                 String fp = after.optString("fingerprint", "");
                 latestSemanticFingerprint = fp;
+                latestActionObservation = toActionObservation(after);
+                agentRuntimeV2.onScreenObserved(latestActionObservation);
+                agentRuntimeV2.reverifyPending(latestActionObservation);
                 shadowAgentRuntime.onScreenObserved(
                         fp,
                         after.optString("stableScreenKey", ""),
@@ -3120,6 +3266,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if (reply == null) reply = new JSONObject();
         if (reply.optBoolean("success", false)) {
             latestSemanticFingerprint = reply.optString("fingerprint", "");
+            latestActionObservation = toActionObservation(reply);
+            agentRuntimeV2.onScreenObserved(latestActionObservation);
+            agentRuntimeV2.reverifyPending(latestActionObservation);
             shadowAgentRuntime.onScreenObserved(
                     latestSemanticFingerprint,
                     reply.optString("stableScreenKey", ""),
@@ -3187,6 +3336,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 }
                 if (!afterFingerprint.isEmpty()) {
                     lastObservedScreenFingerprint = afterFingerprint;
+                    latestActionObservation = toActionObservation(raw);
+                    agentRuntimeV2.onScreenObserved(latestActionObservation);
                     shadowAgentRuntime.onScreenObserved(afterFingerprint, "", currentPkg);
                 }
                 response.put("progress", progress);
