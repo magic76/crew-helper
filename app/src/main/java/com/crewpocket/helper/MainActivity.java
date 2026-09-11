@@ -803,7 +803,7 @@ public class MainActivity extends Activity {
 
         TextView desc = new TextView(this);
         desc.setText(I18n.get(this,
-            "IDLE 使用 sherpa-onnx 在手機本機只偵測「小酷小酷」，命中後才切換 Gemini Live。不需要帳號、AccessKey，也不會把待命音訊送到雲端。",
+            "IDLE 使用 sherpa-onnx 在手機本機只偵測「嘿 小歪」，命中後才切換 Gemini Live。不需要帳號、AccessKey，也不會把待命音訊送到雲端。",
             "IDLE uses sherpa-onnx fully on-device to detect only the wake phrase. Gemini Live starts only after detection. No account or AccessKey is required."));
         desc.setTextSize(11);
         desc.setTextColor(CrewTheme.TEXT_SECONDARY);
@@ -811,7 +811,7 @@ public class MainActivity extends Activity {
         layout.addView(desc);
 
         TextView phrase = new TextView(this);
-        phrase.setText(I18n.get(this, "喚醒詞：小酷小酷", "Wake phrase: 小酷小酷"));
+        phrase.setText(I18n.get(this, "喚醒詞：嘿 小歪", "Wake phrase: 嘿 小歪"));
         phrase.setTextSize(12);
         phrase.setTypeface(Typeface.DEFAULT_BOLD);
         phrase.setTextColor(CrewTheme.TEAL_300);
