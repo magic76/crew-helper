@@ -146,6 +146,12 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private PendingUiChoice pendingUiChoice;
     private volatile boolean pendingChoiceExecuting = false;
 
+    // 0046: Gemini Live may split toolCall/modelTurn/turnComplete across
+    // different WebSocket frames. These flags describe the whole current
+    // server model turn, not one handleJson() invocation.
+    private boolean currentModelTurnHadToolCall = false;
+    private boolean currentModelTurnProducedSpeech = false;
+
     NativeGeminiLiveClient(String apiKey, Listener listener) { this(apiKey, "", AppConfig.DEFAULT_VOICE, "auto", 35, "warm", "", 55, "call", listener); }
     NativeGeminiLiveClient(String apiKey, String serverUrl, Listener listener) { this(apiKey, serverUrl, AppConfig.DEFAULT_VOICE, "auto", 35, "warm", "", 55, "call", listener); }
     NativeGeminiLiveClient(String apiKey, String serverUrl, String voiceName, String noiseMode, int noiseSuppression, Listener listener) {
@@ -327,6 +333,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
      * inside the existing 45-second conversation-goal window.
      */
     private void beginNewUserIntent(String userText) {
+        // A finalized user instruction supersedes any incomplete model-turn
+        // bookkeeping from the previous interaction.
+        resetCurrentModelTurnState();
         long now = System.currentTimeMillis();
         boolean startNewCapsule = conversationGoalId.isEmpty()
                 || now - conversationGoalTouchedAt < 0L
@@ -581,6 +590,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         workingContext.clear();
         cancelAgentTask("通話已結束");
         cancelDeckAutoAdvance();
+        resetCurrentModelTurnState();
         running = false;
         setupReady = false;
         interruptionHandler.removeCallbacks(clearInterruptedFallback);
@@ -706,6 +716,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             if (calls == null) calls = toolCall.optJSONArray("function_calls");
             if (calls != null && calls.length() > 0) {
                 responseHasToolCall = true;
+                markCurrentModelTurnToolCall();
                 clearAgentResponseWatchdog();
                 for (int i = 0; i < calls.length(); i++) executeToolAsync(calls.getJSONObject(i));
             }
@@ -721,6 +732,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             // stopped.  The next model turn is safe to play immediately.
             interruptionHandler.removeCallbacks(clearInterruptedFallback);
             interruptedCurrentTurn = false;
+            resetCurrentModelTurnState();
             return;
         }
         // Finalized input was already processed before tool calls above.
@@ -728,7 +740,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if (outputTranscript == null) outputTranscript = server.optJSONObject("output_transcription");
         if (outputTranscript != null && !outputTranscript.optString("text").isEmpty()
                 && !shouldWithholdUnverifiedAgentReply()) {
-            if (!responseHasToolCall) markAgentUserVisibleReplyProduced();
+            if (!responseHasToolCall) {
+                markCurrentModelTurnSpeech();
+                markAgentUserVisibleReplyProduced();
+            }
             listener.onTranscript("Gemini", outputTranscript.optString("text"));
         }
         JSONObject turn = server.optJSONObject("modelTurn");
@@ -756,6 +771,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                     if (inline != null && inline.optString("data").length() > 0) {
                         enqueueAudio(Base64.decode(inline.getString("data"), Base64.DEFAULT));
                         if (!responseHasToolCall && !agentMuted) {
+                            markCurrentModelTurnSpeech();
                             markAgentUserVisibleReplyProduced();
                         }
                     }
@@ -763,6 +779,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                         String modelText = part.optString("text");
                         if (!responseHasToolCall) {
                             appendAgentFinalText(modelText);
+                            markCurrentModelTurnSpeech();
                             markAgentUserVisibleReplyProduced();
                         }
                         listener.onTranscript("Gemini", modelText);
@@ -783,7 +800,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 aiSpeaking = false;
                 listener.onSpeakingChanged(false);
             }
-            if (!responseHasToolCall) finishAgentTaskIfAwaitingModel();
+            if (shouldEvaluateAgentTaskAtTurnComplete()) {
+                finishAgentTaskIfAwaitingModel();
+            }
             if (deckAutoAdvanceActive && DeckRepository.hasActiveDeck() && !interruptedCurrentTurn && !agentMuted) {
                 scheduleDeckAutoAdvance();
             }
@@ -1782,6 +1801,49 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             if (activeAgentTask != null && activeAgentTask.awaitingModel) {
                 activeAgentTask.finalReply += text;
             }
+        }
+    }
+
+    private void markCurrentModelTurnToolCall() {
+        synchronized (agentLock) {
+            currentModelTurnHadToolCall = true;
+            // Any speech before a later tool call was intermediate, not final.
+            currentModelTurnProducedSpeech = false;
+        }
+    }
+
+    private void markCurrentModelTurnSpeech() {
+        synchronized (agentLock) {
+            currentModelTurnProducedSpeech = true;
+        }
+    }
+
+    /**
+     * Consume whole-turn state exactly at server turnComplete.
+     *
+     * A tool-call turn with no later visible speech must not be mistaken for
+     * a silent final answer just because turnComplete arrived in another frame.
+     */
+    private boolean shouldEvaluateAgentTaskAtTurnComplete() {
+        boolean hadToolCall;
+        boolean producedSpeech;
+        synchronized (agentLock) {
+            hadToolCall = currentModelTurnHadToolCall;
+            producedSpeech = currentModelTurnProducedSpeech;
+            currentModelTurnHadToolCall = false;
+            currentModelTurnProducedSpeech = false;
+        }
+        if (hadToolCall && !producedSpeech) {
+            Log.d(TAG, "0046 tool-call turn complete; defer Agent completion");
+            return false;
+        }
+        return true;
+    }
+
+    private void resetCurrentModelTurnState() {
+        synchronized (agentLock) {
+            currentModelTurnHadToolCall = false;
+            currentModelTurnProducedSpeech = false;
         }
     }
 
