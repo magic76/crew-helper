@@ -49,7 +49,7 @@ final class SherpaWakeWordEngine {
 
     private static final String SUPPORTED_PHRASE = "嘿 小歪";
     private static final String KEYWORD_TOKENS =
-            "h ēi x iǎo w āi @嘿 小歪";
+            "h ēi x iǎo w āi @嘿小歪";
 
     private final Context context;
     private final String phrase;
