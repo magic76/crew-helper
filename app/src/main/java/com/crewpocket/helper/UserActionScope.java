@@ -278,58 +278,101 @@ final class UserActionScope {
      * Keep this intentionally narrow: these phrases contain no new message text,
      * so Runtime can safely submit only the currently visible composer.
      */
+    /**
+     * 0053 deterministic classifier for a send-only follow-up.
+     *
+     * Goal:
+     * - accept natural control phrasing such as "幫我點一下送出" / "幫我按送出按鈕";
+     * - reject new message content such as "輸入晚點到並送出";
+     * - reject negation, explanation, hypothetical questions and recipient routing.
+     *
+     * This is intentionally grammar-like instead of a giant exact-phrase whitelist.
+     */
     static boolean isStandaloneCurrentScreenSendCommand(String rawText) {
-        String value = normalize(rawText == null ? "" : rawText);
+        if (rawText == null || rawText.trim().isEmpty()) return false;
+
+        String folded = TextMatch.caseFold(rawText).trim();
+        String value = normalize(rawText);
         if (value.isEmpty()) return false;
-        return value.equals("送出")
-                || value.equals("送出吧")
-                || value.equals("送出去")
-                || value.equals("幫我送出")
-                || value.equals("帮我送出")
-                || value.equals("幫我送出去")
-                || value.equals("帮我送出去")
-                || value.equals("直接送出")
-                || value.equals("請送出")
-                || value.equals("请送出")
-                || value.equals("然後送出")
-                || value.equals("然后送出")
-                || value.equals("那就送出")
-                || value.equals("就送出")
-                || value.equals("好送出")
-                || value.equals("現在送出")
-                || value.equals("现在送出")
-                || value.equals("發送")
-                || value.equals("发送")
-                || value.equals("發送吧")
-                || value.equals("发送吧")
-                || value.equals("幫我發送")
-                || value.equals("帮我发送")
-                || value.equals("直接發送")
-                || value.equals("直接发送")
-                || value.equals("請發送")
-                || value.equals("请发送")
-                || value.equals("然後發送")
-                || value.equals("然后发送")
-                || value.equals("那就發送")
-                || value.equals("那就发送")
-                || value.equals("就發送")
-                || value.equals("就发送")
-                || value.equals("傳送")
-                || value.equals("传送")
-                || value.equals("傳送吧")
-                || value.equals("传送吧")
-                || value.equals("幫我傳送")
-                || value.equals("帮我传送")
-                || value.equals("直接傳送")
-                || value.equals("直接传送")
-                || value.equals("send")
-                || value.equals("sendit")
-                || value.equals("sendnow")
-                || value.equals("sendthis")
-                || value.equals("sendmessage")
-                || value.equals("sendcurrentmessage")
-                || value.equals("pleasesend")
-                || value.equals("sendplease");
+
+        // Never treat discussion / negation / hypothetical wording as execution.
+        if (containsAny(value,
+                "不要", "別", "别", "不用", "取消", "停止",
+                "不是", "不能", "不可以", "先不要", "暫時不要", "暂时不要",
+                "怎麼", "怎么", "如何", "為什麼", "为什么", "如果", "假如", "能不能")) {
+            return false;
+        }
+        if (folded.matches(".*\\b(don't|dont|do not|never|cancel|stop|how|why|if|should)\\b.*")) {
+            return false;
+        }
+
+        // Recipient routing remains unsupported for current-screen messaging.
+        if (isNamedRecipientMessagingRequest(rawText)) {
+            return false;
+        }
+
+        // If this turn contains new text-entry language, let the normal
+        // same-turn TYPE -> SEND_CURRENT path handle it instead.
+        if (containsAny(value,
+                "輸入", "输入", "打字", "寫", "写",
+                "貼上", "贴上", "填入", "填上", "加上")) {
+            return false;
+        }
+        if (folded.matches(".*\\b(type|input|enter|write|paste|append)\\b.*")) {
+            return false;
+        }
+
+        boolean hasSendVerb = containsAny(value,
+                "送出去", "發出去", "发出去", "傳出去", "传出去",
+                "送出", "發送", "发送", "傳送", "传送")
+                || folded.matches(".*\\bsend\\b.*");
+        if (!hasSendVerb) return false;
+
+        // Strip only command/control language. Any residue is treated as
+        // possible message content and therefore NOT a send-only command.
+        String residual = value;
+        String[] controlTokens = new String[]{
+                // Chinese wrappers / politeness
+                "麻煩你", "麻烦你", "幫我", "帮我", "幫忙", "帮忙",
+                "請", "请", "給我", "给我", "替我", "你",
+                "好啦", "好的", "好啊", "好", "那就", "然後", "然后",
+                "那", "就", "再", "直接", "現在", "现在", "可以",
+
+                // Current-message references
+                "目前", "當前", "当前", "這則", "这则",
+                "訊息", "讯息", "消息", "這個", "这个", "把", "它",
+
+                // Physical-control wording
+                "按鈕", "按钮",
+                "按一下", "點一下", "点一下",
+                "按下", "點下", "点下",
+                "點擊", "点击", "按", "點", "点",
+                "鍵", "键", "一下",
+
+                // Send verbs (longest first)
+                "送出去", "發出去", "发出去", "傳出去", "传出去",
+                "送出", "發送", "发送", "傳送", "传送",
+
+                // Particles / polite endings
+                "吧", "了", "喔", "哦", "啦", "呢", "嘛", "啊", "呀",
+                "嗎", "吗", "謝謝", "谢谢",
+
+                // English command grammar after normalize() removes spaces
+                "goaheadand", "goahead", "couldyou", "wouldyou", "canyou",
+                "please", "helpme", "okay", "then", "just", "now",
+                "click", "tap", "press", "hit",
+                "current", "message", "button", "this", "it",
+                "send", "the", "for", "me", "and", "ok"
+        };
+
+        for (String token : controlTokens) {
+            String normalizedToken = normalize(token);
+            if (!normalizedToken.isEmpty()) {
+                residual = residual.replace(normalizedToken, "");
+            }
+        }
+
+        return residual.isEmpty();
     }
 
     static boolean isSearchControl(String metadata) {
