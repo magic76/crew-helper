@@ -38,6 +38,9 @@ import okio.ByteString;
 
 /** Gemini Live backed by OkHttp's production WebSocket implementation. */
 final class NativeGeminiLiveClient extends WebSocketListener {
+    // Keep 0071 runtime available for shadow telemetry/tests, but do not let
+    // it block production actions until Maps/custom UIs pass device smoke.
+    private static final boolean AGENT_RUNTIME_V2_ENFORCEMENT = false;
     private static final String TAG = "CrewNativeLive";
     interface Listener {
         void onStatus(String text);
@@ -1463,7 +1466,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         final JSONObject args = semantic.runtimeArgs;
 
         AgentRuntimeV2.PreflightResult runtimePreflight = null;
-        if (isMutationTool(name)) {
+        if (AGENT_RUNTIME_V2_ENFORCEMENT && isMutationTool(name)) {
             runtimePreflight = agentRuntimeV2.preflight(
                     callIntentGeneration,
                     userIntentGeneration,
@@ -1572,7 +1575,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 name,
                 lastObservedScreenFingerprint,
                 ActionTransaction.ExpectedEffect.ANY_OBSERVABLE_CHANGE);
-        if (isMutationTool(name)) {
+        if (AGENT_RUNTIME_V2_ENFORCEMENT && isMutationTool(name)) {
             agentRuntimeV2.onActionStarted(
                     id, callIntentGeneration, conversationGoalId, task.taskId,
                     requestedName, name,
@@ -1660,14 +1663,14 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         } finally { activeToolConnection = null; }
         try {
             if (task.cancelled) result = new JSONObject().put("success", false).put("cancelled", true).put("error", "使用者已停止任務");
-            if (isMutationTool(name)) {
+            if (AGENT_RUNTIME_V2_ENFORCEMENT && isMutationTool(name)) {
                 normalizeMutationContract(result);
             }
             if (semantic.semantic) {
                 result.put("semanticAction", semantic.semanticAction)
                         .put("resolvedByRuntime", name);
             }
-            if (isMutationTool(name)) {
+            if (AGENT_RUNTIME_V2_ENFORCEMENT && isMutationTool(name)) {
                 ExecutionEvidence evidence = executionEvidenceFromResult(name, result);
                 agentRuntimeV2.onActionExecuted(id, evidence);
                 ActionVerificationResult verification = agentRuntimeV2.verifyAndRecord(
@@ -2484,10 +2487,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         // 🎯 1. Let Android activate the matching Accessibility node directly.
         if (!label.isEmpty() || !id.isEmpty()) {
             try {
-                JSONObject nodeClick = helperPost("/click_v2", new JSONObject().put("label", label).put("id", id).put("actionKind", "TAP"));
-                if (!nodeClick.optBoolean("success") && "BRIDGE_ROUTE_UNAVAILABLE".equals(nodeClick.optString("error"))) {
-                    nodeClick = helperPost("/click", new JSONObject().put("label", label).put("id", id));
-                }
+                JSONObject nodeClick = helperPost("/click", new JSONObject().put("label", label).put("id", id));
                 if (nodeClick.optBoolean("success")) {
                     nodeClick.put("resolvedFrom", "ui_node_action");
                     workingContext.recordAction("tap_screen", "submitted");
