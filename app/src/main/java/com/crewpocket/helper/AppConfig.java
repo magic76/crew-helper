@@ -28,8 +28,9 @@ public class AppConfig {
 
     public static final String DEFAULT_VOICE = "Kore";
     public static final String DEFAULT_SERVER = "http://127.0.0.1:8000";
-    public static final String DEFAULT_WAKE_PHRASE = "嘿 小歪";
+    public static final String DEFAULT_WAKE_PHRASE = "小歪小歪";
     private static final String LEGACY_WAKE_PHRASE = "小酷小酷";
+    private static final String PREVIOUS_WAKE_PHRASE = "嘿 小歪";
 
     public static SharedPreferences getPrefs(Context context) {
         return context.getApplicationContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
@@ -213,8 +214,11 @@ public class AppConfig {
         String phrase = getPrefs(context).getString(KEY_WAKE_PHRASE, DEFAULT_WAKE_PHRASE);
         String clean = phrase == null ? "" : phrase.trim();
         // Migrate installations that still have the previous hard-coded phrase.
-        if (clean.isEmpty() || LEGACY_WAKE_PHRASE.equals(clean)) {
-            if (LEGACY_WAKE_PHRASE.equals(clean)) {
+        if (clean.isEmpty()
+                || LEGACY_WAKE_PHRASE.equals(clean)
+                || PREVIOUS_WAKE_PHRASE.equals(clean)) {
+            if (LEGACY_WAKE_PHRASE.equals(clean)
+                    || PREVIOUS_WAKE_PHRASE.equals(clean)) {
                 getPrefs(context).edit().putString(KEY_WAKE_PHRASE, DEFAULT_WAKE_PHRASE).apply();
             }
             return DEFAULT_WAKE_PHRASE;
