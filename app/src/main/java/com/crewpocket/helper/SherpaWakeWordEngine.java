@@ -47,9 +47,9 @@ final class SherpaWakeWordEngine {
     private static final String TOKENS = MODEL_DIR + "/tokens.txt";
     private static final String KEYWORDS = MODEL_DIR + "/keywords.txt";
 
-    private static final String SUPPORTED_PHRASE = "小歪小歪";
+    private static final String SUPPORTED_PHRASE = "小酷小酷";
     private static final String KEYWORD_TOKENS =
-            "x iǎo w āi x iǎo w āi @小歪小歪";
+            "x iǎo k ù x iǎo k ù @小酷小酷";
 
     private final Context context;
     private final String phrase;

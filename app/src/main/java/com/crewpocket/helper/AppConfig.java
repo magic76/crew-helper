@@ -28,8 +28,8 @@ public class AppConfig {
 
     public static final String DEFAULT_VOICE = "Kore";
     public static final String DEFAULT_SERVER = "http://127.0.0.1:8000";
-    public static final String DEFAULT_WAKE_PHRASE = "小歪小歪";
-    private static final String LEGACY_WAKE_PHRASE = "小酷小酷";
+    public static final String DEFAULT_WAKE_PHRASE = "小酷小酷";
+    private static final String LEGACY_WAKE_PHRASE = "小歪小歪";
     private static final String PREVIOUS_WAKE_PHRASE = "嘿 小歪";
 
     public static SharedPreferences getPrefs(Context context) {
