@@ -13,7 +13,7 @@ import android.widget.LinearLayout;
 /**
  * 0050 embedded action rail.
  *
- * This is no longer a separate WindowManager overlay. FloatingBubbleManager
+ * This is no longer a separate system overlay. FloatingBubbleManager
  * keeps this view inside the same window/container as FluidBubbleView, so the
  * bubble itself expands vertically and the controls feel physically attached.
  */
