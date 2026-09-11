@@ -1091,12 +1091,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                         .put("timeout_ms", new JSONObject().put("type", "INTEGER")
                                 .put("description", "Maximum wait milliseconds (default 5000, max 15000)")))));
         tools.put(new JSONObject().put("name", "send_text").put("description",
-                "CURRENT SCREEN ONLY: atomically type the exact text into the composer already visible in the foreground App, submit exactly once, and locally verify the send. Use only when the latest user turn explicitly asks to send now. Never search for, infer, verify, or navigate to a recipient. Named-recipient messaging is unsupported. There is no confirmation turn. Never TYPE first; on failure do not resend.")
+                "CURRENT SCREEN ONLY: submit exactly once and locally verify. If the latest user turn contains NEW message content plus an explicit send verb, provide text and Runtime atomically types that exact text then sends it. If the current composer already contains the intended text and the latest user turn is only an explicit send command such as 送出/發送/send, OMIT text; Runtime reads and submits the existing current composer without retyping it. Never search for, infer, verify, or navigate to a recipient. Named-recipient messaging is unsupported. On failure do not resend.")
                 .put("parameters", new JSONObject().put("type", "OBJECT")
                         .put("properties", new JSONObject()
                                 .put("text", new JSONObject().put("type", "STRING")
-                                        .put("description", "Exact message text to send")))
-                        .put("required", new JSONArray().put("text"))));
+                                        .put("description", "Optional exact message text. Provide only when this user turn contains the message content. Omit when explicitly sending text already present in the current composer.")))));
         tools.put(new JSONObject().put("name", "schedule_reminder").put("description", "Set a countdown timer / reminder in seconds. When time is up, the assistant vibrates and announces the message.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("delay_seconds", new JSONObject().put("type", "NUMBER").put("description", "Delay in seconds, e.g. 300 for 5 minutes")).put("message", new JSONObject().put("type", "STRING").put("description", "Reminder text to speak when timer expires")).put("label", new JSONObject().put("type", "STRING").put("description", "Short label for the timer"))).put("required", new JSONArray().put("delay_seconds"))));
         tools.put(new JSONObject().put("name", "start_screen_monitor").put("description", "Start periodic background screen checks or wait until a specific condition/text appears on screen.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("interval_seconds", new JSONObject().put("type", "NUMBER").put("description", "Interval between checks in seconds (e.g. 60)")).put("duration_minutes", new JSONObject().put("type", "NUMBER").put("description", "Total monitoring duration in minutes (default 10)")).put("target_condition", new JSONObject().put("type", "STRING").put("description", "Optional text/word to look for on screen (e.g. '已送達', '完成')")).put("label", new JSONObject().put("type", "STRING").put("description", "Short task name"))).put("required", new JSONArray().put("interval_seconds"))));
         tools.put(new JSONObject().put("name", "list_active_schedules").put("description", "List all currently active timers, background screen monitors, and countdowns with their remaining time.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject())));
@@ -1300,11 +1299,13 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             return;
         }
 
-        // For an explicitly authorized send turn, TYPE is the wrong path:
-        // SendTextTransaction owns type + submit + verification atomically.
+        // For an explicitly authorized send turn, TYPE is the wrong path.
+        // send_text owns both safe variants:
+        // 1) text present in this turn -> type + submit + verify
+        // 2) send-only follow-up -> submit already-filled current composer + verify
         if (userActionScope.canSend() && "type_text".equals(name)) {
             sendBlockedToolResponse(id, requestedName,
-                    "SEND_TEXT_TRANSACTION_REQUIRED：這句已明確要求送出，請直接使用 send_text，不要先 TYPE。");
+                    "SEND_TEXT_TRANSACTION_REQUIRED：這句已明確要求送出。若本句包含新訊息內容，使用 send_text(text=...)；若只是『送出/發送』且目前輸入框已有文字，使用 send_text 並省略 text。");
             return;
         }
 
@@ -3267,9 +3268,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
     private JSONObject sendTextToPhone(JSONObject args) throws Exception {
         String text = args == null ? "" : args.optString("text", "");
-        if (text.isEmpty()) {
-            return new JSONObject().put("success", false).put("error", "EMPTY_TEXT");
-        }
+        boolean useExistingComposer = text.isEmpty();
+
         if (userActionScope.blocksNamedRecipientMessagingAction()) {
             return runtimeBlocked("CURRENT_SCREEN_MESSAGING_ONLY",
                     "目前只支援對當前畫面已開啟的輸入框操作；不支援自動尋找或驗證收件人。");
@@ -3279,17 +3279,28 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                     "目前只支援當前畫面輸入框。最新一句必須明確要求送出；TYPE 本身不代表送出。");
         }
 
-        // One explicit current-screen send instruction owns exactly one atomic
-        // type + submit + verification transaction.
+        // One explicit current-screen send instruction owns exactly one submit
+        // attempt. For a send-only follow-up, Runtime reads the visible composer
+        // locally. Message plaintext is never reconstructed from model memory.
         userActionScope.markMessageTransactionHandled();
         userActionScope.consumeSendAuthorization();
 
-        JSONObject reply = helperPost(
-                "/send_text",
-                new JSONObject().put("text", text));
+        JSONObject payload = new JSONObject();
+        if (useExistingComposer) {
+            payload.put("useExistingComposer", true);
+        } else {
+            payload.put("text", text);
+        }
+
+        JSONObject reply = helperPost("/send_text", payload);
 
         // Runtime deliberately does not echo plaintext back to Gemini.
-        reply.put("textLength", text.length());
+        if (!useExistingComposer) {
+            reply.put("textLength", text.length());
+        }
+        reply.put("sendMode",
+                useExistingComposer ? "CURRENT_COMPOSER" : "TYPE_AND_SEND");
+
         if (!reply.optBoolean("success", false)) {
             String stage = reply.optString("stage", "UNKNOWN");
             String detail = reply.optString("error", "SEND_FAILED");
@@ -3303,7 +3314,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                     "Runtime 沒有驗證訊息送出。不要重送、不要改點 Send；簡短回報 stage/error，等待使用者的新指令。");
         }
 
-        workingContext.recordAction("send_text",
+        workingContext.recordAction(
+                useExistingComposer ? "send_current_composer" : "send_text",
                 reply.optBoolean("success", false) ? "submitted" : "failed");
         return reply;
     }

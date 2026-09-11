@@ -786,19 +786,26 @@ public class CrewAccessibilityService extends AccessibilityService {
                 responseJson = selectionResult[0];
             } else if (path.startsWith("/send_text")) {
                 final String textToSend = getJsonString(body, "text");
-                if (textToSend == null || textToSend.length() == 0) {
-                    responseJson = "{\"success\":false,\"error\":\"EMPTY_TEXT\"}";
-                } else {
-                    PolicyEngine.Result policy =
-                            PolicyEngine.evaluate("type", "", "", isActiveInputHardBlocked());
-                    if (policy.blocked()) {
-                        writeJsonAndClose(socket, policyBlockJson(policy));
-                        return;
-                    }
-                    SendTextTransaction.Result sendResult =
-                            performSendTextTransaction(textToSend);
-                    responseJson = sendResult.toJson().toString();
+                final boolean useExistingComposer =
+                        body != null && body.contains("\"useExistingComposer\":true");
+
+                PolicyEngine.Result policy =
+                        PolicyEngine.evaluate("type", "", "", isActiveInputHardBlocked());
+                if (policy.blocked()) {
+                    writeJsonAndClose(socket, policyBlockJson(policy));
+                    return;
                 }
+
+                SendTextTransaction.Result sendResult;
+                if (useExistingComposer) {
+                    sendResult = performSendCurrentComposerTransaction();
+                } else if (textToSend == null || textToSend.length() == 0) {
+                    sendResult = SendTextTransaction.Result.failure(
+                            "VALIDATE", "EMPTY_TEXT");
+                } else {
+                    sendResult = performSendTextTransaction(textToSend);
+                }
+                responseJson = sendResult.toJson().toString();
             } else if (path.startsWith("/schedule/create")) {
                 String type = getJsonString(body, "type");
                 String label = getJsonString(body, "label");
@@ -1568,8 +1575,8 @@ public class CrewAccessibilityService extends AccessibilityService {
         return null;
     }
 
-    private SendTextTransaction.Result performSendTextTransaction(String text) {
-        SendTextTransaction transaction = new SendTextTransaction(
+    private SendTextTransaction newSendTextTransaction() {
+        return new SendTextTransaction(
                 new SendTextTransaction.Environment() {
                     @Override
                     public AccessibilityNodeInfo currentRoot() {
@@ -1593,7 +1600,14 @@ public class CrewAccessibilityService extends AccessibilityService {
                         recordLastLearnedSendResult(success);
                     }
                 });
-        return transaction.execute(text);
+    }
+
+    private SendTextTransaction.Result performSendTextTransaction(String text) {
+        return newSendTextTransaction().execute(text);
+    }
+
+    private SendTextTransaction.Result performSendCurrentComposerTransaction() {
+        return newSendTextTransaction().executeExisting();
     }
 
     private boolean performSetText(String text) {

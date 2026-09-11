@@ -25,10 +25,19 @@ final class SendTextTransaction {
         boolean typed;
         boolean submitted;
         boolean verified;
+        boolean usedExistingComposer;
+        int textLength;
         String submitMethod = "NONE";
         String stage = "START";
         String error = "";
         SendVerification.Result verification;
+
+        static Result failure(String stage, String error) {
+            Result result = new Result();
+            result.stage = stage == null ? "FAILED" : stage;
+            result.error = error == null ? "SEND_FAILED" : error;
+            return result;
+        }
 
         JSONObject toJson() {
             JSONObject o = new JSONObject();
@@ -37,6 +46,8 @@ final class SendTextTransaction {
                 o.put("typed", typed);
                 o.put("submitted", submitted);
                 o.put("verified", verified);
+                o.put("usedExistingComposer", usedExistingComposer);
+                o.put("textLength", textLength);
                 o.put("submitMethod", submitMethod);
                 o.put("stage", stage);
                 if (!error.isEmpty()) o.put("error", error);
@@ -57,8 +68,26 @@ final class SendTextTransaction {
     }
 
     Result execute(String text) {
+        return executeInternal(text, false);
+    }
+
+    /**
+     * 0051: explicit send-only follow-up.
+     *
+     * When the current composer already contains text and the newest user turn
+     * is only "送出/發送/send", Runtime reads that visible composer locally,
+     * submits exactly once, and verifies without exposing plaintext to Gemini.
+     */
+    Result executeExisting() {
+        return executeInternal(null, true);
+    }
+
+    private Result executeInternal(String requestedText, boolean useExistingComposer) {
         Result result = new Result();
-        if (text == null || text.length() == 0) {
+        result.usedExistingComposer = useExistingComposer;
+
+        if (!useExistingComposer
+                && (requestedText == null || requestedText.length() == 0)) {
             result.stage = "VALIDATE";
             result.error = "EMPTY_TEXT";
             return result;
@@ -66,6 +95,7 @@ final class SendTextTransaction {
 
         AccessibilityNodeInfo root = null;
         AccessibilityNodeInfo composer = null;
+        String submittedText = requestedText;
         try {
             result.stage = "RESOLVE_COMPOSER";
             root = environment.currentRoot();
@@ -84,40 +114,49 @@ final class SendTextTransaction {
                 return result;
             }
 
-            result.stage = "TYPE";
-            if (!setText(composer, text)) {
-                result.error = "INPUT_FAILED";
-                return result;
-            }
-            result.typed = true;
+            if (useExistingComposer) {
+                result.stage = "READ_EXISTING_COMPOSER";
+                CharSequence current = composer.getText();
+                submittedText = current == null ? "" : current.toString();
+                if (submittedText.trim().isEmpty()) {
+                    result.error = "COMPOSER_EMPTY";
+                    return result;
+                }
+                result.textLength = submittedText.length();
+            } else {
+                result.stage = "TYPE";
+                if (!setText(composer, requestedText)) {
+                    result.error = "INPUT_FAILED";
+                    return result;
+                }
+                result.typed = true;
+                result.textLength = requestedText.length();
 
-            sleep(INPUT_SETTLE_MS);
+                sleep(INPUT_SETTLE_MS);
 
-            recycle(composer);
-            composer = null;
-            recycle(root);
-            root = environment.currentRoot();
-            if (root == null) {
-                result.error = "WINDOW_LOST_AFTER_INPUT";
-                return result;
-            }
-            composer = environment.resolveComposer(root);
-            if (composer == null || !composerContains(composer, text)) {
-                result.error = "INPUT_NOT_VERIFIED";
-                return result;
+                recycle(composer);
+                composer = null;
+                recycle(root);
+                root = environment.currentRoot();
+                if (root == null) {
+                    result.error = "WINDOW_LOST_AFTER_INPUT";
+                    return result;
+                }
+                composer = environment.resolveComposer(root);
+                if (composer == null || !composerContains(composer, requestedText)) {
+                    result.error = "INPUT_NOT_VERIFIED";
+                    return result;
+                }
             }
 
-            // 0021: Send resolution must happen only after the composer has text.
-            // Many apps replace microphone/plus/sticker controls with Send only
-            // after text is entered.
             if (!"HAS_TEXT".equals(LearnedUiMappingStore.composerState(composer))) {
                 result.error = "COMPOSER_NOT_READY_FOR_SEND";
-                result.stage = "COMPOSER_EMPTY_AFTER_TYPE";
+                result.stage = useExistingComposer
+                        ? "COMPOSER_EMPTY"
+                        : "COMPOSER_EMPTY_AFTER_TYPE";
                 return result;
             }
 
-            // Snapshot immediately before submission, after exact input has been
-            // locally verified.
             SendVerification.Snapshot before =
                     SendVerification.capture(root, composer);
 
@@ -132,9 +171,6 @@ final class SendTextTransaction {
                         result.error = "SENSITIVE_TARGET_BLOCKED";
                         return result;
                     }
-                    // 0020: if a semantic/learned Send target exists, attempt it ONCE.
-                    // Do not immediately fall back to IME merely because ACTION_CLICK
-                    // returned false; some apps can execute while returning false.
                     try {
                         send.performAction(AccessibilityNodeInfo.ACTION_CLICK);
                         result.submitted = true;
@@ -143,11 +179,9 @@ final class SendTextTransaction {
                         recycle(send);
                         send = null;
                     }
-                } else {
-                    if (tryImeEnter(composer)) {
-                        result.submitted = true;
-                        result.submitMethod = "IME_ENTER";
-                    }
+                } else if (tryImeEnter(composer)) {
+                    result.submitted = true;
+                    result.submitMethod = "IME_ENTER";
                 }
             } finally {
                 recycle(send);
@@ -162,19 +196,20 @@ final class SendTextTransaction {
             sleep(SUBMIT_SETTLE_MS);
 
             SendVerification.Result verification =
-                    verifyWithFreshSnapshot(before, text);
+                    verifyWithFreshSnapshot(before, submittedText);
             if (verification.state == SendVerification.State.UNVERIFIED) {
-                // One passive second observation only. Never click Send twice.
                 sleep(SECOND_VERIFY_MS);
-                verification = verifyWithFreshSnapshot(before, text);
+                verification = verifyWithFreshSnapshot(before, submittedText);
             }
 
             result.verification = verification;
-            boolean verifiedOrLikely = verification.state == SendVerification.State.VERIFIED
+            boolean verifiedOrLikely =
+                    verification.state == SendVerification.State.VERIFIED
                     || verification.state == SendVerification.State.LIKELY;
             environment.recordSendResolutionResult(verifiedOrLikely);
 
-            result.verified = verification.state == SendVerification.State.VERIFIED;
+            result.verified =
+                    verification.state == SendVerification.State.VERIFIED;
             result.success = verifiedOrLikely;
 
             if (!result.success) {
@@ -183,7 +218,9 @@ final class SendTextTransaction {
             result.stage = "DONE";
             return result;
         } catch (Exception e) {
-            result.error = e.getMessage() == null ? "SEND_TRANSACTION_FAILED" : e.getMessage();
+            result.error = e.getMessage() == null
+                    ? "SEND_TRANSACTION_FAILED"
+                    : e.getMessage();
             return result;
         } finally {
             recycle(composer);
