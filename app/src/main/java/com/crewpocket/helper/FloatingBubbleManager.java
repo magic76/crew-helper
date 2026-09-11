@@ -272,68 +272,127 @@ public class FloatingBubbleManager {
             @Override
             public void run() {
                 if (!canDrawOverlays()) return;
+
                 if (compactStatusAutoHideRunnable != null) {
                     mainHandler.removeCallbacks(compactStatusAutoHideRunnable);
+                    compactStatusAutoHideRunnable = null;
                 }
 
-                if (compactStatusView == null) {
-                    final CompactStatusCard card = new CompactStatusCard(context);
+                String heading = title == null ? "" : title.trim();
+                String body = detail == null ? "" : detail.trim();
+                String message;
+                if (heading.isEmpty()) {
+                    message = body;
+                } else if (body.isEmpty() || body.startsWith(heading)) {
+                    message = body.isEmpty() ? heading : body;
+                } else {
+                    message = heading + " · " + body;
+                }
+                if (message.isEmpty()) return;
 
-                    final WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
-                            dp(260),
-                            WindowManager.LayoutParams.WRAP_CONTENT,
-                            Build.VERSION.SDK_INT >= 26
-                                    ? 2038
-                                    : WindowManager.LayoutParams.TYPE_PHONE,
-                            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                                    | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-                            PixelFormat.TRANSLUCENT
-                    );
-                    lp.gravity = Gravity.TOP | Gravity.START;
+                if (compactStatusView != null) {
+                    try { windowManager.removeViewImmediate(compactStatusView); }
+                    catch (Exception ignored) {}
+                    compactStatusView = null;
+                }
+
+                final TextView pill = new TextView(context);
+                pill.setText(message);
+                pill.setSingleLine(true);
+                pill.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                pill.setGravity(Gravity.CENTER_VERTICAL);
+                pill.setTextSize(12.5f);
+                pill.setTextColor(Color.parseColor("#F8FAFC"));
+                pill.setPadding(dp(12), 0, dp(12), 0);
+
+                String lower = message.toLowerCase();
+                boolean error = lower.contains("失敗")
+                        || lower.contains("錯誤")
+                        || lower.contains("無法");
+                boolean done = lower.contains("完成")
+                        || lower.contains("已開")
+                        || lower.contains("已送")
+                        || lower.contains("找到");
+
+                GradientDrawable bg = new GradientDrawable();
+                bg.setColor(Color.argb(238, 15, 23, 42));
+                bg.setCornerRadius(dp(18));
+                bg.setStroke(
+                        dp(1),
+                        Color.parseColor(
+                                error ? "#9F1239"
+                                        : (done ? "#0F766E" : "#334155")));
+                pill.setBackground(bg);
+                pill.setElevation(dp(10));
+
+                int screenW = windowManager.getDefaultDisplay().getWidth();
+                int screenH = windowManager.getDefaultDisplay().getHeight();
+                int pillWidth = Math.min(dp(196), screenW - dp(24));
+                int pillHeight = dp(36);
+
+                final WindowManager.LayoutParams lp =
+                        new WindowManager.LayoutParams(
+                                pillWidth,
+                                pillHeight,
+                                Build.VERSION.SDK_INT >= 26
+                                        ? 2038
+                                        : WindowManager.LayoutParams.TYPE_PHONE,
+                                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                                PixelFormat.TRANSLUCENT);
+                lp.gravity = Gravity.TOP | Gravity.START;
+
+                if (bubbleView != null && bubbleParams != null) {
+                    int bubbleSize = bubbleParams.width > 0
+                            ? bubbleParams.width
+                            : dp(BUBBLE_SIZE_DP);
+                    boolean bubbleOnLeft =
+                            bubbleParams.x + bubbleSize / 2 < screenW / 2;
+                    int targetX = bubbleOnLeft
+                            ? bubbleParams.x + bubbleSize + dp(8)
+                            : bubbleParams.x - pillWidth - dp(8);
+                    lp.x = Math.max(
+                            dp(8),
+                            Math.min(screenW - pillWidth - dp(8), targetX));
+
+                    int targetY =
+                            bubbleParams.y + (bubbleSize - pillHeight) / 2;
+                    int top = getStatusBarHeight() + dp(4);
+                    int bottom = screenH - pillHeight - dp(64);
+                    lp.y = Math.max(top, Math.min(bottom, targetY));
+                } else {
                     lp.x = dp(16);
                     lp.y = dp(96);
-
-                    final FloatingPanelController controller =
-                            new FloatingPanelController(
-                                    context,
-                                    "compact_status",
-                                    windowManager,
-                                    card,
-                                    lp
-                            );
-                    controller.restorePosition();
-                    controller.attachDragHandle(card.dragHandle());
-
-                    card.setCollapsed(controller.isCompact());
-                    card.setOnCollapseClickListener(new View.OnClickListener() {
-                        @Override
-                        public void onClick(View v) {
-                            boolean next = !controller.isCompact();
-                            controller.setCompact(next);
-                            card.setCollapsed(next);
-                            try { windowManager.updateViewLayout(card, lp); } catch (Exception ignored) {}
-                        }
-                    });
-
-                    try {
-                        windowManager.addView(card, lp);
-                        compactStatusView = card;
-                        compactStatusParams = lp;
-                        compactStatusController = controller;
-                    } catch (Exception ignored) {
-                        return;
-                    }
                 }
 
-                if (compactStatusView instanceof CompactStatusCard) {
-                    ((CompactStatusCard) compactStatusView).setContent(title, detail);
+                try {
+                    pill.setAlpha(0f);
+                    pill.setScaleX(0.96f);
+                    pill.setScaleY(0.96f);
+                    windowManager.addView(pill, lp);
+                    compactStatusView = pill;
+                    compactStatusParams = lp;
+                    compactStatusController = null;
+                    pill.animate()
+                            .alpha(1f)
+                            .scaleX(1f)
+                            .scaleY(1f)
+                            .setDuration(140L)
+                            .start();
+                } catch (Exception ignored) {
+                    compactStatusView = null;
+                    compactStatusParams = null;
+                    return;
                 }
+
                 compactStatusAutoHideRunnable = new Runnable() {
                     @Override public void run() {
                         hideCompactStatus();
                     }
                 };
-                mainHandler.postDelayed(compactStatusAutoHideRunnable, MINI_STATUS_AUTO_HIDE_MS);
+                mainHandler.postDelayed(
+                        compactStatusAutoHideRunnable,
+                        MINI_STATUS_AUTO_HIDE_MS);
             }
         });
     }
@@ -752,7 +811,7 @@ public class FloatingBubbleManager {
             int screenHeight = windowManager.getDefaultDisplay().getHeight();
             // 0039: the compact rail contains exactly 2 idle / 3 Live actions.
             int itemCount = NativeLiveService.isActive() ? 3 : 2;
-            int shortcutHeight = dp(12) + itemCount * dp(42);
+            int shortcutHeight = dp(8) + itemCount * dp(46);
             int requiredBottom =
                     bubbleParams.y + bubbleSize
                             + dp(BubbleActionStripOverlay.ACTION_STRIP_GAP_DP)
@@ -770,7 +829,9 @@ public class FloatingBubbleManager {
         if (bubbleActionStrip == null) {
             bubbleActionStrip = new BubbleActionStripOverlay(context);
         }
-        int size = bubbleParams.width > 0 ? bubbleParams.width : dp(BUBBLE_SIZE_DP);
+        int size = bubbleParams.width > 0
+                ? bubbleParams.width
+                : dp(BUBBLE_SIZE_DP);
         if (!bubbleActionStrip.isShowing()) {
             ensureShortcutRoomBelow(size);
         }
@@ -778,21 +839,52 @@ public class FloatingBubbleManager {
                 bubbleParams.x,
                 bubbleParams.y,
                 size,
-                new BubbleActionStripOverlay.Actions() {
-                    @Override public void onToggleCall() {
-                        toggleNativeLive();
-                        refreshVoiceControls();
-                    }
+                bubbleActionStripActions());
+    }
 
-                    @Override public void onOpenConsole() {
-                        showVoiceControls();
-                    }
+    private BubbleActionStripOverlay.Actions bubbleActionStripActions() {
+        return new BubbleActionStripOverlay.Actions() {
+            @Override public void onToggleCall() {
+                toggleNativeLive();
+                refreshVoiceControls();
+            }
 
-                    @Override public void onInterrupt() {
-                        NativeLiveService.interruptForCorrection();
-                        refreshVoiceControls();
-                    }
-                });
+            @Override public void onToggleMute() {
+                boolean muted = NativeLiveService.toggleAgentMute();
+                showCompactStatus(
+                        muted ? "已靜音" : "已取消靜音",
+                        "");
+                refreshVoiceControls();
+            }
+
+            @Override public void onOpenConsole() {
+                showVoiceControls();
+            }
+
+            @Override public void onInterrupt() {
+                if (NativeLiveService.interruptForCorrection()) {
+                    showCompactStatus("已打斷", "");
+                }
+                refreshVoiceControls();
+            }
+        };
+    }
+
+    private void refreshBubbleActionStripIfShowing() {
+        if (bubbleActionStrip == null
+                || !bubbleActionStrip.isShowing()
+                || bubbleParams == null) {
+            return;
+        }
+        int size = bubbleParams.width > 0
+                ? bubbleParams.width
+                : dp(BUBBLE_SIZE_DP);
+        ensureShortcutRoomBelow(size);
+        bubbleActionStrip.refresh(
+                bubbleParams.x,
+                bubbleParams.y,
+                size,
+                bubbleActionStripActions());
     }
 
     // 🌊 Set Water Flow / Thinking State
@@ -832,7 +924,10 @@ public class FloatingBubbleManager {
         if ("THINKING".equalsIgnoreCase(state)) {
             // Server heartbeats refresh the 40s safety timer. They are not new
             // tasks, so do not vibrate repeatedly while already busy.
-            if (!wasBusy) vibrateShort();
+            if (!wasBusy) {
+                vibrateShort();
+                showCompactStatus("正在處理", text);
+            }
             setThinkingState(true);
             String thinkingStatus = text == null || text.isEmpty() ? "AI 回覆中" : "AI 回覆中 · " + text;
             updateDialogStatus(thinkingStatus);
@@ -843,11 +938,13 @@ public class FloatingBubbleManager {
         } else if ("ERROR".equalsIgnoreCase(state)) {
             setThinkingState(false);
             updateDialogStatus("執行失敗");
+            showCompactStatus("操作失敗", text);
         } else if ("DONE".equalsIgnoreCase(state) || "COMPLETED".equalsIgnoreCase(state)) {
             setThinkingState(false);
             vibrateSuccess();
             String doneStatus = text == null || text.isEmpty() ? "已完成" : "已完成 · " + text;
             updateDialogStatus(doneStatus);
+            showCompactStatus("已完成", text);
         } else if ("IDLE".equalsIgnoreCase(state)) {
             setThinkingState(false);
             updateDialogStatus("待命");
@@ -907,28 +1004,6 @@ public class FloatingBubbleManager {
                 if (bubbleView != null) {
                     bubbleView.setNativeVoiceState(
                             isLiveError(latestLiveStatus) ? 3 : (active ? 1 : 0));
-                }
-                if (bubbleActionStrip != null && bubbleActionStrip.isShowing()
-                        && bubbleParams != null) {
-                    int size = bubbleParams.width > 0 ? bubbleParams.width : dp(BUBBLE_SIZE_DP);
-                    ensureShortcutRoomBelow(size);
-                    bubbleActionStrip.refresh(
-                            bubbleParams.x,
-                            bubbleParams.y,
-                            size,
-                            new BubbleActionStripOverlay.Actions() {
-                                @Override public void onToggleCall() {
-                                    toggleNativeLive();
-                                    refreshVoiceControls();
-                                }
-                                @Override public void onOpenConsole() {
-                                    showVoiceControls();
-                                }
-                                @Override public void onInterrupt() {
-                                    NativeLiveService.interruptForCorrection();
-                                    refreshVoiceControls();
-                                }
-                            });
                 }
                 refreshVoiceControls();
             }
@@ -1487,6 +1562,7 @@ public class FloatingBubbleManager {
                 }
                 updateVoiceQuickSettingsUi();
                 updateVoiceTelemetryUi();
+                refreshBubbleActionStripIfShowing();
             }
         });
     }
