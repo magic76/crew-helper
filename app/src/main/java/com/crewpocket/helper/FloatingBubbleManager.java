@@ -66,8 +66,6 @@ public class FloatingBubbleManager {
     private WindowManager.LayoutParams compactStatusParams = null;
     private FloatingPanelController compactStatusController = null;
     private Runnable compactStatusAutoHideRunnable = null;
-    private BubbleContextPanel contextPanelView = null;
-    private WindowManager.LayoutParams contextPanelParams = null;
     private View pendingChoiceView = null;
     private WindowManager.LayoutParams pendingChoiceParams = null;
     private Runnable pendingChoiceTimeout = null;
@@ -368,37 +366,6 @@ public class FloatingBubbleManager {
             @Override public void run() {
                 hidePendingChoicesInternal();
                 if (!canDrawOverlays() || options == null || options.isEmpty()) return;
-
-                if (showContextPanelInternal() && contextPanelView != null) {
-                    contextPanelView.setChoices(
-                            title,
-                            options,
-                            new BubbleContextPanel.ChoiceListener() {
-                                @Override public void onChoice(String elementId) {
-                                    hidePendingChoicesInternal();
-                                    refreshContextPanelState();
-                                    if (callback != null) callback.onChoice(elementId);
-                                }
-
-                                @Override public void onCancel() {
-                                    hidePendingChoicesInternal();
-                                    refreshContextPanelState();
-                                    if (callback != null) callback.onCancel();
-                                }
-                            });
-                    pendingChoiceTimeout = new Runnable() {
-                        @Override public void run() {
-                            hidePendingChoicesInternal();
-                            refreshContextPanelState();
-                            if (callback != null) callback.onCancel();
-                        }
-                    };
-                    mainHandler.postDelayed(pendingChoiceTimeout, PendingUiChoice.TTL_MS);
-                    return;
-                }
-
-                // Safe fallback: keep the old choice card if the new panel
-                // cannot be attached on this device.
                 LinearLayout card = new LinearLayout(context);
                 card.setOrientation(LinearLayout.VERTICAL);
                 card.setPadding(dp(14), dp(12), dp(14), dp(12));
@@ -487,7 +454,6 @@ public class FloatingBubbleManager {
     private void hidePendingChoicesInternal() {
         if (pendingChoiceTimeout != null) mainHandler.removeCallbacks(pendingChoiceTimeout);
         pendingChoiceTimeout = null;
-        if (contextPanelView != null) contextPanelView.clearChoices();
         View old = pendingChoiceView; pendingChoiceView = null; pendingChoiceParams = null;
         if (old != null) try { windowManager.removeViewImmediate(old); } catch (Exception ignored) {}
     }
@@ -605,7 +571,6 @@ public class FloatingBubbleManager {
             dockAnimator.cancel();
             dockAnimator = null;
         }
-        hideContextPanelInternal();
         if (bubbleView != null) {
             try { windowManager.removeView(bubbleView); } catch(Exception e){}
             bubbleView = null;
@@ -716,7 +681,6 @@ public class FloatingBubbleManager {
                                         if (bubbleActionStrip != null) {
                                             bubbleActionStrip.dismiss();
                                         }
-                                        hideContextPanelInternal();
                                     }
                                     int targetX = initialX + (int) (event.getRawX() - initialTouchX);
                                     int targetY = initialY + (int) (event.getRawY() - initialTouchY);
@@ -735,7 +699,7 @@ public class FloatingBubbleManager {
                                         long duration = System.currentTimeMillis() - touchStartTime;
                                         if (dx < 18 && dy < 18 && duration < 450) {
                                             vibrateShort();
-                                            toggleContextPanel();
+                                            toggleBubbleActionStrip();
                                         }
                                     }
                                     snapBubbleToEdge();
@@ -888,7 +852,6 @@ public class FloatingBubbleManager {
             setThinkingState(false);
             updateDialogStatus("待命");
         }
-        refreshContextPanelState();
     }
 
     private void updateDialogStatus(final String status) {
@@ -1063,188 +1026,8 @@ public class FloatingBubbleManager {
     }
 
     private void updateVoiceTranscriptUi() {
-        if (voiceTranscriptText != null) {
-            voiceTranscriptText.setText(latestLiveTranscript);
-        }
-        if (contextPanelView != null) {
-            contextPanelView.setTranscript(latestLiveTranscript);
-        }
-    }
-
-    private void toggleContextPanel() {
-        if (contextPanelView != null) {
-            hideContextPanelInternal();
-        } else {
-            showContextPanelInternal();
-        }
-    }
-
-    private boolean showContextPanelInternal() {
-        if (!canDrawOverlays() || bubbleView == null || bubbleParams == null) return false;
-        if (contextPanelView != null) {
-            refreshContextPanelState();
-            return true;
-        }
-
-        if (bubbleActionStrip != null) bubbleActionStrip.dismiss();
-
-        int overlayType = Build.VERSION.SDK_INT >= 26
-                ? 2038 : WindowManager.LayoutParams.TYPE_PHONE;
-        int screenWidth = windowManager.getDefaultDisplay().getWidth();
-        int screenHeight = windowManager.getDefaultDisplay().getHeight();
-        int panelWidth = Math.min(dp(304), screenWidth - dp(24));
-        int bubbleSize = bubbleParams.width > 0
-                ? bubbleParams.width : dp(BUBBLE_SIZE_DP);
-
-        contextPanelParams = new WindowManager.LayoutParams(
-                panelWidth,
-                WindowManager.LayoutParams.WRAP_CONTENT,
-                overlayType,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                        | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
-                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-                PixelFormat.TRANSLUCENT);
-        contextPanelParams.gravity = Gravity.TOP | Gravity.START;
-
-        boolean bubbleOnLeft =
-                bubbleParams.x + bubbleSize / 2 < screenWidth / 2;
-        if (bubbleOnLeft) {
-            contextPanelParams.x = Math.min(
-                    screenWidth - panelWidth - dp(12),
-                    bubbleParams.x + bubbleSize + dp(8));
-        } else {
-            contextPanelParams.x = Math.max(
-                    dp(12),
-                    bubbleParams.x - panelWidth - dp(8));
-        }
-
-        int safeTop = getStatusBarHeight() + dp(8);
-        int maxY = Math.max(safeTop, screenHeight - dp(360));
-        contextPanelParams.y = Math.max(
-                safeTop,
-                Math.min(maxY, bubbleParams.y - dp(8)));
-
-        final BubbleContextPanel panel = new BubbleContextPanel(context);
-        panel.setMoreClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) {
-                hideContextPanelInternal();
-                showVoiceControls();
-            }
-        });
-        panel.setCloseClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) {
-                hideContextPanelInternal();
-            }
-        });
-
-        try {
-            windowManager.addView(panel, contextPanelParams);
-            contextPanelView = panel;
-            refreshContextPanelState();
-            updateVoiceTranscriptUi();
-            return true;
-        } catch (Exception error) {
-            contextPanelView = null;
-            contextPanelParams = null;
-            return false;
-        }
-    }
-
-    private void hideContextPanelInternal() {
-        BubbleContextPanel panel = contextPanelView;
-        contextPanelView = null;
-        contextPanelParams = null;
-        if (panel != null) {
-            try { windowManager.removeViewImmediate(panel); }
-            catch (Exception ignored) {}
-        }
-    }
-
-    private void refreshContextPanelState() {
-        final BubbleContextPanel panel = contextPanelView;
-        if (panel == null || panel.isShowingChoices()) return;
-
-        final boolean liveActive =
-                nativeLiveRequested || NativeLiveService.isActive();
-        final boolean aiSpeaking = NativeLiveService.isAiSpeaking();
-        final boolean activeTask = NativeLiveService.hasActiveAgentTask();
-        final boolean muted = NativeLiveService.isAgentMuted();
-
-        if (isLiveError(latestLiveStatus)) {
-            panel.setStatus(latestLiveStatus, BubbleContextPanel.MODE_ERROR);
-        } else if (aiSpeaking) {
-            panel.setStatus("正在說話", BubbleContextPanel.MODE_SPEAKING);
-        } else if ("THINKING".equals(currentState)
-                || "TOOL".equals(currentState)
-                || activeTask) {
-            panel.setStatus(
-                    "TOOL".equals(currentState) ? "正在操作" : "正在處理",
-                    BubbleContextPanel.MODE_THINKING);
-        } else if (liveActive) {
-            panel.setStatus(
-                    muted ? "已靜音" : "正在聽",
-                    BubbleContextPanel.MODE_LISTENING);
-        } else {
-            panel.setStatus("待命", BubbleContextPanel.MODE_IDLE);
-        }
-
-        panel.setTranscript(latestLiveTranscript);
-
-        if (aiSpeaking) {
-            panel.setPrimaryAction(
-                    "打斷",
-                    new View.OnClickListener() {
-                        @Override public void onClick(View v) {
-                            NativeLiveService.interruptForCorrection();
-                            refreshVoiceControls();
-                        }
-                    },
-                    false);
-        } else if (activeTask) {
-            panel.setPrimaryAction(
-                    "停止任務",
-                    new View.OnClickListener() {
-                        @Override public void onClick(View v) {
-                            NativeLiveService.stopAgentTask();
-                            refreshVoiceControls();
-                        }
-                    },
-                    true);
-        } else if (!liveActive) {
-            panel.setPrimaryAction(
-                    "開始語音",
-                    new View.OnClickListener() {
-                        @Override public void onClick(View v) {
-                            toggleNativeLive();
-                            refreshVoiceControls();
-                        }
-                    },
-                    false);
-        } else {
-            panel.setPrimaryAction(
-                    muted ? "取消靜音" : "靜音",
-                    new View.OnClickListener() {
-                        @Override public void onClick(View v) {
-                            NativeLiveService.toggleAgentMute();
-                            refreshVoiceControls();
-                        }
-                    },
-                    false);
-        }
-
-        if (liveActive) {
-            panel.setSecondaryAction(
-                    "結束",
-                    new View.OnClickListener() {
-                        @Override public void onClick(View v) {
-                            toggleNativeLive();
-                            refreshVoiceControls();
-                        }
-                    },
-                    true);
-        } else {
-            panel.setSecondaryAction("", null, false);
-        }
+        if (voiceTranscriptText == null) return;
+        voiceTranscriptText.setText(latestLiveTranscript);
     }
 
     private void toggleVoiceControls() {
@@ -1265,7 +1048,6 @@ public class FloatingBubbleManager {
             @Override public void run() {
                 if (!voiceControlsOpening) return;
                 try {
-                    hideContextPanelInternal();
                     if (dialogView != null) hideDialog();
                     int overlayType = Build.VERSION.SDK_INT >= 26 ? 2038 : WindowManager.LayoutParams.TYPE_PHONE;
                     int screenWidth = windowManager.getDefaultDisplay().getWidth();
@@ -1705,7 +1487,6 @@ public class FloatingBubbleManager {
                 }
                 updateVoiceQuickSettingsUi();
                 updateVoiceTelemetryUi();
-                refreshContextPanelState();
             }
         });
     }
