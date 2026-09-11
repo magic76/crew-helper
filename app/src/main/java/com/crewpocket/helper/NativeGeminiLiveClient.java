@@ -129,6 +129,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private volatile String latestSemanticFingerprint = "";
     private final WorkingContext workingContext = new WorkingContext();
     private final UserActionScope userActionScope = new UserActionScope();
+    // 0070: observational-only state projection. It must never gate execution.
+    private final ShadowAgentRuntime shadowAgentRuntime = new ShadowAgentRuntime();
     private String authorizationTranscript = "";
     // Incremented for every finalized user utterance (and typed instruction).
     // Tool calls retain the generation that created them, preventing an old
@@ -188,6 +190,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         this.interruptionSensitivity = Math.max(0, Math.min(100, interruptionSensitivity));
         this.audioOutput = "media".equals(audioOutput) ? "media" : "call";
         this.listener = listener;
+        shadowAgentRuntime.setListener(new AgentLedger.Listener() {
+            @Override public void onEvent(AgentEvent event, AgentState state) {
+                Log.d(TAG, "AgentLedger " + event.type + " => " + state.phase);
+            }
+        });
     }
     boolean isRunning() { return running; }
     String getStage() { return stage; }
@@ -217,6 +224,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
      */
     boolean beginCorrectionWindow() {
         if (!running) return false;
+
+        shadowAgentRuntime.onInterrupted("USER_CORRECTION");
 
         // IMPORTANT: interrupt is a LOCAL CONTROL EVENT, not a conversation turn.
         // Do not call sendInternalAgentDirective() here. Doing so can make Gemini
@@ -325,6 +334,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         Thread worker = activeToolThread;
         if (worker != null) worker.interrupt();
         reportStage("Agent 任務已停止：" + task.endReason);
+        shadowAgentRuntime.onTaskCancelled(task.taskId, task.endReason);
         return true;
     }
 
@@ -365,6 +375,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             pendingCondition = null;
         }
 
+        String shadowTaskId = "";
         synchronized (agentLock) {
             userIntentGeneration++;
             // Calls that have not started belong to the old utterance. An
@@ -373,7 +384,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             inFlightToolSignatures.clear();
             primaryToolCallSignatures.clear();
             coalescedToolCallRecipients.clear();
+            if (activeAgentTask != null) shadowTaskId = activeAgentTask.taskId;
         }
+
+        shadowAgentRuntime.onUserIntent(
+                userIntentGeneration, conversationGoalId, shadowTaskId, startNewCapsule);
 
         supersedeActiveAgentTaskForNewUserInstruction();
         Log.d(TAG, "新的使用者意圖：generation=" + userIntentGeneration
@@ -1326,6 +1341,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                         coalescedToolCallRecipients.put(signature, recipients);
                     }
                     recipients.add(new ToolResponseRecipient(id, call.optString("name", "unknown")));
+                    shadowAgentRuntime.onDuplicateIgnored(
+                            id, call.optString("name", "unknown"), generation);
                     Log.d(TAG, "合併同輪重送工具呼叫：" + signature);
                     return;
                 }
@@ -1333,6 +1350,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 call.put("_crew_intent_generation", generation);
                 call.put("_crew_inflight_signature", signature);
                 pendingToolCalls.add(call);
+                shadowAgentRuntime.onToolQueued(
+                        id, call.optString("name", "unknown"), generation);
             }
         } catch (Exception error) {
             Log.w(TAG, "工具呼叫排程失敗", error);
@@ -1379,6 +1398,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             // The user has already spoken a new command.  Do not execute a
             // queued mutation from the old turn, and do not create a new task
             // record that would inherit its repeat counter.
+            shadowAgentRuntime.onStaleActionRejected(
+                    id, requestedName, callIntentGeneration, userIntentGeneration);
             sendBlockedToolResponse(id, requestedName, "使用者已有新指令，舊操作已取消。");
             return;
         }
@@ -1469,12 +1490,22 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             requestAgentConclusion(task, task.blockedReason);
             return;
         }
+        shadowAgentRuntime.onActionStarted(
+                id,
+                callIntentGeneration,
+                conversationGoalId,
+                task.taskId,
+                requestedName,
+                name,
+                lastObservedScreenFingerprint,
+                ActionTransaction.ExpectedEffect.ANY_OBSERVABLE_CHANGE);
         if (isMutationTool(name) && audioIncidentRecorder != null) {
             audioIncidentRecorder.captureBeforeFirstMutation(task.taskId, name, args);
         }
         JSONObject result = new JSONObject();
         activeToolThread = Thread.currentThread();
         try {
+            shadowAgentRuntime.onActionExecuted(id);
             if (SemanticPhoneAction.ERROR_TOOL.equals(name)) result = args;
             else if ("take_screenshot".equals(name)) result = captureAndSendScreen();
             else if ("inspect_ui".equals(name)) result = inspectUi(args);
@@ -3030,6 +3061,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             if (after != null && after.optBoolean("success", false)) {
                 String fp = after.optString("fingerprint", "");
                 latestSemanticFingerprint = fp;
+                shadowAgentRuntime.onScreenObserved(
+                        fp,
+                        after.optString("stableScreenKey", ""),
+                        after.optString("package", ""));
                 semanticObserveRequired = false;
                 workingContext.observe(after.optString("package", ""), fp, after.optString("stableScreenKey", ""));
             } else if (!executionSuccess) {
@@ -3085,6 +3120,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if (reply == null) reply = new JSONObject();
         if (reply.optBoolean("success", false)) {
             latestSemanticFingerprint = reply.optString("fingerprint", "");
+            shadowAgentRuntime.onScreenObserved(
+                    latestSemanticFingerprint,
+                    reply.optString("stableScreenKey", ""),
+                    reply.optString("package", ""));
             semanticObserveRequired = false;
             workingContext.observe(reply.optString("package", ""), latestSemanticFingerprint, reply.optString("stableScreenKey", ""));
             try { reply.put("runtimeContext", workingContext.toModelJson()); } catch (Exception ignored) {}
@@ -3096,7 +3135,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         JSONObject raw = helperGet("/screen_state");
         if (!raw.optBoolean("success")) return raw;
         String fingerprint = raw.optString("fingerprint", "");
-        if (!fingerprint.isEmpty()) lastObservedScreenFingerprint = fingerprint;
+        if (!fingerprint.isEmpty()) {
+            lastObservedScreenFingerprint = fingerprint;
+            shadowAgentRuntime.onScreenObserved(fingerprint, "", raw.optString("package", ""));
+        }
         JSONArray nodes = raw.optJSONArray("nodes");
         JSONArray actions = raw.optJSONArray("actions");
         JSONArray visible = new JSONArray();
@@ -3143,7 +3185,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                         consecutiveNoProgress = 0;
                     }
                 }
-                if (!afterFingerprint.isEmpty()) lastObservedScreenFingerprint = afterFingerprint;
+                if (!afterFingerprint.isEmpty()) {
+                    lastObservedScreenFingerprint = afterFingerprint;
+                    shadowAgentRuntime.onScreenObserved(afterFingerprint, "", currentPkg);
+                }
                 response.put("progress", progress);
                 response.put("noProgressCount", consecutiveNoProgress);
                 response.put("fingerprint", afterFingerprint);
@@ -3619,6 +3664,14 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     }
 
     private void sendToolResponse(String id, String name, JSONObject result) throws Exception {
+        boolean shadowSuccess = result != null && result.optBoolean("success", false);
+        String shadowCode = result == null ? "NO_RESULT" : result.optString("error", "");
+        if (shadowCode.isEmpty() && result != null) {
+            shadowCode = result.optString("stepResult", shadowSuccess ? "OK" : "FAILED");
+        }
+        String shadowFingerprint = result == null ? "" : result.optString("fingerprint", "");
+        shadowAgentRuntime.onToolResult(
+                id, name, shadowSuccess, shadowCode, shadowFingerprint);
         synchronized (agentLock) {
             if (activeAgentTask != null) {
                 AgentTaskRecord task = activeAgentTask;
