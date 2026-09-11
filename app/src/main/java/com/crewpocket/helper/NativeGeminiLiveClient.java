@@ -1237,8 +1237,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         JSONArray tools = new JSONArray();
         JSONObject phoneActionProperties = new JSONObject()
                 .put("action", new JSONObject().put("type", "STRING")
-                        .put("enum", new JSONArray()
-                                .put("OPEN_APP").put("SEARCH").put("TAP").put("TYPE")
+                                .put("enum", new JSONArray()
+                                .put("OPEN_APP").put("SEARCH").put("COMMIT_SEARCH").put("TAP").put("TYPE")
                                 .put("SCROLL").put("BACK").put("HOME"))
                         .put("description", "Choose exactly one semantic next action; Runtime decides Android implementation."))
                 .put("target", new JSONObject().put("type", "STRING")
@@ -1253,7 +1253,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                         .put("description", "Optional SCROLL distance."));
         tools.put(new JSONObject().put("name", "phone_action")
                 .put("description",
-                        "Perform exactly ONE semantic phone step. Available actions: OPEN_APP, SEARCH, TAP, TYPE, SCROLL, BACK, HOME. Runtime owns selectors, focus, Android implementation and verification. SEARCH is one Runtime transaction; do not manually TAP search then TYPE. TYPE never submits a real message. Real message sending is current-screen only through send_text.")
+                        "Perform exactly ONE semantic phone step. Available actions: OPEN_APP, SEARCH, COMMIT_SEARCH, TAP, TYPE, SCROLL, BACK, HOME. COMMIT_SEARCH presses the current keyboard search/IME button only. Runtime owns selectors, focus, Android implementation and verification. SEARCH is one Runtime transaction; do not manually TAP search then TYPE. TYPE never submits a real message. Real message sending is current-screen only through send_text.")
                 .put("parameters", new JSONObject().put("type", "OBJECT")
                         .put("properties", phoneActionProperties)
                         .put("required", new JSONArray().put("action"))));
@@ -1600,6 +1600,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             else if ("tap_screen".equals(name)) result = tap(args);
             else if ("type_text".equals(name)) result = typeText(args);
             else if ("search_current_app".equals(name)) result = searchCurrentApp(args);
+            else if ("commit_search".equals(name)) result = commitSearch();
             else if ("send_text".equals(name)) result = sendTextToPhone(args);
             else if ("press_key".equals(name)) result = pressKey(args);
             else if ("schedule_reminder".equals(name)) result = scheduleReminder(args);
@@ -1836,6 +1837,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 || "tap_screen".equals(name)
                 || "type_text".equals(name)
                 || "search_current_app".equals(name)
+                || "commit_search".equals(name)
                 || "send_text".equals(name)
                 || "press_key".equals(name);
     }
@@ -3717,6 +3719,18 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         JSONObject reply = helperPost("/key", new JSONObject().put("key", key));
         workingContext.recordAction("key:" + key, reply.optBoolean("success", false) ? "submitted" : "failed");
         return autoObserveAfterMutation(reply, "press_key");
+    }
+
+    /** Explicitly commits the currently focused search field via the IME key. */
+    private JSONObject commitSearch() throws Exception {
+        JSONObject reply = helperPost("/commit_search", new JSONObject());
+        workingContext.recordAction("search_commit",
+                reply.optBoolean("success", false) ? "submitted" : "failed");
+        if (!reply.optBoolean("success", false)) {
+            reply.put("instruction",
+                    "目前沒有可確認的搜尋輸入框或搜尋鍵；不要改點搜尋結果，請先回到搜尋欄。" );
+        }
+        return autoObserveAfterMutation(reply, "commit_search");
     }
 
     private JSONObject sendToMainChat(JSONObject args) throws Exception {

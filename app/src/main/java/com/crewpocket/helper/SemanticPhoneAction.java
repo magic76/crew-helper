@@ -64,6 +64,10 @@ final class SemanticPhoneAction {
             return mapped(action, "search_current_app", new JSONObject().put("text", query));
         }
 
+        if ("COMMIT_SEARCH".equals(action)) {
+            return mapped(action, "commit_search", new JSONObject());
+        }
+
         if ("SCROLL".equals(action)) {
             if (direction.isEmpty()) direction = "up";
             if (!("up".equals(direction) || "down".equals(direction)
@@ -81,7 +85,7 @@ final class SemanticPhoneAction {
         }
 
         return error(action, "UNKNOWN_SEMANTIC_ACTION",
-                "只支援 OPEN_APP/SEARCH/TAP/TYPE/SCROLL/BACK/HOME。");
+                "只支援 OPEN_APP/SEARCH/COMMIT_SEARCH/TAP/TYPE/SCROLL/BACK/HOME。");
     }
 
     private static Resolution mapped(String action, String runtimeName, JSONObject args) {
