@@ -247,6 +247,41 @@ final class DeckRepository {
         }
     }
 
+    /**
+     * 0054 guarded Runtime advance.
+     *
+     * The narration scheduler supplies the index it just finished speaking.
+     * If the UI has moved since then, the request is stale and must not advance.
+     */
+    static JSONObject advanceFromIndex(int expectedIndex) {
+        synchronized (LOCK) {
+            if (activeDeck == null) return failure("尚未開啟 Deck。");
+            if (activeIndex != expectedIndex) {
+                try {
+                    return new JSONObject()
+                            .put("success", false)
+                            .put("error", "STALE_DECK_ADVANCE")
+                            .put("expectedIndex", expectedIndex)
+                            .put("currentIndex", activeIndex);
+                } catch (Exception ignored) {
+                    return failure("STALE_DECK_ADVANCE");
+                }
+            }
+            if (activeIndex >= activeDeck.cards.length() - 1) {
+                return failure("已在最後一張卡片；請作結或依使用者問題選擇其他卡片。");
+            }
+            activeIndex++;
+            DeckActivity.showActiveCard();
+            try {
+                return cardResult(activeDeck.cards.getJSONObject(activeIndex), activeIndex, true)
+                        .put("message", "Runtime 已前往下一張卡片")
+                        .put("advancedFromIndex", expectedIndex);
+            } catch (Exception error) {
+                return failure("前往下一張失敗：" + error.getMessage());
+            }
+        }
+    }
+
     static JSONObject listDeckImages() {
         synchronized (LOCK) {
             if (activeDeck == null) return failure("尚未開啟 Deck。");

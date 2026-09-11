@@ -258,6 +258,29 @@ public class MainActivity extends Activity {
         addPageHeading("▣", I18n.get(this, "Live Deck 簡報中心", "Live Deck Center"),
             I18n.get(this, "AI 語音自動翻頁、資料卡片與圖表生動講解。", "AI voice auto-advance, interactive cards, and data presentations."));
 
+        // 0054: one explicit entry point for presentation mode. Ensure a Deck
+        // is active BEFORE Live setup so Deck tools are visible from turn one.
+        Button enterDeckModeBtn = new Button(this);
+        enterDeckModeBtn.setText("🎙️ " + I18n.get(this, "進入 AI 簡報模式", "Enter AI Presentation Mode"));
+        enterDeckModeBtn.setTextSize(16);
+        enterDeckModeBtn.setTypeface(Typeface.DEFAULT_BOLD);
+        enterDeckModeBtn.setTextColor(Color.WHITE);
+        enterDeckModeBtn.setAllCaps(false);
+        enterDeckModeBtn.setGravity(Gravity.CENTER);
+        enterDeckModeBtn.setBackground(CrewTheme.createGradientButton(
+                this, CrewTheme.INDIGO_500, CrewTheme.TEAL_500, 16));
+        enterDeckModeBtn.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                DeckRepository.initialize(MainActivity.this);
+                DeckRepository.ensureActiveDeck();
+                startActivity(new Intent(MainActivity.this, NativeLiveActivity.class));
+            }
+        });
+        LinearLayout.LayoutParams enterDeckLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(58));
+        enterDeckLp.setMargins(0, dp(12), 0, dp(16));
+        pageContent.addView(enterDeckModeBtn, enterDeckLp);
+
         // Action 1: Import Folder
         pageContent.addView(makeActionCard("➕", I18n.get(this, "匯入 Deck 資料夾", "Import Deck Folder"),
             I18n.get(this, "選擇包含 deck.json 與圖片的資料夾進行展示", "Select a folder containing deck.json and images"), CrewTheme.INDIGO_400, new View.OnClickListener() {
@@ -271,7 +294,11 @@ public class MainActivity extends Activity {
         // Action 2: Ephemeral Info Card
         pageContent.addView(makeActionCard("⚡", I18n.get(this, "AI 即席簡報生成", "On-the-fly Deck Generation"),
             I18n.get(this, "在語音中說『幫我做一份簡報介紹...』，AI 會立即生成帶圖片的卡片並為您導播！", "Say 'create a deck about...', AI will generate cards with web images and present!"), CrewTheme.AMBER_400, new View.OnClickListener() {
-                @Override public void onClick(View v) { startActivity(new Intent(MainActivity.this, NativeLiveActivity.class)); }
+                @Override public void onClick(View v) {
+                    DeckRepository.initialize(MainActivity.this);
+                    DeckRepository.ensureActiveDeck();
+                    startActivity(new Intent(MainActivity.this, NativeLiveActivity.class));
+                }
             }));
 
         // Installed Decks Section

@@ -508,6 +508,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private volatile boolean allowVoiceInterruption = true; // 🎙️ 語音插話：預設開啟（隨時自由說話打斷 AI；若關閉則為防插話保護模式）
     private final Handler deckAdvanceHandler = new Handler(Looper.getMainLooper());
     private volatile boolean deckAutoAdvanceActive = false;
+    // 0054: the scheduled page turn is bound to the card that was actually narrated.
+    // A stale callback may never advance a newer card.
+    private volatile int deckAdvanceExpectedIndex = -1;
     private final Runnable deckAdvanceRunnable = new Runnable() {
         @Override public void run() {
             triggerDeckAutoAdvance();
@@ -583,6 +586,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private void markCurrentTurnInterrupted() {
         interruptedCurrentTurn = true;
         deckAdvanceHandler.removeCallbacks(deckAdvanceRunnable);
+        deckAdvanceExpectedIndex = -1;
         interruptionHandler.removeCallbacks(clearInterruptedFallback);
         interruptionHandler.postDelayed(clearInterruptedFallback, 1800);
     }
@@ -715,6 +719,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             userActionScope.updateFromUserText(completeUserInput);
             if (tryHandleRuntimeSendCurrent(completeUserInput)) return;
             if (isStopAgentTaskPhrase(completeUserInput)) {
+                cancelDeckAutoAdvance();
                 cancelAgentTask("使用者語音停止任務");
             }
         }
@@ -805,6 +810,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             }
         }
         if (server.optBoolean("turnComplete", server.optBoolean("turn_complete", false))) {
+            // Capture whole-turn truth before consuming/resetting it. Only a
+            // pure, audible narration turn is allowed to schedule Deck advance.
+            boolean deckNarrationTurn = shouldAutoAdvanceDeckAfterCurrentTurn();
+            boolean deckTurnWasInterrupted = interruptedCurrentTurn;
+
             // Match agy-web AudioWorklet's `turn-complete`: a final short
             // PCM phrase must not remain below the normal pre-roll threshold.
             if (usingOboeOutput) NativeOboeOutput.finishTurn();
@@ -818,9 +828,30 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             if (shouldEvaluateAgentTaskAtTurnComplete()) {
                 finishAgentTaskIfAwaitingModel();
             }
-            if (deckAutoAdvanceActive && DeckRepository.hasActiveDeck() && !interruptedCurrentTurn && !agentMuted) {
+            if (deckNarrationTurn
+                    && deckAutoAdvanceActive
+                    && DeckRepository.hasActiveDeck()
+                    && !deckTurnWasInterrupted
+                    && !agentMuted) {
                 scheduleDeckAutoAdvance();
             }
+
+            // 0054: model-turn state is per turn, not per Live session.
+            // Tool-only turns after a narration must not inherit "audio seen"
+            // and accidentally schedule extra page turns.
+            resetCurrentModelTurnState();
+        }
+    }
+
+    /**
+     * 0054: auto-advance only after one pure narration turn whose PCM was
+     * actually accepted for playback. Tool turns must never inherit this state.
+     */
+    private boolean shouldAutoAdvanceDeckAfterCurrentTurn() {
+        synchronized (agentLock) {
+            return currentModelTurnProducedSpeech
+                    && currentModelTurnReceivedAudio
+                    && !currentModelTurnHadToolCall;
         }
     }
 
@@ -1486,8 +1517,21 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 if (result.optBoolean("success", false)) deckAutoAdvanceActive = true;
             }
             else if ("advance_deck".equals(name)) {
-                result = DeckRepository.advance();
-                if (result.optBoolean("success", false)) deckAutoAdvanceActive = true;
+                if (deckAutoAdvanceActive) {
+                    // 0054: while automatic narration is active, page timing is
+                    // Runtime-owned. Treat stray model advance calls as a safe no-op.
+                    result = new JSONObject()
+                            .put("success", true)
+                            .put("noOp", true)
+                            .put("runtimeOwned", true)
+                            .put("currentIndex", DeckRepository.activeIndex())
+                            .put("instruction",
+                                    "自動簡報翻頁由 Runtime 控制。不要再次呼叫 advance_deck；"
+                                    + "請只講解目前顯示的卡片，Runtime 會在音訊播放完畢後翻頁。");
+                } else {
+                    result = DeckRepository.advance();
+                    if (result.optBoolean("success", false)) deckAutoAdvanceActive = true;
+                }
             }
             else if ("create_ephemeral_deck".equals(name)) {
                 result = DeckRepository.createEphemeralDeck(args.optString("title"), args.optJSONArray("cards"));
@@ -1852,46 +1896,100 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     }
 
     private void scheduleDeckAutoAdvance() {
-        if (!running || webSocket == null || !deckAutoAdvanceActive || interruptedCurrentTurn || agentMuted) return;
+        if (!running || webSocket == null || !deckAutoAdvanceActive
+                || interruptedCurrentTurn || agentMuted) return;
         if (!DeckRepository.hasActiveDeck()) {
             deckAutoAdvanceActive = false;
+            deckAdvanceExpectedIndex = -1;
             return;
         }
+
+        // Bind this page turn to the card whose narration just completed.
+        deckAdvanceExpectedIndex = DeckRepository.activeIndex();
+
         long remaining = Math.max(0, lastPlaybackActiveAt - System.currentTimeMillis());
-        long delay = remaining + 650; // 等待音訊緩衝清空 + 650ms 自然對話停頓
+        long delay = remaining + 650; // wait for the real audio queue to drain + natural pause
         deckAdvanceHandler.removeCallbacks(deckAdvanceRunnable);
         deckAdvanceHandler.postDelayed(deckAdvanceRunnable, delay);
-        Log.d(TAG, "排程簡報自動翻頁：" + delay + "ms 後觸發下一頁導播");
+        Log.d(TAG, "0054 排程簡報翻頁：cardIndex="
+                + deckAdvanceExpectedIndex + " delay=" + delay + "ms");
     }
 
     private void triggerDeckAutoAdvance() {
-        if (!running || webSocket == null || !deckAutoAdvanceActive || interruptedCurrentTurn || agentMuted) return;
+        if (!running || webSocket == null || !deckAutoAdvanceActive
+                || interruptedCurrentTurn || agentMuted) return;
         if (!DeckRepository.hasActiveDeck()) {
             deckAutoAdvanceActive = false;
+            deckAdvanceExpectedIndex = -1;
             return;
         }
+
+        int expectedIndex = deckAdvanceExpectedIndex;
+        if (expectedIndex < 0) return;
+
+        int actualIndex = DeckRepository.activeIndex();
+        if (actualIndex != expectedIndex) {
+            // A user action, tool call, or stale callback already changed the page.
+            // Never advance a page based on narration for an older card.
+            Log.w(TAG, "0054 忽略過期簡報翻頁：expected="
+                    + expectedIndex + " actual=" + actualIndex);
+            deckAdvanceExpectedIndex = -1;
+            return;
+        }
+
         long remaining = lastPlaybackActiveAt - System.currentTimeMillis();
         if (remaining > 100) {
             deckAdvanceHandler.removeCallbacks(deckAdvanceRunnable);
             deckAdvanceHandler.postDelayed(deckAdvanceRunnable, remaining + 450);
             return;
         }
+
         if (DeckRepository.hasNext()) {
-            int nextCardNum = DeckRepository.activeIndex() + 2;
+            JSONObject advanced = DeckRepository.advanceFromIndex(expectedIndex);
+            if (!advanced.optBoolean("success", false)) {
+                Log.w(TAG, "0054 Runtime 翻頁未執行："
+                        + advanced.optString("error", "UNKNOWN"));
+                deckAdvanceExpectedIndex = -1;
+                return;
+            }
+
+            int currentIndex = DeckRepository.activeIndex();
+            int currentCardNum = currentIndex + 1;
             int total = DeckRepository.totalCards();
-            Log.d(TAG, "自動簡報導播：本頁語音播報完畢，驅動模型翻至第 " + nextCardNum + "/" + total + " 頁");
-            reportStage("簡報導播：第 " + (nextCardNum - 1) + " 頁講解完畢，自動進入第 " + nextCardNum + " 頁…");
-            sendInternalAgentDirective("【簡報導播系統】第 " + (nextCardNum - 1) + " 頁語音播報已播放完畢。請翻到下一頁（呼叫 advance_deck 工具）並繼續為使用者講解第 " + nextCardNum + " 頁（共 " + total + " 頁）。");
+            deckAdvanceExpectedIndex = -1;
+
+            String cardData = advanced.toString();
+            if (cardData.length() > 7000) {
+                cardData = cardData.substring(0, 7000);
+            }
+
+            Log.d(TAG, "0054 Runtime 已翻至第 " + currentCardNum + "/" + total + " 頁");
+            reportStage("簡報導播：進入第 " + currentCardNum + "/" + total + " 頁…");
+
+            // Start the next narration from a clean turn. Runtime already changed
+            // the visible card, so Gemini only needs to narrate the supplied card.
+            resetCurrentModelTurnState();
+            sendInternalAgentDirective(
+                    "【簡報 Runtime 已翻頁】目前畫面已由 Runtime 切到第 "
+                    + currentCardNum + "/" + total + " 頁。"
+                    + "以下是目前卡片資料：" + cardData
+                    + "。只講解目前這一頁，不要呼叫 advance_deck 或 present_deck_card，"
+                    + "不要提前切換畫面。自動翻頁由 Runtime 在這頁語音真正播放完畢後處理。");
         } else {
-            Log.d(TAG, "自動簡報導播：已抵達最後一張卡片，驅動模型總結作結");
-            reportStage("簡報導播：全部卡片播報完畢，進行總結…");
-            sendInternalAgentDirective("【簡報導播系統】簡報所有卡片已播報完畢。請對整份簡報進行簡短總結並禮貌作結。");
+            deckAdvanceExpectedIndex = -1;
             deckAutoAdvanceActive = false;
+            Log.d(TAG, "0054 自動簡報已抵達最後一張卡片");
+            reportStage("簡報導播：全部卡片播報完畢，進行總結…");
+            resetCurrentModelTurnState();
+            sendInternalAgentDirective(
+                    "【簡報導播系統】目前已在最後一張卡片，所有頁面都已播報完成。"
+                    + "請不要再呼叫任何翻頁工具，只做一段簡短總結並作結。");
         }
     }
 
     private void cancelDeckAutoAdvance() {
         deckAdvanceHandler.removeCallbacks(deckAdvanceRunnable);
+        deckAdvanceExpectedIndex = -1;
         deckAutoAdvanceActive = false;
     }
 
