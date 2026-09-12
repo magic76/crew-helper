@@ -80,6 +80,41 @@ final class AgentInspectorStore {
         return activeTask ? "正在執行任務…" : "";
     }
 
+    /**
+     * Minimal labels allowed beside the bubble.
+     * Normal progress and successful completion intentionally return empty.
+     */
+    static String quietFeedbackLabel(String rawStatus, boolean activeTask) {
+        String raw = rawStatus == null ? "" : rawStatus.trim();
+        if (raw.isEmpty()) return "";
+
+        if (raw.contains("等待使用者選擇")
+                || raw.contains("NEED_USER")) {
+            return "需要你選擇";
+        }
+
+        String lower = raw.toLowerCase(Locale.ROOT);
+        boolean permission =
+                lower.contains("permission")
+                || raw.contains("權限不足")
+                || raw.contains("未取得權限");
+        if (permission && activeTask) {
+            return "需要權限";
+        }
+
+        if (!activeTask && raw.contains("Agent 任務結束")) {
+            boolean failed =
+                    lower.contains("失敗")
+                    || lower.contains("錯誤")
+                    || lower.contains("未完成")
+                    || lower.contains("逾時");
+            if (failed) return "操作失敗";
+        }
+
+        // User cancellation and normal successful completion stay silent.
+        return "";
+    }
+
     private static String friendlyTool(String tool) {
         String t = tool == null ? "" : tool.toLowerCase(Locale.ROOT);
         if (t.contains("open_app") || t.equals("launch_app")) {

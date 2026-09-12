@@ -73,6 +73,7 @@ public class FloatingBubbleManager {
     private WindowManager.LayoutParams pendingChoiceParams = null;
     private Runnable pendingChoiceTimeout = null;
     private static final long MINI_STATUS_AUTO_HIDE_MS = 1800L;
+    private static final long AGENT_QUIET_PROGRESS_DELAY_MS = 4000L;
     private static final int BUBBLE_SIZE_DP = 48;
     private static class DockIconButton extends View {
         public static final int ICON_CAMERA = 1;
@@ -242,8 +243,9 @@ public class FloatingBubbleManager {
     private String previousLiveTranscript = "";
     private String latestLiveTranscriptRole = "";
     private Runnable transcriptRefreshRunnable = null;
-    private String lastAgentTaskPill = "";
-    private long lastAgentTaskPillAtMs = 0L;
+    private Runnable agentQuietProgressRunnable = null;
+    private boolean agentQuietTaskActive = false;
+    private boolean agentQuietProgressShown = false;
     private TextView dialogStatusText = null;
     private Button dialogStopButton = null;
     // Legacy screenshot buffer kept only for source compatibility; external server mode is removed.
@@ -403,34 +405,81 @@ public class FloatingBubbleManager {
     }
 
     /**
-     * 0088: short, safe task-state labels beside the bubble.
-     * Never exposes tool args, screen text, user text or raw Runtime payloads.
+     * 0089 Quiet Agent Feedback.
+     *
+     * Normal tool progress belongs in Agent Inspector, not beside the bubble.
+     * The user only sees:
+     * - a delayed "處理中…" if a task has been active for 4s,
+     * - an immediate user-intervention label,
+     * - an immediate final failure label.
+     *
+     * Successful and ordinary intermediate stages stay silent.
      */
     public void updateAgentTaskStatus(final String rawStatus,
                                       final boolean activeTask) {
         mainHandler.post(new Runnable() {
             @Override public void run() {
-                if (bubbleView == null) return;
-
-                String friendly =
-                        AgentInspectorStore.friendlyStage(rawStatus, activeTask);
-                if (friendly == null || friendly.isEmpty()) {
-                    if (!activeTask) lastAgentTaskPill = "";
-                    return;
-                }
-
-                long now = System.currentTimeMillis();
-                if (friendly.equals(lastAgentTaskPill)
-                        && now - lastAgentTaskPillAtMs < 4000L) {
-                    return;
-                }
-                lastAgentTaskPill = friendly;
-                lastAgentTaskPillAtMs = now;
-                showCompactStatus(friendly, "");
+                String important =
+                        AgentInspectorStore.quietFeedbackLabel(
+                                rawStatus, activeTask);
 
                 if (!activeTask) {
-                    lastAgentTaskPill = "";
+                    agentQuietTaskActive = false;
+                    agentQuietProgressShown = false;
+                    if (agentQuietProgressRunnable != null) {
+                        mainHandler.removeCallbacks(
+                                agentQuietProgressRunnable);
+                        agentQuietProgressRunnable = null;
+                    }
+
+                    if (bubbleView != null
+                            && important != null
+                            && !important.isEmpty()) {
+                        showCompactStatus(important, "");
+                    }
+                    return;
                 }
+
+                if (!agentQuietTaskActive) {
+                    agentQuietTaskActive = true;
+                    agentQuietProgressShown = false;
+
+                    if (agentQuietProgressRunnable != null) {
+                        mainHandler.removeCallbacks(
+                                agentQuietProgressRunnable);
+                    }
+
+                    agentQuietProgressRunnable = new Runnable() {
+                        @Override public void run() {
+                            agentQuietProgressRunnable = null;
+                            if (!agentQuietTaskActive
+                                    || agentQuietProgressShown
+                                    || bubbleView == null) {
+                                return;
+                            }
+                            agentQuietProgressShown = true;
+                            showCompactStatus("處理中…", "");
+                        }
+                    };
+                    mainHandler.postDelayed(
+                            agentQuietProgressRunnable,
+                            AGENT_QUIET_PROGRESS_DELAY_MS);
+                }
+
+                if (important == null || important.isEmpty()
+                        || bubbleView == null) {
+                    return;
+                }
+
+                // A real decision/error is more useful than the generic
+                // delayed progress hint, so suppress that hint afterwards.
+                agentQuietProgressShown = true;
+                if (agentQuietProgressRunnable != null) {
+                    mainHandler.removeCallbacks(
+                            agentQuietProgressRunnable);
+                    agentQuietProgressRunnable = null;
+                }
+                showCompactStatus(important, "");
             }
         });
     }
