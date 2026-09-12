@@ -758,7 +758,7 @@ public class MainActivity extends Activity
                     String deckTitle = deck.optString("title", deckId);
                     int cardCount = deck.optInt("cards", 0);
 
-                    pageContent.addView(makeActionCard(
+                    pageContent.addView(makeDeckActionCard(
                         "▣",
                         deckTitle,
                         cardCount + " " + I18n.get(
@@ -795,7 +795,7 @@ public class MainActivity extends Activity
 
         addSectionTitle(pageContent, I18n.get(this, "⋯ 更多", "MORE"));
 
-        pageContent.addView(makeActionCard(
+        pageContent.addView(makeDeckActionCard(
             "➕",
             I18n.get(this, "進階：匯入 Deck 資料夾", "Advanced: Import Deck Folder"),
             I18n.get(this,
@@ -816,140 +816,309 @@ public class MainActivity extends Activity
 
     private void renderSettingsPage() {
         pageContent.removeAllViews();
-        addPageHeading("⚙️", I18n.get(this, "設定與偏好", "Settings & Preferences"),
-            I18n.get(this, "音色、說話個性、自訂 Prompt、權限與 API 設定。", "Voice, speaking personality, custom prompts, permissions, and API settings."));
 
-        // ── 1. Voice & Persona ──
-        addSectionTitle(pageContent, I18n.get(this, "🎙 語音與個性", "VOICE & PERSONALITY"));
+        addPageHeading(
+                "⚙",
+                I18n.get(this, "設定", "Settings"),
+                I18n.get(
+                        this,
+                        "調整 Crew Helper 的語音、喚醒、手機能力與進階選項。",
+                        "Voice, wake, phone capabilities, and advanced options."));
 
-        String customPromptSummary = AppConfig.getCustomSystemPrompt(this).isEmpty()
-            ? I18n.get(this, "預設官方設定（點擊自訂專屬人設與口吻）", "Default prompt (Tap to customize)")
-            : I18n.get(this, "已啟用自訂人設 Prompt（點擊編輯）", "Custom prompt active (Tap to edit)");
-        pageContent.addView(makeActionCard("🧠", I18n.get(this, "語音模型 Prompt 設定", "Voice Model Prompt"),
-            customPromptSummary, CrewTheme.AMBER_400, new View.OnClickListener() {
-                @Override public void onClick(View v) { showCustomPromptDialog(); }
-            }));
+        addSectionTitle(
+                pageContent,
+                I18n.get(this, "語音與個性", "VOICE & PERSONALITY"));
 
-        pageContent.addView(makeActionCard(
-            "🗣️",
-            I18n.get(this, "音色", "Voice"),
-            I18n.get(this, "目前音色：", "Current voice: ")
-                    + AppConfig.getVoiceName(this),
-            CrewTheme.TEAL_400,
-            new View.OnClickListener() {
-                @Override public void onClick(View v) {
-                    showVoicePersonaDialog();
-                }
-            }));
+        pageContent.addView(makeSettingsRow(
+                "🗣",
+                I18n.get(this, "音色", "Voice"),
+                AppConfig.getVoiceName(this),
+                CrewTheme.TEAL_300,
+                new View.OnClickListener() {
+                    @Override public void onClick(View v) {
+                        showVoicePersonaDialog();
+                    }
+                }));
 
-        pageContent.addView(makeActionCard(
-            "◌",
-            I18n.get(this, "說話個性", "Speaking Personality"),
-            I18n.get(
-                    this,
-                    "回答長度、主動程度、表達方式、解釋程度等",
-                    "Verbosity, initiative, expression, explanation, and more"),
-            CrewTheme.INDIGO_400,
-            new View.OnClickListener() {
-                @Override public void onClick(View v) {
-                    startActivity(new Intent(
-                            MainActivity.this,
-                            PersonalitySettingsActivity.class));
-                }
-            }));
+        pageContent.addView(makeSettingsRow(
+                "◌",
+                I18n.get(this, "說話個性", "Speaking Personality"),
+                personalitySummary(),
+                CrewTheme.INDIGO_400,
+                new View.OnClickListener() {
+                    @Override public void onClick(View v) {
+                        startActivity(new Intent(
+                                MainActivity.this,
+                                PersonalitySettingsActivity.class));
+                    }
+                }));
 
-        final int liveIdleMinutes = AppConfig.getLiveIdleTimeoutMinutes(this);
-        String liveIdleSummary = liveIdleMinutes <= 0
-            ? I18n.get(this, "已關閉 · Live 不會因閒置自動結束", "Disabled · Live will not auto-end when idle")
-            : I18n.get(this,
-                "最後一次使用者指令後 " + liveIdleMinutes + " 分鐘，Agent 閒置時自動結束 Live",
-                "Auto-end Live after " + liveIdleMinutes + " min without a new user instruction, once Agent is idle");
-        pageContent.addView(makeActionCard("⏱️",
-            I18n.get(this, "語音閒置自動結束", "Live Idle Auto-End"),
-            liveIdleSummary, CrewTheme.CYAN_400, new View.OnClickListener() {
-                @Override public void onClick(View v) { showLiveIdleTimeoutDialog(); }
-            }));
+        final int interruption =
+                AppConfig.getInterruptionSensitivity(this);
+        pageContent.addView(makeSettingsRow(
+                "↯",
+                I18n.get(this, "插話靈敏度", "Interruption Sensitivity"),
+                interruptionSummary(interruption),
+                CrewTheme.EMERALD_400,
+                new View.OnClickListener() {
+                    @Override public void onClick(View v) {
+                        showInterruptionSensitivityDialog();
+                    }
+                }));
 
-        // ── 2. System & Permissions ──
-        addSectionTitle(pageContent, I18n.get(this, "📱 手機操作與權限", "PHONE CONTROL & PERMISSIONS"));
+        pageContent.addView(makeSettingsRow(
+                "🔊",
+                I18n.get(this, "音訊輸出", "Audio Output"),
+                audioOutputSummary(),
+                CrewTheme.CYAN_400,
+                new View.OnClickListener() {
+                    @Override public void onClick(View v) {
+                        showAudioOutputDialog();
+                    }
+                }));
 
-        String accSummary = CrewAccessibilityService.isServiceRunning()
-            ? I18n.get(this, "狀態：🟢 已啟用（螢幕操作感知正常）", "Status: 🟢 Active (Screen perception ready)")
-            : I18n.get(this, "狀態：🔴 未啟用（點擊授權無障礙服務）", "Status: 🔴 Inactive (Tap to grant permission)");
-        pageContent.addView(makeActionCard("🛡️", I18n.cardAccessibilityTitle(this), accSummary, CrewTheme.INDIGO_500, new View.OnClickListener() {
-            @Override public void onClick(View v) { showAccessibilityDisclosureDialog(); }
-        }));
+        final int liveIdleMinutes =
+                AppConfig.getLiveIdleTimeoutMinutes(this);
+        pageContent.addView(makeSettingsRow(
+                "⏱",
+                I18n.get(this, "閒置自動結束", "Live Idle Auto-End"),
+                liveIdleMinutes <= 0
+                        ? I18n.get(this, "關閉", "Off")
+                        : liveIdleMinutes + " "
+                                + I18n.get(this, "分鐘", "min"),
+                CrewTheme.CYAN_400,
+                new View.OnClickListener() {
+                    @Override public void onClick(View v) {
+                        showLiveIdleTimeoutDialog();
+                    }
+                }));
+
+        addSectionTitle(
+                pageContent,
+                I18n.get(this, "喚醒與待命", "WAKE & STANDBY"));
+
+        pageContent.addView(makeSettingsRow(
+                "⌁",
+                I18n.get(this, "喚醒詞", "Wake Phrase"),
+                "「" + AppConfig.getWakePhrase(this) + "」",
+                CrewTheme.TEAL_300,
+                new View.OnClickListener() {
+                    @Override public void onClick(View v) {
+                        showAlwaysOnDialog();
+                    }
+                }));
 
         boolean alwaysOn = AppConfig.isAlwaysOnEnabled(this);
-        String alwaysOnSummary = alwaysOn
-            ? I18n.get(this, "狀態：🟢 全天待命 · 喚醒詞「" + AppConfig.getWakePhrase(this) + "」 · " + NativeLiveService.getRuntimeState(),
-                "Status: 🟢 Always-on · Wake phrase: " + AppConfig.getWakePhrase(this) + " · " + NativeLiveService.getRuntimeState())
-            : I18n.get(this, "狀態：⚪ 未啟用 · 點擊設定低功耗語音喚醒", "Status: ⚪ Disabled · Tap to configure low-power wake word");
-        pageContent.addView(makeActionCard("🎧", I18n.get(this, "全天語音喚醒", "Always-On Wake Word"),
-            alwaysOnSummary, CrewTheme.TEAL_400, new View.OnClickListener() {
-                @Override public void onClick(View v) { showAlwaysOnDialog(); }
-            }));
+        pageContent.addView(makeSettingsRow(
+                "🎧",
+                I18n.get(this, "全天待命", "Always-On Wake"),
+                alwaysOn
+                        ? I18n.get(this, "開啟", "On")
+                        : I18n.get(this, "關閉", "Off"),
+                alwaysOn
+                        ? CrewTheme.EMERALD_400
+                        : CrewTheme.TEXT_MUTED,
+                new View.OnClickListener() {
+                    @Override public void onClick(View v) {
+                        showAlwaysOnDialog();
+                    }
+                }));
 
-        String notificationSummary = notificationPermissionGranted() && notificationsEnabled()
-            ? I18n.get(this, "狀態：🟢 通知已允許 · Always-On 控制會顯示在通知列",
-                "Status: 🟢 Notifications allowed · Always-On controls are visible")
-            : I18n.get(this, "狀態：🟠 通知未允許/被系統關閉 · 點擊開啟設定",
-                "Status: 🟠 Notifications blocked · Tap to open settings");
-        pageContent.addView(makeActionCard("🔔", I18n.get(this, "通知與待命控制", "Notifications & Always-On Controls"),
-            notificationSummary, CrewTheme.CYAN_400, new View.OnClickListener() {
-                @Override public void onClick(View v) { openNotificationSettings(); }
-            }));
+        final int wakeSensitivity = AppConfig.getWakeSensitivity(this);
+        pageContent.addView(makeSettingsRow(
+                "◉",
+                I18n.get(this, "喚醒靈敏度", "Wake Sensitivity"),
+                wakeSensitivitySummary(wakeSensitivity),
+                CrewTheme.TEAL_300,
+                new View.OnClickListener() {
+                    @Override public void onClick(View v) {
+                        showAlwaysOnDialog();
+                    }
+                }));
 
-        pageContent.addView(makeActionCard("📸", I18n.cardCameraTitle(this), I18n.cardCameraDesc(this), CrewTheme.AMBER_400, new View.OnClickListener() {
-            @Override public void onClick(View v) { requestCameraPermission(); }
-        }));
+        boolean notificationReady =
+                notificationPermissionGranted() && notificationsEnabled();
+        pageContent.addView(makeSettingsRow(
+                "🔔",
+                I18n.get(this, "通知", "Notifications"),
+                notificationReady
+                        ? I18n.get(this, "已允許", "Allowed")
+                        : I18n.get(this, "需要處理", "Needs attention"),
+                notificationReady
+                        ? CrewTheme.EMERALD_400
+                        : CrewTheme.AMBER_400,
+                new View.OnClickListener() {
+                    @Override public void onClick(View v) {
+                        openNotificationSettings();
+                    }
+                }));
 
-        pageContent.addView(makeActionCard("☀️", I18n.cardKeepAwakeTitle(this),
-            I18n.cardKeepAwakeDesc(this, FloatingBubbleManager.isKeepAwakeActive()), CrewTheme.AMBER_400, new View.OnClickListener() {
-                @Override public void onClick(View v) {
-                    boolean active = FloatingBubbleManager.toggleKeepAwake(MainActivity.this);
-                    Toast.makeText(MainActivity.this, active ? "☀️ " + I18n.get(MainActivity.this, "螢幕常亮已開啟", "Screen Keep Awake ON") : "🌙 " + I18n.get(MainActivity.this, "螢幕常亮已關閉", "Screen Keep Awake OFF"), Toast.LENGTH_SHORT).show();
-                    renderSettingsPage();
-                }
-            }));
-
-        // ── 3. System Preferences ──
-        addSectionTitle(pageContent, I18n.get(this, "🌐 系統設定", "SYSTEM SETTINGS"));
-
-        pageContent.addView(makeActionCard("🔐", I18n.cardSettingsTitle(this),
-            I18n.get(this, "Gemini API Key · 直接連線 Gemini Live", "Gemini API Key · Direct Gemini Live"),
-            CrewTheme.CYAN_400, new View.OnClickListener() {
-                @Override public void onClick(View v) { showSettingsDialog(); }
-            }));
-
-        pageContent.addView(makeActionCard("🌐", I18n.cardLanguageTitle(this), I18n.cardLanguageDesc(this), CrewTheme.INDIGO_400, new View.OnClickListener() {
-            @Override public void onClick(View v) { showLanguageDialog(); }
-        }));
-
-        pageContent.addView(makeActionCard("⌘", I18n.get(this, "診斷資訊與版本", "Diagnostics & Version"),
-            I18n.get(this, "服務狀態、版本與本機 Bridge", "Service status, version, and local bridge"), CrewTheme.TEXT_MUTED, new View.OnClickListener() {
-                @Override public void onClick(View v) { showDiagnosticsDialog(); }
-            }));
-
-        // 0088: developer-only debugging. Keep it out of Home,
-        // bottom navigation, bubble, and Live Console.
         addSectionTitle(
-            pageContent,
-            I18n.get(this, "🧪 開發者工具", "DEVELOPER TOOLS"));
-        pageContent.addView(makeActionCard(
-            "⌁",
-            "Agent Inspector",
-            I18n.get(this,
-                "最近一次 Runtime 任務摘要與已脫敏事件；不含畫面、對話內容或金鑰",
-                "Sanitized latest Runtime task trace; no screen content, conversation text, or keys"),
-            CrewTheme.TEXT_MUTED,
-            new View.OnClickListener() {
-                @Override public void onClick(View v) {
-                    startActivity(new Intent(
-                            MainActivity.this,
-                            AgentInspectorActivity.class));
-                }
-            }));
+                pageContent,
+                I18n.get(this, "手機能力", "PHONE CAPABILITIES"));
+
+        boolean accessibility =
+                CrewAccessibilityService.isServiceRunning();
+        pageContent.addView(makeSettingsRow(
+                "🛡",
+                I18n.get(this, "螢幕操作", "Screen Actions"),
+                accessibility
+                        ? I18n.get(this, "已啟用", "Enabled")
+                        : I18n.get(this, "未啟用", "Not enabled"),
+                accessibility
+                        ? CrewTheme.EMERALD_400
+                        : CrewTheme.TEXT_MUTED,
+                new View.OnClickListener() {
+                    @Override public void onClick(View v) {
+                        showAccessibilityDisclosureDialog();
+                    }
+                }));
+
+        boolean overlay = hasOverlayPermission();
+        pageContent.addView(makeSettingsRow(
+                "◉",
+                I18n.get(this, "懸浮球權限", "Floating Bubble Permission"),
+                overlay
+                        ? I18n.get(this, "已允許", "Allowed")
+                        : I18n.get(this, "未允許", "Not allowed"),
+                overlay
+                        ? CrewTheme.EMERALD_400
+                        : CrewTheme.TEXT_MUTED,
+                new View.OnClickListener() {
+                    @Override public void onClick(View v) {
+                        openOverlaySettings();
+                    }
+                }));
+
+        boolean cameraReady =
+                Build.VERSION.SDK_INT < Build.VERSION_CODES.M
+                        || checkSelfPermission(
+                                android.Manifest.permission.CAMERA)
+                                == PackageManager.PERMISSION_GRANTED;
+        pageContent.addView(makeSettingsRow(
+                "📸",
+                I18n.get(this, "相機", "Camera"),
+                cameraReady
+                        ? I18n.get(this, "已允許", "Allowed")
+                        : I18n.get(this, "未允許", "Not allowed"),
+                cameraReady
+                        ? CrewTheme.EMERALD_400
+                        : CrewTheme.TEXT_MUTED,
+                new View.OnClickListener() {
+                    @Override public void onClick(View v) {
+                        requestCameraPermission();
+                    }
+                }));
+
+        boolean keepAwake =
+                FloatingBubbleManager.isKeepAwakeActive();
+        pageContent.addView(makeSettingsRow(
+                "☀",
+                I18n.get(this, "螢幕常亮", "Keep Screen Awake"),
+                keepAwake
+                        ? I18n.get(this, "開啟", "On")
+                        : I18n.get(this, "關閉", "Off"),
+                keepAwake
+                        ? CrewTheme.AMBER_400
+                        : CrewTheme.TEXT_MUTED,
+                new View.OnClickListener() {
+                    @Override public void onClick(View v) {
+                        boolean active =
+                                FloatingBubbleManager.toggleKeepAwake(
+                                        MainActivity.this);
+                        Toast.makeText(
+                                MainActivity.this,
+                                active
+                                        ? I18n.get(
+                                                MainActivity.this,
+                                                "螢幕常亮已開啟",
+                                                "Keep Screen Awake ON")
+                                        : I18n.get(
+                                                MainActivity.this,
+                                                "螢幕常亮已關閉",
+                                                "Keep Screen Awake OFF"),
+                                Toast.LENGTH_SHORT).show();
+                        renderSettingsPage();
+                    }
+                }));
+
+        addSectionTitle(
+                pageContent,
+                I18n.get(this, "App", "APP"));
+
+        pageContent.addView(makeSettingsRow(
+                "🔐",
+                I18n.get(this, "Gemini API Key", "Gemini API Key"),
+                hasGeminiKey()
+                        ? I18n.get(this, "已設定", "Configured")
+                        : I18n.get(this, "未設定", "Not configured"),
+                hasGeminiKey()
+                        ? CrewTheme.EMERALD_400
+                        : CrewTheme.AMBER_400,
+                new View.OnClickListener() {
+                    @Override public void onClick(View v) {
+                        showSettingsDialog();
+                    }
+                }));
+
+        pageContent.addView(makeSettingsRow(
+                "🌐",
+                I18n.get(this, "語言", "Language"),
+                I18n.get(this, "中文", "English"),
+                CrewTheme.INDIGO_400,
+                new View.OnClickListener() {
+                    @Override public void onClick(View v) {
+                        showLanguageDialog();
+                    }
+                }));
+
+        pageContent.addView(makeSettingsRow(
+                "⌘",
+                I18n.get(this, "診斷資訊與版本", "Diagnostics & Version"),
+                appVersionSummary(),
+                CrewTheme.TEXT_SECONDARY,
+                new View.OnClickListener() {
+                    @Override public void onClick(View v) {
+                        showDiagnosticsDialog();
+                    }
+                }));
+
+        addSectionTitle(
+                pageContent,
+                I18n.get(this, "進階", "ADVANCED"));
+
+        String customPrompt =
+                AppConfig.getCustomSystemPrompt(this);
+        pageContent.addView(makeSettingsRow(
+                "🧠",
+                I18n.get(this, "進階自訂指令", "Advanced Custom Instructions"),
+                customPrompt == null || customPrompt.trim().isEmpty()
+                        ? I18n.get(this, "未設定", "Not configured")
+                        : I18n.get(this, "已設定", "Configured"),
+                customPrompt == null || customPrompt.trim().isEmpty()
+                        ? CrewTheme.TEXT_MUTED
+                        : CrewTheme.AMBER_400,
+                new View.OnClickListener() {
+                    @Override public void onClick(View v) {
+                        showCustomPromptDialog();
+                    }
+                }));
+
+        pageContent.addView(makeSettingsRow(
+                "⌁",
+                "Agent Inspector",
+                I18n.get(
+                        this,
+                        "Runtime 診斷",
+                        "Runtime diagnostics"),
+                CrewTheme.TEXT_SECONDARY,
+                new View.OnClickListener() {
+                    @Override public void onClick(View v) {
+                        startActivity(new Intent(
+                                MainActivity.this,
+                                AgentInspectorActivity.class));
+                    }
+                }));
 
         addFooter(pageContent, true);
     }
@@ -1166,7 +1335,7 @@ public class MainActivity extends Activity
             .show();
     }
 
-    private View makeActionCard(String icon, String titleText, String descText, int accentColor, View.OnClickListener onClick) {
+    private View makeDeckActionCard(String icon, String titleText, String descText, int accentColor, View.OnClickListener onClick) {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.HORIZONTAL);
         card.setGravity(Gravity.CENTER_VERTICAL);
@@ -1665,6 +1834,287 @@ public class MainActivity extends Activity
             })
             .setNegativeButton(I18n.get(this, "取消", "Cancel"), null)
             .show();
+    }
+
+
+    private View makeSettingsRow(
+            String iconText,
+            String titleText,
+            String valueText,
+            int valueColor,
+            View.OnClickListener listener) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(12), dp(8), dp(10), dp(8));
+        row.setBackground(CrewTheme.createCard(
+                this,
+                CrewTheme.BG_SURFACE,
+                CrewTheme.BORDER_SUBTLE,
+                14));
+        row.setOnClickListener(listener);
+
+        TextView icon = new TextView(this);
+        icon.setText(iconText);
+        icon.setTextSize(15);
+        icon.setGravity(Gravity.CENTER);
+        icon.setTextColor(CrewTheme.TEXT_SECONDARY);
+        row.addView(
+                icon,
+                new LinearLayout.LayoutParams(dp(34), dp(42)));
+
+        TextView title = new TextView(this);
+        title.setText(titleText);
+        title.setTextSize(13);
+        title.setTextColor(CrewTheme.TEXT_PRIMARY);
+        title.setGravity(Gravity.CENTER_VERTICAL);
+        row.addView(
+                title,
+                new LinearLayout.LayoutParams(
+                        0,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        1f));
+
+        TextView value = new TextView(this);
+        value.setText(valueText == null ? "" : valueText);
+        value.setTextSize(11.5f);
+        value.setTextColor(valueColor);
+        value.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
+        value.setSingleLine(true);
+        value.setEllipsize(
+                android.text.TextUtils.TruncateAt.END);
+        row.addView(
+                value,
+                new LinearLayout.LayoutParams(
+                        dp(136),
+                        ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        TextView chevron = new TextView(this);
+        chevron.setText("›");
+        chevron.setTextSize(20);
+        chevron.setTextColor(CrewTheme.TEXT_MUTED);
+        chevron.setGravity(Gravity.CENTER);
+        row.addView(
+                chevron,
+                new LinearLayout.LayoutParams(dp(20), dp(42)));
+
+        LinearLayout outer = new LinearLayout(this);
+        outer.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams lp =
+                new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.setMargins(0, 0, 0, dp(6));
+        outer.addView(row, lp);
+        return outer;
+    }
+
+    private String personalitySummary() {
+        return personalityLabel(
+                        AppConfig.getPersonalityVerbosity(this),
+                        "short", "精簡",
+                        "detailed", "詳細",
+                        "一般")
+                + " · "
+                + personalityLabel(
+                        AppConfig.getPersonalityInitiative(this),
+                        "quiet", "少打擾",
+                        "proactive", "主動",
+                        "平衡")
+                + " · "
+                + personalityLabel(
+                        AppConfig.getPersonalityExpression(this),
+                        "direct", "直接",
+                        "lively", "活潑",
+                        "自然")
+                + " · "
+                + personalityLabel(
+                        AppConfig.getPersonalityExplanation(this),
+                        "answer", "只給答案",
+                        "teach", "教學",
+                        "說明原因");
+    }
+
+    private String personalityLabel(
+            String value,
+            String firstValue,
+            String firstLabel,
+            String secondValue,
+            String secondLabel,
+            String fallbackLabel) {
+        if (firstValue.equals(value)) return firstLabel;
+        if (secondValue.equals(value)) return secondLabel;
+        return fallbackLabel;
+    }
+
+    private String interruptionSummary(int value) {
+        String label;
+        if (value <= 35) {
+            label = I18n.get(this, "低", "Low");
+        } else if (value >= 71) {
+            label = I18n.get(this, "高", "High");
+        } else {
+            label = I18n.get(this, "中", "Medium");
+        }
+        return label + " · " + value;
+    }
+
+    private String wakeSensitivitySummary(int value) {
+        String label;
+        if (value <= 40) {
+            label = I18n.get(this, "低", "Low");
+        } else if (value >= 76) {
+            label = I18n.get(this, "高", "High");
+        } else {
+            label = I18n.get(this, "中", "Medium");
+        }
+        return label + " · " + value;
+    }
+
+    private String audioOutputSummary() {
+        return "media".equals(AppConfig.getAudioOutput(this))
+                ? I18n.get(this, "媒體模式", "Media")
+                : I18n.get(this, "通話模式", "Call");
+    }
+
+    private String appVersionSummary() {
+        try {
+            android.content.pm.PackageInfo info =
+                    getPackageManager().getPackageInfo(
+                            getPackageName(), 0);
+            String version = info.versionName;
+            return version == null || version.trim().isEmpty()
+                    ? ""
+                    : "v" + version.trim();
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
+    private void showInterruptionSensitivityDialog() {
+        final int current =
+                AppConfig.getInterruptionSensitivity(this);
+
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(dp(20), dp(10), dp(20), 0);
+
+        final TextView value = new TextView(this);
+        value.setText(interruptionSummary(current));
+        value.setTextSize(14);
+        value.setTextColor(CrewTheme.TEXT_PRIMARY);
+        value.setGravity(Gravity.CENTER);
+        layout.addView(value);
+
+        final android.widget.SeekBar seek =
+                new android.widget.SeekBar(this);
+        seek.setMax(100);
+        seek.setProgress(current);
+        layout.addView(seek);
+
+        TextView hint = new TextView(this);
+        hint.setText(I18n.get(
+                this,
+                "越高越容易在 Gemini 說話時插話打斷。設定於下一次通話套用。",
+                "Higher values make barge-in easier while Gemini is speaking. Applies next session."));
+        hint.setTextSize(11);
+        hint.setTextColor(CrewTheme.TEXT_SECONDARY);
+        hint.setPadding(0, dp(8), 0, 0);
+        layout.addView(hint);
+
+        seek.setOnSeekBarChangeListener(
+                new android.widget.SeekBar.OnSeekBarChangeListener() {
+                    @Override public void onProgressChanged(
+                            android.widget.SeekBar bar,
+                            int progress,
+                            boolean fromUser) {
+                        value.setText(interruptionSummary(progress));
+                    }
+
+                    @Override public void onStartTrackingTouch(
+                            android.widget.SeekBar bar) {}
+
+                    @Override public void onStopTrackingTouch(
+                            android.widget.SeekBar bar) {}
+                });
+
+        final android.app.AlertDialog dialog =
+                new android.app.AlertDialog.Builder(this)
+                        .setTitle(I18n.get(
+                                this,
+                                "插話靈敏度",
+                                "Interruption Sensitivity"))
+                        .setView(layout)
+                        .setPositiveButton(
+                                I18n.get(this, "儲存", "Save"),
+                                null)
+                        .setNegativeButton(
+                                I18n.get(this, "取消", "Cancel"),
+                                null)
+                        .create();
+
+        dialog.setOnShowListener(d -> {
+            dialog.getButton(
+                    android.app.AlertDialog.BUTTON_POSITIVE)
+                    .setOnClickListener(v -> {
+                        AppConfig.setInterruptionSensitivity(
+                                MainActivity.this,
+                                seek.getProgress());
+                        dialog.dismiss();
+                        renderSettingsPage();
+                    });
+        });
+
+        dialog.show();
+    }
+
+    private void showAudioOutputDialog() {
+        final String current =
+                AppConfig.getAudioOutput(this);
+        final String[] values = {"call", "media"};
+        final String[] labels = {
+                I18n.get(
+                        this,
+                        "通話模式 · 適合語音對話與回音消除",
+                        "Call mode · optimized for voice/AEC"),
+                I18n.get(
+                        this,
+                        "媒體模式 · 跟隨媒體音量與裝置",
+                        "Media mode · follows media volume/devices")
+        };
+
+        final int[] selected = {
+                "media".equals(current) ? 1 : 0
+        };
+
+        new android.app.AlertDialog.Builder(this)
+                .setTitle(I18n.get(
+                        this,
+                        "音訊輸出",
+                        "Audio Output"))
+                .setSingleChoiceItems(
+                        labels,
+                        selected[0],
+                        (dialog, which) -> selected[0] = which)
+                .setPositiveButton(
+                        I18n.get(this, "儲存", "Save"),
+                        (dialog, which) -> {
+                            AppConfig.setAudioOutput(
+                                    MainActivity.this,
+                                    values[selected[0]]);
+                            Toast.makeText(
+                                    MainActivity.this,
+                                    I18n.get(
+                                            MainActivity.this,
+                                            "音訊輸出將於下一次通話套用",
+                                            "Audio output applies next session"),
+                                    Toast.LENGTH_SHORT).show();
+                            renderSettingsPage();
+                        })
+                .setNegativeButton(
+                        I18n.get(this, "取消", "Cancel"),
+                        null)
+                .show();
     }
 
     private int currentFilterTab = 0; // 0: All, 1: Female, 2: Male
