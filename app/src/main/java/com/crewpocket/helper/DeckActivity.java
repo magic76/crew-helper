@@ -128,9 +128,8 @@ public class DeckActivity extends Activity {
         if ("timeline".equals(type)) addItems(surface, card.optJSONArray("items"), true);
         if ("compare".equals(type)) addItems(surface, card.optJSONArray("items"), false);
         addFacts(surface, card.optJSONArray("facts"));
-        if (!card.optString("speakerNotes").isEmpty()) {
-            TextView note = text("🎙️ " + card.optString("speakerNotes"), 12, CrewTheme.TEXT_MUTED, false); note.setPadding(0, dp(22), 0, 0); surface.addView(note);
-        }
+        // speakerNotes are presenter-only guidance for Gemini and must not be
+        // rendered on the audience-facing slide.
     }
 
     private void addImageIfPresent(LinearLayout host, DeckRepository.Deck deck, final String relativeOrUrl, String caption) {

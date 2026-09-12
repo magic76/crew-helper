@@ -29,6 +29,15 @@ import android.widget.Toast;
  * Cyberpunk Dark Luxury Style
  */
 public class NativeLiveActivity extends Activity {
+    static final String EXTRA_DECK_ENTRY_MODE = "crew.deck.entry_mode";
+    static final String EXTRA_DECK_ID = "crew.deck.id";
+    static final String EXTRA_DECK_AUTO_START = "crew.deck.auto_start";
+    static final String DECK_ENTRY_CREATE = "create";
+    static final String DECK_ENTRY_PRESENT = "present";
+
+    private String deckEntryMode = "";
+    private String deckEntryDeckId = "";
+    private boolean deckAutoStartRequested = false;
     // The full-page screen is a configuration/diagnostic entry point.  Keep a
     // reference only so the foreground service can synchronously release an
     // old page-owned session before it takes ownership of Live audio.
@@ -92,6 +101,31 @@ public class NativeLiveActivity extends Activity {
         DeckRepository.initialize(this);
         activeInstance = this;
 
+        Intent launchIntent = getIntent();
+        if (launchIntent != null) {
+            deckEntryMode = launchIntent.getStringExtra(EXTRA_DECK_ENTRY_MODE);
+            if (deckEntryMode == null) deckEntryMode = "";
+            deckEntryDeckId = launchIntent.getStringExtra(EXTRA_DECK_ID);
+            if (deckEntryDeckId == null) deckEntryDeckId = "";
+            deckAutoStartRequested =
+                    launchIntent.getBooleanExtra(EXTRA_DECK_AUTO_START, false);
+        }
+
+        if (DECK_ENTRY_CREATE.equals(deckEntryMode)) {
+            DeckRepository.closeActiveDeck();
+        } else if (DECK_ENTRY_PRESENT.equals(deckEntryMode)) {
+            org.json.JSONObject prepared = DeckRepository.prepareDeck(deckEntryDeckId);
+            if (!prepared.optBoolean("success", false)) {
+                Toast.makeText(
+                        this,
+                        prepared.optString("error", "無法載入簡報"),
+                        Toast.LENGTH_LONG).show();
+                deckEntryMode = "";
+                deckEntryDeckId = "";
+                deckAutoStartRequested = false;
+            }
+        }
+
         // 🌌 Immersive Dark Bar
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             getWindow().setStatusBarColor(CrewTheme.BG_PRIMARY);
@@ -126,7 +160,11 @@ public class NativeLiveActivity extends Activity {
         headerRow.addView(backBtn);
 
         TextView title = new TextView(this);
-        title.setText(I18n.get(this, "原生 Gemini Live", "Native Gemini Live"));
+        title.setText(DECK_ENTRY_CREATE.equals(deckEntryMode)
+                ? I18n.get(this, "AI 建立新簡報", "Create AI Presentation")
+                : (DECK_ENTRY_PRESENT.equals(deckEntryMode)
+                    ? I18n.get(this, "Gemini AI 主講", "Gemini AI Presenter")
+                    : I18n.get(this, "原生 Gemini Live", "Native Gemini Live")));
         title.setTextSize(18);
         title.setTextColor(CrewTheme.TEXT_PRIMARY);
         title.setTypeface(Typeface.DEFAULT_BOLD);
@@ -135,7 +173,17 @@ public class NativeLiveActivity extends Activity {
         root.addView(headerRow);
 
         TextView note = new TextView(this);
-        note.setText(I18n.get(this, "端到端低延遲 Web Audio PCM 直連通話（無須開啟瀏覽器）", "End-to-end low-latency direct voice chat (No browser needed)"));
+        note.setText(DECK_ENTRY_CREATE.equals(deckEntryMode)
+                ? I18n.get(this,
+                    "連線後直接告訴 Gemini 簡報主題；Gemini 會建立投影片並開始主講。",
+                    "Tell Gemini the topic after connection; it will build the slides and present them.")
+                : (DECK_ENTRY_PRESENT.equals(deckEntryMode)
+                    ? I18n.get(this,
+                        "連線完成後會自動顯示第一頁，由 Gemini 直接開始主講。",
+                        "After connection the first slide opens automatically and Gemini starts presenting.")
+                    : I18n.get(this,
+                        "端到端低延遲 Web Audio PCM 直連通話（無須開啟瀏覽器）",
+                        "End-to-end low-latency direct voice chat (No browser needed)")));
         note.setTextSize(11);
         note.setTextColor(CrewTheme.TEXT_SECONDARY);
         note.setPadding(0, dp(4), 0, dp(18));
@@ -599,6 +647,17 @@ public class NativeLiveActivity extends Activity {
             @Override public void onClick(View v) { captureAndSendCamera(); }
         });
         refreshAssistantControls();
+
+        if (deckAutoStartRequested) {
+            handler.postDelayed(new Runnable() {
+                @Override public void run() {
+                    if (isFinishing()) return;
+                    if (!callRequested && (client == null || !client.isRunning())) {
+                        toggleCall();
+                    }
+                }
+            }, 300L);
+        }
     }
 
     private Button makeControlButton() {
@@ -835,11 +894,22 @@ public class NativeLiveActivity extends Activity {
 
     private void updateCallButtonUi(boolean isCallActive) {
         if (isCallActive) {
-            callButton.setText(I18n.get(this, "🛑 結束 Live 通話", "🛑 End Live Call"));
-            callButton.setBackground(CrewTheme.createGradientButton(this, CrewTheme.ROSE_500, Color.parseColor("#9F1239"), 14));
+            callButton.setText(
+                    DECK_ENTRY_CREATE.equals(deckEntryMode)
+                            || DECK_ENTRY_PRESENT.equals(deckEntryMode)
+                    ? I18n.get(this, "🛑 結束 AI 簡報", "🛑 End AI Presentation")
+                    : I18n.get(this, "🛑 結束 Live 通話", "🛑 End Live Call"));
+            callButton.setBackground(CrewTheme.createGradientButton(
+                    this, CrewTheme.ROSE_500, Color.parseColor("#9F1239"), 14));
         } else {
-            callButton.setText(I18n.get(this, "🎙️ 開始原生 Live 通話", "🎙️ Start Native Live Call"));
-            callButton.setBackground(CrewTheme.createGradientButton(this, CrewTheme.TEAL_500, CrewTheme.INDIGO_600, 14));
+            callButton.setText(
+                    DECK_ENTRY_CREATE.equals(deckEntryMode)
+                    ? I18n.get(this, "🎙️ 開始建立簡報", "🎙️ Start Creating")
+                    : (DECK_ENTRY_PRESENT.equals(deckEntryMode)
+                        ? I18n.get(this, "🎙️ 開始 AI 主講", "🎙️ Start AI Presenter")
+                        : I18n.get(this, "🎙️ 開始原生 Live 通話", "🎙️ Start Native Live Call")));
+            callButton.setBackground(CrewTheme.createGradientButton(
+                    this, CrewTheme.TEAL_500, CrewTheme.INDIGO_600, 14));
         }
     }
 
@@ -962,6 +1032,7 @@ public class NativeLiveActivity extends Activity {
                 });
             }
         });
+        client.configureDeckStartup(deckEntryMode, deckEntryDeckId);
         client.setAgentMaxSteps(AppConfig.getAgentMaxSteps(this));
         client.start();
         handler.removeCallbacks(connectionWatchdog);

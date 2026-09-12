@@ -563,6 +563,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private volatile boolean allowVoiceInterruption = true; // 🎙️ 語音插話：預設開啟（隨時自由說話打斷 AI；若關閉則為防插話保護模式）
     private final Handler deckAdvanceHandler = new Handler(Looper.getMainLooper());
     private volatile boolean deckAutoAdvanceActive = false;
+    // 0082: UI-selected presentation entry is explicit. Creation no longer
+    // needs a fake welcome Deck merely to expose deck tools.
+    private volatile String deckStartupMode = "";
+    private volatile String deckStartupDeckId = "";
+    private volatile boolean deckStartupDispatched = false;
     // 0054: the scheduled page turn is bound to the card that was actually narrated.
     // A stale callback may never advance a newer card.
     private volatile int deckAdvanceExpectedIndex = -1;
@@ -574,6 +579,58 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
     boolean isDeckAutoAdvanceActive() { return deckAutoAdvanceActive; }
     void setDeckAutoAdvanceActive(boolean active) { this.deckAutoAdvanceActive = active; if (!active) cancelDeckAutoAdvance(); }
+
+    void configureDeckStartup(String mode, String deckId) {
+        String normalized = mode == null ? "" : mode.trim();
+        if (!"create".equals(normalized) && !"present".equals(normalized)) {
+            normalized = "";
+        }
+        deckStartupMode = normalized;
+        deckStartupDeckId = deckId == null ? "" : deckId.trim();
+        deckStartupDispatched = false;
+    }
+
+    private boolean isDeckSessionMode() {
+        return "create".equals(deckStartupMode)
+                || "present".equals(deckStartupMode)
+                || DeckRepository.hasActiveDeck();
+    }
+
+    private void dispatchDeckStartupIfNeeded() {
+        if (!setupReady || deckStartupDispatched || deckStartupMode.isEmpty()) return;
+
+        if ("create".equals(deckStartupMode)) {
+            deckStartupDispatched = true;
+            sendInternalAgentDirective(
+                    "【AI 簡報建立入口】使用者剛剛主動選擇『AI 建立新簡報』。"
+                    + "如果使用者還沒說主題，現在只用一句話問：想做什麼主題的簡報？"
+                    + "不要要求 deck.json、檔案、資料夾或任何技術設定。"
+                    + "使用者提供主題後，呼叫 create_ephemeral_deck 一次建立 3–8 頁，"
+                    + "建立完成後直接以 Gemini 主講人的身分開始介紹第一頁。");
+            return;
+        }
+
+        if ("present".equals(deckStartupMode)) {
+            JSONObject card = DeckRepository.presentCard("");
+            if (!card.optBoolean("success", false)) {
+                deckStartupDispatched = true;
+                sendInternalAgentDirective(
+                        "【AI 簡報啟動失敗】無法取得目前簡報第一頁。"
+                        + "請簡短告訴使用者簡報無法載入，不要猜測內容。");
+                return;
+            }
+
+            deckStartupDispatched = true;
+            deckAutoAdvanceActive = true;
+            resetCurrentModelTurnState();
+            sendInternalAgentDirective(
+                    "【AI 簡報開始】使用者已選好簡報，第一頁現在已顯示。"
+                    + "你是這場簡報的主講人。直接自然地開始介紹目前第一頁，"
+                    + "不要再問要不要開始、不要呼叫 open_deck/advance_deck。"
+                    + "Runtime 會在你的語音真正播放完畢後自動翻頁。"
+                    + "目前第一頁完整資料：" + card.toString());
+        }
+    }
 
     boolean isAgentMuted() { return agentMuted; }
     boolean isAiSpeaking() { return aiSpeaking; }
@@ -734,6 +791,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             setupReady = true;
             reportStage("🎙️ 已連線，直接說話");
             startAudio();
+            dispatchDeckStartupIfNeeded();
             return;
         }
 
@@ -1196,8 +1254,14 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         setup.put("outputAudioTranscription", new JSONObject());
         setup.put("tools", new JSONArray().put(new JSONObject().put("functionDeclarations", buildToolDeclarations())));
         String customPrompt = this.customPrompt;
+        String deckInstruction = "";
+        if (isDeckSessionMode()) {
+            deckInstruction = "create".equals(deckStartupMode)
+                    ? LivePrompt.DECK_CREATE
+                    : LivePrompt.DECK;
+        }
         String baseInstruction = LivePrompt.CORE + "\nVoice style: " + liveToneInstruction()
-                + (DeckRepository.hasActiveDeck() ? "\n" + LivePrompt.DECK : "");
+                + (deckInstruction.isEmpty() ? "" : "\n" + deckInstruction);
 
         if (customPrompt != null && !customPrompt.trim().isEmpty()) {
             baseInstruction = baseInstruction
@@ -1311,22 +1375,39 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         return filterModelFacingTools(tools);
     }
 
-    /** 0042: small Live model surface; Runtime capability remains richer internally. */
+    /** 0082: keep the Live model surface small and mode-specific. */
     private JSONArray filterModelFacingTools(JSONArray declared) {
         JSONArray exposed = new JSONArray();
-        boolean deckMode = DeckRepository.hasActiveDeck();
+        boolean deckMode = isDeckSessionMode();
+        boolean createMode = "create".equals(deckStartupMode);
+        boolean presentMode = "present".equals(deckStartupMode);
+
         for (int i = 0; i < declared.length(); i++) {
             JSONObject tool = declared.optJSONObject(i);
             if (tool == null) continue;
             String name = tool.optString("name", "");
-            if (isNormalPhoneModelTool(name)
-                    || (deckMode && isDeckModelTool(name))) {
-                exposed.put(tool);
+
+            boolean allow;
+            if (!deckMode) {
+                allow = isNormalPhoneModelTool(name);
+            } else if (createMode) {
+                allow = "create_ephemeral_deck".equals(name)
+                        || "end_voice_session".equals(name);
+            } else if (presentMode) {
+                allow = "end_voice_session".equals(name)
+                        || isDeckPresentationModelTool(name);
+            } else {
+                allow = isNormalPhoneModelTool(name) || isDeckModelTool(name);
             }
+
+            if (allow) exposed.put(tool);
         }
-        Log.i(TAG, "0042 model tool surface: "
+
+        Log.i(TAG, "0082 model tool surface: "
                 + exposed.length()
-                + (deckMode ? " (deck mode)" : " (normal phone mode)"));
+                + (createMode ? " (deck create)"
+                    : (presentMode ? " (deck presenter)"
+                        : (deckMode ? " (legacy deck)" : " (normal phone)"))));
         return exposed;
     }
 
@@ -1335,6 +1416,16 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 || "inspect_ui".equals(name)
                 || "send_text".equals(name)
                 || "end_voice_session".equals(name);
+    }
+
+    private boolean isDeckPresentationModelTool(String name) {
+        return "get_deck_card".equals(name)
+                || "present_deck_card".equals(name)
+                || "list_deck_images".equals(name)
+                || "attach_deck_image".equals(name)
+                || "update_deck_card".equals(name)
+                || "insert_deck_card".equals(name)
+                || "remove_future_deck_card".equals(name);
     }
 
     private boolean isDeckModelTool(String name) {

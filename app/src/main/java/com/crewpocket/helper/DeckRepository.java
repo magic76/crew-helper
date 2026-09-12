@@ -145,6 +145,25 @@ final class DeckRepository {
         file.delete();
     }
 
+    /**
+     * Prepare an installed Deck for a Live presenter session without opening UI yet.
+     * NativeLiveActivity owns connection startup; once Gemini is ready Runtime shows
+     * the first card and gives its data to the presenter.
+     */
+    static JSONObject prepareDeck(String requestedId) {
+        synchronized (LOCK) {
+            try {
+                Deck deck = loadDeck(requestedId);
+                activeDeck = deck;
+                activeIndex = 0;
+                return cardResult(deck.cards.getJSONObject(0), 0, false)
+                        .put("prepared", true);
+            } catch (Exception error) {
+                return failure("無法準備 Deck：" + error.getMessage());
+            }
+        }
+    }
+
     static JSONObject openDeck(String requestedId) {
         synchronized (LOCK) {
             try {
@@ -437,12 +456,29 @@ final class DeckRepository {
     }
 
     private static JSONObject cardResult(JSONObject card, int cardIndex, boolean current) throws Exception {
-        JSONArray facts = card.optJSONArray("facts"); JSONArray next = card.optJSONArray("next");
-        JSONObject result = new JSONObject().put("success", true).put("deckId", activeDeck.id).put("deckTitle", activeDeck.title)
-                .put("cardId", card.optString("id")).put("cardNumber", cardIndex + 1).put("totalCards", activeDeck.cards.length())
-                .put("type", card.optString("type", "content")).put("title", card.optString("title"))
-                .put("body", card.optString("body")).put("speakerNotes", card.optString("speakerNotes"))
-                .put("facts", facts == null ? new JSONArray() : facts).put("allowedNext", next == null ? new JSONArray() : next);
+        JSONArray facts = card.optJSONArray("facts");
+        JSONArray items = card.optJSONArray("items");
+        JSONArray metrics = card.optJSONArray("metrics");
+        JSONArray next = card.optJSONArray("next");
+
+        JSONObject result = new JSONObject()
+                .put("success", true)
+                .put("deckId", activeDeck.id)
+                .put("deckTitle", activeDeck.title)
+                .put("cardId", card.optString("id"))
+                .put("cardNumber", cardIndex + 1)
+                .put("totalCards", activeDeck.cards.length())
+                .put("type", card.optString("type", "content"))
+                .put("title", card.optString("title"))
+                .put("subtitle", card.optString("subtitle"))
+                .put("body", card.optString("body"))
+                .put("speakerNotes", card.optString("speakerNotes"))
+                .put("facts", facts == null ? new JSONArray() : facts)
+                .put("items", items == null ? new JSONArray() : items)
+                .put("metrics", metrics == null ? new JSONArray() : metrics)
+                .put("imageCaption", card.optString("imageCaption"))
+                .put("allowedNext", next == null ? new JSONArray() : next);
+
         if (current) result.put("displayed", true);
         return result;
     }

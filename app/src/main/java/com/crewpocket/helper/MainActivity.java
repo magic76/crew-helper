@@ -255,54 +255,48 @@ public class MainActivity extends Activity {
 
     private void renderDecksPage() {
         pageContent.removeAllViews();
-        addPageHeading("▣", I18n.get(this, "Live Deck 簡報中心", "Live Deck Center"),
-            I18n.get(this, "AI 語音自動翻頁、資料卡片與圖表生動講解。", "AI voice auto-advance, interactive cards, and data presentations."));
 
-        // 0054: one explicit entry point for presentation mode. Ensure a Deck
-        // is active BEFORE Live setup so Deck tools are visible from turn one.
-        Button enterDeckModeBtn = new Button(this);
-        enterDeckModeBtn.setText("🎙️ " + I18n.get(this, "進入 AI 簡報模式", "Enter AI Presentation Mode"));
-        enterDeckModeBtn.setTextSize(16);
-        enterDeckModeBtn.setTypeface(Typeface.DEFAULT_BOLD);
-        enterDeckModeBtn.setTextColor(Color.WHITE);
-        enterDeckModeBtn.setAllCaps(false);
-        enterDeckModeBtn.setGravity(Gravity.CENTER);
-        enterDeckModeBtn.setBackground(CrewTheme.createGradientButton(
+        addPageHeading("▣",
+            I18n.get(this, "AI 簡報", "AI Presentations"),
+            I18n.get(this,
+                "說一個主題，Gemini 幫你建立並主講；也可以直接主講既有簡報。",
+                "Give Gemini a topic to create and present, or present an existing deck."));
+
+        Button createDeckBtn = new Button(this);
+        createDeckBtn.setText("✨ " + I18n.get(this, "AI 建立新簡報", "Create with AI"));
+        createDeckBtn.setTextSize(16);
+        createDeckBtn.setTypeface(Typeface.DEFAULT_BOLD);
+        createDeckBtn.setTextColor(Color.WHITE);
+        createDeckBtn.setAllCaps(false);
+        createDeckBtn.setGravity(Gravity.CENTER);
+        createDeckBtn.setBackground(CrewTheme.createGradientButton(
                 this, CrewTheme.INDIGO_500, CrewTheme.TEAL_500, 16));
-        enterDeckModeBtn.setOnClickListener(new View.OnClickListener() {
+        createDeckBtn.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
-                DeckRepository.initialize(MainActivity.this);
-                DeckRepository.ensureActiveDeck();
-                startActivity(new Intent(MainActivity.this, NativeLiveActivity.class));
+                Intent intent = new Intent(MainActivity.this, NativeLiveActivity.class);
+                intent.putExtra(
+                        NativeLiveActivity.EXTRA_DECK_ENTRY_MODE,
+                        NativeLiveActivity.DECK_ENTRY_CREATE);
+                intent.putExtra(NativeLiveActivity.EXTRA_DECK_AUTO_START, true);
+                startActivity(intent);
             }
         });
-        LinearLayout.LayoutParams enterDeckLp = new LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams createLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(58));
-        enterDeckLp.setMargins(0, dp(12), 0, dp(16));
-        pageContent.addView(enterDeckModeBtn, enterDeckLp);
+        createLp.setMargins(0, dp(12), 0, dp(18));
+        pageContent.addView(createDeckBtn, createLp);
 
-        // Action 1: Import Folder
-        pageContent.addView(makeActionCard("➕", I18n.get(this, "匯入 Deck 資料夾", "Import Deck Folder"),
-            I18n.get(this, "選擇包含 deck.json 與圖片的資料夾進行展示", "Select a folder containing deck.json and images"), CrewTheme.INDIGO_400, new View.OnClickListener() {
-                @Override public void onClick(View v) {
-                    Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
-                    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
-                    startActivityForResult(intent, 741);
-                }
-            }));
+        TextView createHint = new TextView(this);
+        createHint.setText(I18n.get(this,
+                "點下去後直接跟 Gemini 說主題，例如：「幫我做一份 5 分鐘介紹 AI Agent 的簡報」。不需要 deck.json。",
+                "Then simply tell Gemini the topic, e.g. “Make a 5-minute presentation about AI agents.” No deck.json required."));
+        createHint.setTextSize(11);
+        createHint.setTextColor(CrewTheme.TEXT_SECONDARY);
+        createHint.setPadding(dp(4), 0, dp(4), dp(16));
+        pageContent.addView(createHint);
 
-        // Action 2: Ephemeral Info Card
-        pageContent.addView(makeActionCard("⚡", I18n.get(this, "AI 即席簡報生成", "On-the-fly Deck Generation"),
-            I18n.get(this, "在語音中說『幫我做一份簡報介紹...』，AI 會立即生成帶圖片的卡片並為您導播！", "Say 'create a deck about...', AI will generate cards with web images and present!"), CrewTheme.AMBER_400, new View.OnClickListener() {
-                @Override public void onClick(View v) {
-                    DeckRepository.initialize(MainActivity.this);
-                    DeckRepository.ensureActiveDeck();
-                    startActivity(new Intent(MainActivity.this, NativeLiveActivity.class));
-                }
-            }));
+        addSectionTitle(pageContent, I18n.get(this, "📁 我的簡報", "MY PRESENTATIONS"));
 
-        // Installed Decks Section
-        addSectionTitle(pageContent, I18n.get(this, "📁 已安裝簡報庫", "INSTALLED DECKS"));
         try {
             org.json.JSONObject res = DeckRepository.listDecks();
             org.json.JSONArray decks = res.optJSONArray("decks");
@@ -312,17 +306,59 @@ public class MainActivity extends Activity {
                     final String deckId = deck.optString("deckId");
                     String deckTitle = deck.optString("title", deckId);
                     int cardCount = deck.optInt("cards", 0);
-                    pageContent.addView(makeActionCard("▣", deckTitle,
-                        cardCount + " " + I18n.get(MainActivity.this, "張卡片 · 點擊全螢幕預覽", "cards · Tap to open full screen"),
-                        CrewTheme.TEAL_400, new View.OnClickListener() {
+
+                    pageContent.addView(makeActionCard(
+                        "▣",
+                        deckTitle,
+                        cardCount + " " + I18n.get(
+                                MainActivity.this,
+                                "張 · 點擊讓 Gemini 開始主講",
+                                "cards · Tap to let Gemini present"),
+                        CrewTheme.TEAL_400,
+                        new View.OnClickListener() {
                             @Override public void onClick(View v) {
-                                DeckRepository.openDeck(deckId);
-                                startActivity(new Intent(MainActivity.this, DeckActivity.class));
+                                Intent intent = new Intent(
+                                        MainActivity.this, NativeLiveActivity.class);
+                                intent.putExtra(
+                                        NativeLiveActivity.EXTRA_DECK_ENTRY_MODE,
+                                        NativeLiveActivity.DECK_ENTRY_PRESENT);
+                                intent.putExtra(
+                                        NativeLiveActivity.EXTRA_DECK_ID, deckId);
+                                intent.putExtra(
+                                        NativeLiveActivity.EXTRA_DECK_AUTO_START, true);
+                                startActivity(intent);
                             }
                         }));
                 }
+            } else {
+                TextView empty = new TextView(this);
+                empty.setText(I18n.get(this,
+                        "目前沒有已安裝簡報。可以先用 AI 建立一份。",
+                        "No installed presentations yet. Create one with AI."));
+                empty.setTextSize(12);
+                empty.setTextColor(CrewTheme.TEXT_SECONDARY);
+                empty.setPadding(dp(4), dp(4), dp(4), dp(14));
+                pageContent.addView(empty);
             }
         } catch (Exception ignored) {}
+
+        addSectionTitle(pageContent, I18n.get(this, "⋯ 更多", "MORE"));
+
+        pageContent.addView(makeActionCard(
+            "➕",
+            I18n.get(this, "進階：匯入 Deck 資料夾", "Advanced: Import Deck Folder"),
+            I18n.get(this,
+                "給已經準備好 deck.json 與圖片的外部簡報使用；一般 AI 建立簡報不需要這個。",
+                "For externally prepared folders containing deck.json and images. AI-created presentations do not need this."),
+            CrewTheme.INDIGO_400,
+            new View.OnClickListener() {
+                @Override public void onClick(View v) {
+                    Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+                    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                            | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+                    startActivityForResult(intent, 741);
+                }
+            }));
 
         addFooter(pageContent, false);
     }
