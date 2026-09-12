@@ -50,7 +50,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         void onMicrophoneLevel(double dbfs, double gateDbfs, boolean sending);
     }
     private final String apiKey;
-    private final String serverUrl;
     private final String voiceName;
     private volatile String noiseMode;
     private volatile int noiseSuppression;
@@ -187,7 +186,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         this.memoryRuleIndex = this.appContext == null ? null : new MemoryRuleIndex(this.appContext);
         this.audioIncidentRecorder = this.appContext == null ? null : new AudioIncidentRecorder(this.appContext);
         this.apiKey = apiKey;
-        this.serverUrl = serverUrl == null ? "" : serverUrl.trim();
         this.voiceName = voiceName == null || voiceName.trim().isEmpty() ? AppConfig.DEFAULT_VOICE : voiceName.trim();
         this.noiseMode = "quiet".equals(noiseMode) || "noisy".equals(noiseMode) ? noiseMode : "auto";
         this.noiseSuppression = Math.max(0, Math.min(100, noiseSuppression));
@@ -1217,10 +1215,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                     + customPrompt.trim();
         }
         setup.put("systemInstruction", new JSONObject().put("parts", new JSONArray().put(new JSONObject().put("text", baseInstruction))));
-        String skillPlaybook = loadVoiceSkillPlaybook();
-        if (!skillPlaybook.isEmpty()) {
-            setup.getJSONObject("systemInstruction").getJSONArray("parts").getJSONObject(0).put("text", setup.getJSONObject("systemInstruction").getJSONArray("parts").getJSONObject(0).optString("text") + "【已載入手機技能手冊】" + skillPlaybook);
-        }
         root.put("setup", setup); return root.toString();
     }
 
@@ -1282,7 +1276,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         tools.put(new JSONObject().put("name", "cancel_schedule").put("description", "Cancel one or all active timers/screen monitors.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("task_id", new JSONObject().put("type", "STRING").put("description", "Optional task ID to cancel, e.g. 'timer_1'")).put("label_hint", new JSONObject().put("type", "STRING").put("description", "Optional keyword/label of the timer to cancel")).put("cancel_all", new JSONObject().put("type", "BOOLEAN").put("description", "Set true to cancel all active timers and monitors")))));
         tools.put(new JSONObject().put("name", "take_screenshot").put("description", "Capture the phone screen ONLY when inspect_ui has no nodes (e.g. Canvas, Unity, WebGL, custom game UI) or user explicitly requests it."));
         tools.put(new JSONObject().put("name", "end_voice_session").put("description", "End the voice call only for an explicit call-ending command: '結束通話', '掛斷電話', or '退出語音助理'. Never infer this from '關閉', '退出', '再見', '先這樣', or a request to close an app, window, or feature."));
-        tools.put(new JSONObject().put("name", "save_to_main_chat").put("description", "Save a concise result or note to Crew Pocket main chat ONLY when the user explicitly asks to save, record, or send it there. Never use this for ordinary conversation.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("message", new JSONObject().put("type", "STRING").put("description", "The exact concise note to save"))).put("required", new JSONArray().put("message"))));
         tools.put(new JSONObject().put("name", "list_decks").put("description", "List trusted locally installed Live Decks available for a presentation, story, or teaching flow. Call before opening a deck when its ID is unknown."));
         tools.put(new JSONObject().put("name", "open_deck").put("description", "Open a trusted Live Deck by deckId and show its first card full-screen. Returns that card's concise presentation data.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("deck_id", new JSONObject().put("type", "STRING").put("description", "ID returned by list_decks"))).put("required", new JSONArray().put("deck_id"))));
         tools.put(new JSONObject().put("name", "get_deck_card").put("description", "Read concise, structured information for one card in the currently open Deck. Use its facts, speakerNotes, and allowedNext to decide the next presentation action.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("card_id", new JSONObject().put("type", "STRING").put("description", "Card ID from allowedNext; omit only to reread the visible card")))));
@@ -1621,7 +1614,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 finishAgentTask(task, "通話結束", "");
                 new Handler(Looper.getMainLooper()).postDelayed(new Runnable() { @Override public void run() { stop(); } }, 1200);
                 return;
-            } else if ("save_to_main_chat".equals(name) || "send_to_main_chat".equals(name)) result = sendToMainChat(args);
+            }
             else if ("list_decks".equals(name)) result = DeckRepository.listDecks();
             else if ("open_deck".equals(name)) {
                 result = DeckRepository.openDeck(args.optString("deck_id"));
@@ -3449,31 +3442,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         return -1;
     }
 
-    private String loadVoiceSkillPlaybook() {
-        if (serverUrl.isEmpty()) return ""; // Standalone mode: no custom skills server needed
-        HttpURLConnection connection = null;
-        try {
-            String endpoint = serverUrl.replaceAll("/+$", "") + "/api/phone/skills";
-            connection = (HttpURLConnection) new URL(endpoint).openConnection();
-            connection.setRequestMethod("GET"); connection.setConnectTimeout(1500); connection.setReadTimeout(2500);
-            int code = connection.getResponseCode();
-            if (code < 200 || code >= 300) return "";
-            BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream(), "UTF-8"));
-            StringBuilder raw = new StringBuilder(); String line; while ((line = reader.readLine()) != null) raw.append(line); reader.close();
-            JSONArray skills = new JSONObject(raw.toString()).optJSONArray("skills");
-            if (skills == null) return "";
-            StringBuilder playbook = new StringBuilder();
-            for (int i = 0; i < skills.length() && i < 12 && playbook.length() < 12000; i++) {
-                JSONObject skill = skills.optJSONObject(i);
-                if (skill == null) continue;
-                String name = skill.optString("name", "").trim();
-                String instruction = skill.optString("instruction", "").trim();
-                if (!name.isEmpty() && !instruction.isEmpty()) playbook.append("\n[技能：").append(name).append("] ").append(instruction);
-            }
-            return playbook.toString();
-        } catch (Exception ignored) { return ""; }
-        finally { if (connection != null) connection.disconnect(); }
-    }
+
 
     private JSONObject helperGet(String endpoint) throws Exception {
         HttpURLConnection connection = null;
@@ -3733,47 +3702,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         return autoObserveAfterMutation(reply, "commit_search");
     }
 
-    private JSONObject sendToMainChat(JSONObject args) throws Exception {
-        String message = args.optString("message", args.optString("text", "")).trim();
-        if (message.isEmpty()) return new JSONObject().put("success", false).put("error", "主對話訊息不可為空");
-        String targetUrl = serverUrl;
-        if (targetUrl == null || targetUrl.trim().isEmpty()) {
-            targetUrl = AppConfig.DEFAULT_SERVER;
-        }
-        HttpURLConnection connection = null;
-        String endpoint = targetUrl.replaceAll("/+$", "") + "/api/inbound/messages";
-        try {
-            connection = (HttpURLConnection) new URL(endpoint).openConnection();
-            connection.setRequestMethod("POST");
-            connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
-            connection.setDoOutput(true);
-            connection.setConnectTimeout(2500);
-            connection.setReadTimeout(5000);
-            byte[] body = new JSONObject().put("message", message).put("source", "CrewHelper").toString().getBytes("UTF-8");
-            connection.setFixedLengthStreamingMode(body.length);
-            OutputStream out = connection.getOutputStream();
-            out.write(body);
-            out.close();
-            int code = connection.getResponseCode();
-            BufferedReader reader = new BufferedReader(new InputStreamReader(code >= 200 && code < 300 ? connection.getInputStream() : connection.getErrorStream(), "UTF-8"));
-            StringBuilder raw = new StringBuilder(); String line;
-            while ((line = reader.readLine()) != null) raw.append(line);
-            reader.close();
-            JSONObject reply = raw.length() == 0 ? new JSONObject() : new JSONObject(raw.toString());
-            if (code < 200 || code >= 300) return new JSONObject().put("success", false).put("httpStatus", code)
-                    .put("error", reply.optString("error", "Crew Pocket 主聊天拒絕接收訊息"));
-            boolean delivered = reply.optBoolean("delivered", false);
-            int pending = reply.optInt("pending", 0);
-            reply.put("success", true).put("deliveryStatus", delivered ? "delivered" : "queued")
-                    .put("message", delivered ? "已送到 Crew Pocket 主聊天。" : "主聊天目前未連線；訊息已排隊（待送 " + pending + " 則），開啟 Crew Pocket 主頁後才會送出。");
-            return reply;
-        } catch (Exception e) {
-            Log.w(TAG, "sendToMainChat error: " + e.getMessage());
-            return new JSONObject().put("success", false).put("error", "無法連線 Crew Pocket 主聊天橋接：" + (e.getMessage() == null ? endpoint : e.getMessage()));
-        } finally {
-            if (connection != null) connection.disconnect();
-        }
-    }
+
 
     private JSONObject captureAndSendScreen() throws Exception {
         JSONObject capture = helperPost("/screenshot", new JSONObject());

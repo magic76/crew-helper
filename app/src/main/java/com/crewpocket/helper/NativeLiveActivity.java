@@ -903,9 +903,8 @@ public class NativeLiveActivity extends Activity {
     }
 
     private void startClient(String key) {
-        String serverUrl = AppConfig.getServerUrl(this);
         String voiceName = AppConfig.getVoiceName(this);
-        client = new NativeGeminiLiveClient(this, key, serverUrl, voiceName, AppConfig.getNoiseMode(this), AppConfig.getNoiseSuppression(this), AppConfig.getLiveTone(this), AppConfig.getCustomSystemPrompt(this), AppConfig.getInterruptionSensitivity(this), AppConfig.getAudioOutput(this), new NativeGeminiLiveClient.Listener() {
+        client = new NativeGeminiLiveClient(this, key, "", voiceName, AppConfig.getNoiseMode(this), AppConfig.getNoiseSuppression(this), AppConfig.getLiveTone(this), AppConfig.getCustomSystemPrompt(this), AppConfig.getInterruptionSensitivity(this), AppConfig.getAudioOutput(this), new NativeGeminiLiveClient.Listener() {
             @Override public void onStatus(final String text) {
                 if (text != null && text.contains("已連線")) reconnectAttempts = 0;
                 updateStatus(CrewTheme.TEAL_400, text);

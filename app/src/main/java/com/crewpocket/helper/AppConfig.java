@@ -6,7 +6,6 @@ import android.content.SharedPreferences;
 public class AppConfig {
     public static final String PREFS_NAME = "crew_helper_config";
     public static final String KEY_GEMINI_API_KEY = "gemini_api_key";
-    public static final String KEY_SERVER_URL = "custom_server_url";
     public static final String KEY_VOICE_NAME = "live_voice_name";
     public static final String KEY_LOCAL_BRIDGE = "local_bridge_enabled";
     public static final String KEY_NOISE_MODE = "noise_mode";
@@ -27,7 +26,6 @@ public class AppConfig {
     public static final String KEY_WAKE_SENSITIVITY = "wake_sensitivity";
 
     public static final String DEFAULT_VOICE = "Kore";
-    public static final String DEFAULT_SERVER = "http://127.0.0.1:8000";
     public static final String DEFAULT_WAKE_PHRASE = "小酷小酷";
     private static final String LEGACY_WAKE_PHRASE = "小歪小歪";
     private static final String PREVIOUS_WAKE_PHRASE = "嘿 小歪";
@@ -56,23 +54,7 @@ public class AppConfig {
         context.getSharedPreferences("crew_native_live", Context.MODE_PRIVATE).edit().putString("gemini_live_key", cleanKey).apply();
     }
 
-    // ── 2. Custom Server URL (Connected vs Standalone Mode) ──
-    public static String getServerUrl(Context context) {
-        if (context == null) return "";
-        return getPrefs(context).getString(KEY_SERVER_URL, "");
-    }
-
-    public static void setServerUrl(Context context, String url) {
-        if (context == null) return;
-        getPrefs(context).edit().putString(KEY_SERVER_URL, url == null ? "" : url.trim()).apply();
-    }
-
-    public static boolean isStandaloneMode(Context context) {
-        String url = getServerUrl(context);
-        return url == null || url.trim().isEmpty();
-    }
-
-    // ── 3. Gemini Live Voice Persona ──
+    // ── 2. Gemini Live Voice Persona ──
     public static String getVoiceName(Context context) {
         if (context == null) return DEFAULT_VOICE;
         return getPrefs(context).getString(KEY_VOICE_NAME, DEFAULT_VOICE);

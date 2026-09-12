@@ -92,7 +92,7 @@ public final class I18n {
     }
 
     public static String cardSettingsTitle(Context ctx) {
-        return get(ctx, "運作模式與 API 設定", "Operation Mode & Settings");
+        return get(ctx, "Gemini API 設定", "Gemini API Settings");
     }
 
     public static String cardLanguageTitle(Context ctx) {

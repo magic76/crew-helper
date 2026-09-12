@@ -243,8 +243,7 @@ public class FloatingBubbleManager {
     private Runnable transcriptRefreshRunnable = null;
     private TextView dialogStatusText = null;
     private Button dialogStopButton = null;
-    // Image data remains in Helper until the user explicitly sends it to the
-    // connected Crew Pocket server; no server-side screenshot command is used.
+    // Legacy screenshot buffer kept only for source compatibility; external server mode is removed.
     private String pendingImageData = null;
     private Runnable safetyTimeoutRunnable = null;
 
@@ -1839,317 +1838,9 @@ public class FloatingBubbleManager {
     }
 
     public void showDialog() {
-        if (!canDrawOverlays()) return;
-        if (dialogView != null) return;
-
-        mainHandler.post(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    int overlayType = Build.VERSION.SDK_INT >= 26 
-                        ? 2038 
-                        : WindowManager.LayoutParams.TYPE_PHONE;
-
-                    int screenWidth = windowManager.getDefaultDisplay().getWidth();
-                    dialogParams = new WindowManager.LayoutParams(
-                        Math.max(dp(280), screenWidth - dp(30)),
-                        WindowManager.LayoutParams.WRAP_CONTENT,
-                        overlayType,
-                        WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL | WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
-                        PixelFormat.TRANSLUCENT
-                    );
-                    dialogParams.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
-                    dialogParams.y = dp(72);
-
-                    LinearLayout card = new LinearLayout(context);
-                    card.setOrientation(LinearLayout.VERTICAL);
-                    card.setPadding(dp(16), dp(12), dp(16), dp(16));
-                    final boolean connectedMode = !AppConfig.isStandaloneMode(context);
-
-                    GradientDrawable cardBg = new GradientDrawable();
-                    cardBg.setColor(Color.parseColor("#F50F172A")); // Luxury Slate 900
-                    cardBg.setCornerRadius(dp(20));
-                    cardBg.setStroke(dp(1.5f), Color.parseColor("#33818CF8")); // Indigo 400 @ 20%
-                    card.setBackground(cardBg);
-                    card.setElevation(dp(20));
-
-                    // Header Row
-                    LinearLayout header = new LinearLayout(context);
-                    header.setOrientation(LinearLayout.HORIZONTAL);
-                    header.setGravity(Gravity.CENTER_VERTICAL);
-                    header.setPadding(dp(2), dp(2), dp(2), dp(6));
-
-                    TextView title = new TextView(context);
-                    title.setText(connectedMode ? "🤖 Crew Pocket" : "🎙️ Crew Helper");
-                    title.setTextSize(14);
-                    title.setTextColor(Color.WHITE);
-                    title.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-                    header.addView(title);
-
-                    TextView badge = new TextView(context);
-                    badge.setText(connectedMode ? "隨身指令" : "獨立模式");
-                    badge.setTextSize(9);
-                    badge.setTextColor(Color.parseColor("#5EEAD4")); // Teal 300
-                    badge.setTypeface(android.graphics.Typeface.MONOSPACE);
-                    GradientDrawable badgeBg = new GradientDrawable();
-                    badgeBg.setColor(Color.parseColor("#2614B8A6"));
-                    badgeBg.setCornerRadius(dp(6));
-                    badgeBg.setStroke(dp(1), Color.parseColor("#4D14B8A6"));
-                    badge.setBackground(badgeBg);
-                    badge.setPadding(dp(6), dp(2), dp(6), dp(2));
-                    LinearLayout.LayoutParams badgeLp = new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-                    badgeLp.setMargins(dp(8), 0, 0, 0);
-                    header.addView(badge, badgeLp);
-
-                    View spacer = new View(context);
-                    header.addView(spacer, new LinearLayout.LayoutParams(0, 1, 1f));
-
-                    final TextView wakePill = new TextView(context);
-                    wakePill.setTextSize(10);
-                    wakePill.setPadding(dp(8), dp(3), dp(8), dp(3));
-                    updateWakeButtonUi(wakePill, isKeepAwakeActive());
-                    wakePill.setOnClickListener(new View.OnClickListener() {
-                        @Override public void onClick(View v) {
-                            vibrateSuccess();
-                            boolean next = toggleKeepAwake(context);
-                            updateWakeButtonUi(wakePill, next);
-                            Toast.makeText(context, next ? "☀️ 螢幕常亮已開啟（防止休眠）" : "🌙 螢幕常亮已關閉", Toast.LENGTH_SHORT).show();
-                        }
-                    });
-                    LinearLayout.LayoutParams wakeLp = new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-                    wakeLp.setMargins(0, 0, dp(8), 0);
-                    header.addView(wakePill, wakeLp);
-
-                    TextView closeBtn = new TextView(context);
-                    closeBtn.setText("✕");
-                    closeBtn.setTextSize(14);
-                    closeBtn.setTextColor(Color.parseColor("#94A3B8"));
-                    closeBtn.setGravity(Gravity.CENTER);
-                    GradientDrawable closeBg = new GradientDrawable();
-                    closeBg.setColor(Color.parseColor("#1E293B"));
-                    closeBg.setCornerRadius(dp(12));
-                    closeBtn.setBackground(closeBg);
-                    closeBtn.setOnClickListener(new View.OnClickListener() {
-                        @Override
-                        public void onClick(View v) {
-                            hideDialog();
-                        }
-                    });
-                    LinearLayout.LayoutParams closeLp = new LinearLayout.LayoutParams(dp(26), dp(26));
-                    header.addView(closeBtn, closeLp);
-
-                    header.setOnTouchListener(new View.OnTouchListener() {
-                        private int startX, startY;
-                        private float touchX, touchY;
-                        @Override public boolean onTouch(View v, MotionEvent event) {
-                            switch (event.getAction()) {
-                                case MotionEvent.ACTION_DOWN:
-                                    startX = dialogParams.x;
-                                    startY = dialogParams.y;
-                                    touchX = event.getRawX();
-                                    touchY = event.getRawY();
-                                    return true;
-                                case MotionEvent.ACTION_MOVE:
-                                    dialogParams.x = startX + (int) (event.getRawX() - touchX);
-                                    dialogParams.y = startY + (int) (event.getRawY() - touchY);
-                                    try { windowManager.updateViewLayout(dialogView, dialogParams); } catch (Exception ignored) {}
-                                    return true;
-                                default:
-                                    return true;
-                            }
-                        }
-                    });
-                    card.addView(header);
-
-                    dialogStatusText = new TextView(context);
-                    dialogStatusText.setText(friendlyState(currentState));
-                    dialogStatusText.setTextSize(10);
-                    dialogStatusText.setTextColor(Color.parseColor("#94A3B8"));
-                    dialogStatusText.setTypeface(android.graphics.Typeface.MONOSPACE);
-                    dialogStatusText.setPadding(dp(4), dp(2), dp(4), 0);
-                    card.addView(dialogStatusText);
-
-                    final EditText input = new EditText(context);
-                    input.setHint("輸入你想給 Crew Pocket AI 的指令...");
-                    input.setHintTextColor(Color.parseColor("#64748B"));
-                    input.setTextColor(Color.WHITE);
-                    input.setTextSize(13);
-                    input.setMinLines(2);
-                    input.setMaxLines(3);
-                    input.setGravity(Gravity.TOP | Gravity.START);
-                    input.setPadding(dp(12), dp(10), dp(12), dp(10));
-
-                    GradientDrawable inputBg = new GradientDrawable();
-                    inputBg.setColor(Color.parseColor("#020617")); // Slate 950
-                    inputBg.setCornerRadius(dp(14));
-                    inputBg.setStroke(dp(1), Color.parseColor("#334155")); // Slate 700
-                    input.setBackground(inputBg);
-                    input.setVisibility(connectedMode ? View.VISIBLE : View.GONE);
-
-                    LinearLayout.LayoutParams inputLp = new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
-                    );
-                    inputLp.setMargins(0, dp(8), 0, dp(10));
-                    card.addView(input, inputLp);
-
-                    LinearLayout actions = new LinearLayout(context);
-                    actions.setOrientation(LinearLayout.HORIZONTAL);
-                    actions.setGravity(Gravity.CENTER_VERTICAL);
-
-                    Button btnSnap = new Button(context);
-                    btnSnap.setText("📸 截圖");
-                    btnSnap.setTextColor(Color.parseColor("#38BDF8"));
-                    btnSnap.setTextSize(11);
-                    btnSnap.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-                    btnSnap.setAllCaps(false);
-                    btnSnap.setMinHeight(dp(38));
-                    btnSnap.setPadding(dp(6), 0, dp(6), 0);
-                    GradientDrawable snapBg = new GradientDrawable();
-                    snapBg.setColor(Color.parseColor("#1E293B"));
-                    snapBg.setCornerRadius(dp(10));
-                    snapBg.setStroke(dp(1), Color.parseColor("#334155"));
-                    btnSnap.setBackground(snapBg);
-                    btnSnap.setVisibility(connectedMode ? View.VISIBLE : View.GONE);
-                    btnSnap.setOnClickListener(new View.OnClickListener() {
-                        @Override
-                        public void onClick(View v) {
-                            vibrateShort();
-                            btnSnap.setEnabled(false);
-                            updateDialogStatus("正在擷取螢幕…");
-                            captureScreenshotForPrompt(new CaptureCallback() {
-                                @Override public void onResult(boolean success, String detail) {
-                                    btnSnap.setEnabled(true);
-                                    if (success) {
-                                        if (pendingImageData == null || pendingImageData.isEmpty()) {
-                                            updateDialogStatus("截圖資料無法使用，請重試");
-                                            return;
-                                        }
-                                        input.setHint("已截圖，輸入你想問的問題…");
-                                        updateDialogStatus("截圖已準備，請輸入問題");
-                                    } else {
-                                        updateDialogStatus("截圖失敗，請重試");
-                                    }
-                                }
-                            });
-                        }
-                    });
-                    LinearLayout.LayoutParams snapLp = new LinearLayout.LayoutParams(
-                        0, dp(38), 1f
-                    );
-                    snapLp.setMargins(0, 0, dp(6), 0);
-                    actions.addView(btnSnap, snapLp);
-
-                    Button btnSend = new Button(context);
-                    btnSend.setText("💬 傳送執行");
-                    btnSend.setTextColor(Color.WHITE);
-                    btnSend.setTextSize(12);
-                    btnSend.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-                    btnSend.setAllCaps(false);
-                    btnSend.setMinHeight(dp(38));
-                    btnSend.setPadding(dp(6), 0, dp(6), 0);
-                    GradientDrawable sendBg = new GradientDrawable(
-                        GradientDrawable.Orientation.LEFT_RIGHT,
-                        new int[]{ Color.parseColor("#14B8A6"), Color.parseColor("#4F46E5") }
-                    );
-                    sendBg.setCornerRadius(dp(10));
-                    btnSend.setBackground(sendBg);
-                    btnSend.setVisibility(connectedMode ? View.VISIBLE : View.GONE);
-                    btnSend.setOnClickListener(new View.OnClickListener() {
-                        @Override
-                        public void onClick(View v) {
-                            String msg = input.getText().toString().trim();
-                            if (!msg.isEmpty()) {
-                                vibrateShort();
-                                btnSend.setEnabled(false);
-                                updateDialogStatus("正在連線…");
-                                final String imageData = pendingImageData;
-                                sendMessageToCrewPocket(msg, imageData, new SendCallback() {
-                                    @Override public void onResult(boolean success, String detail) {
-                                        btnSend.setEnabled(true);
-                                        if (success) {
-                                            pendingImageData = null;
-                                            hideDialog();
-                                        }
-                                        else updateDialogStatus("傳送失敗，請重試");
-                                    }
-                                });
-                            } else {
-                                Toast.makeText(context, "請輸入指令文字", Toast.LENGTH_SHORT).show();
-                            }
-                        }
-                    });
-                    LinearLayout.LayoutParams sendLp = new LinearLayout.LayoutParams(0, dp(38), 1.4f);
-                    sendLp.setMargins(0, 0, dp(6), 0);
-                    actions.addView(btnSend, sendLp);
-
-                    final Button btnAwake = new Button(context);
-                    final boolean isAwake = CrewAccessibilityService.isKeepAwakeActive();
-                    btnAwake.setText(isAwake ? "☀️ 常亮中" : "☀️ 常亮");
-                    btnAwake.setTextColor(isAwake ? Color.parseColor("#FDE047") : Color.parseColor("#94A3B8"));
-                    btnAwake.setTextSize(11);
-                    btnAwake.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-                    btnAwake.setAllCaps(false);
-                    btnAwake.setMinHeight(dp(38));
-                    btnAwake.setPadding(dp(4), 0, dp(4), 0);
-                    final GradientDrawable awakeBg = new GradientDrawable();
-                    awakeBg.setColor(isAwake ? Color.parseColor("#422006") : Color.parseColor("#1E293B"));
-                    awakeBg.setCornerRadius(dp(10));
-                    awakeBg.setStroke(dp(1), isAwake ? Color.parseColor("#EAB308") : Color.parseColor("#334155"));
-                    btnAwake.setBackground(awakeBg);
-                    btnAwake.setOnClickListener(new View.OnClickListener() {
-                        @Override public void onClick(View v) {
-                            vibrateShort();
-                            boolean next = CrewAccessibilityService.toggleKeepAwake();
-                            btnAwake.setText(next ? "☀️ 常亮中" : "☀️ 常亮");
-                            btnAwake.setTextColor(next ? Color.parseColor("#FDE047") : Color.parseColor("#94A3B8"));
-                            awakeBg.setColor(next ? Color.parseColor("#422006") : Color.parseColor("#1E293B"));
-                            awakeBg.setStroke(dp(1), next ? Color.parseColor("#EAB308") : Color.parseColor("#334155"));
-                            Toast.makeText(context, next ? "☀️ 螢幕常亮已開啟（防止休眠）" : "🌙 螢幕常亮已關閉", Toast.LENGTH_SHORT).show();
-                        }
-                    });
-                    LinearLayout.LayoutParams awakeLp = new LinearLayout.LayoutParams(0, dp(38), 1.0f);
-                    awakeLp.setMargins(0, 0, dp(6), 0);
-                    actions.addView(btnAwake, awakeLp);
-
-                    card.addView(actions);
-
-                    dialogStopButton = new Button(context);
-                    dialogStopButton.setText("🛑 停止生成");
-                    dialogStopButton.setTextColor(Color.parseColor("#FECACA"));
-                    dialogStopButton.setTextSize(11);
-                    dialogStopButton.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-                    dialogStopButton.setAllCaps(false);
-                    dialogStopButton.setMinHeight(dp(36));
-                    dialogStopButton.setPadding(dp(4), 0, dp(4), 0);
-                    GradientDrawable stopBg = new GradientDrawable();
-                    stopBg.setColor(Color.parseColor("#450A0A"));
-                    stopBg.setCornerRadius(dp(10));
-                    stopBg.setStroke(dp(1), Color.parseColor("#991B1B"));
-                    dialogStopButton.setBackground(stopBg);
-                    dialogStopButton.setVisibility(connectedMode && ("THINKING".equals(currentState) || "TOOL".equals(currentState)) ? View.VISIBLE : View.GONE);
-                    dialogStopButton.setOnClickListener(new View.OnClickListener() {
-                        @Override public void onClick(View v) {
-                            stopCrewPocketGeneration();
-                            hideDialog();
-                        }
-                    });
-                    LinearLayout.LayoutParams stopLp = new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT, dp(36)
-                    );
-                    stopLp.setMargins(0, dp(8), 0, 0);
-
-                    card.addView(dialogStopButton, stopLp);
-
-                    dialogView = card;
-                    windowManager.addView(dialogView, dialogParams);
-                    isDialogShowing = true;
-                } catch (Exception e) {
-                    e.printStackTrace();
-                }
-            }
-        });
+        // 0072: the old Crew Pocket server composer was removed.
+        // Keep this entry point source-compatible and open the native Live console instead.
+        showVoiceControls();
     }
 
     public void hideDialog() {
@@ -2180,80 +1871,14 @@ public class FloatingBubbleManager {
     }
 
     public void sendMessageToCrewPocket(final String message, final String imageData, final SendCallback callback) {
-        if (AppConfig.isStandaloneMode(context)) {
-            mainHandler.post(new Runnable() {
-                @Override public void run() {
-                    setThinkingState(false);
-                    updateDialogStatus("此功能需要 Crew Pocket 連線模式");
-                    if (callback != null) callback.onResult(false, "Crew Pocket 未連線");
-                }
-            });
-            return;
-        }
-        setThinkingState(true);
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                boolean success = false;
-                String detail = "無法連線";
-                String server = AppConfig.getServerUrl(context);
-                if (server == null || server.isEmpty()) {
-                    server = AppConfig.DEFAULT_SERVER;
-                }
-                String endpoint = server.replaceAll("/+$", "") + "/api/inbound/messages";
-
-                try {
-                    for (int attempt = 1; attempt <= 3 && !success; attempt++) {
-                        HttpURLConnection conn = null;
-                        try {
-                            URL url = new URL(endpoint);
-                            conn = (HttpURLConnection) url.openConnection();
-                            conn.setRequestMethod("POST");
-                            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
-                            conn.setDoOutput(true);
-                            conn.setConnectTimeout(4000);
-                            conn.setReadTimeout(4000);
-
-                            String payload = "{\"message\":\"" + escapeJson(message) + "\",\"source\":\"FloatingBubble\"";
-                            if (imageData != null && !imageData.isEmpty()) {
-                                payload += ",\"image_base64\":\"" + imageData + "\"";
-                            }
-                            payload += "}";
-                            byte[] bytes = payload.getBytes(StandardCharsets.UTF_8);
-                            conn.setFixedLengthStreamingMode(bytes.length);
-                            OutputStream os = conn.getOutputStream();
-                            os.write(bytes);
-                            os.flush();
-                            os.close();
-
-                            int code = conn.getResponseCode();
-                            success = code >= 200 && code < 300;
-                            detail = "HTTP " + code;
-                        } catch (Exception attemptError) {
-                            detail = attemptError.getMessage() == null ? "連線逾時" : attemptError.getMessage();
-                            if (attempt < 3) {
-                                try { Thread.sleep(250L * attempt); } catch (InterruptedException ignored) {}
-                            }
-                        } finally {
-                            if (conn != null) conn.disconnect();
-                        }
-                    }
-                } catch (Exception e) {
-                    detail = e.getMessage() == null ? "連線失敗" : e.getMessage();
-                }
-                final boolean result = success;
-                final String resultDetail = detail;
-                mainHandler.post(new Runnable() {
-                    @Override public void run() {
-                        if (!result) {
-                            setThinkingState(false);
-                            updateDialogStatus("Crew Pocket 尚未連線");
-                        }
-                        if (callback != null) callback.onResult(result, resultDetail);
-                    }
-                });
+        // 0072 compatibility shim: external Crew Pocket server mode no longer exists.
+        mainHandler.post(new Runnable() {
+            @Override public void run() {
+                setThinkingState(false);
+                updateDialogStatus("伺服器模式已移除，請使用 Gemini Live");
+                if (callback != null) callback.onResult(false, "SERVER_MODE_REMOVED");
             }
-        }).start();
+        });
     }
 
     public void captureScreenshotForPrompt(final CaptureCallback callback) {
@@ -2321,25 +1946,10 @@ public class FloatingBubbleManager {
     }
 
     public void stopCrewPocketGeneration() {
+        // 0072 compatibility shim: there is no external generation server to stop.
         setThinkingState(false);
         currentState = "IDLE";
-        new Thread(new Runnable() {
-            @Override public void run() {
-                try {
-                    URL url = new URL("http://127.0.0.1:8000/api/stop");
-                    HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                    conn.setRequestMethod("POST");
-                    conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
-                    conn.setDoOutput(true);
-                    byte[] bytes = "{}".getBytes(StandardCharsets.UTF_8);
-                    conn.setFixedLengthStreamingMode(bytes.length);
-                    OutputStream os = conn.getOutputStream();
-                    os.write(bytes); os.flush(); os.close();
-                    conn.getResponseCode();
-                    conn.disconnect();
-                } catch (Exception ignored) {}
-            }
-        }).start();
+        updateDialogStatus("已停止");
     }
 
     private String escapeJson(String s) {
@@ -2351,6 +1961,7 @@ public class FloatingBubbleManager {
         private Paint bgPaint;
         private Paint ringPaint;
         private Paint glowPaint;
+        private Bitmap logoBitmap;
         private RectF ringBounds = new RectF();
         private SweepGradient idleSweepGradient;
         private SweepGradient activeSweepGradient;
@@ -2373,6 +1984,7 @@ public class FloatingBubbleManager {
         private void init() {
             bgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
             bgPaint.setStyle(Paint.Style.FILL);
+            logoBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.crew_assistant_bubble);
 
             ringPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
             ringPaint.setStyle(Paint.Style.STROKE);
@@ -2512,77 +2124,23 @@ public class FloatingBubbleManager {
             super.onDraw(canvas);
             final float cx = getWidth() / 2f;
             final float cy = getHeight() / 2f;
-            final float radius = (Math.min(getWidth(), getHeight()) / 2f) - 2.5f;
-            final float pulse = 0.5f + 0.5f * (float) Math.sin(
-                    Math.toRadians(rotationAngle * 2f));
+            final float radius = Math.max(1f, Math.min(getWidth(), getHeight()) / 2f - 1.5f);
 
-            int coreCenter;
-            int coreMid;
-            int coreEdge;
-            int waveLeft;
-            int waveRight;
-            int waveAlpha;
-
-            if (nativeVoiceState == 3) {
-                coreCenter = Color.parseColor("#FFF1F2");
-                coreMid = Color.parseColor("#FB7185");
-                coreEdge = Color.parseColor("#BE123C");
-                waveLeft = Color.parseColor("#FB7185");
-                waveRight = Color.parseColor("#F59E0B");
-                waveAlpha = 230;
-            } else if (nativeVoiceState == 2) {
-                coreCenter = Color.parseColor("#FFFFFF");
-                coreMid = Color.parseColor("#C084FC");
-                coreEdge = Color.parseColor("#6D28D9");
-                waveLeft = Color.parseColor("#60A5FA");
-                waveRight = Color.parseColor("#C084FC");
-                waveAlpha = 235;
-            } else if (nativeVoiceState == 1) {
-                coreCenter = Color.parseColor("#FFFFFF");
-                coreMid = Color.parseColor("#22D3EE");
-                coreEdge = Color.parseColor("#4F46E5");
-                waveLeft = Color.parseColor("#22D3EE");
-                waveRight = Color.parseColor("#818CF8");
-                waveAlpha = 205 + Math.round(50f * pulse);
-            } else if (isFlowing) {
-                coreCenter = Color.parseColor("#FFFFFF");
-                coreMid = Color.parseColor("#38BDF8");
-                coreEdge = Color.parseColor("#A855F7");
-                waveLeft = Color.parseColor("#38BDF8");
-                waveRight = Color.parseColor("#C084FC");
-                waveAlpha = 235;
-            } else {
-                // IDLE is alive but quiet: subdued blue-violet instead of a
-                // microphone icon that falsely suggests continuous recording.
-                coreCenter = Color.parseColor("#E0F2FE");
-                coreMid = Color.parseColor("#60A5FA");
-                coreEdge = Color.parseColor("#6366F1");
-                waveLeft = Color.parseColor("#38BDF8");
-                waveRight = Color.parseColor("#818CF8");
-                waveAlpha = 118;
-            }
-
-            // 0039 LISTENING CORE — dark, low-interference circular glass base.
-            android.graphics.RadialGradient baseGradient =
-                    new android.graphics.RadialGradient(
-                            cx - radius * 0.08f,
-                            cy - radius * 0.10f,
-                            radius,
-                            new int[]{
-                                    Color.parseColor("#172554"),
-                                    Color.parseColor("#071426"),
-                                    Color.parseColor("#020617")
-                            },
-                            new float[]{0f, 0.68f, 1f},
-                            android.graphics.Shader.TileMode.CLAMP);
-            bgPaint.setShader(baseGradient);
-            bgPaint.setAlpha(245);
-            canvas.drawCircle(cx, cy, radius, bgPaint);
+            // 0072 brand core: selected Crew assistant logo. The source PNG has
+            // transparent corners so the overlay remains a true circular bubble.
+            RectF logoBounds = new RectF(0f, 0f, getWidth(), getHeight());
             bgPaint.setShader(null);
             bgPaint.setAlpha(255);
+            if (logoBitmap != null && !logoBitmap.isRecycled()) {
+                canvas.drawBitmap(logoBitmap, null, logoBounds, bgPaint);
+            } else {
+                bgPaint.setColor(Color.parseColor("#071426"));
+                canvas.drawCircle(cx, cy, radius, bgPaint);
+            }
 
-            // A very thin animated rim keeps existing state motion without
-            // competing visually with the central listening core.
+            // Keep the previous runtime-state language as a thin animated rim:
+            // neutral=idle, blue=listening, purple=speaking, red=error,
+            // rainbow=tool execution. The logo itself never changes identity.
             matrix.setRotate(rotationAngle, cx, cy);
             SweepGradient rimGradient = nativeVoiceState == 3
                     ? errorSweepGradient
@@ -2597,84 +2155,30 @@ public class FloatingBubbleManager {
                 rimGradient.setLocalMatrix(matrix);
                 ringPaint.setShader(rimGradient);
                 ringPaint.setStyle(Paint.Style.STROKE);
-                ringPaint.setStrokeWidth(Math.max(1.4f, radius * 0.055f));
-                ringPaint.setAlpha(nativeVoiceState == 0 && !isFlowing ? 105 : 175);
-                canvas.drawOval(ringBounds, ringPaint);
+                ringPaint.setStrokeCap(Paint.Cap.ROUND);
+                ringPaint.setStrokeWidth(Math.max(2f, radius * 0.075f));
+                ringPaint.setAlpha(nativeVoiceState == 0 && !isFlowing ? 90 : 225);
+                RectF stateRing = new RectF(
+                        ringPaint.getStrokeWidth() / 2f,
+                        ringPaint.getStrokeWidth() / 2f,
+                        getWidth() - ringPaint.getStrokeWidth() / 2f,
+                        getHeight() - ringPaint.getStrokeWidth() / 2f);
+                canvas.drawOval(stateRing, ringPaint);
+                ringPaint.setShader(null);
             }
-
-            // Soft glow behind the orb.
-            ringPaint.setShader(null);
-            glowPaint.setShader(null);
-            glowPaint.setStyle(Paint.Style.FILL);
-            glowPaint.setColor(coreMid);
-            glowPaint.setAlpha(nativeVoiceState == 0 && !isFlowing
-                    ? 35 : 55 + Math.round(25f * pulse));
-            final float orbRadius = radius * 0.43f;
-            canvas.drawCircle(cx, cy, orbRadius * 1.42f, glowPaint);
-
-            // Central listening orb.
-            android.graphics.RadialGradient orbGradient =
-                    new android.graphics.RadialGradient(
-                            cx - orbRadius * 0.30f,
-                            cy - orbRadius * 0.34f,
-                            orbRadius * 1.35f,
-                            new int[]{coreCenter, coreMid, coreEdge},
-                            new float[]{0f, 0.48f, 1f},
-                            android.graphics.Shader.TileMode.CLAMP);
-            bgPaint.setShader(orbGradient);
-            bgPaint.setAlpha(255);
-            canvas.drawCircle(cx, cy, orbRadius, bgPaint);
-            bgPaint.setShader(null);
-
-            // Listening waves: visible state language instead of a microphone.
-            android.graphics.LinearGradient waveGradient =
-                    new android.graphics.LinearGradient(
-                            cx - radius, cy,
-                            cx + radius, cy,
-                            waveLeft, waveRight,
-                            android.graphics.Shader.TileMode.CLAMP);
-            ringPaint.setShader(waveGradient);
-            ringPaint.setStyle(Paint.Style.STROKE);
-            ringPaint.setStrokeCap(Paint.Cap.ROUND);
-            ringPaint.setAlpha(waveAlpha);
-
-            RectF innerWave = new RectF(
-                    cx - radius * 0.75f, cy - radius * 0.75f,
-                    cx + radius * 0.75f, cy + radius * 0.75f);
-            ringPaint.setStrokeWidth(Math.max(2.1f, radius * 0.105f));
-            canvas.drawArc(innerWave, 112f, 136f, false, ringPaint);
-            canvas.drawArc(innerWave, -68f, 136f, false, ringPaint);
-
-            RectF outerWave = new RectF(
-                    cx - radius * 0.98f, cy - radius * 0.98f,
-                    cx + radius * 0.98f, cy + radius * 0.98f);
-            ringPaint.setStrokeWidth(Math.max(1.7f, radius * 0.080f));
-            ringPaint.setAlpha(Math.max(72, waveAlpha - 42));
-            canvas.drawArc(outerWave, 120f, 120f, false, ringPaint);
-            canvas.drawArc(outerWave, -60f, 120f, false, ringPaint);
-
-            // Small specular point gives the orb depth at launcher/bubble size.
-            ringPaint.setShader(null);
-            glowPaint.setStyle(Paint.Style.FILL);
-            glowPaint.setColor(Color.WHITE);
-            glowPaint.setAlpha(nativeVoiceState == 0 && !isFlowing ? 118 : 185);
-            canvas.drawCircle(
-                    cx - orbRadius * 0.28f,
-                    cy - orbRadius * 0.31f,
-                    Math.max(1.2f, orbRadius * 0.115f),
-                    glowPaint);
 
             if (isSuccessFlash) {
                 ringPaint.setStyle(Paint.Style.STROKE);
-                ringPaint.setStrokeWidth(Math.max(1.3f, radius * 0.055f));
+                ringPaint.setShader(null);
+                ringPaint.setStrokeWidth(Math.max(2f, radius * 0.055f));
                 ringPaint.setColor(Color.WHITE);
-                ringPaint.setAlpha(190);
-                canvas.drawCircle(cx, cy, radius * 0.88f, ringPaint);
+                ringPaint.setAlpha(210);
+                RectF successRing = new RectF(
+                        ringPaint.getStrokeWidth(), ringPaint.getStrokeWidth(),
+                        getWidth() - ringPaint.getStrokeWidth(),
+                        getHeight() - ringPaint.getStrokeWidth());
+                canvas.drawOval(successRing, ringPaint);
             }
-
-            ringPaint.setShader(null);
-            ringPaint.setAlpha(255);
-            glowPaint.setAlpha(255);
         }
     }
 }

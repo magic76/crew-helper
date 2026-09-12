@@ -330,7 +330,7 @@ public class MainActivity extends Activity {
     private void renderSettingsPage() {
         pageContent.removeAllViews();
         addPageHeading("⚙️", I18n.get(this, "設定與偏好", "Settings & Preferences"),
-            I18n.get(this, "語音音色、自訂人設、權限與連線管理。", "Voice persona, custom prompts, permissions, and connection mode."));
+            I18n.get(this, "語音音色、自訂人設、權限與 API 設定。", "Voice persona, custom prompts, permissions, and API settings."));
 
         // ── 1. Voice & Persona ──
         addSectionTitle(pageContent, I18n.get(this, "🤖 語音與人設", "VOICE & PERSONA"));
@@ -404,17 +404,13 @@ public class MainActivity extends Activity {
             }));
 
         // ── 3. System Preferences ──
-        addSectionTitle(pageContent, I18n.get(this, "🌐 系統與連線", "SYSTEM & CONNECTION"));
+        addSectionTitle(pageContent, I18n.get(this, "🌐 系統設定", "SYSTEM SETTINGS"));
 
-        boolean isStandalone = AppConfig.isStandaloneMode(this);
-        String currentServer = AppConfig.getServerUrl(this);
-        String modeSummary = isStandalone
-            ? I18n.get(this, "模式：☁️ Gemini 雲端直連模式", "Mode: ☁️ Direct Gemini Cloud")
-            : I18n.get(this, "模式：🔗 Crew Pocket 伺服器 (" + currentServer + ")", "Mode: 🔗 Crew Pocket (" + currentServer + ")");
-
-        pageContent.addView(makeActionCard("🔐", I18n.cardSettingsTitle(this), modeSummary, CrewTheme.CYAN_400, new View.OnClickListener() {
-            @Override public void onClick(View v) { showSettingsDialog(); }
-        }));
+        pageContent.addView(makeActionCard("🔐", I18n.cardSettingsTitle(this),
+            I18n.get(this, "Gemini API Key · 直接連線 Gemini Live", "Gemini API Key · Direct Gemini Live"),
+            CrewTheme.CYAN_400, new View.OnClickListener() {
+                @Override public void onClick(View v) { showSettingsDialog(); }
+            }));
 
         pageContent.addView(makeActionCard("🌐", I18n.cardLanguageTitle(this), I18n.cardLanguageDesc(this), CrewTheme.INDIGO_400, new View.OnClickListener() {
             @Override public void onClick(View v) { showLanguageDialog(); }
@@ -947,82 +943,79 @@ public class MainActivity extends Activity {
         layout.setBackgroundColor(CrewTheme.BG_PRIMARY);
 
         TextView titleView = new TextView(this);
-        titleView.setText(I18n.get(this, "⚙️ 運作模式與連線設定", "⚙️ Operation Mode & Settings"));
+        titleView.setText(I18n.get(this, "⚙️ Gemini API 設定", "⚙️ Gemini API Settings"));
         titleView.setTextSize(16);
         titleView.setTypeface(Typeface.DEFAULT_BOLD);
         titleView.setTextColor(CrewTheme.TEXT_PRIMARY);
         titleView.setPadding(0, 0, 0, dp(12));
         layout.addView(titleView);
 
-        // 1. Gemini API Key (BYOK)
         TextView keyLabel = new TextView(this);
-        keyLabel.setText(I18n.get(this, "1. Gemini API Key (BYOK 獨立雲端模式)", "1. Gemini API Key (BYOK Cloud Mode)"));
+        keyLabel.setText(I18n.get(this, "Gemini API Key (BYOK)", "Gemini API Key (BYOK)"));
         keyLabel.setTextSize(12);
         keyLabel.setTypeface(Typeface.DEFAULT_BOLD);
         keyLabel.setTextColor(CrewTheme.TEAL_400);
         layout.addView(keyLabel);
 
         TextView keyHintLink = new TextView(this);
-        keyHintLink.setText(I18n.get(this, "🔗 免費申請 Gemini API Key (aistudio.google.com) ↗", "🔗 Get Free Gemini API Key (aistudio.google.com) ↗"));
+        keyHintLink.setText(I18n.get(this,
+            "🔗 免費申請 Gemini API Key (aistudio.google.com) ↗",
+            "🔗 Get Free Gemini API Key (aistudio.google.com) ↗"));
         keyHintLink.setTextSize(11);
         keyHintLink.setTextColor(CrewTheme.CYAN_400);
         keyHintLink.setPadding(0, dp(2), 0, dp(4));
         keyHintLink.setClickable(true);
         keyHintLink.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
+            @Override public void onClick(View v) {
                 try {
-                    startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("https://aistudio.google.com/apikey")));
+                    startActivity(new Intent(Intent.ACTION_VIEW,
+                            Uri.parse("https://aistudio.google.com/apikey")));
                 } catch (Exception ignored) {}
             }
         });
         layout.addView(keyHintLink);
 
         final android.widget.EditText keyInput = new android.widget.EditText(this);
-        keyInput.setHint(I18n.get(this, "請輸入 AIzaSy 開頭的 Gemini API Key", "Enter AIzaSy... Gemini API Key"));
+        keyInput.setHint(I18n.get(this,
+            "請輸入 AIzaSy 開頭的 Gemini API Key",
+            "Enter AIzaSy... Gemini API Key"));
         keyInput.setHintTextColor(CrewTheme.TEXT_MUTED);
         keyInput.setText(AppConfig.getGeminiApiKey(this));
         keyInput.setTextSize(12);
         keyInput.setTextColor(CrewTheme.TEXT_PRIMARY);
-        keyInput.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        keyInput.setBackground(CrewTheme.createCard(this, CrewTheme.BG_SURFACE, CrewTheme.BORDER_SUBTLE, 8));
+        keyInput.setInputType(android.text.InputType.TYPE_CLASS_TEXT
+                | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        keyInput.setBackground(CrewTheme.createCard(
+                this, CrewTheme.BG_SURFACE, CrewTheme.BORDER_SUBTLE, 8));
         keyInput.setPadding(dp(10), dp(10), dp(10), dp(10));
-        LinearLayout.LayoutParams keyLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        keyLp.setMargins(0, dp(4), 0, dp(14));
+        LinearLayout.LayoutParams keyLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        keyLp.setMargins(0, dp(4), 0, dp(8));
         layout.addView(keyInput, keyLp);
 
-        // 2. Custom Server URL (Connected Mode)
-        TextView serverLabel = new TextView(this);
-        serverLabel.setText(I18n.get(this, "2. Crew Pocket 伺服器網址 (連線擴充模式)", "2. Custom Server URL (Connected Mode)"));
-        serverLabel.setTextSize(12);
-        serverLabel.setTypeface(Typeface.DEFAULT_BOLD);
-        serverLabel.setTextColor(CrewTheme.INDIGO_400);
-        layout.addView(serverLabel);
-
-        final android.widget.EditText serverInput = new android.widget.EditText(this);
-        serverInput.setHint(I18n.get(this, "留空為純獨立模式，或填 http://127.0.0.1:8000", "Empty for standalone, or http://127.0.0.1:8000"));
-        serverInput.setHintTextColor(CrewTheme.TEXT_MUTED);
-        serverInput.setText(AppConfig.getServerUrl(this));
-        serverInput.setTextSize(12);
-        serverInput.setTextColor(CrewTheme.TEXT_PRIMARY);
-        serverInput.setBackground(CrewTheme.createCard(this, CrewTheme.BG_SURFACE, CrewTheme.BORDER_SUBTLE, 8));
-        serverInput.setPadding(dp(10), dp(10), dp(10), dp(10));
-        LinearLayout.LayoutParams serverLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        serverLp.setMargins(0, dp(4), 0, dp(14));
-        layout.addView(serverInput, serverLp);
+        TextView directHint = new TextView(this);
+        directHint.setText(I18n.get(this,
+            "Crew Helper 直接連線 Gemini Live；手機操作仍使用本機 127.0.0.1:8766 Bridge。",
+            "Crew Helper connects directly to Gemini Live; phone actions continue to use the local 127.0.0.1:8766 bridge."));
+        directHint.setTextSize(10);
+        directHint.setTextColor(CrewTheme.TEXT_MUTED);
+        directHint.setPadding(0, dp(4), 0, 0);
+        layout.addView(directHint);
 
         builder.setView(layout);
-        builder.setPositiveButton(I18n.get(this, "儲存設定", "Save Settings"), new android.content.DialogInterface.OnClickListener() {
-            @Override
-            public void onClick(android.content.DialogInterface dialog, int which) {
-                String newKey = keyInput.getText().toString().trim();
-                String newServer = serverInput.getText().toString().trim();
-                AppConfig.setGeminiApiKey(MainActivity.this, newKey);
-                AppConfig.setServerUrl(MainActivity.this, newServer);
-                Toast.makeText(MainActivity.this, I18n.get(MainActivity.this, "✅ 設定已儲存生效！", "✅ Settings saved successfully!"), Toast.LENGTH_SHORT).show();
-                recreate();
-            }
-        });
+        builder.setPositiveButton(I18n.get(this, "儲存設定", "Save Settings"),
+            new android.content.DialogInterface.OnClickListener() {
+                @Override public void onClick(android.content.DialogInterface dialog, int which) {
+                    AppConfig.setGeminiApiKey(
+                            MainActivity.this, keyInput.getText().toString().trim());
+                    Toast.makeText(MainActivity.this,
+                            I18n.get(MainActivity.this,
+                                "✅ Gemini API Key 已儲存！",
+                                "✅ Gemini API Key saved!"),
+                            Toast.LENGTH_SHORT).show();
+                    recreate();
+                }
+            });
         builder.setNegativeButton(I18n.get(this, "取消", "Cancel"), null);
         builder.show();
     }

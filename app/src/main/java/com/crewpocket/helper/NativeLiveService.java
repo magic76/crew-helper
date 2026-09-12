@@ -1106,9 +1106,8 @@ public class NativeLiveService extends Service {
             returnToIdle("尚未設定 Gemini API Key，請至主畫面填寫");
             return;
         }
-        final String serverUrl = AppConfig.getServerUrl(this);
         final String voiceName = AppConfig.getVoiceName(this);
-        client = new NativeGeminiLiveClient(this, apiKey, serverUrl, voiceName,
+        client = new NativeGeminiLiveClient(this, apiKey, "", voiceName,
                 AppConfig.getNoiseMode(this), AppConfig.getNoiseSuppression(this),
                 AppConfig.getLiveTone(this), AppConfig.getCustomSystemPrompt(this),
                 AppConfig.getInterruptionSensitivity(this), AppConfig.getAudioOutput(this),
