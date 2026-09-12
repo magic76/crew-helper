@@ -65,6 +65,7 @@ public class FloatingBubbleManager {
     private WindowManager.LayoutParams voiceControlParams = null;
     private FloatingPanelController voiceControlController = null;
     private BubbleActionStripOverlay bubbleActionStrip = null;
+    private WindowManager.LayoutParams bubbleActionStripParams = null;
     private View compactStatusView = null;
     private WindowManager.LayoutParams compactStatusParams = null;
     private FloatingPanelController compactStatusController = null;
@@ -317,7 +318,7 @@ public class FloatingBubbleManager {
                         || lower.contains("找到");
 
                 GradientDrawable bg = new GradientDrawable();
-                bg.setColor(Color.argb(238, 15, 23, 42));
+                bg.setColor(Color.argb(238, 58, 58, 60));
                 bg.setCornerRadius(dp(18));
                 bg.setStroke(
                         dp(1),
@@ -637,12 +638,14 @@ public class FloatingBubbleManager {
             bubbleExpandAnimator.cancel();
             bubbleExpandAnimator = null;
         }
+        removeBubbleMiniConsole();
         if (bubbleContainer != null) {
             try { windowManager.removeView(bubbleContainer); } catch (Exception ignored) {}
         }
         bubbleContainer = null;
         bubbleView = null;
         bubbleActionStrip = null;
+        bubbleActionStripParams = null;
     }
 
     public boolean isBubbleShowing() {
@@ -723,12 +726,9 @@ public class FloatingBubbleManager {
                             bubbleView,
                             new LinearLayout.LayoutParams(size, size));
 
+                    // 0085: keep the Crew bubble itself fixed at 48dp.
+                    // The Mini Console is attached as its own nearby overlay.
                     bubbleActionStrip = new BubbleActionStripOverlay(context);
-                    bubbleContainer.addView(
-                            bubbleActionStrip,
-                            new LinearLayout.LayoutParams(
-                                    size,
-                                    LinearLayout.LayoutParams.WRAP_CONTENT));
 
                     bubbleView.setOnTouchListener(new View.OnTouchListener() {
                         private int initialX, initialY;
@@ -878,186 +878,163 @@ public class FloatingBubbleManager {
     }
 
     private void toggleBubbleActionStrip() {
-        if (bubbleView == null
-                || bubbleContainer == null
-                || bubbleParams == null
-                || bubbleActionStrip == null) {
-            return;
-        }
-
-        if (bubbleActionStrip.isShowing()) {
-            collapseBubbleActions(true);
-        } else {
-            expandBubbleActions();
-        }
+        if (bubbleView == null || bubbleContainer == null
+                || bubbleParams == null || bubbleActionStrip == null) return;
+        if (bubbleActionStrip.isShowing()) collapseBubbleActions(true);
+        else expandBubbleActions();
     }
 
     private void expandBubbleActions() {
-        if (bubbleContainer == null
-                || bubbleParams == null
-                || bubbleActionStrip == null) {
-            return;
+        if (bubbleContainer == null || bubbleParams == null
+                || bubbleActionStrip == null || !canDrawOverlays()) return;
+
+        if (voiceControlView != null || voiceControlsOpening) hideVoiceControls();
+        removeBubbleMiniConsole();
+
+        bubbleActionStrip.show(bubbleActionStripActions(), miniConsoleStatus());
+
+        int overlayType = Build.VERSION.SDK_INT >= 26
+                ? 2038 : WindowManager.LayoutParams.TYPE_PHONE;
+        bubbleActionStripParams = new WindowManager.LayoutParams(
+                bubbleActionStrip.desiredWidthPx(),
+                bubbleActionStrip.desiredHeightPx(),
+                overlayType,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                        | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                PixelFormat.TRANSLUCENT);
+        bubbleActionStripParams.gravity = Gravity.TOP | Gravity.START;
+        positionBubbleMiniConsole();
+
+        try {
+            windowManager.addView(bubbleActionStrip, bubbleActionStripParams);
+        } catch (Exception error) {
+            bubbleActionStrip.dismiss();
+            bubbleActionStripParams = null;
         }
-
-        bubbleActionStrip.show(bubbleActionStripActions());
-        ensureShortcutRoomBelow(dp(BUBBLE_SIZE_DP));
-        setBubbleContainerExpandedStyle(true);
-
-        int targetHeight =
-                dp(BUBBLE_SIZE_DP)
-                        + bubbleActionStrip.desiredHeightPx();
-        animateBubbleContainerHeight(targetHeight, 160L, null);
     }
 
     private void collapseBubbleActions(boolean animated) {
-        if (bubbleContainer == null
-                || bubbleParams == null
-                || bubbleActionStrip == null
-                || !bubbleActionStrip.isShowing()) {
-            return;
-        }
-
-        Runnable finish = new Runnable() {
-            @Override public void run() {
-                if (bubbleActionStrip != null) {
-                    bubbleActionStrip.dismiss();
-                }
-                setBubbleContainerExpandedStyle(false);
-            }
-        };
-
-        if (animated) {
-            animateBubbleContainerHeight(
-                    dp(BUBBLE_SIZE_DP),
-                    140L,
-                    finish);
-        } else {
-            bubbleExpandAnimationGeneration++;
-            if (bubbleExpandAnimator != null) {
-                bubbleExpandAnimator.cancel();
-                bubbleExpandAnimator = null;
-            }
-            bubbleParams.height = dp(BUBBLE_SIZE_DP);
-            try {
-                windowManager.updateViewLayout(
-                        bubbleContainer,
-                        bubbleParams);
-            } catch (Exception ignored) {}
-            finish.run();
-        }
+        removeBubbleMiniConsole();
     }
 
-    private void setBubbleContainerExpandedStyle(boolean expanded) {
-        if (bubbleContainer == null) return;
-        if (!expanded) {
-            bubbleContainer.setBackground(null);
-            return;
+    private void removeBubbleMiniConsole() {
+        if (bubbleActionStrip != null && bubbleActionStrip.isShowing()) {
+            try { windowManager.removeViewImmediate(bubbleActionStrip); }
+            catch (Exception ignored) {}
+            bubbleActionStrip.dismiss();
         }
-
-        GradientDrawable bg = new GradientDrawable();
-        // 0083: neutral gray keeps the expanded assistant visually quieter
-        // against arbitrary apps than the old blue/slate panel.
-        bg.setColor(Color.argb(238, 58, 58, 60));
-        bg.setCornerRadius(dp(24));
-        bg.setStroke(dp(1), Color.parseColor("#666B7280"));
-        bubbleContainer.setBackground(bg);
+        bubbleActionStripParams = null;
     }
 
-    private void animateBubbleContainerHeight(
-            int targetHeight,
-            long durationMs,
-            final Runnable endAction) {
-        if (bubbleContainer == null || bubbleParams == null) return;
+    private void positionBubbleMiniConsole() {
+        if (bubbleActionStrip == null || bubbleActionStripParams == null
+                || bubbleParams == null) return;
 
-        final int generation = ++bubbleExpandAnimationGeneration;
-        if (bubbleExpandAnimator != null) {
-            bubbleExpandAnimator.cancel();
+        int screenW = windowManager.getDefaultDisplay().getWidth();
+        int screenH = windowManager.getDefaultDisplay().getHeight();
+        int bubbleSize = dp(BUBBLE_SIZE_DP);
+        int consoleW = bubbleActionStrip.desiredWidthPx();
+        int consoleH = bubbleActionStrip.desiredHeightPx();
+        int margin = dp(8);
+
+        boolean onLeft = bubbleParams.x + bubbleSize / 2 < screenW / 2;
+        int targetX = onLeft
+                ? bubbleParams.x + bubbleSize + dp(8)
+                : bubbleParams.x - consoleW - dp(8);
+        int targetY = bubbleParams.y - dp(10);
+
+        int maxX = Math.max(margin, screenW - consoleW - margin);
+        int minY = getStatusBarHeight() + dp(4);
+        int maxY = Math.max(minY, screenH - consoleH - dp(24));
+        bubbleActionStripParams.x = Math.max(margin, Math.min(maxX, targetX));
+        bubbleActionStripParams.y = Math.max(minY, Math.min(maxY, targetY));
+    }
+
+    private String miniConsoleStatus() {
+        if (!NativeLiveService.isActive()) {
+            if (AppConfig.isAlwaysOnEnabled(context)) {
+                return "等待喚醒「" + AppConfig.getWakePhrase(context) + "」";
+            }
+            return "待命";
         }
-
-        final int startHeight =
-                bubbleParams.height > 0
-                        ? bubbleParams.height
-                        : dp(BUBBLE_SIZE_DP);
-        if (startHeight == targetHeight) {
-            if (endAction != null) endAction.run();
-            return;
-        }
-
-        bubbleExpandAnimator =
-                ValueAnimator.ofInt(startHeight, targetHeight);
-        bubbleExpandAnimator.setDuration(durationMs);
-        bubbleExpandAnimator.setInterpolator(
-                new DecelerateInterpolator());
-        bubbleExpandAnimator.addUpdateListener(animation -> {
-            if (bubbleContainer == null || bubbleParams == null) return;
-            bubbleParams.height = (Integer) animation.getAnimatedValue();
-            try {
-                windowManager.updateViewLayout(
-                        bubbleContainer,
-                        bubbleParams);
-            } catch (Exception ignored) {}
-        });
-        bubbleExpandAnimator.addListener(
-                new AnimatorListenerAdapter() {
-                    @Override
-                    public void onAnimationEnd(Animator animation) {
-                        if (generation != bubbleExpandAnimationGeneration) return;
-                        bubbleExpandAnimator = null;
-                        if (endAction != null) endAction.run();
-                    }
-                });
-        bubbleExpandAnimator.start();
+        if (isLiveError(latestLiveStatus)) return latestLiveStatus;
+        if (NativeLiveService.hasActiveAgentTask()) return "正在執行任務…";
+        if (NativeLiveService.isAiSpeaking()) return "Gemini 正在說話";
+        if (NativeLiveService.isAgentMuted()) return "麥克風已靜音";
+        String lower = latestLiveStatus == null ? "" : latestLiveStatus.toLowerCase();
+        if (lower.contains("連線")) return "正在連線…";
+        return "正在聽…";
     }
 
     private BubbleActionStripOverlay.Actions bubbleActionStripActions() {
         return new BubbleActionStripOverlay.Actions() {
-            @Override public void onToggleCall() {
-                collapseBubbleActions(false);
-                toggleNativeLive();
+            @Override public void onPrimaryMic() {
+                if (!NativeLiveService.isActive()) {
+                    toggleNativeLive();
+                    showCompactStatus("正在連線", "Gemini Live");
+                } else {
+                    boolean muted = NativeLiveService.toggleAgentMute();
+                    showCompactStatus(muted ? "麥克風已靜音" : "正在聽", "");
+                }
                 refreshVoiceControls();
+                refreshBubbleActionStripIfShowing();
             }
 
-            @Override public void onToggleMute() {
-                collapseBubbleActions(false);
-                boolean muted = NativeLiveService.toggleAgentMute();
+            @Override public void onSendScreen() {
+                boolean sent = NativeLiveService.sendScreenSnapshot();
                 showCompactStatus(
-                        muted ? "已靜音" : "已取消靜音",
-                        "");
+                        sent ? "正在看畫面" : "無法取得畫面",
+                        sent ? "已送給 Gemini" : "請確認 Live 已連線");
+                refreshBubbleActionStripIfShowing();
+            }
+
+            @Override public void onSendCamera() {
+                boolean sent = NativeLiveService.sendCameraSnapshot();
+                showCompactStatus(
+                        sent ? "正在拍照" : "相機無法使用",
+                        sent ? "完成後會送給 Gemini" : "請確認權限與 Live");
+                refreshBubbleActionStripIfShowing();
+            }
+
+            @Override public void onStop() {
+                if (NativeLiveService.hasActiveAgentTask()) {
+                    boolean stopped = NativeLiveService.stopAgentTask();
+                    showCompactStatus(stopped ? "任務已停止" : "停止失敗", "");
+                } else if (NativeLiveService.isAiSpeaking()) {
+                    boolean interrupted = NativeLiveService.interruptAiSpeech();
+                    showCompactStatus(interrupted ? "已停止說話" : "無法停止", "");
+                } else {
+                    showCompactStatus("目前沒有執行中的任務", "");
+                }
                 refreshVoiceControls();
+                refreshBubbleActionStripIfShowing();
+            }
+
+            @Override public void onEndCall() {
+                if (NativeLiveService.isActive()) {
+                    nativeLiveRequested = false;
+                    NativeLiveService.stop(context);
+                    updateNativeLiveStatus("正在結束語音通話", false);
+                    showCompactStatus("正在結束 Live", "");
+                }
+                collapseBubbleActions(false);
             }
 
             @Override public void onOpenConsole() {
                 collapseBubbleActions(false);
                 showVoiceControls();
             }
-
-            @Override public void onInterrupt() {
-                collapseBubbleActions(false);
-                if (NativeLiveService.interruptForCorrection()) {
-                    showCompactStatus("已打斷", "");
-                }
-                refreshVoiceControls();
-            }
         };
     }
 
     private void refreshBubbleActionStripIfShowing() {
-        if (bubbleActionStrip == null
-                || !bubbleActionStrip.isShowing()
-                || bubbleContainer == null
-                || bubbleParams == null) {
-            return;
-        }
-
-        bubbleActionStrip.refresh(bubbleActionStripActions());
-        ensureShortcutRoomBelow(dp(BUBBLE_SIZE_DP));
-        int targetHeight =
-                dp(BUBBLE_SIZE_DP)
-                        + bubbleActionStrip.desiredHeightPx();
-        animateBubbleContainerHeight(
-                targetHeight,
-                100L,
-                null);
+        if (bubbleActionStrip == null || !bubbleActionStrip.isShowing()
+                || bubbleActionStripParams == null) return;
+        bubbleActionStrip.refresh(bubbleActionStripActions(), miniConsoleStatus());
+        positionBubbleMiniConsole();
+        try { windowManager.updateViewLayout(bubbleActionStrip, bubbleActionStripParams); }
+        catch (Exception ignored) {}
     }
 
     // 🌊 Set Water Flow / Thinking State
@@ -1179,6 +1156,7 @@ public class FloatingBubbleManager {
                             isLiveError(latestLiveStatus) ? 3 : (active ? 1 : 0));
                 }
                 refreshVoiceControls();
+                refreshBubbleActionStripIfShowing();
             }
         });
     }

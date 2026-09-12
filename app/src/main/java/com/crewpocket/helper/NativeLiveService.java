@@ -719,6 +719,46 @@ public class NativeLiveService extends Service {
         return instance != null && instance.toggleVisualSharing(false);
     }
 
+    /** 0085: one-shot screen observation for the Bubble Mini Console. */
+    static boolean sendScreenSnapshot() {
+        NativeLiveService running = instance;
+        if (running == null || !active || running.client == null) return false;
+        try {
+            running.client.sendScreenFrame();
+            return true;
+        } catch (Exception error) {
+            running.updateStatus("畫面擷取失敗", true);
+            return false;
+        }
+    }
+
+    /** 0085: one-shot back-camera capture for the Bubble Mini Console. */
+    static boolean sendCameraSnapshot() {
+        final NativeLiveService running = instance;
+        if (running == null || !active || running.client == null) return false;
+        try {
+            CameraCaptureManager.capturePhoto(
+                    running,
+                    false,
+                    new CameraCaptureManager.CaptureCallback() {
+                        @Override public void onSuccess(String path) {
+                            if (active && running.client != null) {
+                                running.client.sendCameraFrame(path);
+                            }
+                        }
+                        @Override public void onError(String error) {
+                            running.updateStatus(
+                                    "相機失敗：" + (error == null ? "unknown" : error),
+                                    true);
+                        }
+                    });
+            return true;
+        } catch (Exception error) {
+            running.updateStatus("相機啟動失敗", true);
+            return false;
+        }
+    }
+
     static boolean toggleAgentMute() {
         return instance != null && instance.client != null && instance.client.toggleAgentMute();
     }
