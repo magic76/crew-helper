@@ -38,9 +38,7 @@ import okio.ByteString;
 
 /** Gemini Live backed by OkHttp's production WebSocket implementation. */
 final class NativeGeminiLiveClient extends WebSocketListener {
-    // Keep 0071 runtime available for shadow telemetry/tests, but do not let
-    // it block production actions until Maps/custom UIs pass device smoke.
-    private static final boolean AGENT_RUNTIME_V2_ENFORCEMENT = false;
+    // 0073: AgentRuntimeV2 production authority is staged per action/package.
     private static final String TAG = "CrewNativeLive";
     interface Listener {
         void onStatus(String text);
@@ -1457,9 +1455,12 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         }
         final String name = semantic.runtimeName;
         final JSONObject args = semantic.runtimeArgs;
+        final boolean runtimeV2Enforced =
+                isMutationTool(name)
+                && AgentRuntimeRollout.shouldEnforce(name, latestActionObservation);
 
         AgentRuntimeV2.PreflightResult runtimePreflight = null;
-        if (AGENT_RUNTIME_V2_ENFORCEMENT && isMutationTool(name)) {
+        if (runtimeV2Enforced) {
             runtimePreflight = agentRuntimeV2.preflight(
                     callIntentGeneration,
                     userIntentGeneration,
@@ -1568,7 +1569,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 name,
                 lastObservedScreenFingerprint,
                 ActionTransaction.ExpectedEffect.ANY_OBSERVABLE_CHANGE);
-        if (AGENT_RUNTIME_V2_ENFORCEMENT && isMutationTool(name)) {
+        if (runtimeV2Enforced) {
             agentRuntimeV2.onActionStarted(
                     id, callIntentGeneration, conversationGoalId, task.taskId,
                     requestedName, name,
@@ -1657,14 +1658,19 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         } finally { activeToolConnection = null; }
         try {
             if (task.cancelled) result = new JSONObject().put("success", false).put("cancelled", true).put("error", "使用者已停止任務");
-            if (AGENT_RUNTIME_V2_ENFORCEMENT && isMutationTool(name)) {
+            if (runtimeV2Enforced) {
                 normalizeMutationContract(result);
+            }
+            if (isMutationTool(name)) {
+                result.put("runtimeV2Enforced", runtimeV2Enforced)
+                        .put("runtimeV2Rollout",
+                                AgentRuntimeRollout.rolloutLabel(name, latestActionObservation));
             }
             if (semantic.semantic) {
                 result.put("semanticAction", semantic.semanticAction)
                         .put("resolvedByRuntime", name);
             }
-            if (AGENT_RUNTIME_V2_ENFORCEMENT && isMutationTool(name)) {
+            if (runtimeV2Enforced) {
                 ExecutionEvidence evidence = executionEvidenceFromResult(name, result);
                 agentRuntimeV2.onActionExecuted(id, evidence);
                 ActionVerificationResult verification = agentRuntimeV2.verifyAndRecord(
@@ -1972,6 +1978,13 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         boolean cancelled = result != null && result.optBoolean("cancelled", false);
         boolean runtimeVerified = result != null && (result.optBoolean("verified", false)
                 || ("search_current_app".equals(name) && result.optBoolean("committed", false)));
+        if ("launch_app".equals(name) && result != null) {
+            String launchedPackage = result.optString("package", "").trim();
+            if (!launchedPackage.isEmpty()
+                    && launchedPackage.equals(latestActionObservation.packageName)) {
+                runtimeVerified = true;
+            }
+        }
         JSONObject verification = result == null ? null : result.optJSONObject("verification");
         if (verification != null) {
             String state = verification.optString("state", "");
@@ -3088,7 +3101,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
     private long mutationSettleDelayMs(String actionName) {
         if ("launch_app".equals(actionName)) return 650L;
-        if ("search_commit".equals(actionName)) return 700L;
+        if ("commit_search".equals(actionName)) return 700L;
         if ("search_current_app".equals(actionName)) return 520L;
         if ("press_key".equals(actionName)) return 320L;
         if ("type_text".equals(actionName)) return 260L;
