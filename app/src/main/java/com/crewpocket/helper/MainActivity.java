@@ -231,6 +231,20 @@ public class MainActivity extends Activity
         liveLp.setMargins(0, 0, 0, dp(6));
         root.addView(liveButton, liveLp);
 
+        NoteStore notebookStore = new NoteStore(this);
+        root.addView(makeSettingsRow(
+                "📝",
+                I18n.get(this, "記事本", "Notebook"),
+                notebookStore.count() + " " + I18n.get(this, "篇", "notes"),
+                CrewTheme.TEAL_300,
+                new View.OnClickListener() {
+                    @Override public void onClick(View v) {
+                        startActivity(new Intent(
+                                MainActivity.this,
+                                NotebookActivity.class));
+                    }
+                }));
+
         addSectionTitle(root, I18n.get(this, "隨身助理", "ASSISTANT"));
 
         final boolean wakeOn = AppConfig.isAlwaysOnEnabled(this);

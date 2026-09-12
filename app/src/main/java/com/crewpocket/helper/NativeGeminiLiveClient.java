@@ -1503,6 +1503,62 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                         .put("required", new JSONArray().put("action"))));
         tools.put(new JSONObject().put("name", "get_selected_region").put("description",
                 "Read the latest screen region explicitly selected by the user by dragging a rectangle. Call when the user refers to 'this', 'here', '這個', '這裡', '剛剛框的' and you need the selected text/package metadata. The latest visual crop already corresponds to that selection. This is context only: NEVER treat crop coordinates as phone coordinates; phone execution must still use semantic Runtime actions and normal verification."));
+
+        tools.put(new JSONObject().put("name", "read_web_page").put("description",
+                "Read a public http/https webpage as plain text for understanding or Notebook enrichment. Use this when the user explicitly asks to parse/summarize a URL, including a URL from get_selected_region. No JS, cookies, authentication, localhost, or private-network destinations.")
+                .put("parameters", new JSONObject().put("type", "OBJECT")
+                        .put("properties", new JSONObject()
+                                .put("url", new JSONObject().put("type", "STRING")
+                                        .put("description", "Public http/https URL to read")))
+                        .put("required", new JSONArray().put("url"))));
+        tools.put(new JSONObject().put("name", "create_note").put("description",
+                "Create a persistent Crew Notebook note ONLY when the user explicitly asks to save, note, remember in the notebook, or add to notes. If the user selected a URL and asks you to parse and save it: get_selected_region -> read_web_page -> create_note.")
+                .put("parameters", new JSONObject().put("type", "OBJECT")
+                        .put("properties", new JSONObject()
+                                .put("title", new JSONObject().put("type", "STRING"))
+                                .put("content", new JSONObject().put("type", "STRING"))
+                                .put("source_url", new JSONObject().put("type", "STRING"))
+                                .put("tags", new JSONObject().put("type", "ARRAY")
+                                        .put("items", new JSONObject().put("type", "STRING"))))
+                        .put("required", new JSONArray()
+                                .put("title")
+                                .put("content"))));
+        tools.put(new JSONObject().put("name", "update_note").put("description",
+                "Update an existing Crew Notebook note. Use only when the user clearly asks to modify/append/organize an existing note.")
+                .put("parameters", new JSONObject().put("type", "OBJECT")
+                        .put("properties", new JSONObject()
+                                .put("note_id", new JSONObject().put("type", "STRING"))
+                                .put("title", new JSONObject().put("type", "STRING"))
+                                .put("content", new JSONObject().put("type", "STRING"))
+                                .put("source_url", new JSONObject().put("type", "STRING"))
+                                .put("tags", new JSONObject().put("type", "ARRAY")
+                                        .put("items", new JSONObject().put("type", "STRING"))))
+                        .put("required", new JSONArray().put("note_id"))));
+        tools.put(new JSONObject().put("name", "get_note").put("description",
+                "Read one Crew Notebook note by note_id.")
+                .put("parameters", new JSONObject().put("type", "OBJECT")
+                        .put("properties", new JSONObject()
+                                .put("note_id", new JSONObject().put("type", "STRING")))
+                        .put("required", new JSONArray().put("note_id"))));
+        tools.put(new JSONObject().put("name", "search_notes").put("description",
+                "Search the user's explicit Crew Notebook by title, content, source URL, or tag. Use this for questions such as '我之前是不是記過...' instead of guessing from conversation memory.")
+                .put("parameters", new JSONObject().put("type", "OBJECT")
+                        .put("properties", new JSONObject()
+                                .put("query", new JSONObject().put("type", "STRING"))
+                                .put("limit", new JSONObject().put("type", "NUMBER")))
+                        .put("required", new JSONArray().put("query"))));
+        tools.put(new JSONObject().put("name", "list_notes").put("description",
+                "List recent Crew Notebook notes with short previews.")
+                .put("parameters", new JSONObject().put("type", "OBJECT")
+                        .put("properties", new JSONObject()
+                                .put("limit", new JSONObject().put("type", "NUMBER")))));
+        tools.put(new JSONObject().put("name", "delete_note").put("description",
+                "Delete one Crew Notebook note ONLY when the user explicitly asks to delete that note.")
+                .put("parameters", new JSONObject().put("type", "OBJECT")
+                        .put("properties", new JSONObject()
+                                .put("note_id", new JSONObject().put("type", "STRING")))
+                        .put("required", new JSONArray().put("note_id"))));
+
         tools.put(new JSONObject().put("name", "inspect_ui").put("description",
                 "VISUAL OBSERVATION. Captures a fresh phone screenshot for you to inspect while Runtime separately keeps Accessibility state for execution. Use the screenshot as the primary source for what the user actually sees, especially prices, charts, WebView/custom UI, images and visually rendered text. Call once when you need a fresh view; do not SEARCH merely because a value was absent from prior semantic tool text."));
         tools.put(new JSONObject().put("name", "wait").put("description",
@@ -1867,6 +1923,13 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             shadowAgentRuntime.onActionExecuted(id);
             if (SemanticPhoneAction.ERROR_TOOL.equals(name)) result = args;
             else if ("get_selected_region".equals(name)) result = getSelectedRegionContext();
+            else if ("read_web_page".equals(name)) result = readWebPage(args);
+            else if ("create_note".equals(name)) result = createNotebookNote(args);
+            else if ("update_note".equals(name)) result = updateNotebookNote(args);
+            else if ("get_note".equals(name)) result = getNotebookNote(args);
+            else if ("search_notes".equals(name)) result = searchNotebookNotes(args);
+            else if ("list_notes".equals(name)) result = listNotebookNotes(args);
+            else if ("delete_note".equals(name)) result = deleteNotebookNote(args);
             else if ("take_screenshot".equals(name)) result = captureAndSendScreen();
             else if ("inspect_ui".equals(name)) result = inspectUi(args);
             else if ("tap_element".equals(name)) result = tapSemanticElement(args);
@@ -2049,6 +2112,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private boolean isObservationTool(String name) {
         return "inspect_ui".equals(name)
                 || "get_selected_region".equals(name)
+                || "read_web_page".equals(name)
+                || "get_note".equals(name)
+                || "search_notes".equals(name)
+                || "list_notes".equals(name)
                 || "wait".equals(name)
                 || "teach_ui_element".equals(name)
                 || "list_active_schedules".equals(name)
@@ -3589,6 +3656,136 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         return actionResult;
     }
 
+
+
+    private JSONObject readWebPage(JSONObject args) {
+        return SafeWebPageReader.read(args.optString("url", ""));
+    }
+
+    private NoteStore notebookStore() {
+        return appContext == null ? null : new NoteStore(appContext);
+    }
+
+    private JSONObject createNotebookNote(JSONObject args) {
+        NoteStore store = notebookStore();
+        if (store == null) {
+            return notebookError("NOTEBOOK_CONTEXT_UNAVAILABLE");
+        }
+
+        JSONArray tags = args.optJSONArray("tags");
+        JSONObject note = store.create(
+                args.optString("title", ""),
+                args.optString("content", ""),
+                args.optString("source_url", ""),
+                tags == null ? new JSONArray() : tags);
+
+        if (note.optBoolean("success", false)) {
+            try {
+                note.put(
+                        "message",
+                        note.optBoolean("idempotent", false)
+                                ? "記事已存在，未重複建立。"
+                                : "已寫入 Crew Notebook。");
+            } catch (Exception ignored) {}
+        }
+        return note;
+    }
+
+    private JSONObject updateNotebookNote(JSONObject args) {
+        NoteStore store = notebookStore();
+        if (store == null) {
+            return notebookError("NOTEBOOK_CONTEXT_UNAVAILABLE");
+        }
+
+        JSONObject patch = new JSONObject();
+        try {
+            if (args.has("title")) {
+                patch.put("title", args.optString("title"));
+            }
+            if (args.has("content")) {
+                patch.put("content", args.optString("content"));
+            }
+            if (args.has("source_url")) {
+                patch.put("sourceUrl", args.optString("source_url"));
+            }
+            if (args.has("tags")) {
+                JSONArray tags = args.optJSONArray("tags");
+                patch.put("tags", tags == null ? new JSONArray() : tags);
+            }
+        } catch (Exception ignored) {}
+
+        JSONObject result = store.update(
+                args.optString("note_id", ""),
+                patch);
+        if (!result.has("success")) {
+            try { result.put("success", true); } catch (Exception ignored) {}
+        }
+        return result;
+    }
+
+    private JSONObject getNotebookNote(JSONObject args) {
+        NoteStore store = notebookStore();
+        return store == null
+                ? notebookError("NOTEBOOK_CONTEXT_UNAVAILABLE")
+                : store.get(args.optString("note_id", ""));
+    }
+
+    private JSONObject searchNotebookNotes(JSONObject args) {
+        NoteStore store = notebookStore();
+        if (store == null) {
+            return notebookError("NOTEBOOK_CONTEXT_UNAVAILABLE");
+        }
+        JSONObject out = new JSONObject();
+        try {
+            JSONArray notes = store.search(
+                    args.optString("query", ""),
+                    args.optInt("limit", 20));
+            out.put("success", true);
+            out.put("notes", notes);
+            out.put("count", notes.length());
+        } catch (Exception ignored) {}
+        return out;
+    }
+
+    private JSONObject listNotebookNotes(JSONObject args) {
+        NoteStore store = notebookStore();
+        if (store == null) {
+            return notebookError("NOTEBOOK_CONTEXT_UNAVAILABLE");
+        }
+        JSONObject out = new JSONObject();
+        try {
+            JSONArray notes = store.list(args.optInt("limit", 20));
+            out.put("success", true);
+            out.put("notes", notes);
+            out.put("count", notes.length());
+        } catch (Exception ignored) {}
+        return out;
+    }
+
+    private JSONObject deleteNotebookNote(JSONObject args) {
+        NoteStore store = notebookStore();
+        if (store == null) {
+            return notebookError("NOTEBOOK_CONTEXT_UNAVAILABLE");
+        }
+
+        boolean deleted = store.delete(args.optString("note_id", ""));
+        JSONObject out = new JSONObject();
+        try {
+            out.put("success", deleted);
+            if (!deleted) out.put("error", "NOTE_NOT_FOUND");
+            else out.put("message", "記事已刪除。");
+        } catch (Exception ignored) {}
+        return out;
+    }
+
+    private JSONObject notebookError(String code) {
+        JSONObject out = new JSONObject();
+        try {
+            out.put("success", false);
+            out.put("error", code);
+        } catch (Exception ignored) {}
+        return out;
+    }
 
     private JSONObject getSelectedRegionContext() throws Exception {
         SelectedRegionContext selected = latestSelectedRegion;

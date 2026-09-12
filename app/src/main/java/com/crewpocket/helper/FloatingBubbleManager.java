@@ -881,6 +881,32 @@ public class FloatingBubbleManager {
                         private float initialTouchX, initialTouchY;
                         private long touchStartTime;
                         private boolean moved = false;
+                        private boolean regionLongPressTriggered = false;
+                        private Runnable regionLongPressRunnable = null;
+
+                        private void cancelRegionLongPress() {
+                            if (regionLongPressRunnable != null) {
+                                mainHandler.removeCallbacks(regionLongPressRunnable);
+                                regionLongPressRunnable = null;
+                            }
+                        }
+
+                        private void armRegionLongPress() {
+                            cancelRegionLongPress();
+                            regionLongPressTriggered = false;
+                            regionLongPressRunnable = new Runnable() {
+                                @Override public void run() {
+                                    regionLongPressRunnable = null;
+                                    if (moved || regionLongPressTriggered) return;
+                                    regionLongPressTriggered = true;
+                                    vibrateShort();
+                                    startRegionSelection();
+                                }
+                            };
+                            mainHandler.postDelayed(
+                                    regionLongPressRunnable,
+                                    3000L);
+                        }
 
                         @Override
                         public boolean onTouch(View v, MotionEvent event) {
@@ -899,6 +925,8 @@ public class FloatingBubbleManager {
                                     initialTouchY = event.getRawY();
                                     touchStartTime = System.currentTimeMillis();
                                     moved = false;
+                                    regionLongPressTriggered = false;
+                                    armRegionLongPress();
                                     if (isDocked) {
                                         wakeBubbleFromDock();
                                     } else {
@@ -912,6 +940,7 @@ public class FloatingBubbleManager {
                                             event.getRawY() - initialTouchY);
                                     if (moveDist > 18 && !moved) {
                                         moved = true;
+                                        cancelRegionLongPress();
                                         collapseBubbleActions(false);
                                         initialX = bubbleParams.x;
                                         initialY = bubbleParams.y;
@@ -938,7 +967,8 @@ public class FloatingBubbleManager {
 
                                 case MotionEvent.ACTION_UP:
                                 case MotionEvent.ACTION_CANCEL:
-                                    if (!moved) {
+                                    cancelRegionLongPress();
+                                    if (!moved && !regionLongPressTriggered) {
                                         float dx = Math.abs(
                                                 event.getRawX() - initialTouchX);
                                         float dy = Math.abs(
@@ -946,16 +976,12 @@ public class FloatingBubbleManager {
                                         long duration =
                                                 System.currentTimeMillis()
                                                         - touchStartTime;
-                                        if (dx < 18 && dy < 18) {
-                                            if (duration < 450) {
-                                                vibrateShort();
-                                                toggleBubbleActionStrip();
-                                            } else if (duration >= 650) {
-                                                vibrateShort();
-                                                startRegionSelection();
-                                            }
+                                        if (dx < 18 && dy < 18 && duration < 450) {
+                                            vibrateShort();
+                                            toggleBubbleActionStrip();
                                         }
                                     }
+                                    regionLongPressTriggered = false;
                                     snapBubbleToEdge();
                                     scheduleAutoDock();
                                     return true;

@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.crewpocket.helper"
-    android:versionCode="91"
-    android:versionName="1.8.54">
+    android:versionCode="92"
+    android:versionName="1.8.55">
 
     <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34" />
 
@@ -69,6 +69,11 @@
 
         <activity
             android:name=".PersonalitySettingsActivity"
+            android:screenOrientation="portrait"
+            android:exported="false" />
+
+        <activity
+            android:name=".NotebookActivity"
             android:screenOrientation="portrait"
             android:exported="false" />
 
