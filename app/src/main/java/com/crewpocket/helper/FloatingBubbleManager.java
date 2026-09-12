@@ -73,7 +73,6 @@ public class FloatingBubbleManager {
     private WindowManager.LayoutParams pendingChoiceParams = null;
     private Runnable pendingChoiceTimeout = null;
     private static final long MINI_STATUS_AUTO_HIDE_MS = 1800L;
-    private static final long AGENT_QUIET_PROGRESS_DELAY_MS = 4000L;
     private static final int BUBBLE_SIZE_DP = 48;
     private static class DockIconButton extends View {
         public static final int ICON_CAMERA = 1;
@@ -243,9 +242,6 @@ public class FloatingBubbleManager {
     private String previousLiveTranscript = "";
     private String latestLiveTranscriptRole = "";
     private Runnable transcriptRefreshRunnable = null;
-    private Runnable agentQuietProgressRunnable = null;
-    private boolean agentQuietTaskActive = false;
-    private boolean agentQuietProgressShown = false;
     private TextView dialogStatusText = null;
     private Button dialogStopButton = null;
     // Legacy screenshot buffer kept only for source compatibility; external server mode is removed.
@@ -405,15 +401,13 @@ public class FloatingBubbleManager {
     }
 
     /**
-     * 0089 Quiet Agent Feedback.
+     * 0090 Bubble State Feedback.
      *
-     * Normal tool progress belongs in Agent Inspector, not beside the bubble.
-     * The user only sees:
-     * - a delayed "處理中…" if a task has been active for 4s,
-     * - an immediate user-intervention label,
-     * - an immediate final failure label.
+     * Ordinary Agent progress is represented by the bubble ring itself:
+     * a bright cyan spinner arc while the task is active.
      *
-     * Successful and ordinary intermediate stages stay silent.
+     * Text is reserved only for states that require user intervention or
+     * explain a real failure. Agent Inspector remains the detailed timeline.
      */
     public void updateAgentTaskStatus(final String rawStatus,
                                       final boolean activeTask) {
@@ -423,63 +417,39 @@ public class FloatingBubbleManager {
                         AgentInspectorStore.quietFeedbackLabel(
                                 rawStatus, activeTask);
 
-                if (!activeTask) {
-                    agentQuietTaskActive = false;
-                    agentQuietProgressShown = false;
-                    if (agentQuietProgressRunnable != null) {
-                        mainHandler.removeCallbacks(
-                                agentQuietProgressRunnable);
-                        agentQuietProgressRunnable = null;
-                    }
+                if (bubbleView == null) return;
 
-                    if (bubbleView != null
-                            && important != null
-                            && !important.isEmpty()) {
+                if (activeTask) {
+                    boolean needsAttention =
+                            important != null && !important.isEmpty();
+
+                    bubbleView.setAgentNeedsAttention(needsAttention);
+                    bubbleView.setAgentWorking(!needsAttention);
+
+                    if (needsAttention) {
                         showCompactStatus(important, "");
                     }
                     return;
                 }
 
-                if (!agentQuietTaskActive) {
-                    agentQuietTaskActive = true;
-                    agentQuietProgressShown = false;
+                bubbleView.setAgentWorking(false);
+                bubbleView.setAgentNeedsAttention(false);
 
-                    if (agentQuietProgressRunnable != null) {
-                        mainHandler.removeCallbacks(
-                                agentQuietProgressRunnable);
-                    }
-
-                    agentQuietProgressRunnable = new Runnable() {
-                        @Override public void run() {
-                            agentQuietProgressRunnable = null;
-                            if (!agentQuietTaskActive
-                                    || agentQuietProgressShown
-                                    || bubbleView == null) {
-                                return;
-                            }
-                            agentQuietProgressShown = true;
-                            showCompactStatus("處理中…", "");
-                        }
-                    };
-                    mainHandler.postDelayed(
-                            agentQuietProgressRunnable,
-                            AGENT_QUIET_PROGRESS_DELAY_MS);
-                }
-
-                if (important == null || important.isEmpty()
-                        || bubbleView == null) {
+                if (AgentInspectorStore.isSuccessfulTaskEnd(rawStatus)) {
+                    // Silent success: a short green/white rim flash only.
+                    bubbleView.flashAgentResult(true);
                     return;
                 }
 
-                // A real decision/error is more useful than the generic
-                // delayed progress hint, so suppress that hint afterwards.
-                agentQuietProgressShown = true;
-                if (agentQuietProgressRunnable != null) {
-                    mainHandler.removeCallbacks(
-                            agentQuietProgressRunnable);
-                    agentQuietProgressRunnable = null;
+                if ("操作失敗".equals(important)) {
+                    bubbleView.flashAgentResult(false);
+                    showCompactStatus(important, "");
+                    return;
                 }
-                showCompactStatus(important, "");
+
+                if (important != null && !important.isEmpty()) {
+                    showCompactStatus(important, "");
+                }
             }
         });
     }
@@ -2314,11 +2284,20 @@ public class FloatingBubbleManager {
         private SweepGradient activeSweepGradient;
         private SweepGradient speakingSweepGradient;
         private SweepGradient errorSweepGradient;
+        private SweepGradient attentionSweepGradient;
         private SweepGradient rainbowSweepGradient;
         private Matrix matrix = new Matrix();
         private float rotationAngle = 0f;
         private boolean isFlowing = false;
         private boolean isSuccessFlash = false;
+
+        // 0090: explicit Agent state, independent of Gemini Live state.
+        private boolean agentWorking = false;
+        private boolean agentNeedsAttention = false;
+        // 0 none, 1 success, 2 failure
+        private int agentResultFlash = 0;
+        private int agentResultFlashGeneration = 0;
+
         // 0 idle, 1 connected/listening, 2 AI speaking, 3 connection error
         private int nativeVoiceState = 0;
         private ValueAnimator continuousRotator;
@@ -2421,7 +2400,13 @@ public class FloatingBubbleManager {
             };
             errorSweepGradient = new SweepGradient(cx, cy, errorColors, null);
 
-            // 4. Fast Rainbow Thinking Stream
+            int[] attentionColors = new int[]{
+                Color.parseColor("#F59E0B"), Color.parseColor("#FCD34D"),
+                Color.parseColor("#FBBF24"), Color.parseColor("#F59E0B")
+            };
+            attentionSweepGradient =
+                    new SweepGradient(cx, cy, attentionColors, null);
+
             int[] rainbowColors = new int[]{
                 Color.parseColor("#38BDF8"),
                 Color.parseColor("#818CF8"),
@@ -2432,20 +2417,34 @@ public class FloatingBubbleManager {
             rainbowSweepGradient = new SweepGradient(cx, cy, rainbowColors, null);
         }
 
+        private void updateRotationSpeed() {
+            if (continuousRotator == null) return;
+
+            long duration;
+            if (agentWorking) {
+                duration = 850L;
+            } else if (isFlowing) {
+                duration = 1200L;
+            } else if (nativeVoiceState == 2) {
+                duration = 1500L;
+            } else if (nativeVoiceState == 1) {
+                duration = 2500L;
+            } else {
+                duration = 4000L;
+            }
+            continuousRotator.setDuration(duration);
+        }
+
         public void startWaterFlow() {
             isFlowing = true;
             isSuccessFlash = false;
-            if (continuousRotator != null) {
-                continuousRotator.setDuration(1200); // Speed up rotation during tool execution
-            }
+            updateRotationSpeed();
             invalidate();
         }
 
         public void stopWaterFlow() {
             isFlowing = false;
-            if (continuousRotator != null) {
-                continuousRotator.setDuration(4000); // Return to gentle 4s rotation
-            }
+            updateRotationSpeed();
             isSuccessFlash = true;
             invalidate();
 
@@ -2458,11 +2457,51 @@ public class FloatingBubbleManager {
             }, 850);
         }
 
+        public void setAgentWorking(boolean working) {
+            if (agentWorking == working) return;
+            agentWorking = working;
+            if (working) {
+                agentNeedsAttention = false;
+                agentResultFlash = 0;
+                agentResultFlashGeneration++;
+            }
+            updateRotationSpeed();
+            invalidate();
+        }
+
+        public void setAgentNeedsAttention(boolean needsAttention) {
+            if (agentNeedsAttention == needsAttention) return;
+            agentNeedsAttention = needsAttention;
+            if (needsAttention) {
+                agentWorking = false;
+                agentResultFlash = 0;
+                agentResultFlashGeneration++;
+            }
+            updateRotationSpeed();
+            invalidate();
+        }
+
+        public void flashAgentResult(final boolean success) {
+            agentWorking = false;
+            agentNeedsAttention = false;
+            updateRotationSpeed();
+
+            final int generation = ++agentResultFlashGeneration;
+            agentResultFlash = success ? 1 : 2;
+            invalidate();
+
+            postDelayed(new Runnable() {
+                @Override public void run() {
+                    if (generation != agentResultFlashGeneration) return;
+                    agentResultFlash = 0;
+                    invalidate();
+                }
+            }, success ? 650L : 950L);
+        }
+
         public void setNativeVoiceState(int state) {
             this.nativeVoiceState = state;
-            if (continuousRotator != null) {
-                continuousRotator.setDuration(state == 2 ? 1500 : (state == 1 ? 2500 : 4000));
-            }
+            updateRotationSpeed();
             invalidate();
         }
 
@@ -2491,6 +2530,8 @@ public class FloatingBubbleManager {
             matrix.setRotate(rotationAngle, cx, cy);
             SweepGradient rimGradient = nativeVoiceState == 3
                     ? errorSweepGradient
+                    : agentNeedsAttention
+                    ? attentionSweepGradient
                     : nativeVoiceState == 2
                     ? speakingSweepGradient
                     : nativeVoiceState == 1
@@ -2504,7 +2545,13 @@ public class FloatingBubbleManager {
                 ringPaint.setStyle(Paint.Style.STROKE);
                 ringPaint.setStrokeCap(Paint.Cap.ROUND);
                 ringPaint.setStrokeWidth(Math.max(2f, radius * 0.075f));
-                ringPaint.setAlpha(nativeVoiceState == 0 && !isFlowing ? 90 : 225);
+                ringPaint.setAlpha(
+                        agentWorking
+                                ? 78
+                                : (nativeVoiceState == 0
+                                        && !isFlowing
+                                        && !agentNeedsAttention
+                                        ? 90 : 225));
                 RectF stateRing = new RectF(
                         ringPaint.getStrokeWidth() / 2f,
                         ringPaint.getStrokeWidth() / 2f,
@@ -2512,6 +2559,48 @@ public class FloatingBubbleManager {
                         getHeight() - ringPaint.getStrokeWidth() / 2f);
                 canvas.drawOval(stateRing, ringPaint);
                 ringPaint.setShader(null);
+            }
+
+            if (agentWorking) {
+                ringPaint.setStyle(Paint.Style.STROKE);
+                ringPaint.setShader(null);
+                ringPaint.setStrokeCap(Paint.Cap.ROUND);
+                ringPaint.setStrokeWidth(Math.max(2.5f, radius * 0.095f));
+                ringPaint.setColor(Color.parseColor("#22D3EE"));
+                ringPaint.setAlpha(255);
+
+                float inset = ringPaint.getStrokeWidth() / 2f;
+                RectF agentSpinnerRing = new RectF(
+                        inset,
+                        inset,
+                        getWidth() - inset,
+                        getHeight() - inset);
+                canvas.drawArc(
+                        agentSpinnerRing,
+                        rotationAngle - 90f,
+                        92f,
+                        false,
+                        ringPaint);
+            }
+
+            if (agentResultFlash != 0) {
+                ringPaint.setStyle(Paint.Style.STROKE);
+                ringPaint.setShader(null);
+                ringPaint.setStrokeCap(Paint.Cap.ROUND);
+                ringPaint.setStrokeWidth(Math.max(2.5f, radius * 0.085f));
+                ringPaint.setColor(
+                        agentResultFlash == 1
+                                ? Color.parseColor("#34D399")
+                                : Color.parseColor("#FB7185"));
+                ringPaint.setAlpha(245);
+
+                float resultInset = ringPaint.getStrokeWidth();
+                RectF resultRing = new RectF(
+                        resultInset,
+                        resultInset,
+                        getWidth() - resultInset,
+                        getHeight() - resultInset);
+                canvas.drawOval(resultRing, ringPaint);
             }
 
             if (isSuccessFlash) {

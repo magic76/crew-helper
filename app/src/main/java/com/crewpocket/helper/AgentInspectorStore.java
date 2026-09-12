@@ -80,6 +80,19 @@ final class AgentInspectorStore {
         return activeTask ? "正在執行任務…" : "";
     }
 
+    static boolean isSuccessfulTaskEnd(String rawStatus) {
+        String raw = rawStatus == null ? "" : rawStatus.trim();
+        if (!raw.contains("Agent 任務結束")) return false;
+
+        String lower = raw.toLowerCase(Locale.ROOT);
+        return !lower.contains("失敗")
+                && !lower.contains("錯誤")
+                && !lower.contains("未完成")
+                && !lower.contains("逾時")
+                && !lower.contains("取消")
+                && !raw.contains("使用者取消");
+    }
+
     /**
      * Minimal labels allowed beside the bubble.
      * Normal progress and successful completion intentionally return empty.
