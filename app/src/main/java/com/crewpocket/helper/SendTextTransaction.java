@@ -172,9 +172,17 @@ final class SendTextTransaction {
                         return result;
                     }
                     try {
-                        send.performAction(AccessibilityNodeInfo.ACTION_CLICK);
-                        result.submitted = true;
-                        result.submitMethod = "SEMANTIC_SEND";
+                        boolean clickAccepted = send.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                        if (clickAccepted) {
+                            result.submitted = true;
+                            result.submitMethod = "SEMANTIC_SEND";
+                        } else {
+                            // Do not guess or immediately fall back to another submit primitive:
+                            // a duplicate send is worse than a visible failure.  Surface the real
+                            // Android result so the resolver can be fixed from device evidence.
+                            result.submitMethod = "SEMANTIC_SEND_REJECTED";
+                            result.error = "SUBMIT_CLICK_REJECTED";
+                        }
                     } finally {
                         recycle(send);
                         send = null;
@@ -188,7 +196,9 @@ final class SendTextTransaction {
             }
 
             if (!result.submitted) {
-                result.error = "SUBMIT_TARGET_NOT_FOUND";
+                if (result.error.isEmpty()) {
+                    result.error = "SUBMIT_TARGET_NOT_FOUND";
+                }
                 return result;
             }
 
