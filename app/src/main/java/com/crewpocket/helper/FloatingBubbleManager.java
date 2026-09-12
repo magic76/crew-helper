@@ -242,6 +242,8 @@ public class FloatingBubbleManager {
     private String previousLiveTranscript = "";
     private String latestLiveTranscriptRole = "";
     private Runnable transcriptRefreshRunnable = null;
+    private String lastAgentTaskPill = "";
+    private long lastAgentTaskPillAtMs = 0L;
     private TextView dialogStatusText = null;
     private Button dialogStopButton = null;
     // Legacy screenshot buffer kept only for source compatibility; external server mode is removed.
@@ -396,6 +398,39 @@ public class FloatingBubbleManager {
                 mainHandler.postDelayed(
                         compactStatusAutoHideRunnable,
                         MINI_STATUS_AUTO_HIDE_MS);
+            }
+        });
+    }
+
+    /**
+     * 0088: short, safe task-state labels beside the bubble.
+     * Never exposes tool args, screen text, user text or raw Runtime payloads.
+     */
+    public void updateAgentTaskStatus(final String rawStatus,
+                                      final boolean activeTask) {
+        mainHandler.post(new Runnable() {
+            @Override public void run() {
+                if (bubbleView == null) return;
+
+                String friendly =
+                        AgentInspectorStore.friendlyStage(rawStatus, activeTask);
+                if (friendly == null || friendly.isEmpty()) {
+                    if (!activeTask) lastAgentTaskPill = "";
+                    return;
+                }
+
+                long now = System.currentTimeMillis();
+                if (friendly.equals(lastAgentTaskPill)
+                        && now - lastAgentTaskPillAtMs < 4000L) {
+                    return;
+                }
+                lastAgentTaskPill = friendly;
+                lastAgentTaskPillAtMs = now;
+                showCompactStatus(friendly, "");
+
+                if (!activeTask) {
+                    lastAgentTaskPill = "";
+                }
             }
         });
     }
@@ -1530,7 +1565,7 @@ public class FloatingBubbleManager {
                     voiceCallButton = makeDockIconButton();
 
                     voiceCameraButton.setContentDescription("切換相機分享");
-                    voiceScreenButton.setContentDescription("切換螢幕分享");
+                    voiceScreenButton.setContentDescription("讓 Gemini 看目前畫面");
                     voiceMuteButton.setContentDescription("麥克風靜音或打斷 Gemini");
                     voiceCallButton.setContentDescription("開始或結束 Live 通話");
 
@@ -1557,7 +1592,10 @@ public class FloatingBubbleManager {
                                         Toast.LENGTH_SHORT).show();
                                 return;
                             }
-                            NativeLiveService.toggleScreenSharing();
+                            boolean sent = NativeLiveService.sendScreenSnapshot();
+                            showCompactStatus(
+                                    sent ? "已送出目前畫面" : "無法取得畫面",
+                                    sent ? "Gemini 正在查看" : "請確認 Live 已連線");
                             refreshVoiceControls();
                         }
                     });
@@ -1598,7 +1636,7 @@ public class FloatingBubbleManager {
                             makeConsoleActionCell(voiceCameraButton, "相機"),
                             cameraLp);
                     row.addView(
-                            makeConsoleActionCell(voiceScreenButton, "畫面"),
+                            makeConsoleActionCell(voiceScreenButton, "看畫面"),
                             screenLp);
                     row.addView(
                             makeConsoleActionCell(voiceMuteButton, "麥克風"),
@@ -1811,41 +1849,9 @@ public class FloatingBubbleManager {
                     voiceSettingsChoices.setPadding(0, dp(5), 0, 0);
                     voiceSettingsPanel.addView(voiceSettingsChoices);
 
-                    voiceTeachSendButton = makeVoiceSettingButton();
-                    voiceTeachSendButton.setText(
-                            "⌁ 教導目前 App 的送出鍵");
-                    voiceTeachSendButton.setContentDescription(
-                            "教導目前 App 的送出按鈕");
-                    voiceTeachSendButton.setOnClickListener(
-                            new View.OnClickListener() {
-                                @Override public void onClick(View v) {
-                                    CrewAccessibilityService service =
-                                            CrewAccessibilityService
-                                                    .getInstance();
-                                    if (service == null) {
-                                        Toast.makeText(
-                                                context,
-                                                "無障礙服務尚未啟用",
-                                                Toast.LENGTH_SHORT).show();
-                                        return;
-                                    }
-                                    if (!service.beginTeachElement(
-                                            "COMPOSER_SEND")) {
-                                        Toast.makeText(
-                                                context,
-                                                "請先在目前聊天輸入框放入文字",
-                                                Toast.LENGTH_SHORT).show();
-                                    }
-                                }
-                            });
-                    LinearLayout.LayoutParams teachLp =
-                            new LinearLayout.LayoutParams(
-                                    LinearLayout.LayoutParams.MATCH_PARENT,
-                                    dp(40));
-                    teachLp.setMargins(0, dp(6), 0, 0);
-                    voiceSettingsPanel.addView(
-                            voiceTeachSendButton,
-                            teachLp);
+                    // Teach Send is intentionally not a normal setting.
+                    // Its lower-level runtime remains available for a targeted
+                    // SEND_TARGET_NOT_FOUND recovery flow.
 
                     LinearLayout.LayoutParams settingsPanelLp =
                             new LinearLayout.LayoutParams(
@@ -2059,10 +2065,6 @@ public class FloatingBubbleManager {
             boolean media = "media".equals(AppConfig.getAudioOutput(context));
             voiceOutputButton.setText("🔊 輸出 ›");
             applyVoiceSettingStyle(voiceOutputButton, media ? Color.parseColor("#164E63") : Color.parseColor("#3F1D5B"), media ? Color.parseColor("#22D3EE") : Color.parseColor("#C084FC"), Color.WHITE);
-        }
-        if (voiceTeachSendButton != null) {
-            applyVoiceSettingStyle(voiceTeachSendButton,
-                    Color.parseColor("#172554"), Color.parseColor("#2563EB"), Color.parseColor("#DBEAFE"));
         }
         if (voiceSettingsToggleButton != null) {
             applyVoiceSettingStyle(voiceSettingsToggleButton, Color.parseColor("#1E293B"), Color.parseColor("#475569"), Color.parseColor("#CBD5E1"));

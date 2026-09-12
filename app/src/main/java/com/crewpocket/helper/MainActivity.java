@@ -477,6 +477,26 @@ public class MainActivity extends Activity {
                 @Override public void onClick(View v) { showDiagnosticsDialog(); }
             }));
 
+        // 0088: developer-only debugging. Keep it out of Home,
+        // bottom navigation, bubble, and Live Console.
+        addSectionTitle(
+            pageContent,
+            I18n.get(this, "🧪 開發者工具", "DEVELOPER TOOLS"));
+        pageContent.addView(makeActionCard(
+            "⌁",
+            "Agent Inspector",
+            I18n.get(this,
+                "最近一次 Runtime 任務摘要與已脫敏事件；不含畫面、對話內容或金鑰",
+                "Sanitized latest Runtime task trace; no screen content, conversation text, or keys"),
+            CrewTheme.TEXT_MUTED,
+            new View.OnClickListener() {
+                @Override public void onClick(View v) {
+                    startActivity(new Intent(
+                            MainActivity.this,
+                            AgentInspectorActivity.class));
+                }
+            }));
+
         addFooter(pageContent, true);
     }
 

@@ -1155,8 +1155,32 @@ public class NativeLiveService extends Service {
                     @Override public void onStatus(String text) {
                         if (text != null && text.contains("已連線")) reconnectAttempts = 0;
                         updateStatus(text, true);
+
+                        NativeGeminiLiveClient live = client;
+                        boolean taskActive =
+                                live != null && live.hasActiveAgentTask();
+                        org.json.JSONArray history =
+                                live == null ? null : live.getAgentTaskHistory();
+
+                        AgentInspectorStore.record(
+                                NativeLiveService.this,
+                                text,
+                                history,
+                                taskActive);
+                        FloatingBubbleManager.getInstance(
+                                NativeLiveService.this)
+                                .updateAgentTaskStatus(text, taskActive);
                     }
                     @Override public void onStopped(String reason) {
+                        NativeGeminiLiveClient live = client;
+                        AgentInspectorStore.record(
+                                NativeLiveService.this,
+                                reason,
+                                live == null ? null : live.getAgentTaskHistory(),
+                                live != null && live.hasActiveAgentTask());
+                        FloatingBubbleManager.getInstance(
+                                NativeLiveService.this)
+                                .updateAgentTaskStatus(reason, false);
                         handleClientStopped(reason);
                     }
                     @Override public void onTranscript(String role, String text) {
