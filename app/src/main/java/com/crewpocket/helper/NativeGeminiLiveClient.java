@@ -1243,7 +1243,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                         .put("properties", phoneActionProperties)
                         .put("required", new JSONArray().put("action"))));
         tools.put(new JSONObject().put("name", "inspect_ui").put("description",
-                "FALLBACK OBSERVATION ONLY. Phone tool responses use status DONE/WAIT/NEED_USER/FAILED. When status=DONE and screen is present, use it directly. When status=WAIT or FAILED needs a fresh view, call inspect_ui once before another phone mutation."));
+                "VISUAL OBSERVATION. Captures a fresh phone screenshot for you to inspect while Runtime separately keeps Accessibility state for execution. Use the screenshot as the primary source for what the user actually sees, especially prices, charts, WebView/custom UI, images and visually rendered text. Call once when you need a fresh view; do not SEARCH merely because a value was absent from prior semantic tool text."));
         tools.put(new JSONObject().put("name", "wait").put("description",
                 "Wait for a screen condition after an asynchronous action. Runtime polls and returns the latest state.")
                 .put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject()
@@ -2046,7 +2046,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                         task.awaitingModel = true;
                         task.status = reason;
                         reportStage(reason);
-                        sendInternalAgentDirective("【Agent 系統狀態】上一個工具結果已回傳。若 stepResult=STEP_OK，請直接根據 after 最新畫面繼續尚未完成的任務；若 stepResult=STEP_FAILED，請換方法且不要重複同一動作。只有真的完成或無替代方案時才作結論。");
+                        sendInternalAgentDirective("【Agent 系統狀態】上一個工具結果已回傳。只看目前 model-facing status：DONE 代表上一步成功；WAIT 先 inspect_ui 看 fresh screenshot，不要重複操作；FAILED 換方法且不要重複同一動作；NEED_USER 只問必要選擇。只有真的完成或無替代方案時才作結論。");
                     }
                 }
             };
@@ -2313,7 +2313,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             task.status = "正在驗證上一個操作的實際畫面";
         }
         reportStage(task.status);
-        sendInternalAgentDirective("【Runtime 必要驗證】上一個手機操作只代表動作已執行，尚未證明任務完成。現在必須呼叫 inspect_ui，根據回傳的實際畫面決定下一步；在取得該證據前，不要對使用者作答或作結論。");
+        sendInternalAgentDirective("【Runtime 必要驗證】上一個手機操作只代表動作已執行，尚未證明任務完成。現在必須呼叫 inspect_ui；Runtime 會送一張 fresh screenshot。直接看最新畫面決定下一步；在取得該證據前，不要對使用者作答或作結論。");
     }
 
     private void finishAgentTask(AgentTaskRecord task, String reason, String finalReply) {
@@ -3299,23 +3299,98 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         return actionResult;
     }
 
+    /**
+     * 0080 Visual Observe.
+     *
+     * Accessibility remains Runtime's structural source for execution and
+     * verification. Gemini receives a fresh screenshot so it can understand
+     * what the user actually sees (prices, charts, WebView/custom UI, etc.).
+     * The compact semantic view is retained internally only as fallback/debug.
+     */
     private JSONObject inspectUi(JSONObject args) throws Exception {
-        JSONObject reply = helperGet("/semantic_screen");
-        if (reply == null) reply = new JSONObject();
-        if (reply.optBoolean("success", false)) {
-            latestSemanticFingerprint = reply.optString("fingerprint", "");
-            latestActionObservation = toActionObservation(reply);
+        JSONObject semantic = helperGet("/semantic_screen");
+        if (semantic == null) semantic = new JSONObject();
+
+        if (semantic.optBoolean("success", false)) {
+            latestSemanticFingerprint = semantic.optString("fingerprint", "");
+            latestActionObservation = toActionObservation(semantic);
             agentRuntimeV2.onScreenObserved(latestActionObservation);
             agentRuntimeV2.reverifyPending(latestActionObservation);
             shadowAgentRuntime.onScreenObserved(
                     latestSemanticFingerprint,
-                    reply.optString("stableScreenKey", ""),
-                    reply.optString("package", ""));
+                    semantic.optString("stableScreenKey", ""),
+                    semantic.optString("package", ""));
             semanticObserveRequired = false;
-            workingContext.observe(reply.optString("package", ""), latestSemanticFingerprint, reply.optString("stableScreenKey", ""));
-            try { reply.put("runtimeContext", workingContext.toModelJson()); } catch (Exception ignored) {}
+            workingContext.observe(
+                    semantic.optString("package", ""),
+                    latestSemanticFingerprint,
+                    semantic.optString("stableScreenKey", ""));
         }
-        return ModelScreenView.compact(reply, "EXPLICIT_INSPECT");
+
+        JSONObject out = new JSONObject();
+        out.put("success", semantic.optBoolean("success", false))
+                .put("visualSent", false)
+                .put("semanticFallback",
+                        ModelScreenView.compact(semantic, "EXPLICIT_INSPECT"));
+
+        if (semantic.has("package")) {
+            out.put("package", semantic.optString("package", ""));
+        }
+        if (semantic.has("fingerprint")) {
+            out.put("fingerprint", semantic.optString("fingerprint", ""));
+        }
+        if (semantic.has("stableScreenKey")) {
+            out.put("stableScreenKey", semantic.optString("stableScreenKey", ""));
+        }
+
+        if (semanticScreenContainsSensitiveElement(semantic)) {
+            out.put("success", true)
+                    .put("visualBlocked", "SENSITIVE_SCREEN")
+                    .put("message",
+                            "目前畫面含敏感輸入，未傳送截圖；使用已遮蔽的語意畫面作為 fallback。");
+            return out;
+        }
+
+        JSONObject visual;
+        try {
+            visual = captureAndSendScreen();
+        } catch (Exception error) {
+            visual = new JSONObject()
+                    .put("success", false)
+                    .put("error",
+                            error.getMessage() == null
+                                    ? "VISUAL_CAPTURE_FAILED"
+                                    : error.getMessage());
+        }
+
+        if (visual.optBoolean("success", false)) {
+            out.put("success", true)
+                    .put("visualSent", true)
+                    .put("visualSource", "FRESH_SCREENSHOT")
+                    .put("message",
+                            "最新手機畫面已傳送給模型；直接以畫面作為主要視覺證據。");
+        } else {
+            out.put("visualSent", false)
+                    .put("visualError",
+                            visual.optString("error", "VISUAL_CAPTURE_FAILED"))
+                    .put("message",
+                            "截圖不可用；改用 Runtime 的語意畫面 fallback。");
+        }
+
+        return out;
+    }
+
+    private boolean semanticScreenContainsSensitiveElement(JSONObject semantic) {
+        if (semantic == null) return false;
+        JSONArray elements = semantic.optJSONArray("elements");
+        if (elements == null) return false;
+        for (int i = 0; i < elements.length(); i++) {
+            JSONObject element = elements.optJSONObject(i);
+            if (element != null && element.optBoolean("sensitive", false)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private JSONObject inspectUiLegacy() throws Exception {

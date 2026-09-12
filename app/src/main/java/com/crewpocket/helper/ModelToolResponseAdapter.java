@@ -165,7 +165,14 @@ final class ModelToolResponseAdapter {
             return "訊息已送出。";
         }
         if ("inspect_ui".equals(toolName)) {
-            return "已讀取目前畫面。";
+            if (result.optBoolean("visualSent", false)) {
+                return "最新手機畫面已提供；直接看畫面判斷目前內容。";
+            }
+            if ("SENSITIVE_SCREEN".equals(
+                    upper(result.optString("visualBlocked", "")))) {
+                return "目前畫面含敏感資訊，未傳送截圖；使用已遮蔽的畫面資訊。";
+            }
+            return "截圖不可用；使用目前語意畫面作為 fallback。";
         }
         if ("end_voice_session".equals(toolName)) {
             return "語音通話即將結束。";
@@ -202,6 +209,9 @@ final class ModelToolResponseAdapter {
             JSONObject source = result.optJSONObject("after");
             if (source == null && result.optJSONArray("important") != null) {
                 source = result;
+            }
+            if (source == null && !result.optBoolean("visualSent", false)) {
+                source = result.optJSONObject("semanticFallback");
             }
 
             if (source != null) {
