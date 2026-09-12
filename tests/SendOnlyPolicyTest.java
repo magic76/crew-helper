@@ -16,6 +16,9 @@ public final class SendOnlyPolicyTest {
         check(UserActionScope.isStandaloneCurrentScreenSendCommand("send"), "send en");
         check(UserActionScope.isStandaloneCurrentScreenSendCommand("please send this"), "natural english send");
 
+        check(UserActionScope.looksLikeSendTarget("傳送訊息"), "send target zh");
+        check(UserActionScope.looksLikeSendTarget("Send message"), "send target en");
+
         check(!UserActionScope.isStandaloneCurrentScreenSendCommand("不要送出"), "negated send");
         check(!UserActionScope.isStandaloneCurrentScreenSendCommand("先不要送出"), "deferred send");
         check(!UserActionScope.isStandaloneCurrentScreenSendCommand("輸入送出"), "typed word send");

@@ -2477,8 +2477,31 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
         String tapMeta = label + " " + id;
         if (UserActionScope.looksLikeSendTarget(tapMeta)) {
-            return runtimeBlocked("SEND_CONTROL_RUNTIME_OWNED",
-                    "Send 控制由 Runtime 專用 send_text transaction 管理；禁止 phone_action 直接點擊 Send。");
+            // 0078: keep Send Runtime-owned, but tolerate a weak model choosing
+            // TAP("Send") instead of the dedicated SEND_CURRENT path.
+            //
+            // This does NOT bypass authorization:
+            // sendTextToPhone() still requires the latest user turn to explicitly
+            // authorize send, consumes that authorization, sends at most once,
+            // and uses the verified current-composer transaction.
+            if (userActionScope.shouldBlockFurtherMessageMutation()) {
+                return new JSONObject()
+                        .put("success", true)
+                        .put("action", "SEND_CURRENT")
+                        .put("sendMode", "ALREADY_HANDLED")
+                        .put("remappedFrom", "TAP_SEND_CONTROL")
+                        .put("stepResult", "STEP_OK")
+                        .put("instruction",
+                                "本輪訊息送出 transaction 已經處理過；不要再次點擊或重送。");
+            }
+
+            JSONObject routedSend = sendTextToPhone(new JSONObject());
+            routedSend.put("remappedFrom", "TAP_SEND_CONTROL");
+            if (routedSend.optBoolean("success", false)) {
+                routedSend.put("instruction",
+                        "TAP Send 已由 Runtime 轉成單次 SEND_CURRENT 並完成；不要再呼叫 Send/TAP。");
+            }
+            return routedSend;
         }
         if (!pendingChoiceExecuting
                 && userActionScope.shouldBlockTapForSearch(tapMeta, label.isEmpty() && id.isEmpty())) {
@@ -2962,8 +2985,21 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
         String elementMeta = semanticElementMeta(elementId);
         if (UserActionScope.looksLikeSendTarget(elementMeta)) {
-            return runtimeBlocked("SEND_CONTROL_RUNTIME_OWNED",
-                    "Send 控制由 Runtime 專用 send_text transaction 管理；禁止 semantic tap 直接點擊 Send。");
+            if (userActionScope.shouldBlockFurtherMessageMutation()) {
+                return new JSONObject()
+                        .put("success", true)
+                        .put("action", "SEND_CURRENT")
+                        .put("sendMode", "ALREADY_HANDLED")
+                        .put("remappedFrom", "TAP_SEND_CONTROL")
+                        .put("stepResult", "STEP_OK")
+                        .put("instruction", "本輪訊息送出 transaction 已經處理過；不要再次點擊或重送。");
+            }
+            JSONObject routedSend = sendTextToPhone(new JSONObject());
+            routedSend.put("remappedFrom", "TAP_SEND_CONTROL");
+            if (routedSend.optBoolean("success", false)) {
+                routedSend.put("instruction", "TAP Send 已由 Runtime 轉成單次 SEND_CURRENT 並完成；不要再呼叫 Send/TAP。");
+            }
+            return routedSend;
         }
         if (!pendingChoiceExecuting
                 && userActionScope.shouldBlockTapForSearch(elementMeta, elementMeta.isEmpty())) {
