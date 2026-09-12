@@ -10,8 +10,8 @@ android {
         applicationId "com.crewpocket.helper"
         minSdk 24
         targetSdk 34
-        versionCode 82
-        versionName "1.8.45"
+        versionCode 83
+        versionName "1.8.46"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }

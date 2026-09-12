@@ -351,6 +351,7 @@ public class FloatingBubbleManager {
                             : dp(BUBBLE_SIZE_DP);
                     boolean bubbleOnLeft =
                             bubbleParams.x + bubbleSize / 2 < screenW / 2;
+        bubbleActionStrip.setBubbleOnLeft(bubbleOnLeft);
                     int targetX = bubbleOnLeft
                             ? bubbleParams.x + bubbleSize + dp(8)
                             : bubbleParams.x - pillWidth - dp(8);
