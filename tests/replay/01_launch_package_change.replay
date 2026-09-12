@@ -1,0 +1,14 @@
+id=launch_package_change
+intent=OPEN_APP_REDACTED
+runtime=launch_app
+execution.accepted=true
+before.package=com.android.launcher
+before.fingerprint=home_fp
+before.stable=home
+before.elements=30
+after.package=com.example.video
+after.fingerprint=video_fp
+after.stable=video_home
+after.elements=40
+expect.status=VERIFIED
+expect.code=APP_PACKAGE_TRANSITION_OBSERVED

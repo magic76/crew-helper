@@ -1,0 +1,14 @@
+id=search_focus_only_pending
+intent=SEARCH_REDACTED
+runtime=search_current_app
+execution.accepted=true
+before.package=com.example.video
+before.fingerprint=same
+before.stable=same
+before.focus=
+after.package=com.example.video
+after.fingerprint=same
+after.stable=same
+after.focus=search_box
+expect.status=PENDING
+expect.code=SEARCH_AWAITING_RESULTS_EVIDENCE

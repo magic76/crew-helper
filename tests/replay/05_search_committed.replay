@@ -1,0 +1,13 @@
+id=search_committed
+intent=SEARCH_REDACTED
+runtime=search_current_app
+execution.accepted=true
+execution.runtimeVerified=true
+before.package=com.example.video
+before.fingerprint=home
+before.stable=home
+after.package=com.example.video
+after.fingerprint=results
+after.stable=results
+expect.status=VERIFIED
+expect.code=RUNTIME_VERIFIED

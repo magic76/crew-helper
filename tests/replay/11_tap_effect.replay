@@ -1,0 +1,12 @@
+id=tap_effect
+intent=TAP_SEMANTIC_TARGET
+runtime=tap_screen
+execution.accepted=true
+before.package=com.example.app
+before.fingerprint=before
+before.stable=screen_a
+after.package=com.example.app
+after.fingerprint=after
+after.stable=screen_b
+expect.status=VERIFIED
+expect.code=TAP_EFFECT_OBSERVED

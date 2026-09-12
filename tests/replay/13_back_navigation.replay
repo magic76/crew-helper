@@ -1,0 +1,12 @@
+id=back_navigation
+intent=BACK
+runtime=press_key
+execution.accepted=true
+before.package=com.example.app
+before.fingerprint=detail
+before.stable=detail
+after.package=com.example.app
+after.fingerprint=list
+after.stable=list
+expect.status=VERIFIED
+expect.code=NAVIGATION_TRANSITION_OBSERVED

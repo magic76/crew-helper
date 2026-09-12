@@ -1,0 +1,12 @@
+id=commit_search_transition
+intent=COMMIT_SEARCH
+runtime=commit_search
+execution.accepted=true
+before.package=com.example.video
+before.fingerprint=typing
+before.stable=search
+after.package=com.example.video
+after.fingerprint=results
+after.stable=results
+expect.status=VERIFIED
+expect.code=SEARCH_COMMIT_TRANSITION_OBSERVED

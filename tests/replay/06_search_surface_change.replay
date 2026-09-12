@@ -1,0 +1,12 @@
+id=search_surface_change
+intent=SEARCH_REDACTED
+runtime=search_current_app
+execution.accepted=true
+before.package=com.example.video
+before.fingerprint=search_field
+before.stable=search
+after.package=com.example.video
+after.fingerprint=results
+after.stable=results
+expect.status=VERIFIED
+expect.code=SEARCH_SURFACE_TRANSITION_OBSERVED

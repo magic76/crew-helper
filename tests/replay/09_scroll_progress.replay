@@ -1,0 +1,12 @@
+id=scroll_progress
+intent=SCROLL
+runtime=swipe_screen
+execution.accepted=true
+before.package=com.example.feed
+before.fingerprint=row_1_5
+before.stable=feed
+after.package=com.example.feed
+after.fingerprint=row_6_10
+after.stable=feed
+expect.status=VERIFIED
+expect.code=SCROLL_PROGRESS_OBSERVED

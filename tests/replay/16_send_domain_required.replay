@@ -1,0 +1,12 @@
+id=send_domain_required
+intent=SEND_CURRENT_REDACTED
+runtime=send_text
+execution.accepted=true
+before.package=com.example.chat
+before.fingerprint=a
+before.stable=chat
+after.package=com.example.chat
+after.fingerprint=b
+after.stable=chat
+expect.status=PENDING
+expect.code=DOMAIN_VERIFICATION_REQUIRED

@@ -29,6 +29,11 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Run Agent Runtime Replay Tests
+        run: |
+          chmod +x scripts/run_agent_runtime_tests.sh
+          ./scripts/run_agent_runtime_tests.sh
+
       - name: Build with Gradle
         run: |
           chmod +x gradlew || gradle wrapper

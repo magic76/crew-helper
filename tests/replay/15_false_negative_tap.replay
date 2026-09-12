@@ -1,0 +1,13 @@
+id=false_negative_tap
+intent=TAP_SEMANTIC_TARGET
+runtime=tap_screen
+execution.accepted=false
+execution.errorCode=GESTURE_FALSE
+before.package=com.example.app
+before.fingerprint=a
+before.stable=a
+after.package=com.example.app
+after.fingerprint=b
+after.stable=b
+expect.status=LIKELY
+expect.code=TAP_EFFECT_OBSERVED_FALSE_NEGATIVE_RECONCILED

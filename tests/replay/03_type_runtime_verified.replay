@@ -1,0 +1,15 @@
+id=type_runtime_verified
+intent=TYPE_REDACTED
+runtime=type_text
+execution.accepted=true
+execution.runtimeVerified=true
+before.package=com.example.chat
+before.fingerprint=f1
+before.stable=chat
+before.focus=composer
+after.package=com.example.chat
+after.fingerprint=f1
+after.stable=chat
+after.focus=composer
+expect.status=VERIFIED
+expect.code=RUNTIME_VERIFIED

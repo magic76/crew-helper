@@ -1,0 +1,14 @@
+id=type_focus_change
+intent=TYPE_REDACTED
+runtime=type_text
+execution.accepted=true
+before.package=com.example.form
+before.fingerprint=f1
+before.stable=form
+before.focus=
+after.package=com.example.form
+after.fingerprint=f1
+after.stable=form
+after.focus=input
+expect.status=VERIFIED
+expect.code=TYPE_EFFECT_OBSERVED

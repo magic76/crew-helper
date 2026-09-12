@@ -1,0 +1,14 @@
+id=policy_block
+intent=BLOCKED_MUTATION
+runtime=tap_screen
+execution.accepted=false
+execution.blocked=true
+execution.errorCode=POLICY_BLOCK
+before.package=com.example.app
+before.fingerprint=a
+before.stable=a
+after.package=com.example.app
+after.fingerprint=b
+after.stable=b
+expect.status=BLOCKED
+expect.code=POLICY_BLOCK

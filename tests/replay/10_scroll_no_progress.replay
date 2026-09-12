@@ -1,0 +1,12 @@
+id=scroll_no_progress
+intent=SCROLL
+runtime=swipe_screen
+execution.accepted=true
+before.package=com.example.feed
+before.fingerprint=same
+before.stable=feed
+after.package=com.example.feed
+after.fingerprint=same
+after.stable=feed
+expect.status=PENDING
+expect.code=SCROLL_AWAITING_PROGRESS

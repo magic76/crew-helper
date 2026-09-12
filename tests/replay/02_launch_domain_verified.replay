@@ -1,0 +1,13 @@
+id=launch_domain_verified
+intent=OPEN_APP_ALREADY_FOREGROUND
+runtime=launch_app
+execution.accepted=true
+execution.runtimeVerified=true
+before.package=com.example.video
+before.fingerprint=same
+before.stable=same
+after.package=com.example.video
+after.fingerprint=same
+after.stable=same
+expect.status=VERIFIED
+expect.code=RUNTIME_VERIFIED
