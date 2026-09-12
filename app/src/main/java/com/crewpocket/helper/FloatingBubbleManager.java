@@ -955,9 +955,11 @@ public class FloatingBubbleManager {
         }
 
         GradientDrawable bg = new GradientDrawable();
-        bg.setColor(Color.argb(232, 15, 23, 42));
+        // 0083: neutral gray keeps the expanded assistant visually quieter
+        // against arbitrary apps than the old blue/slate panel.
+        bg.setColor(Color.argb(238, 58, 58, 60));
         bg.setCornerRadius(dp(24));
-        bg.setStroke(dp(1), Color.parseColor("#334155"));
+        bg.setStroke(dp(1), Color.parseColor("#666B7280"));
         bubbleContainer.setBackground(bg);
     }
 
@@ -1326,9 +1328,10 @@ public class FloatingBubbleManager {
                     dock.setClipChildren(false);
 
                     GradientDrawable dockBg = new GradientDrawable();
-                    dockBg.setColor(Color.parseColor("#F50F172A")); // Luxury Slate 900
+                    // Match the expanded bubble with a neutral dark gray console.
+                    dockBg.setColor(Color.parseColor("#F23A3A3C"));
                     dockBg.setCornerRadius(dp(24));
-                    dockBg.setStroke(dp(1.5f), Color.parseColor("#33818CF8")); // Indigo 400 @ 20%
+                    dockBg.setStroke(dp(1.5f), Color.parseColor("#66717176"));
                     dock.setBackground(dockBg);
                     dock.setElevation(dp(16));
 

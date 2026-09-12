@@ -43,8 +43,10 @@ public class NativeLiveActivity extends Activity {
     // old page-owned session before it takes ownership of Live audio.
     private static volatile NativeLiveActivity activeInstance;
     private static final int REQUEST_RECORD_AUDIO = 301;
-    private EditText apiKeyInput;
     private EditText textInput;
+    private TextView geminiKeyStatusText;
+    private Button geminiKeySettingsButton;
+    private boolean waitingForGeminiKeySettings = false;
     private TextView statusDot;
     private TextView statusText;
     private TextView transcript;
@@ -236,57 +238,52 @@ public class NativeLiveActivity extends Activity {
         diagnosticCard.addView(diagnosticText);
         root.addView(diagnosticCard);
 
-        // ── 3. API Key Card ──
+        // ── 3. Gemini connection configuration ──
+        // The API key is configured only in the main Settings tab.  Do not keep
+        // another editable secret field on the Live screen.
         LinearLayout keyCard = new LinearLayout(this);
         keyCard.setOrientation(LinearLayout.VERTICAL);
         keyCard.setPadding(dp(14), dp(14), dp(14), dp(14));
         LinearLayout.LayoutParams keyCardLp = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
         keyCardLp.setMargins(0, dp(14), 0, 0);
         keyCard.setLayoutParams(keyCardLp);
-        keyCard.setBackground(CrewTheme.createCard(this, CrewTheme.BG_SURFACE, CrewTheme.BORDER_SUBTLE, 16));
+        keyCard.setBackground(CrewTheme.createCard(
+                this, CrewTheme.BG_SURFACE, CrewTheme.BORDER_SUBTLE, 16));
 
         TextView keyLabel = new TextView(this);
-        keyLabel.setText("Google AI Studio API Key");
-        keyLabel.setTextSize(11);
+        keyLabel.setText(I18n.get(
+                this, "Gemini 連線設定", "Gemini Connection"));
+        keyLabel.setTextSize(12);
         keyLabel.setTextColor(CrewTheme.TEAL_300);
         keyLabel.setTypeface(Typeface.DEFAULT_BOLD);
         keyCard.addView(keyLabel);
 
-        apiKeyInput = new EditText(this);
-        apiKeyInput.setHint("AIzaSy...");
-        apiKeyInput.setHintTextColor(CrewTheme.TEXT_MUTED);
-        apiKeyInput.setTextColor(CrewTheme.TEXT_PRIMARY);
-        apiKeyInput.setTextSize(12);
-        apiKeyInput.setTypeface(Typeface.MONOSPACE);
-        apiKeyInput.setSingleLine(true);
-        apiKeyInput.setBackground(CrewTheme.createCard(this, CrewTheme.BG_PRIMARY, CrewTheme.BORDER_SUBTLE, 10));
-        apiKeyInput.setPadding(dp(12), dp(10), dp(12), dp(10));
-        LinearLayout.LayoutParams inputLp = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        inputLp.setMargins(0, dp(8), 0, 0);
-        keyCard.addView(apiKeyInput, inputLp);
+        geminiKeyStatusText = new TextView(this);
+        geminiKeyStatusText.setTextSize(11);
+        geminiKeyStatusText.setTextColor(CrewTheme.TEXT_SECONDARY);
+        geminiKeyStatusText.setPadding(0, dp(6), 0, dp(10));
+        keyCard.addView(geminiKeyStatusText);
 
-        String savedKey = AppConfig.getGeminiApiKey(this);
-        apiKeyInput.setText(savedKey);
-
-        TextView keyHint = new TextView(this);
-        keyHint.setText(I18n.get(this, "🔗 免費申請 Gemini API Key (aistudio.google.com) ↗", "🔗 Get Free Gemini API Key (aistudio.google.com) ↗"));
-        keyHint.setTextSize(11);
-        keyHint.setTextColor(CrewTheme.CYAN_400);
-        keyHint.setPadding(0, dp(6), 0, 0);
-        keyHint.setClickable(true);
-        keyHint.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                try {
-                    startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("https://aistudio.google.com/apikey")));
-                } catch (Exception ignored) {}
+        geminiKeySettingsButton = new Button(this);
+        geminiKeySettingsButton.setAllCaps(false);
+        geminiKeySettingsButton.setTextSize(12);
+        geminiKeySettingsButton.setTextColor(CrewTheme.TEXT_PRIMARY);
+        geminiKeySettingsButton.setBackground(CrewTheme.createCard(
+                this, CrewTheme.BG_ELEVATED, CrewTheme.BORDER_INDIGO, 10));
+        geminiKeySettingsButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                openGeminiKeySettings(false);
             }
         });
-        keyCard.addView(keyHint);
+        keyCard.addView(
+                geminiKeySettingsButton,
+                new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, dp(42)));
 
         root.addView(keyCard);
+        refreshGeminiKeyUi();
 
         // ── 4. Main Call Action Button ──
         callButton = new Button(this);
@@ -660,6 +657,64 @@ public class NativeLiveActivity extends Activity {
         }
     }
 
+    @Override protected void onResume() {
+        super.onResume();
+        refreshGeminiKeyUi();
+
+        if (waitingForGeminiKeySettings) {
+            String key = AppConfig.getGeminiApiKey(this);
+            if (key != null && key.trim().length() >= 20) {
+                waitingForGeminiKeySettings = false;
+                handler.postDelayed(new Runnable() {
+                    @Override public void run() {
+                        if (!isFinishing()
+                                && !callRequested
+                                && (client == null || !client.isRunning())) {
+                            toggleCall();
+                        }
+                    }
+                }, 250L);
+            }
+        }
+    }
+
+    private void refreshGeminiKeyUi() {
+        if (geminiKeyStatusText == null || geminiKeySettingsButton == null) return;
+
+        String key = AppConfig.getGeminiApiKey(this);
+        boolean configured = key != null && key.trim().length() >= 20;
+
+        geminiKeyStatusText.setText(configured
+                ? I18n.get(this,
+                    "✓ Gemini API Key 已在設定頁配置",
+                    "✓ Gemini API Key is configured in Settings")
+                : I18n.get(this,
+                    "尚未設定 Gemini API Key，開始通話前請先完成設定。",
+                    "Gemini API Key is not configured yet. Set it before starting Live."));
+        geminiKeyStatusText.setTextColor(
+                configured ? CrewTheme.EMERALD_400 : CrewTheme.AMBER_400);
+
+        geminiKeySettingsButton.setText(configured
+                ? I18n.get(this, "⚙ 管理 API Key", "⚙ Manage API Key")
+                : I18n.get(this, "⚙ 前往設定 API Key", "⚙ Set API Key"));
+    }
+
+    private void openGeminiKeySettings(boolean resumeCallAfterSave) {
+        waitingForGeminiKeySettings = resumeCallAfterSave;
+        if (resumeCallAfterSave) {
+            Toast.makeText(
+                    this,
+                    I18n.get(this,
+                        "請先在設定頁填入 Gemini API Key；完成後返回即可繼續。",
+                        "Set your Gemini API Key in Settings, then return to continue."),
+                    Toast.LENGTH_LONG).show();
+        }
+
+        Intent intent = new Intent(this, MainActivity.class);
+        intent.putExtra(MainActivity.EXTRA_OPEN_GEMINI_KEY_SETTINGS, true);
+        startActivity(intent);
+    }
+
     private Button makeControlButton() {
         Button button = new Button(this);
         button.setTextSize(10.5f);
@@ -945,13 +1000,20 @@ public class NativeLiveActivity extends Activity {
             refreshAssistantControls();
             return;
         }
-        final String key = apiKeyInput.getText().toString().trim();
-        if (key.length() < 20) { updateStatus(CrewTheme.ROSE_500, "請填入有效的 Gemini API Key"); return; }
+        final String key = AppConfig.getGeminiApiKey(this).trim();
+        if (key.length() < 20) {
+            updateStatus(
+                    CrewTheme.AMBER_400,
+                    I18n.get(this,
+                            "請先到設定頁配置 Gemini API Key",
+                            "Configure your Gemini API Key in Settings first"));
+            openGeminiKeySettings(true);
+            return;
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{android.Manifest.permission.RECORD_AUDIO}, REQUEST_RECORD_AUDIO);
             return;
         }
-        AppConfig.setGeminiApiKey(this, key);
         callRequested = true;
         reconnectAttempts = 0;
         NativeLiveService.suspendIdleWakeIfRunning();

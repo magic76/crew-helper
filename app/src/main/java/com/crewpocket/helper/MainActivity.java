@@ -21,6 +21,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 public class MainActivity extends Activity {
+    static final String EXTRA_OPEN_GEMINI_KEY_SETTINGS = "crew.open_gemini_key_settings";
     private TextView statusDot;
     private TextView statusText;
     private TextView statusDetail;
@@ -60,7 +61,26 @@ public class MainActivity extends Activity {
 
         appRoot.addView(buildBottomNavigation());
         setContentView(appRoot);
-        renderTab(0);
+
+        boolean openGeminiKeySettings = getIntent() != null
+                && getIntent().getBooleanExtra(
+                        EXTRA_OPEN_GEMINI_KEY_SETTINGS, false);
+        renderTab(openGeminiKeySettings ? 2 : 0);
+
+        if (openGeminiKeySettings) {
+            // Consume the one-shot deep link so Activity recreation does not
+            // reopen the dialog forever.
+            getIntent().removeExtra(EXTRA_OPEN_GEMINI_KEY_SETTINGS);
+            pageContent.postDelayed(new Runnable() {
+                @Override public void run() {
+                    if (isFinishing()) return;
+                    activeTab = 2;
+                    renderSettingsPage();
+                    refreshNavigation();
+                    showSettingsDialog();
+                }
+            }, 180L);
+        }
 
         // Request only runtime permissions when needed
         checkAndRequestPermissions();
@@ -1049,7 +1069,12 @@ public class MainActivity extends Activity {
                                 "✅ Gemini API Key 已儲存！",
                                 "✅ Gemini API Key saved!"),
                             Toast.LENGTH_SHORT).show();
-                    recreate();
+                    if (activeTab == 2) {
+                        renderSettingsPage();
+                        refreshNavigation();
+                    } else {
+                        recreate();
+                    }
                 }
             });
         builder.setNegativeButton(I18n.get(this, "取消", "Cancel"), null);
