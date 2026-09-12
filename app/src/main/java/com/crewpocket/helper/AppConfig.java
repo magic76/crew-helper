@@ -8,6 +8,8 @@ public class AppConfig {
     public static final String KEY_GEMINI_API_KEY = "gemini_api_key";
     public static final String KEY_VOICE_NAME = "live_voice_name";
     public static final String KEY_LOCAL_BRIDGE = "local_bridge_enabled";
+    /** 0084: private per-install capability token for localhost:8766. */
+    public static final String KEY_LOCAL_BRIDGE_TOKEN = "local_bridge_token";
     public static final String KEY_NOISE_MODE = "noise_mode";
     public static final String KEY_NOISE_SUPPRESSION = "noise_suppression";
     public static final String KEY_LIVE_TONE = "live_tone";
@@ -65,7 +67,7 @@ public class AppConfig {
         getPrefs(context).edit().putString(KEY_VOICE_NAME, voice == null ? DEFAULT_VOICE : voice.trim()).apply();
     }
 
-    // ── 4. Local Bridge Automation (:8766) ──
+    // ── 4. App-internal Runtime Bridge (:8766) ──
     public static boolean isLocalBridgeEnabled(Context context) {
         if (context == null) return true;
         return getPrefs(context).getBoolean(KEY_LOCAL_BRIDGE, true);
@@ -74,6 +76,37 @@ public class AppConfig {
     public static void setLocalBridgeEnabled(Context context, boolean enabled) {
         if (context == null) return;
         getPrefs(context).edit().putBoolean(KEY_LOCAL_BRIDGE, enabled).apply();
+    }
+
+    /**
+     * 0084: localhost is not an identity boundary on Android. Other apps such
+     * as Termux can reach 127.0.0.1:8766, so every Runtime request carries a
+     * private per-install capability token stored in Crew Helper app storage.
+     *
+     * The token is intentionally never exposed in UI, logs, model context, or
+     * public bridge responses.
+     */
+    public static synchronized String getLocalBridgeToken(Context context) {
+        if (context == null) return "";
+        SharedPreferences prefs = getPrefs(context);
+        String token = prefs.getString(KEY_LOCAL_BRIDGE_TOKEN, "");
+        if (token == null || token.length() < 32) {
+            token = java.util.UUID.randomUUID().toString().replace("-", "")
+                    + java.util.UUID.randomUUID().toString().replace("-", "");
+            prefs.edit().putString(KEY_LOCAL_BRIDGE_TOKEN, token).commit();
+        }
+        return token;
+    }
+
+    public static boolean isLocalBridgeTokenValid(Context context, String candidate) {
+        if (context == null || candidate == null) return false;
+        String expected = getLocalBridgeToken(context);
+        if (expected.length() != candidate.length() || expected.isEmpty()) return false;
+        int diff = 0;
+        for (int i = 0; i < expected.length(); i++) {
+            diff |= expected.charAt(i) ^ candidate.charAt(i);
+        }
+        return diff == 0;
     }
 
     // ── 5. Voice environment: auto, quiet, or noisy ──

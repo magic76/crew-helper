@@ -315,6 +315,35 @@ public class CrewAccessibilityService extends AccessibilityService {
         }
     }
 
+    private void writeBridgeHttpJsonAndClose(
+            Socket socket,
+            int statusCode,
+            String statusText,
+            String responseJson) {
+        if (socket == null) return;
+        String body = responseJson == null ? "{}" : responseJson;
+        try {
+            byte[] responseBytes = body.getBytes(StandardCharsets.UTF_8);
+            OutputStream out = socket.getOutputStream();
+            out.write(("HTTP/1.1 " + statusCode + " " + statusText + "\r\n")
+                    .getBytes(StandardCharsets.UTF_8));
+            out.write("Content-Type: application/json; charset=utf-8\r\n"
+                    .getBytes(StandardCharsets.UTF_8));
+            out.write("Cache-Control: no-store\r\n"
+                    .getBytes(StandardCharsets.UTF_8));
+            out.write("Connection: close\r\n"
+                    .getBytes(StandardCharsets.UTF_8));
+            out.write(("Content-Length: " + responseBytes.length + "\r\n")
+                    .getBytes(StandardCharsets.UTF_8));
+            out.write("\r\n".getBytes(StandardCharsets.UTF_8));
+            out.write(responseBytes);
+            out.flush();
+        } catch (Exception ignored) {
+        } finally {
+            try { socket.close(); } catch (Exception ignored) {}
+        }
+    }
+
     private void handleSocketRequest(final Socket socket) {
         try {
             BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
@@ -329,12 +358,38 @@ public class CrewAccessibilityService extends AccessibilityService {
             String path = parts.length > 1 ? parts[1] : "/";
 
             int contentLength = 0;
+            String bridgeToken = "";
             while ((line = reader.readLine()) != null && !line.isEmpty()) {
-                if (line.toLowerCase().startsWith("content-length:")) {
+                String lowerLine = line.toLowerCase(Locale.ROOT);
+                if (lowerLine.startsWith("content-length:")) {
                     try {
                         contentLength = Integer.parseInt(line.substring(15).trim());
                     } catch (Exception e) {}
+                } else if (lowerLine.startsWith("x-crew-bridge-token:")) {
+                    int colon = line.indexOf(':');
+                    if (colon >= 0 && colon + 1 < line.length()) {
+                        bridgeToken = line.substring(colon + 1).trim();
+                    }
                 }
+            }
+
+            if (!AppConfig.isLocalBridgeTokenValid(
+                    CrewAccessibilityService.this, bridgeToken)) {
+                writeBridgeHttpJsonAndClose(
+                        socket,
+                        401,
+                        "Unauthorized",
+                        "{\"success\":false,\"error\":\"UNAUTHORIZED_LOCAL_BRIDGE\"}");
+                return;
+            }
+
+            if (path.startsWith("/notify")) {
+                writeBridgeHttpJsonAndClose(
+                        socket,
+                        410,
+                        "Gone",
+                        "{\"success\":false,\"error\":\"LEGACY_NOTIFY_REMOVED\"}");
+                return;
             }
 
             StringBuilder bodyBuilder = new StringBuilder();
@@ -521,25 +576,6 @@ public class CrewAccessibilityService extends AccessibilityService {
                     } catch (Exception ignored) {}
                 }
                 responseJson = result[0];
-            } else if (path.startsWith("/notify")) {
-                String state = "DONE";
-                String text = "";
-                try {
-                    String parsedState = getJsonString(body, "state");
-                    String parsedText = getJsonString(body, "text");
-                    if (parsedState != null && !parsedState.isEmpty()) state = parsedState;
-                    if (parsedText != null) text = parsedText;
-                } catch (Exception ignored) {}
-
-                final String fState = state;
-                final String fText = text;
-                mainHandler.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        FloatingBubbleManager.getInstance(CrewAccessibilityService.this).handleNotify(fState, fText);
-                    }
-                });
-                responseJson = "{\"success\":true,\"action\":\"NOTIFIED\",\"state\":\"" + state + "\"}";
             } else if (path.startsWith("/bubble")) {
                 mainHandler.post(new Runnable() {
                     @Override public void run() { FloatingBubbleManager.getInstance(CrewAccessibilityService.this).showBubble(); }
@@ -1112,7 +1148,7 @@ public class CrewAccessibilityService extends AccessibilityService {
             OutputStream out = socket.getOutputStream();
             out.write("HTTP/1.1 200 OK\r\n".getBytes(StandardCharsets.UTF_8));
             out.write("Content-Type: application/json; charset=utf-8\r\n".getBytes(StandardCharsets.UTF_8));
-            out.write("Access-Control-Allow-Origin: *\r\n".getBytes(StandardCharsets.UTF_8));
+            out.write("Cache-Control: no-store\r\n".getBytes(StandardCharsets.UTF_8));
             out.write(("Content-Length: " + responseBytes.length + "\r\n").getBytes(StandardCharsets.UTF_8));
             out.write("\r\n".getBytes(StandardCharsets.UTF_8));
             out.write(responseBytes);

@@ -3653,12 +3653,27 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
 
 
+    private void authenticateLocalBridge(HttpURLConnection connection) {
+        if (connection == null) {
+            throw new IllegalArgumentException("LOCAL_BRIDGE_CONNECTION_REQUIRED");
+        }
+        if (appContext == null) {
+            throw new IllegalStateException("LOCAL_BRIDGE_CONTEXT_REQUIRED");
+        }
+        String token = AppConfig.getLocalBridgeToken(appContext);
+        if (token == null || token.isEmpty()) {
+            throw new IllegalStateException("LOCAL_BRIDGE_TOKEN_UNAVAILABLE");
+        }
+        connection.setRequestProperty("X-Crew-Bridge-Token", token);
+    }
+
     private JSONObject helperGet(String endpoint) throws Exception {
         HttpURLConnection connection = null;
         try {
             connection = (HttpURLConnection) new URL("http://127.0.0.1:8766" + endpoint).openConnection();
             activeToolConnection = connection;
             connection.setRequestMethod("GET");
+            authenticateLocalBridge(connection);
             connection.setConnectTimeout(3000); connection.setReadTimeout(5000);
             int code = connection.getResponseCode();
             BufferedReader reader = new BufferedReader(new InputStreamReader(code >= 200 && code < 300 ? connection.getInputStream() : connection.getErrorStream(), "UTF-8"));
@@ -3995,6 +4010,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             connection = (HttpURLConnection) new URL("http://127.0.0.1:8766" + endpoint).openConnection();
             activeToolConnection = connection;
             connection.setRequestMethod("POST"); connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+            authenticateLocalBridge(connection);
             connection.setDoOutput(true); connection.setConnectTimeout(3500); connection.setReadTimeout(7000);
             byte[] body = payload.toString().getBytes("UTF-8");
             connection.setFixedLengthStreamingMode(body.length);
