@@ -21,13 +21,16 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/AgentRuntimeV2.java" \
   "$SRC/TextMatch.java" \
   "$SRC/UserActionScope.java" \
+  "$SRC/SearchTransactionPolicy.java" \
   "$ROOT/tests/SendOnlyPolicyTest.java" \
+  "$ROOT/tests/SearchTransactionPolicyTest.java" \
   "$ROOT/tests/ActionVerifierV2Test.java" \
   "$ROOT/tests/AgentRuntimeV2Test.java" \
   "$ROOT/tests/AgentRuntimeRolloutTest.java" \
   "$ROOT/tests/AgentReplayRunner.java"
 
 java -cp "$OUT" com.crewpocket.helper.SendOnlyPolicyTest
+java -cp "$OUT" com.crewpocket.helper.SearchTransactionPolicyTest
 java -cp "$OUT" com.crewpocket.helper.ActionVerifierV2Test
 java -cp "$OUT" com.crewpocket.helper.AgentRuntimeV2Test
 java -cp "$OUT" com.crewpocket.helper.AgentRuntimeRolloutTest

@@ -1970,7 +1970,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 || result.has("policy"));
         boolean cancelled = result != null && result.optBoolean("cancelled", false);
         boolean runtimeVerified = result != null && (result.optBoolean("verified", false)
-                || ("search_current_app".equals(name) && result.optBoolean("committed", false)));
+                || (("search_current_app".equals(name) || "commit_search".equals(name))
+                    && result.optBoolean("resultsObserved", false)));
         if ("launch_app".equals(name) && result != null) {
             String launchedPackage = result.optString("package", "").trim();
             if (!launchedPackage.isEmpty()
@@ -3609,24 +3610,52 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         }
 
         // Only now can Runtime truthfully say the query entered a proven
-        // search field.
+        // search field. Completion requires query-excluding result-surface
+        // evidence from AppSearchRuntime.
         userActionScope.markSearchQueryEntered();
 
-        if (reply.optBoolean("committed", false)) {
+        boolean resultsObserved = reply.optBoolean("resultsObserved", false);
+        boolean commitDispatched = reply.optBoolean("commitDispatched", false);
+        String searchState = reply.optString("state", "QUERY_ENTERED");
+
+        observed.put("searchTransaction", searchState)
+                .put("typed", true)
+                .put("commitDispatched", commitDispatched)
+                .put("committed", resultsObserved)
+                .put("resultsObserved", resultsObserved)
+                .put("searchCommitMethod",
+                        reply.optString("commitMethod", "NONE"));
+
+        if (resultsObserved) {
             userActionScope.markSearchCommitted();
-            observed.put("searchTransaction", "COMMITTED")
-                    .put("typed", true).put("committed", true)
-                    .put("searchCommitMethod", reply.optString("commitMethod", "RUNTIME"));
+            observed.put("taskState", "EVIDENCE_AVAILABLE")
+                    .put("completionEvidence",
+                            reply.optString("resultEvidence",
+                                    "SEARCH_RESULT_SURFACE_OBSERVED"));
             if (userActionScope.shouldSelectSearchResult()) {
                 return resolveCommittedSearchSelection(text, observed);
             }
-        } else {
-            observed.put("searchTransaction", "QUERY_ENTERED")
-                    .put("typed", true).put("committed", false)
-                    .put("taskState", "IN_PROGRESS")
-                    .put("instruction", "搜尋文字已確認輸入；請根據 after 畫面判斷是否已有結果或可用搜尋鍵。");
+            return observed;
         }
-        return observed;
+
+        if (commitDispatched) {
+            return observed
+                    .put("searchTransaction", "PENDING_RESULTS")
+                    .put("taskState", "IN_PROGRESS")
+                    .put("completionEvidence",
+                            "SEARCH_COMMIT_DISPATCHED_RESULTS_NOT_CONFIRMED")
+                    .put("nextRequirement",
+                            "等待搜尋結果畫面變化；不要再次送出 Search/Enter。")
+                    .put("instruction",
+                            "Runtime 已送出搜尋提交，但尚未觀察到結果內容。請先 wait(screen_change) 或依 fresh after 觀察；不要重複 SEARCH/COMMIT_SEARCH，也不要盲點結果。");
+        }
+
+        return observed
+                .put("searchTransaction", "QUERY_ENTERED")
+                .put("taskState", "IN_PROGRESS")
+                .put("completionEvidence", "SEARCH_QUERY_TYPED_NO_RESULT_EVIDENCE")
+                .put("instruction",
+                        "搜尋文字已確認輸入，但尚未觀察到結果且沒有可用提交鍵。依 fresh after 判斷 live-filter 結果；若沒有，回報目前卡點，不要宣稱搜尋完成。");
     }
 
     private JSONObject sendTextToPhone(JSONObject args) throws Exception {
@@ -3714,6 +3743,12 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if (!reply.optBoolean("success", false)) {
             reply.put("instruction",
                     "目前沒有可確認的搜尋輸入框或搜尋鍵；不要改點搜尋結果，請先回到搜尋欄。" );
+        } else if (!reply.optBoolean("resultsObserved", false)) {
+            reply.put("taskState", "IN_PROGRESS")
+                    .put("completionEvidence",
+                            "SEARCH_COMMIT_DISPATCHED_RESULTS_NOT_CONFIRMED")
+                    .put("instruction",
+                            "Search/Enter 已送出，但結果尚未被 Runtime 觀察到。請等待畫面變化；不要再次提交搜尋。");
         }
         return autoObserveAfterMutation(reply, "commit_search");
     }

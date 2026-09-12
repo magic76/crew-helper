@@ -11,12 +11,15 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * 0036 Search Transaction commit step.
+ * SEARCH commit dispatcher + generic result-surface verification.
  *
- * Only submits when Runtime proves the focused editable is a search input.
- * Never clicks an app suggestion/result because search != open.
+ * Android accepting IME Search/Enter means only "commit dispatched".
+ * It becomes resultsObserved only after the query-excluding search surface changes.
  */
 final class SearchCommitRuntime {
+    private static final long RESULT_WAIT_MS = 1400L;
+    private static final long RESULT_POLL_MS = 140L;
+
     private SearchCommitRuntime() {}
 
     static JSONObject commit(CrewAccessibilityService service) {
@@ -29,6 +32,7 @@ final class SearchCommitRuntime {
             return result(false, "NONE", "NO_FOCUSED_SEARCH_INPUT");
         }
 
+        String beforeSurface = SearchSurfaceFingerprint.capture(service);
         try {
             if (SensitiveDataGuard.isHardBlockedInput(searchInput)) {
                 return result(false, "NONE", "SENSITIVE_INPUT_BLOCKED");
@@ -38,19 +42,38 @@ final class SearchCommitRuntime {
             }
 
             if (performImeEnter(searchInput)) {
-                return result(true, "ACTION_IME_ENTER", "");
+                return dispatchedResult(service, beforeSurface, "ACTION_IME_ENTER");
             }
         } finally {
             searchInput.recycle();
         }
 
-        // Fallback only to the IME's own semantic action key.
-        // Never click an app suggestion/result as a substitute.
         if (clickImeCommitButton(service)) {
-            return result(true, "IME_ACTION_BUTTON", "");
+            return dispatchedResult(service, beforeSurface, "IME_ACTION_BUTTON");
         }
 
         return result(false, "NONE", "NO_SEARCH_COMMIT_ACTION");
+    }
+
+    private static JSONObject dispatchedResult(CrewAccessibilityService service,
+                                               String beforeSurface,
+                                               String method) {
+        SearchSurfaceFingerprint.Observation observation =
+                SearchSurfaceFingerprint.awaitChange(
+                        service, beforeSurface, RESULT_WAIT_MS, RESULT_POLL_MS);
+
+        JSONObject out = result(true, method, "");
+        try {
+            out.put("commitDispatched", true)
+                    .put("resultsObserved", observation.changed)
+                    .put("state", observation.changed
+                            ? SearchTransactionPolicy.RESULTS_OBSERVED
+                            : SearchTransactionPolicy.PENDING_RESULTS)
+                    .put("resultEvidence", observation.changed
+                            ? "SEARCH_SURFACE_CHANGED_AFTER_COMMIT"
+                            : "NO_SEARCH_SURFACE_CHANGE_YET");
+        } catch (Exception ignored) {}
+        return out;
     }
 
     private static AccessibilityNodeInfo findFocusedSearchInput(
@@ -65,8 +88,6 @@ final class SearchCommitRuntime {
             if (root != null) root.recycle();
         }
 
-        // The IME may be the active window while the app's focused search field
-        // lives in another interactive window.
         try {
             List<AccessibilityWindowInfo> windows = service.getWindows();
             if (windows != null) {
@@ -129,10 +150,6 @@ final class SearchCommitRuntime {
         return null;
     }
 
-    /**
-     * ACTION_IME_ENTER is newer than the project's API-24 compile surface.
-     * Reflection keeps low compile-SDK compatibility on modern Android.
-     */
     private static boolean performImeEnter(AccessibilityNodeInfo input) {
         if (input == null) return false;
         try {
@@ -206,7 +223,6 @@ final class SearchCommitRuntime {
         String meta = normalize(text + " " + desc + " " + id);
         if (meta.isEmpty()) return 0;
 
-        // Search transaction can never reuse a message-send control.
         if (containsAny(meta,
                 "send", "message", "composer", "傳送", "传送",
                 "發送", "发送", "送出")) {
@@ -254,7 +270,12 @@ final class SearchCommitRuntime {
         try {
             out.put("success", success)
                     .put("action", "SEARCH_COMMIT")
-                    .put("method", method == null ? "NONE" : method);
+                    .put("method", method == null ? "NONE" : method)
+                    .put("commitDispatched", success)
+                    .put("resultsObserved", false)
+                    .put("state", success
+                            ? SearchTransactionPolicy.PENDING_RESULTS
+                            : SearchTransactionPolicy.FAILED);
             if (!success && error != null && !error.isEmpty()) {
                 out.put("error", error);
             }

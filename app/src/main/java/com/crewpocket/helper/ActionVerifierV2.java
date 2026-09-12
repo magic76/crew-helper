@@ -1,11 +1,10 @@
 package com.crewpocket.helper;
 
 /**
- * 0073 action-specific verifier.
+ * 0077 action-specific verifier.
  *
  * Android's callback says whether a command was accepted; this class decides
- * whether the expected semantic effect actually became observable.  It stores
- * no user-visible text and only reasons over privacy-safe structural evidence.
+ * whether the expected semantic effect actually became observable.
  */
 final class ActionVerifierV2 {
     private ActionVerifierV2() {}
@@ -39,9 +38,7 @@ final class ActionVerifierV2 {
                     screenChanged, stableChanged, packageChanged, focusChanged);
         }
 
-        // Domain runtimes can provide stronger proof than a screen fingerprint:
-        // TYPE can prove the focused editor contains the write; SEARCH can prove
-        // commit; launch can prove the requested package is foreground.
+        // 0077: for SEARCH this means the query-excluding result surface changed.
         if (execution.runtimeVerified) {
             return result(ActionVerificationResult.Status.VERIFIED,
                     "RUNTIME_VERIFIED",
@@ -63,28 +60,25 @@ final class ActionVerifierV2 {
             pendingCode = "LAUNCH_AWAITING_TARGET_EVIDENCE";
             noEffectCode = "LAUNCH_TARGET_NOT_OBSERVED";
         } else if ("type_text".equals(name)) {
-            // Text often changes the semantic fingerprint while focus remains
-            // on the same editor. A focus transition is also legitimate when
-            // Runtime first focuses the target before typing.
             expectationMet = screenChanged || focusChanged;
             observedCode = "TYPE_EFFECT_OBSERVED";
             pendingCode = "TYPE_AWAITING_TEXT_EVIDENCE";
             noEffectCode = "TYPE_EFFECT_NOT_OBSERVED";
         } else if ("search_current_app".equals(name)) {
-            // Merely focusing a field is not a completed search. Require real
-            // screen/surface progress unless the search runtime already proved
-            // commit through runtimeVerified above.
-            expectationMet = screenChanged || stableChanged || packageChanged;
-            observedCode = "SEARCH_SURFACE_TRANSITION_OBSERVED";
+            // Generic ScreenFingerprint includes query text, so screenChanged
+            // can be caused by typing alone. It must never verify SEARCH.
+            expectationMet = false;
+            observedCode = "SEARCH_RESULTS_OBSERVED";
             pendingCode = "SEARCH_AWAITING_RESULTS_EVIDENCE";
-            noEffectCode = "SEARCH_EFFECT_NOT_OBSERVED";
+            noEffectCode = "SEARCH_RESULTS_NOT_OBSERVED";
         } else if ("commit_search".equals(name)) {
-            expectationMet = screenChanged || stableChanged || packageChanged;
-            observedCode = "SEARCH_COMMIT_TRANSITION_OBSERVED";
+            // IME Search/Enter accepted != results. SearchCommitRuntime provides
+            // runtimeVerified only after result-surface evidence.
+            expectationMet = false;
+            observedCode = "SEARCH_COMMIT_RESULTS_OBSERVED";
             pendingCode = "SEARCH_COMMIT_AWAITING_RESULTS";
-            noEffectCode = "SEARCH_COMMIT_NO_TRANSITION";
+            noEffectCode = "SEARCH_COMMIT_RESULTS_NOT_OBSERVED";
         } else if ("swipe_screen".equals(name)) {
-            // A package change is not evidence that the requested scroll worked.
             expectationMet = screenChanged || stableChanged;
             observedCode = "SCROLL_PROGRESS_OBSERVED";
             pendingCode = "SCROLL_AWAITING_PROGRESS";
@@ -136,8 +130,6 @@ final class ActionVerifierV2 {
         }
 
         if (expectationMet) {
-            // Post-action UI evidence can reconcile an Android false negative,
-            // but report LIKELY so callers know execution and observation disagreed.
             ActionVerificationResult.Status status = execution.executionAccepted
                     ? ActionVerificationResult.Status.VERIFIED
                     : ActionVerificationResult.Status.LIKELY;
@@ -155,8 +147,6 @@ final class ActionVerifierV2 {
                     screenChanged, stableChanged, packageChanged, focusChanged);
         }
 
-        // Accepted asynchronous actions are PENDING, never fake success. This
-        // forces one fresh observation before a same-action retry.
         if (execution.executionAccepted) {
             return result(ActionVerificationResult.Status.PENDING,
                     pendingCode,

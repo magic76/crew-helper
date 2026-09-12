@@ -9,18 +9,22 @@ import org.json.JSONObject;
 import java.util.Locale;
 
 /**
- * Runtime-owned app search transaction. The model supplies only a query.
+ * Runtime-owned generic app SEARCH transaction.
  *
- * 0044 SearchFocusProof:
- * - never type a search query into an arbitrary focused editable;
- * - an already-focused field must carry search semantics;
- * - otherwise Runtime must first click a trusted search control and observe a
- *   newly focused editable before it is allowed to type;
- * - focus identity is rechecked immediately before ACTION_SET_TEXT.
+ * Contract:
+ * 1. prove the search field;
+ * 2. type and verify the query;
+ * 3. observe whether the app live-filters its result surface;
+ * 4. dispatch IME Search/Enter when available;
+ * 5. only claim results when the non-editor search surface actually changes.
+ *
+ * The query text changing by itself is never result evidence.
  */
 final class AppSearchRuntime {
     private static final long SEARCH_FOCUS_TIMEOUT_MS = 1300L;
     private static final long SEARCH_FOCUS_POLL_MS = 120L;
+    private static final long LIVE_RESULT_WAIT_MS = 360L;
+    private static final long LIVE_RESULT_POLL_MS = 120L;
 
     private AppSearchRuntime() {}
 
@@ -39,10 +43,9 @@ final class AppSearchRuntime {
             focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
             String beforeFocusedKey = editableKey(focused);
 
-            // Only type directly into a field that independently proves it is
-            // a search field. A chat composer being focused is not proof.
             if (isUsableEditable(focused) && isTrustedSearchEditable(focused)) {
-                return enterAndCommit(service, text, beforeFocusedKey, "EXISTING_SEARCH_FIELD");
+                return enterAndSearch(service, text, beforeFocusedKey,
+                        "EXISTING_SEARCH_FIELD");
             }
 
             search = findBestSearchControl(root);
@@ -94,10 +97,8 @@ final class AppSearchRuntime {
                 boolean newlyFocused = !key.isEmpty()
                         && (beforeFocusedKey.isEmpty() || !key.equals(beforeFocusedKey));
 
-                // A trusted Search control + a newly focused editable is enough
-                // proof even when the target app gives the field a generic id.
                 if (trustedByMetadata || newlyFocused) {
-                    return enterAndCommit(
+                    return enterAndSearch(
                             service,
                             text,
                             key,
@@ -120,7 +121,7 @@ final class AppSearchRuntime {
         return out;
     }
 
-    private static JSONObject enterAndCommit(
+    private static JSONObject enterAndSearch(
             CrewAccessibilityService service,
             String text,
             String expectedFocusedKey,
@@ -144,6 +145,8 @@ final class AppSearchRuntime {
             recycle(root);
         }
 
+        String beforeSurface = SearchSurfaceFingerprint.capture(service);
+
         if (!service.performSetTextVerified(text)) {
             JSONObject failed = result(false, "TEXT_NOT_VERIFIED");
             try {
@@ -153,30 +156,71 @@ final class AppSearchRuntime {
             return failed;
         }
 
-        JSONObject out = new JSONObject();
+        SearchSurfaceFingerprint.Observation liveObservation =
+                SearchSurfaceFingerprint.awaitChange(
+                        service,
+                        beforeSurface,
+                        LIVE_RESULT_WAIT_MS,
+                        LIVE_RESULT_POLL_MS);
+
+        JSONObject commit;
         try {
-            JSONObject commit = SearchCommitRuntime.commit(service);
-            out.put("success", true)
-                    .put("action", "APP_SEARCH")
-                    .put("state", "QUERY_ENTERED")
-                    .put("focusProof", proof)
-                    .put("textVerified", true)
-                    .put("committed", commit.optBoolean("success", false))
-                    .put("commitMethod", commit.optString("method", "NONE"));
-            if (!commit.optBoolean("success", false)) {
-                out.put("message",
-                        "搜尋文字已確認輸入；此 App 尚未提供可用的搜尋提交鍵。");
-            }
+            commit = SearchCommitRuntime.commit(service);
         } catch (Exception ignored) {
+            commit = new JSONObject();
             try {
-                out.put("success", true)
-                        .put("action", "APP_SEARCH")
-                        .put("state", "QUERY_ENTERED")
-                        .put("focusProof", proof)
-                        .put("textVerified", true)
-                        .put("committed", false);
+                commit.put("success", false)
+                        .put("method", "NONE")
+                        .put("error", "SEARCH_COMMIT_EXCEPTION")
+                        .put("resultsObserved", false);
             } catch (Exception ignoredAgain) {}
         }
+
+        boolean commitDispatched = commit.optBoolean("success", false);
+        boolean postCommitSurfaceChanged =
+                commit.optBoolean("resultsObserved", false);
+
+        SearchTransactionPolicy.Decision decision =
+                SearchTransactionPolicy.decide(
+                        true,
+                        liveObservation.changed,
+                        commitDispatched,
+                        postCommitSurfaceChanged);
+
+        JSONObject out = new JSONObject();
+        try {
+            out.put("success", true)
+                    .put("action", "APP_SEARCH")
+                    .put("state", decision.state)
+                    .put("focusProof", proof)
+                    .put("textVerified", true)
+                    .put("liveSurfaceChanged", liveObservation.changed)
+                    .put("commitDispatched", commitDispatched)
+                    .put("commitMethod", commit.optString("method", "NONE"))
+                    .put("postCommitSurfaceChanged", postCommitSurfaceChanged)
+                    .put("resultsObserved", decision.resultsObserved)
+                    // From 0077 this means evidence-backed SEARCH completion.
+                    .put("committed", decision.resultsObserved);
+
+            if (!commitDispatched) {
+                out.put("commitError",
+                        commit.optString("error", "NO_SEARCH_COMMIT_ACTION"));
+            }
+
+            if (SearchTransactionPolicy.RESULTS_OBSERVED.equals(decision.state)) {
+                out.put("resultEvidence", "SEARCH_SURFACE_CHANGED_AFTER_COMMIT");
+            } else if (SearchTransactionPolicy.LIVE_RESULTS_OBSERVED.equals(decision.state)) {
+                out.put("resultEvidence", "SEARCH_SURFACE_CHANGED_AFTER_TYPE");
+            } else if (SearchTransactionPolicy.PENDING_RESULTS.equals(decision.state)) {
+                out.put("resultEvidence", "COMMIT_DISPATCHED_RESULTS_NOT_YET_OBSERVED")
+                        .put("message",
+                                "搜尋提交已送出，但 Runtime 尚未看到結果畫面變化。");
+            } else if (SearchTransactionPolicy.QUERY_ENTERED.equals(decision.state)) {
+                out.put("resultEvidence", "QUERY_TYPED_NO_RESULT_EVIDENCE")
+                        .put("message",
+                                "搜尋文字已確認輸入，但尚未看到結果，且沒有可用的搜尋提交鍵。");
+            }
+        } catch (Exception ignored) {}
         return out;
     }
 
@@ -299,7 +343,14 @@ final class AppSearchRuntime {
     private static JSONObject result(boolean success, String error) {
         JSONObject out = new JSONObject();
         try {
-            out.put("success", success).put("action", "APP_SEARCH");
+            out.put("success", success)
+                    .put("action", "APP_SEARCH")
+                    .put("state", success
+                            ? SearchTransactionPolicy.QUERY_ENTERED
+                            : SearchTransactionPolicy.FAILED)
+                    .put("resultsObserved", false)
+                    .put("commitDispatched", false)
+                    .put("committed", false);
             if (!success) out.put("error", error);
         } catch (Exception ignored) {}
         return out;
