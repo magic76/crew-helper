@@ -147,6 +147,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private volatile long runtimeShortcutGuardUntil = 0L;
     // 0052: standalone "送出/發送/send" is owned directly by Runtime.
     private volatile boolean runtimeSendCurrentExecuting = false;
+    // 0074: voice send-only turns are Runtime-owned until Gemini drains the
+    // original server turn. This prevents a late model reply from telling the
+    // user to say "送出" after Runtime already handled that exact command.
+    private volatile long runtimeSendOwnedGeneration = -1L;
+    private volatile String runtimeSendPendingAck = "";
     private AudioIncidentRecorder audioIncidentRecorder;
     private volatile PendingCondition pendingCondition = null;
     private final Object pendingChoiceLock = new Object();
@@ -388,6 +393,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
      * inside the existing 45-second conversation-goal window.
      */
     private void beginNewUserIntent(String userText) {
+        // A real new user instruction supersedes any stale send-only model turn.
+        runtimeSendOwnedGeneration = -1L;
+        runtimeSendPendingAck = "";
         // A finalized user instruction supersedes any incomplete model-turn
         // bookkeeping from the previous interaction.
         resetCurrentModelTurnState();
@@ -450,7 +458,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
             beginNewUserIntent(input);
             userActionScope.updateFromUserText(input);
-            if (tryHandleRuntimeSendCurrent(input)) {
+            if (tryHandleRuntimeSendCurrent(input, false)) {
                 listener.onTranscript("你", input);
                 return true;
             }
@@ -772,8 +780,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             }
 
             userActionScope.updateFromUserText(completeUserInput);
-            if (tryHandleRuntimeSendCurrent(completeUserInput)) return;
-            if (isStopAgentTaskPhrase(completeUserInput)) {
+            boolean runtimeSendHandled = tryHandleRuntimeSendCurrent(completeUserInput, true);
+            if (!runtimeSendHandled && isStopAgentTaskPhrase(completeUserInput)) {
                 cancelDeckAutoAdvance();
                 cancelAgentTask("使用者語音停止任務");
             }
@@ -811,7 +819,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         JSONObject outputTranscript = server.optJSONObject("outputTranscription");
         if (outputTranscript == null) outputTranscript = server.optJSONObject("output_transcription");
         if (outputTranscript != null && !outputTranscript.optString("text").isEmpty()
-                && !runtimeSendCurrentExecuting
+                && !isRuntimeSendTurnOwned()
                 && !shouldWithholdUnverifiedAgentReply()) {
             // Bubble text may arrive even when no PCM is played. Keep showing
             // it, but do not let text satisfy the final-speech contract.
@@ -832,7 +840,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             // task.  Do not play that premature conclusion: Runtime needs one
             // explicit post-action screen observation before an agent answer.
             boolean withholdForVerification =
-                    shouldWithholdUnverifiedAgentReply() || runtimeSendCurrentExecuting;
+                    shouldWithholdUnverifiedAgentReply() || isRuntimeSendTurnOwned();
             if (!interruptedCurrentTurn && !withholdForVerification) {
                 if (!aiSpeaking) {
                     aiSpeaking = true;
@@ -895,6 +903,16 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             // Tool-only turns after a narration must not inherit "audio seen"
             // and accidentally schedule extra page turns.
             resetCurrentModelTurnState();
+
+            if (isRuntimeSendTurnOwned()) {
+                String pendingAck = runtimeSendPendingAck;
+                runtimeSendOwnedGeneration = -1L;
+                runtimeSendPendingAck = "";
+                Log.d(TAG, "RuntimeSend TURN_DRAINED");
+                if (pendingAck != null && !pendingAck.isEmpty()) {
+                    sendInternalAgentDirective(pendingAck);
+                }
+            }
         }
     }
 
@@ -914,7 +932,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
      * 0052: standalone send-only commands never depend on Gemini tool choice.
      * Runtime owns the physical SEND_CURRENT operation.
      */
-    private boolean tryHandleRuntimeSendCurrent(String inputText) {
+    private boolean tryHandleRuntimeSendCurrent(String inputText, boolean ownCurrentModelTurn) {
         if (!UserActionScope.isStandaloneCurrentScreenSendCommand(inputText)) {
             return false;
         }
@@ -929,13 +947,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
         runtimeSendCurrentExecuting = true;
         runtimeShortcutGuardUntil = Long.MAX_VALUE;
-
-        try {
-            sendInternalAgentDirective(
-                    "【Runtime Send 接管】使用者已明確要求送出目前畫面的輸入框。"
-                    + "Runtime 正在執行 SEND_CURRENT；不要呼叫任何手機工具，"
-                    + "也不要回答『沒有送出功能』。先保持安靜等待 Runtime 結果。");
-        } catch (Exception ignored) {}
+        if (ownCurrentModelTurn) {
+            runtimeSendOwnedGeneration = generation;
+            runtimeSendPendingAck = "";
+            Log.d(TAG, "RuntimeSend TURN_OWNED generation=" + generation);
+        }
 
         new Thread(new Runnable() {
             @Override public void run() {
@@ -973,21 +989,27 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 workingContext.updateLastResult(success ? "STEP_OK" : "STEP_FAILED");
 
                 try {
-                    if (success) {
-                        sendInternalAgentDirective(
-                                "【Runtime Send 完成】目前輸入框已送出一次。"
-                                + "不要再呼叫工具，只用一句很短的話告知使用者已送出。");
-                    } else {
-                        sendInternalAgentDirective(
-                                "【Runtime Send 未完成】Runtime 沒有重送。stage="
+                    String ackDirective = success
+                            ? "【Runtime Send 完成】目前輸入框已送出一次。不要再呼叫工具，只用一句很短的話告知使用者已送出。"
+                            : "【Runtime Send 未完成】Runtime 沒有重送。stage="
                                 + stage + (error.isEmpty() ? "" : " error=" + error)
-                                + "。不要呼叫手機工具；只用一句很短的話告知使用者尚未送出。");
+                                + "。不要呼叫手機工具；只用一句很短的話告知使用者尚未送出。";
+                    if (ownCurrentModelTurn && runtimeSendOwnedGeneration == generation) {
+                        runtimeSendPendingAck = ackDirective;
+                        Log.d(TAG, "RuntimeSend ACK_DEFERRED generation=" + generation);
+                    } else {
+                        sendInternalAgentDirective(ackDirective);
                     }
                 } catch (Exception ignored) {}
             }
         }, "CrewRuntimeSendCurrent").start();
 
         return true;
+    }
+
+    private boolean isRuntimeSendTurnOwned() {
+        return runtimeSendOwnedGeneration >= 0L
+                && runtimeSendOwnedGeneration == userIntentGeneration;
     }
 
     private boolean isStopAgentTaskPhrase(String text) {
@@ -1362,6 +1384,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private void executeToolAsync(final JSONObject call) {
         final String id = call.optString("id", "tool_" + System.nanoTime());
         synchronized (handledToolCalls) { if (!handledToolCalls.add(id)) return; }
+        if (isRuntimeSendTurnOwned()) {
+            Log.d(TAG, "RuntimeSend MODEL_TOOL_SUPPRESSED id=" + id);
+            return;
+        }
         try {
             synchronized (agentLock) {
                 final long generation = userIntentGeneration;
@@ -3675,6 +3701,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         }
 
         JSONObject reply = helperPost("/send_current", new JSONObject());
+        Log.i(TAG, "RuntimeSend SEND_CURRENT_RESULT success="
+                + reply.optBoolean("success", false)
+                + " stage=" + reply.optString("stage", "")
+                + " method=" + reply.optString("method", reply.optString("source", ""))
+                + " error=" + reply.optString("error", ""));
         reply.put("sendMode",
                 text.isEmpty() ? "CURRENT_COMPOSER" : "TYPE_THEN_SEND_CURRENT");
         if (!text.isEmpty()) {
