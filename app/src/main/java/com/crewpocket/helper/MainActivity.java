@@ -20,7 +20,8 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-public class MainActivity extends Activity {
+public class MainActivity extends Activity
+        implements NativeLiveService.RuntimeStateListener {
     static final String EXTRA_OPEN_GEMINI_KEY_SETTINGS = "crew.open_gemini_key_settings";
     private TextView statusDot;
     private TextView statusText;
@@ -28,6 +29,7 @@ public class MainActivity extends Activity {
     private LinearLayout statusCard;
     private LinearLayout pageContent;
     private FloatingBubbleManager.FluidBubbleView homeOrb;
+    private String homeRuntimeSignature = "";
     private final Button[] navButtons = new Button[3];
     private int activeTab = 0;
 
@@ -107,6 +109,34 @@ public class MainActivity extends Activity {
                 }
             }, 900L);
         }
+
+        NativeLiveService.setRuntimeStateListener(this);
+    }
+
+
+    @Override
+    protected void onPause() {
+        NativeLiveService.clearRuntimeStateListener(this);
+        super.onPause();
+    }
+
+    @Override
+    public void onRuntimeStateChanged() {
+        if (isFinishing() || pageContent == null || activeTab != 0) return;
+
+        String signature = buildHomeRuntimeSignature();
+        if (signature.equals(homeRuntimeSignature)) return;
+
+        homeRuntimeSignature = signature;
+        renderHomePage();
+    }
+
+    private String buildHomeRuntimeSignature() {
+        return NativeLiveService.getRuntimeState()
+                + "|" + NativeLiveService.isActive()
+                + "|" + NativeLiveService.isAiSpeaking()
+                + "|" + NativeLiveService.hasActiveAgentTask()
+                + "|" + AppConfig.isAlwaysOnEnabled(this);
     }
 
     private void renderTab(int tab) {
@@ -205,18 +235,12 @@ public class MainActivity extends Activity {
 
         final boolean wakeOn = AppConfig.isAlwaysOnEnabled(this);
         String runtime = NativeLiveService.getRuntimeState();
-        String wakeDetail;
-        if (!wakeOn) {
-            wakeDetail = I18n.get(this, "關閉時仍可手動開始通話", "You can still start Live manually");
-        } else if ("IDLE_LISTENING".equals(runtime)) {
-            wakeDetail = "「" + AppConfig.getWakePhrase(this) + "」· "
-                    + I18n.get(this, "正在待命", "Listening");
-        } else if ("ACTIVE".equals(runtime)) {
-            wakeDetail = I18n.get(this, "目前通話中", "Live is active");
-        } else {
-            wakeDetail = "「" + AppConfig.getWakePhrase(this) + "」· "
-                    + I18n.get(this, "已開啟", "Enabled");
-        }
+        String wakeDetail = wakeOn
+                ? wakeRuntimeSummary(runtime)
+                : I18n.get(
+                        this,
+                        "關閉時仍可手動開始通話",
+                        "You can still start Live manually");
 
         root.addView(makeHomeControlRow(
                 I18n.get(this, "喚醒詞", "Wake phrase"),
@@ -273,6 +297,7 @@ public class MainActivity extends Activity {
                 hasGeminiKey()
                         ? I18n.get(this, "已連線", "Ready")
                         : I18n.get(this, "需要 API Key", "API key required"),
+                true,
                 v -> openGeminiKeySettingsFromHome());
 
         boolean accessibility = CrewAccessibilityService.isServiceRunning();
@@ -282,7 +307,11 @@ public class MainActivity extends Activity {
                 accessibility,
                 accessibility
                         ? I18n.get(this, "已授權", "Ready")
-                        : I18n.get(this, "需要無障礙服務", "Accessibility required"),
+                        : I18n.get(
+                                this,
+                                "未啟用（選用）",
+                                "Not enabled (optional)"),
+                false,
                 v -> showAccessibilityDisclosureDialog());
 
         addCapabilityRow(
@@ -292,6 +321,7 @@ public class MainActivity extends Activity {
                 hasMicrophonePermission()
                         ? I18n.get(this, "已授權", "Ready")
                         : I18n.get(this, "需要權限", "Permission required"),
+                true,
                 v -> requestPermissions(
                         new String[]{android.Manifest.permission.RECORD_AUDIO},
                         991));
@@ -302,8 +332,24 @@ public class MainActivity extends Activity {
                 hasOverlayPermission(),
                 hasOverlayPermission()
                         ? I18n.get(this, "已授權", "Ready")
-                        : I18n.get(this, "需要權限", "Permission required"),
+                        : I18n.get(
+                                this,
+                                "未啟用（選用）",
+                                "Not enabled (optional)"),
+                false,
                 v -> openOverlaySettings());
+
+        if (wakeOn) {
+            addCapabilityRow(
+                    root,
+                    I18n.get(this, "背景喚醒", "Background wake"),
+                    isWakeCapabilityReady(),
+                    wakeCapabilityDetail(),
+                    true,
+                    v -> fixWakeCapability());
+        }
+
+        homeRuntimeSignature = buildHomeRuntimeSignature();
 
         addFooter(root, false);
         refreshServiceStatus();
@@ -371,6 +417,7 @@ public class MainActivity extends Activity {
             String title,
             boolean ready,
             String detail,
+            boolean attentionWhenMissing,
             View.OnClickListener fix) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
@@ -378,10 +425,15 @@ public class MainActivity extends Activity {
         row.setPadding(dp(12), dp(9), dp(12), dp(9));
 
         TextView icon = new TextView(this);
-        icon.setText(ready ? "✓" : "!");
+        icon.setText(ready ? "✓" : (attentionWhenMissing ? "!" : "○"));
         icon.setTextSize(14);
         icon.setTypeface(Typeface.DEFAULT_BOLD);
-        icon.setTextColor(ready ? CrewTheme.EMERALD_400 : CrewTheme.AMBER_400);
+        icon.setTextColor(
+                ready
+                        ? CrewTheme.EMERALD_400
+                        : (attentionWhenMissing
+                                ? CrewTheme.AMBER_400
+                                : CrewTheme.TEXT_MUTED));
         icon.setGravity(Gravity.CENTER);
         row.addView(icon, new LinearLayout.LayoutParams(dp(28), dp(34)));
 
@@ -405,9 +457,15 @@ public class MainActivity extends Activity {
 
         if (!ready) {
             TextView action = new TextView(this);
-            action.setText(I18n.get(this, "修復 ›", "Fix ›"));
+            action.setText(I18n.get(
+                    this,
+                    attentionWhenMissing ? "修復 ›" : "啟用 ›",
+                    attentionWhenMissing ? "Fix ›" : "Enable ›"));
             action.setTextSize(10.5f);
-            action.setTextColor(CrewTheme.AMBER_400);
+            action.setTextColor(
+                    attentionWhenMissing
+                            ? CrewTheme.AMBER_400
+                            : CrewTheme.TEAL_300);
             row.addView(action);
             row.setOnClickListener(fix);
         }
@@ -417,7 +475,7 @@ public class MainActivity extends Activity {
 
     private boolean hasGeminiKey() {
         String key = AppConfig.getGeminiApiKey(this);
-        return key != null && !key.trim().isEmpty();
+        return key != null && key.trim().length() >= 20;
     }
 
     private boolean hasMicrophonePermission() {
@@ -431,46 +489,197 @@ public class MainActivity extends Activity {
                 || Settings.canDrawOverlays(this);
     }
 
-    private boolean isAssistantReady() {
-        return hasGeminiKey()
-                && hasMicrophonePermission()
-                && CrewAccessibilityService.isServiceRunning()
-                && hasOverlayPermission();
+    private boolean isCoreAssistantReady() {
+        return hasGeminiKey() && hasMicrophonePermission();
     }
 
-    private String firstReadinessIssue() {
+    private String firstCoreReadinessIssue() {
         if (!hasGeminiKey()) {
-            return I18n.get(this, "需要設定 Gemini API Key", "Gemini API key is required");
+            return I18n.get(
+                    this,
+                    "需要設定 Gemini API Key",
+                    "Gemini API key is required");
         }
         if (!hasMicrophonePermission()) {
-            return I18n.get(this, "需要麥克風權限", "Microphone permission is required");
-        }
-        if (!CrewAccessibilityService.isServiceRunning()) {
-            return I18n.get(this, "需要開啟無障礙服務", "Accessibility service is required");
-        }
-        if (!hasOverlayPermission()) {
-            return I18n.get(this, "需要允許懸浮視窗", "Overlay permission is required");
+            return I18n.get(
+                    this,
+                    "需要麥克風權限",
+                    "Microphone permission is required");
         }
         return "";
     }
 
     private void openFirstReadinessFix() {
-        if (isAssistantReady()) return;
-        if (!hasGeminiKey()) {
-            openGeminiKeySettingsFromHome();
+        if (!isCoreAssistantReady()) {
+            if (!hasGeminiKey()) {
+                openGeminiKeySettingsFromHome();
+                return;
+            }
+            if (!hasMicrophonePermission()) {
+                requestPermissions(
+                        new String[]{android.Manifest.permission.RECORD_AUDIO},
+                        991);
+                return;
+            }
+        }
+
+        if (AppConfig.isAlwaysOnEnabled(this) && !isWakeCapabilityReady()) {
+            fixWakeCapability();
+        }
+    }
+
+
+    private boolean hasNotificationPermission() {
+        return Build.VERSION.SDK_INT < 33
+                || checkSelfPermission("android.permission.POST_NOTIFICATIONS")
+                        == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private boolean areAppNotificationsEnabled() {
+        try {
+            android.app.NotificationManager manager =
+                    (android.app.NotificationManager)
+                            getSystemService(NOTIFICATION_SERVICE);
+            return manager == null || manager.areNotificationsEnabled();
+        } catch (Throwable ignored) {
+            return true;
+        }
+    }
+
+    private boolean isWakeCapabilityReady() {
+        if (!AppConfig.isAlwaysOnEnabled(this)) return true;
+        if (!hasNotificationPermission() || !areAppNotificationsEnabled()) {
+            return false;
+        }
+
+        String runtime = NativeLiveService.getRuntimeState();
+        return !"STOPPED".equals(runtime)
+                && !"BLOCKED".equals(runtime)
+                && !"DEGRADED".equals(runtime);
+    }
+
+    private String wakeCapabilityDetail() {
+        if (!hasNotificationPermission()) {
+            return I18n.get(
+                    this,
+                    "需要通知權限",
+                    "Notification permission required");
+        }
+        if (!areAppNotificationsEnabled()) {
+            return I18n.get(
+                    this,
+                    "系統通知已關閉",
+                    "App notifications are disabled");
+        }
+
+        String runtime = NativeLiveService.getRuntimeState();
+        if ("BLOCKED".equals(runtime)) {
+            return I18n.get(this, "喚醒服務被阻擋", "Wake service is blocked");
+        }
+        if ("DEGRADED".equals(runtime)) {
+            return I18n.get(this, "喚醒服務不穩定", "Wake service is degraded");
+        }
+        if ("STOPPED".equals(runtime)) {
+            return I18n.get(
+                    this,
+                    "背景服務尚未啟動",
+                    "Background service is not running");
+        }
+        if ("IDLE_MIC_YIELDED".equals(runtime)) {
+            return I18n.get(
+                    this,
+                    "暫停：其他 App 正在使用麥克風",
+                    "Paused: another app is using the microphone");
+        }
+        if ("ACTIVE".equals(runtime)) {
+            return I18n.get(this, "目前通話中", "Live is active");
+        }
+        if ("IDLE_LISTENING".equals(runtime)) {
+            return "「" + AppConfig.getWakePhrase(this) + "」· "
+                    + I18n.get(this, "正在待命", "Listening");
+        }
+        return I18n.get(this, "正在準備", "Starting");
+    }
+
+    private String wakeRuntimeSummary(String runtime) {
+        if (!hasNotificationPermission()) {
+            return I18n.get(
+                    this,
+                    "需要通知權限",
+                    "Notification permission required");
+        }
+        if (!areAppNotificationsEnabled()) {
+            return I18n.get(
+                    this,
+                    "系統通知已關閉",
+                    "App notifications are disabled");
+        }
+        if ("IDLE_LISTENING".equals(runtime)) {
+            return "「" + AppConfig.getWakePhrase(this) + "」· "
+                    + I18n.get(this, "正在待命", "Listening");
+        }
+        if ("ACTIVE".equals(runtime)) {
+            return I18n.get(this, "目前通話中", "Live is active");
+        }
+        if ("IDLE_MIC_YIELDED".equals(runtime)) {
+            return I18n.get(
+                    this,
+                    "暫停：其他 App 正在使用麥克風",
+                    "Paused: another app is using the microphone");
+        }
+        if ("BLOCKED".equals(runtime) || "DEGRADED".equals(runtime)) {
+            return I18n.get(
+                    this,
+                    "需要檢查喚醒服務",
+                    "Wake service needs attention");
+        }
+        if ("STOPPED".equals(runtime)) {
+            return I18n.get(
+                    this,
+                    "背景服務尚未啟動",
+                    "Background service is not running");
+        }
+        return I18n.get(this, "正在準備", "Starting");
+    }
+
+    private void fixWakeCapability() {
+        if (!hasNotificationPermission()) {
+            if (Build.VERSION.SDK_INT >= 33) {
+                requestPermissions(
+                        new String[]{"android.permission.POST_NOTIFICATIONS"},
+                        992);
+            }
             return;
         }
-        if (!hasMicrophonePermission()) {
-            requestPermissions(
-                    new String[]{android.Manifest.permission.RECORD_AUDIO},
-                    991);
+
+        if (!areAppNotificationsEnabled()) {
+            openNotificationSettings();
             return;
         }
-        if (!CrewAccessibilityService.isServiceRunning()) {
-            showAccessibilityDisclosureDialog();
-            return;
+
+        renderTab(2);
+        Toast.makeText(
+                this,
+                I18n.get(
+                        this,
+                        "請查看喚醒診斷資訊",
+                        "Check wake diagnostics"),
+                Toast.LENGTH_SHORT).show();
+    }
+
+    private void openNotificationSettings() {
+        try {
+            Intent intent =
+                    new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS);
+            intent.putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName());
+            startActivity(intent);
+        } catch (Exception error) {
+            try {
+                startActivity(new Intent(
+                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        Uri.parse("package:" + getPackageName())));
+            } catch (Exception ignored) {}
         }
-        if (!hasOverlayPermission()) openOverlaySettings();
     }
 
     private void openGeminiKeySettingsFromHome() {
@@ -892,20 +1101,6 @@ public class MainActivity extends Activity {
         } catch (Throwable ignored) {
             return true;
         }
-    }
-
-    private void openNotificationSettings() {
-        try {
-            Intent intent;
-            if (Build.VERSION.SDK_INT >= 26) {
-                intent = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS);
-                intent.putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName());
-            } else {
-                intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                        Uri.parse("package:" + getPackageName()));
-            }
-            startActivity(intent);
-        } catch (Exception ignored) {}
     }
 
     @Override
@@ -1686,7 +1881,7 @@ public class MainActivity extends Activity {
         GeminiVoicePreviewClient.stop();
     }
 
-   private void refreshServiceStatus() {
+    private void refreshServiceStatus() {
         if (statusDot == null
                 || statusText == null
                 || statusDetail == null
@@ -1695,19 +1890,20 @@ public class MainActivity extends Activity {
             return;
         }
 
-        boolean ready = isAssistantReady();
+        boolean coreReady = isCoreAssistantReady();
         String runtime = NativeLiveService.getRuntimeState();
         boolean agentWorking = NativeLiveService.hasActiveAgentTask();
         boolean speaking = NativeLiveService.isAiSpeaking();
         boolean live = NativeLiveService.isActive();
-        boolean runtimeError =
-                "BLOCKED".equals(runtime) || "DEGRADED".equals(runtime);
+        boolean wakeAttention =
+                AppConfig.isAlwaysOnEnabled(this)
+                        && !isWakeCapabilityReady();
 
         if (homeOrb != null) {
             homeOrb.setAgentWorking(false);
             homeOrb.setAgentNeedsAttention(false);
 
-            if (!ready || runtimeError) {
+            if (!coreReady) {
                 homeOrb.setNativeVoiceState(3);
             } else if (agentWorking) {
                 homeOrb.setNativeVoiceState(1);
@@ -1716,32 +1912,22 @@ public class MainActivity extends Activity {
                 homeOrb.setNativeVoiceState(2);
             } else if (live) {
                 homeOrb.setNativeVoiceState(1);
+            } else if (wakeAttention) {
+                homeOrb.setNativeVoiceState(0);
+                homeOrb.setAgentNeedsAttention(true);
             } else {
                 homeOrb.setNativeVoiceState(0);
             }
         }
 
-        if (!ready) {
+        if (!coreReady) {
             statusDot.setTextColor(CrewTheme.AMBER_400);
-            statusText.setText(I18n.get(this, "需要完成設定", "Setup required"));
-            statusText.setTextColor(CrewTheme.AMBER_400);
-            statusDetail.setText(firstReadinessIssue());
-            statusCard.setBackground(CrewTheme.createCard(
+            statusText.setText(I18n.get(
                     this,
-                    Color.parseColor("#1A78350F"),
-                    Color.parseColor("#4DF59E0B"),
-                    18));
-            return;
-        }
-
-        if (runtimeError) {
-            statusDot.setTextColor(CrewTheme.AMBER_400);
-            statusText.setText(I18n.get(this, "喚醒服務需要檢查", "Wake service needs attention"));
+                    "需要完成核心設定",
+                    "Core setup required"));
             statusText.setTextColor(CrewTheme.AMBER_400);
-            statusDetail.setText(I18n.get(
-                    this,
-                    "核心功能可用；可到設定查看診斷資訊",
-                    "Core features are ready; check diagnostics in Settings"));
+            statusDetail.setText(firstCoreReadinessIssue());
             statusCard.setBackground(CrewTheme.createCard(
                     this,
                     Color.parseColor("#1A78350F"),
@@ -1761,22 +1947,66 @@ public class MainActivity extends Activity {
                     "Detailed steps stay in Agent Inspector"));
         } else if (speaking) {
             statusText.setText(I18n.get(this, "Gemini 正在回覆", "Gemini is speaking"));
-            statusDetail.setText(I18n.get(this, "可以直接插話打斷", "You can interrupt naturally"));
+            statusDetail.setText(I18n.get(
+                    this,
+                    "可以直接插話打斷",
+                    "You can interrupt naturally"));
         } else if (live) {
             statusText.setText(I18n.get(this, "正在聆聽", "Listening"));
-            statusDetail.setText(I18n.get(this, "直接說出你要做的事", "Say what you want to do"));
+            statusDetail.setText(I18n.get(
+                    this,
+                    "直接說出你要做的事",
+                    "Say what you want to do"));
+        } else if (wakeAttention) {
+            statusDot.setTextColor(CrewTheme.AMBER_400);
+            statusText.setTextColor(CrewTheme.AMBER_400);
+            statusText.setText(I18n.get(
+                    this,
+                    "助理可用 · 喚醒詞需要處理",
+                    "Assistant ready · Wake needs attention"));
+            statusDetail.setText(wakeCapabilityDetail());
+            statusCard.setBackground(CrewTheme.createCard(
+                    this,
+                    Color.parseColor("#1A78350F"),
+                    Color.parseColor("#4DF59E0B"),
+                    18));
+            return;
         } else if (AppConfig.isAlwaysOnEnabled(this)
                 && "IDLE_LISTENING".equals(runtime)) {
-            statusText.setText(I18n.get(this, "助理正在待命", "Assistant is standing by"));
+            statusText.setText(I18n.get(
+                    this,
+                    "助理正在待命",
+                    "Assistant is standing by"));
             statusDetail.setText(
                     "說「" + AppConfig.getWakePhrase(this) + "」"
                             + I18n.get(this, "即可開始", " to start"));
         } else {
             statusText.setText(I18n.get(this, "準備就緒", "Ready"));
-            statusDetail.setText(I18n.get(
-                    this,
-                    "可手動開始通話，或開啟喚醒詞",
-                    "Start Live manually or enable the wake phrase"));
+
+            boolean phoneControl = CrewAccessibilityService.isServiceRunning();
+            boolean overlay = hasOverlayPermission();
+
+            if (phoneControl && overlay) {
+                statusDetail.setText(I18n.get(
+                        this,
+                        "語音與手機操作均可使用",
+                        "Voice and phone actions are ready"));
+            } else if (!phoneControl && !overlay) {
+                statusDetail.setText(I18n.get(
+                        this,
+                        "語音已可用 · 手機操作與懸浮球尚未啟用",
+                        "Voice ready · Phone actions and bubble are optional"));
+            } else if (!phoneControl) {
+                statusDetail.setText(I18n.get(
+                        this,
+                        "語音已可用 · 手機操作尚未啟用",
+                        "Voice ready · Phone actions are optional"));
+            } else {
+                statusDetail.setText(I18n.get(
+                        this,
+                        "語音與手機操作可用 · 懸浮球尚未啟用",
+                        "Voice and phone actions ready · Bubble is optional"));
+            }
         }
 
         statusCard.setBackground(CrewTheme.createCard(

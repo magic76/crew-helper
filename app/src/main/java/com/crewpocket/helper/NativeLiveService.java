@@ -52,6 +52,50 @@ public class NativeLiveService extends Service {
     private static volatile boolean serviceRunning;
     private static NativeLiveService instance;
 
+    interface RuntimeStateListener {
+        void onRuntimeStateChanged();
+    }
+
+    private static final Handler RUNTIME_STATE_HANDLER =
+            new Handler(Looper.getMainLooper());
+    private static java.lang.ref.WeakReference<RuntimeStateListener>
+            runtimeStateListener =
+                    new java.lang.ref.WeakReference<RuntimeStateListener>(null);
+    private static boolean runtimeStateDispatchPosted;
+
+    static void setRuntimeStateListener(RuntimeStateListener listener) {
+        runtimeStateListener =
+                new java.lang.ref.WeakReference<RuntimeStateListener>(listener);
+        notifyRuntimeStateChanged();
+    }
+
+    static void clearRuntimeStateListener(RuntimeStateListener listener) {
+        RuntimeStateListener current = runtimeStateListener.get();
+        if (current == listener) {
+            runtimeStateListener.clear();
+        }
+    }
+
+    private static void notifyRuntimeStateChanged() {
+        synchronized (NativeLiveService.class) {
+            if (runtimeStateDispatchPosted) return;
+            runtimeStateDispatchPosted = true;
+        }
+
+        RUNTIME_STATE_HANDLER.postDelayed(new Runnable() {
+            @Override public void run() {
+                synchronized (NativeLiveService.class) {
+                    runtimeStateDispatchPosted = false;
+                }
+
+                RuntimeStateListener listener = runtimeStateListener.get();
+                if (listener != null) {
+                    listener.onRuntimeStateChanged();
+                }
+            }
+        }, 60L);
+    }
+
     private RuntimeState runtimeState = RuntimeState.IDLE;
     private NativeGeminiLiveClient client;
     private final Handler visualHandler = new Handler(Looper.getMainLooper());
@@ -595,6 +639,7 @@ public class NativeLiveService extends Service {
     static void enableAlwaysOn(Context context) {
         if (context == null) return;
         AppConfig.setAlwaysOnEnabled(context, true);
+        notifyRuntimeStateChanged();
         NativeLiveService running = instance;
         if (running != null) {
             running.visualHandler.post(new Runnable() {
@@ -623,6 +668,7 @@ public class NativeLiveService extends Service {
     static void disableAlwaysOn(Context context) {
         if (context == null) return;
         AppConfig.setAlwaysOnEnabled(context, false);
+        notifyRuntimeStateChanged();
         NativeLiveService running = instance;
         if (running != null) {
             running.visualHandler.post(new Runnable() {
@@ -826,6 +872,7 @@ public class NativeLiveService extends Service {
         super.onCreate();
         instance = this;
         serviceRunning = true;
+        notifyRuntimeStateChanged();
         CorrectionLearningRuntime.init(this);
         wakeAcknowledgement = new WakeAcknowledgement(this);
         alwaysOnEnabled = AppConfig.isAlwaysOnEnabled(this);
@@ -1170,6 +1217,7 @@ public class NativeLiveService extends Service {
                         FloatingBubbleManager.getInstance(
                                 NativeLiveService.this)
                                 .updateAgentTaskStatus(text, taskActive);
+                        notifyRuntimeStateChanged();
                     }
                     @Override public void onStopped(String reason) {
                         NativeGeminiLiveClient live = client;
@@ -1182,6 +1230,7 @@ public class NativeLiveService extends Service {
                                 NativeLiveService.this)
                                 .updateAgentTaskStatus(reason, false);
                         handleClientStopped(reason);
+                        notifyRuntimeStateChanged();
                     }
                     @Override public void onTranscript(String role, String text) {
                         if ("你".equals(role) && text != null && !text.trim().isEmpty()) {
@@ -1190,7 +1239,10 @@ public class NativeLiveService extends Service {
                         FloatingBubbleManager.getInstance(NativeLiveService.this).updateLiveTranscript(role, text);
                     }
                     @Override public void onSpeakingChanged(boolean speaking) {
-                        FloatingBubbleManager.getInstance(NativeLiveService.this).refreshVoiceControls();
+                        FloatingBubbleManager.getInstance(
+                                NativeLiveService.this)
+                                .refreshVoiceControls();
+                        notifyRuntimeStateChanged();
                     }
                     @Override public void onMicrophoneLevel(double dbfs, double gateDbfs, boolean sending) {
                         FloatingBubbleManager.getInstance(NativeLiveService.this).updateLiveMicrophoneLevel(dbfs, sending);
@@ -1328,6 +1380,7 @@ public class NativeLiveService extends Service {
     private synchronized void stopRuntime(String reason) {
         alwaysOnEnabled = false;
         stopRequested = true;
+        notifyRuntimeStateChanged();
         active = false;
         runtimeState = RuntimeState.IDLE;
         stopIdleWakeWord();
@@ -1366,14 +1419,19 @@ public class NativeLiveService extends Service {
         Notification notification = buildNotification(text);
         startForeground(NOTIFICATION_ID, notification);
         foregroundStarted = true;
+        notifyRuntimeStateChanged();
     }
 
     private void updateForegroundNotification(String text) {
         if (!foregroundStarted) return;
         try {
-            NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-            if (manager != null) manager.notify(NOTIFICATION_ID, buildNotification(text));
+            NotificationManager manager =
+                    (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+            if (manager != null) {
+                manager.notify(NOTIFICATION_ID, buildNotification(text));
+            }
         } catch (Exception ignored) {}
+        notifyRuntimeStateChanged();
     }
 
     private Notification buildNotification(String text) {
