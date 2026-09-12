@@ -1243,7 +1243,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                         .put("properties", phoneActionProperties)
                         .put("required", new JSONArray().put("action"))));
         tools.put(new JSONObject().put("name", "inspect_ui").put("description",
-                "FALLBACK OBSERVATION ONLY. Do NOT call after STEP_OK when result.after.fresh=true; Runtime already auto-observed the new screen. Call inspect_ui only when there is no trustworthy current/after state, Runtime explicitly requires observation after STEP_FAILED, or semantics are insufficient. It returns a compact screen for exactly one next phone_action."));
+                "FALLBACK OBSERVATION ONLY. Phone tool responses use status DONE/WAIT/NEED_USER/FAILED. When status=DONE and screen is present, use it directly. When status=WAIT or FAILED needs a fresh view, call inspect_ui once before another phone mutation."));
         tools.put(new JSONObject().put("name", "wait").put("description",
                 "Wait for a screen condition after an asynchronous action. Runtime polls and returns the latest state.")
                 .put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject()
@@ -3877,15 +3877,21 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if (DeckRepository.hasActiveDeck() && (name.contains("deck"))) {
             result.put("modeInstructions", LivePrompt.DECK);
         }
+
+        // 0079: keep the complete Runtime result for logs/task history, but give
+        // the weak Live model a tiny, stable phone-control contract.
+        final JSONObject modelResult =
+                ModelToolResponseAdapter.forModel(name, result);
+
         JSONArray responses = new JSONArray();
-        responses.put(new JSONObject().put("response", new JSONObject().put("result", result)).put("id", id).put("name", name));
+        responses.put(new JSONObject().put("response", new JSONObject().put("result", modelResult)).put("id", id).put("name", name));
         synchronized (agentLock) {
             String signature = primaryToolCallSignatures.remove(id);
             if (signature != null) {
                 ArrayList<ToolResponseRecipient> duplicates = coalescedToolCallRecipients.remove(signature);
                 if (duplicates != null) {
                     for (ToolResponseRecipient duplicate : duplicates) {
-                        responses.put(new JSONObject().put("response", new JSONObject().put("result", result))
+                        responses.put(new JSONObject().put("response", new JSONObject().put("result", modelResult))
                                 .put("id", duplicate.id).put("name", duplicate.name));
                     }
                 }
