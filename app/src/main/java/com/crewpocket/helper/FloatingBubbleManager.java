@@ -65,7 +65,6 @@ public class FloatingBubbleManager {
     private WindowManager.LayoutParams voiceControlParams = null;
     private FloatingPanelController voiceControlController = null;
     private BubbleActionStripOverlay bubbleActionStrip = null;
-    private WindowManager.LayoutParams bubbleActionStripParams = null;
     private View compactStatusView = null;
     private WindowManager.LayoutParams compactStatusParams = null;
     private FloatingPanelController compactStatusController = null;
@@ -240,6 +239,7 @@ public class FloatingBubbleManager {
     private double latestMicDbfs = -96d;
     private boolean latestMicSending = false;
     private String latestLiveTranscript = "等待對話開始…";
+    private String previousLiveTranscript = "";
     private String latestLiveTranscriptRole = "";
     private Runnable transcriptRefreshRunnable = null;
     private TextView dialogStatusText = null;
@@ -351,7 +351,6 @@ public class FloatingBubbleManager {
                             : dp(BUBBLE_SIZE_DP);
                     boolean bubbleOnLeft =
                             bubbleParams.x + bubbleSize / 2 < screenW / 2;
-        bubbleActionStrip.setBubbleOnLeft(bubbleOnLeft);
                     int targetX = bubbleOnLeft
                             ? bubbleParams.x + bubbleSize + dp(8)
                             : bubbleParams.x - pillWidth - dp(8);
@@ -639,14 +638,12 @@ public class FloatingBubbleManager {
             bubbleExpandAnimator.cancel();
             bubbleExpandAnimator = null;
         }
-        removeBubbleMiniConsole();
         if (bubbleContainer != null) {
             try { windowManager.removeView(bubbleContainer); } catch (Exception ignored) {}
         }
         bubbleContainer = null;
         bubbleView = null;
         bubbleActionStrip = null;
-        bubbleActionStripParams = null;
     }
 
     public boolean isBubbleShowing() {
@@ -727,9 +724,12 @@ public class FloatingBubbleManager {
                             bubbleView,
                             new LinearLayout.LayoutParams(size, size));
 
-                    // 0085: keep the Crew bubble itself fixed at 48dp.
-                    // The Mini Console is attached as its own nearby overlay.
                     bubbleActionStrip = new BubbleActionStripOverlay(context);
+                    bubbleContainer.addView(
+                            bubbleActionStrip,
+                            new LinearLayout.LayoutParams(
+                                    size,
+                                    LinearLayout.LayoutParams.WRAP_CONTENT));
 
                     bubbleView.setOnTouchListener(new View.OnTouchListener() {
                         private int initialX, initialY;
@@ -879,163 +879,184 @@ public class FloatingBubbleManager {
     }
 
     private void toggleBubbleActionStrip() {
-        if (bubbleView == null || bubbleContainer == null
-                || bubbleParams == null || bubbleActionStrip == null) return;
-        if (bubbleActionStrip.isShowing()) collapseBubbleActions(true);
-        else expandBubbleActions();
+        if (bubbleView == null
+                || bubbleContainer == null
+                || bubbleParams == null
+                || bubbleActionStrip == null) {
+            return;
+        }
+
+        if (bubbleActionStrip.isShowing()) {
+            collapseBubbleActions(true);
+        } else {
+            expandBubbleActions();
+        }
     }
 
     private void expandBubbleActions() {
-        if (bubbleContainer == null || bubbleParams == null
-                || bubbleActionStrip == null || !canDrawOverlays()) return;
-
-        if (voiceControlView != null || voiceControlsOpening) hideVoiceControls();
-        removeBubbleMiniConsole();
-
-        bubbleActionStrip.show(bubbleActionStripActions(), miniConsoleStatus());
-
-        int overlayType = Build.VERSION.SDK_INT >= 26
-                ? 2038 : WindowManager.LayoutParams.TYPE_PHONE;
-        bubbleActionStripParams = new WindowManager.LayoutParams(
-                bubbleActionStrip.desiredWidthPx(),
-                bubbleActionStrip.desiredHeightPx(),
-                overlayType,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                        | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
-                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-                PixelFormat.TRANSLUCENT);
-        bubbleActionStripParams.gravity = Gravity.TOP | Gravity.START;
-        positionBubbleMiniConsole();
-
-        try {
-            windowManager.addView(bubbleActionStrip, bubbleActionStripParams);
-        } catch (Exception error) {
-            bubbleActionStrip.dismiss();
-            bubbleActionStripParams = null;
+        if (bubbleContainer == null
+                || bubbleParams == null
+                || bubbleActionStrip == null) {
+            return;
         }
+
+        bubbleActionStrip.show(bubbleActionStripActions());
+        ensureShortcutRoomBelow(dp(BUBBLE_SIZE_DP));
+        setBubbleContainerExpandedStyle(true);
+
+        int targetHeight =
+                dp(BUBBLE_SIZE_DP)
+                        + bubbleActionStrip.desiredHeightPx();
+        animateBubbleContainerHeight(targetHeight, 160L, null);
     }
 
     private void collapseBubbleActions(boolean animated) {
-        removeBubbleMiniConsole();
-    }
-
-    private void removeBubbleMiniConsole() {
-        if (bubbleActionStrip != null && bubbleActionStrip.isShowing()) {
-            try { windowManager.removeViewImmediate(bubbleActionStrip); }
-            catch (Exception ignored) {}
-            bubbleActionStrip.dismiss();
+        if (bubbleContainer == null
+                || bubbleParams == null
+                || bubbleActionStrip == null
+                || !bubbleActionStrip.isShowing()) {
+            return;
         }
-        bubbleActionStripParams = null;
-    }
 
-    private void positionBubbleMiniConsole() {
-        if (bubbleActionStrip == null || bubbleActionStripParams == null
-                || bubbleParams == null) return;
-
-        int screenW = windowManager.getDefaultDisplay().getWidth();
-        int screenH = windowManager.getDefaultDisplay().getHeight();
-        int bubbleSize = dp(BUBBLE_SIZE_DP);
-        int consoleW = bubbleActionStrip.desiredWidthPx();
-        int consoleH = bubbleActionStrip.desiredHeightPx();
-        int margin = dp(8);
-
-        boolean onLeft = bubbleParams.x + bubbleSize / 2 < screenW / 2;
-        int targetX = onLeft
-                ? bubbleParams.x + bubbleSize + dp(8)
-                : bubbleParams.x - consoleW - dp(8);
-        int targetY = bubbleParams.y - dp(10);
-
-        int maxX = Math.max(margin, screenW - consoleW - margin);
-        int minY = getStatusBarHeight() + dp(4);
-        int maxY = Math.max(minY, screenH - consoleH - dp(24));
-        bubbleActionStripParams.x = Math.max(margin, Math.min(maxX, targetX));
-        bubbleActionStripParams.y = Math.max(minY, Math.min(maxY, targetY));
-    }
-
-    private String miniConsoleStatus() {
-        if (!NativeLiveService.isActive()) {
-            if (AppConfig.isAlwaysOnEnabled(context)) {
-                return "等待喚醒「" + AppConfig.getWakePhrase(context) + "」";
+        Runnable finish = new Runnable() {
+            @Override public void run() {
+                if (bubbleActionStrip != null) {
+                    bubbleActionStrip.dismiss();
+                }
+                setBubbleContainerExpandedStyle(false);
             }
-            return "待命";
+        };
+
+        if (animated) {
+            animateBubbleContainerHeight(
+                    dp(BUBBLE_SIZE_DP),
+                    140L,
+                    finish);
+        } else {
+            bubbleExpandAnimationGeneration++;
+            if (bubbleExpandAnimator != null) {
+                bubbleExpandAnimator.cancel();
+                bubbleExpandAnimator = null;
+            }
+            bubbleParams.height = dp(BUBBLE_SIZE_DP);
+            try {
+                windowManager.updateViewLayout(
+                        bubbleContainer,
+                        bubbleParams);
+            } catch (Exception ignored) {}
+            finish.run();
         }
-        if (isLiveError(latestLiveStatus)) return latestLiveStatus;
-        if (NativeLiveService.hasActiveAgentTask()) return "正在執行任務…";
-        if (NativeLiveService.isAiSpeaking()) return "Gemini 正在說話";
-        if (NativeLiveService.isAgentMuted()) return "麥克風已靜音";
-        String lower = latestLiveStatus == null ? "" : latestLiveStatus.toLowerCase();
-        if (lower.contains("連線")) return "正在連線…";
-        return "正在聽…";
+    }
+
+    private void setBubbleContainerExpandedStyle(boolean expanded) {
+        if (bubbleContainer == null) return;
+        if (!expanded) {
+            bubbleContainer.setBackground(null);
+            return;
+        }
+
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(Color.argb(238, 58, 58, 60));
+        bg.setCornerRadius(dp(24));
+        bg.setStroke(dp(1), Color.parseColor("#666B7280"));
+        bubbleContainer.setBackground(bg);
+    }
+
+    private void animateBubbleContainerHeight(
+            int targetHeight,
+            long durationMs,
+            final Runnable endAction) {
+        if (bubbleContainer == null || bubbleParams == null) return;
+
+        final int generation = ++bubbleExpandAnimationGeneration;
+        if (bubbleExpandAnimator != null) {
+            bubbleExpandAnimator.cancel();
+        }
+
+        final int startHeight =
+                bubbleParams.height > 0
+                        ? bubbleParams.height
+                        : dp(BUBBLE_SIZE_DP);
+        if (startHeight == targetHeight) {
+            if (endAction != null) endAction.run();
+            return;
+        }
+
+        bubbleExpandAnimator =
+                ValueAnimator.ofInt(startHeight, targetHeight);
+        bubbleExpandAnimator.setDuration(durationMs);
+        bubbleExpandAnimator.setInterpolator(
+                new DecelerateInterpolator());
+        bubbleExpandAnimator.addUpdateListener(animation -> {
+            if (bubbleContainer == null || bubbleParams == null) return;
+            bubbleParams.height = (Integer) animation.getAnimatedValue();
+            try {
+                windowManager.updateViewLayout(
+                        bubbleContainer,
+                        bubbleParams);
+            } catch (Exception ignored) {}
+        });
+        bubbleExpandAnimator.addListener(
+                new AnimatorListenerAdapter() {
+                    @Override
+                    public void onAnimationEnd(Animator animation) {
+                        if (generation != bubbleExpandAnimationGeneration) return;
+                        bubbleExpandAnimator = null;
+                        if (endAction != null) endAction.run();
+                    }
+                });
+        bubbleExpandAnimator.start();
     }
 
     private BubbleActionStripOverlay.Actions bubbleActionStripActions() {
         return new BubbleActionStripOverlay.Actions() {
-            @Override public void onPrimaryMic() {
-                if (!NativeLiveService.isActive()) {
-                    toggleNativeLive();
-                    showCompactStatus("正在連線", "Gemini Live");
-                } else {
-                    boolean muted = NativeLiveService.toggleAgentMute();
-                    showCompactStatus(muted ? "麥克風已靜音" : "正在聽", "");
-                }
-                refreshVoiceControls();
-                refreshBubbleActionStripIfShowing();
-            }
-
-            @Override public void onSendScreen() {
-                boolean sent = NativeLiveService.sendScreenSnapshot();
-                showCompactStatus(
-                        sent ? "正在看畫面" : "無法取得畫面",
-                        sent ? "已送給 Gemini" : "請確認 Live 已連線");
-                refreshBubbleActionStripIfShowing();
-            }
-
-            @Override public void onSendCamera() {
-                boolean sent = NativeLiveService.sendCameraSnapshot();
-                showCompactStatus(
-                        sent ? "正在拍照" : "相機無法使用",
-                        sent ? "完成後會送給 Gemini" : "請確認權限與 Live");
-                refreshBubbleActionStripIfShowing();
-            }
-
-            @Override public void onStop() {
-                if (NativeLiveService.hasActiveAgentTask()) {
-                    boolean stopped = NativeLiveService.stopAgentTask();
-                    showCompactStatus(stopped ? "任務已停止" : "停止失敗", "");
-                } else if (NativeLiveService.isAiSpeaking()) {
-                    boolean interrupted = NativeLiveService.interruptAiSpeech();
-                    showCompactStatus(interrupted ? "已停止說話" : "無法停止", "");
-                } else {
-                    showCompactStatus("目前沒有執行中的任務", "");
-                }
-                refreshVoiceControls();
-                refreshBubbleActionStripIfShowing();
-            }
-
-            @Override public void onEndCall() {
-                if (NativeLiveService.isActive()) {
-                    nativeLiveRequested = false;
-                    NativeLiveService.stop(context);
-                    updateNativeLiveStatus("正在結束語音通話", false);
-                    showCompactStatus("正在結束 Live", "");
-                }
+            @Override public void onToggleCall() {
                 collapseBubbleActions(false);
+                toggleNativeLive();
+                refreshVoiceControls();
+            }
+
+            @Override public void onToggleMute() {
+                collapseBubbleActions(false);
+                boolean muted = NativeLiveService.toggleAgentMute();
+                showCompactStatus(
+                        muted ? "已靜音" : "已取消靜音",
+                        "");
+                refreshVoiceControls();
             }
 
             @Override public void onOpenConsole() {
                 collapseBubbleActions(false);
                 showVoiceControls();
             }
+
+            @Override public void onInterrupt() {
+                collapseBubbleActions(false);
+                if (NativeLiveService.interruptForCorrection()) {
+                    showCompactStatus("已打斷", "");
+                }
+                refreshVoiceControls();
+            }
         };
     }
 
     private void refreshBubbleActionStripIfShowing() {
-        if (bubbleActionStrip == null || !bubbleActionStrip.isShowing()
-                || bubbleActionStripParams == null) return;
-        bubbleActionStrip.refresh(bubbleActionStripActions(), miniConsoleStatus());
-        positionBubbleMiniConsole();
-        try { windowManager.updateViewLayout(bubbleActionStrip, bubbleActionStripParams); }
-        catch (Exception ignored) {}
+        if (bubbleActionStrip == null
+                || !bubbleActionStrip.isShowing()
+                || bubbleContainer == null
+                || bubbleParams == null) {
+            return;
+        }
+
+        bubbleActionStrip.refresh(bubbleActionStripActions());
+        ensureShortcutRoomBelow(dp(BUBBLE_SIZE_DP));
+        int targetHeight =
+                dp(BUBBLE_SIZE_DP)
+                        + bubbleActionStrip.desiredHeightPx();
+        animateBubbleContainerHeight(
+                targetHeight,
+                100L,
+                null);
     }
 
     // 🌊 Set Water Flow / Thinking State
@@ -1135,6 +1156,9 @@ public class FloatingBubbleManager {
                 NativeLiveService.stop(context);
                 updateNativeLiveStatus("正在結束語音通話", false);
             } else {
+                previousLiveTranscript = "";
+                latestLiveTranscript = "等待對話開始…";
+                latestLiveTranscriptRole = "";
                 nativeLiveRequested = true;
                 NativeLiveService.start(context);
                 // Give immediate visual feedback; the service will replace it
@@ -1185,6 +1209,12 @@ public class FloatingBubbleManager {
                 String speaker = "Gemini".equalsIgnoreCase(role) ? "助理" : "你";
                 String fragment = text.trim().replaceAll("\\s+", " ");
                 if (!speaker.equals(latestLiveTranscriptRole)) {
+                    if (!latestLiveTranscriptRole.isEmpty()
+                            && latestLiveTranscript != null
+                            && !latestLiveTranscript.trim().isEmpty()
+                            && !"等待對話開始…".equals(latestLiveTranscript.trim())) {
+                        previousLiveTranscript = latestLiveTranscript;
+                    }
                     latestLiveTranscriptRole = speaker;
                     latestLiveTranscript = speaker + "：" + fragment;
                 } else {
@@ -1236,25 +1266,89 @@ public class FloatingBubbleManager {
     }
 
     private void updateVoiceTelemetryUi() {
+        boolean liveRequested = nativeLiveRequested || NativeLiveService.isActive();
+        boolean error = isLiveError(latestLiveStatus);
+        boolean activeTask = NativeLiveService.hasActiveAgentTask();
+        boolean speaking = NativeLiveService.isAiSpeaking();
+        boolean muted = NativeLiveService.isAgentMuted();
+
+        String statusText;
+        int statusColor;
+        if (error) {
+            statusText = latestLiveStatus == null || latestLiveStatus.trim().isEmpty()
+                    ? "連線發生錯誤"
+                    : latestLiveStatus.trim();
+            statusColor = Color.parseColor("#FB7185");
+        } else if (activeTask) {
+            statusText = "正在執行任務…";
+            statusColor = Color.parseColor("#FBBF24");
+        } else if (speaking) {
+            statusText = "Gemini 正在回覆";
+            statusColor = Color.parseColor("#FCD34D");
+        } else if (muted) {
+            statusText = "麥克風已靜音";
+            statusColor = Color.parseColor("#FDA4AF");
+        } else if (liveRequested) {
+            String lower = latestLiveStatus == null
+                    ? ""
+                    : latestLiveStatus.toLowerCase();
+            if (lower.contains("正在連線")
+                    || lower.contains("連線中")
+                    || lower.contains("connecting")) {
+                statusText = "正在連線…";
+                statusColor = Color.parseColor("#93C5FD");
+            } else {
+                statusText = "正在聆聽";
+                statusColor = Color.parseColor("#5EEAD4");
+            }
+        } else {
+            statusText = "待命";
+            statusColor = Color.parseColor("#A1A1AA");
+        }
+
         if (voiceStatusText != null) {
-            boolean error = isLiveError(latestLiveStatus);
-            voiceStatusText.setText((error ? "● " : "● ") + latestLiveStatus);
-            voiceStatusText.setTextColor(Color.parseColor(error ? "#FDA4AF" : "#93C5FD"));
+            voiceStatusText.setText("● " + statusText);
+            voiceStatusText.setTextColor(statusColor);
         }
         if (voiceMeterText != null) {
-            long db = Math.round(Math.max(-96d, Math.min(0d, latestMicDbfs)));
-            String state = !NativeLiveService.isActive() ? "等待通話" : (latestMicSending ? "正在送出" : "靜音中");
-            voiceMeterText.setText("🎙 收音 " + db + " dB · " + state);
+            voiceMeterText.setText(liveRequested ? "Gemini Live" : "語音助理");
+            voiceMeterText.setTextColor(Color.parseColor("#A1A1AA"));
         }
         if (voiceStopAgentButton != null) {
-            boolean activeTask = NativeLiveService.hasActiveAgentTask();
-            voiceStopAgentButton.setVisibility(activeTask ? View.VISIBLE : View.GONE);
+            boolean showStop = activeTask || speaking;
+            voiceStopAgentButton.setVisibility(showStop ? View.VISIBLE : View.GONE);
+            if (showStop) {
+                voiceStopAgentButton.setText(
+                        activeTask ? "■ 停止目前任務" : "■ 停止 Gemini 回覆");
+            }
         }
     }
 
     private void updateVoiceTranscriptUi() {
         if (voiceTranscriptText == null) return;
-        voiceTranscriptText.setText(latestLiveTranscript);
+
+        boolean liveRequested = nativeLiveRequested || NativeLiveService.isActive();
+        String current = latestLiveTranscript == null ? "" : latestLiveTranscript.trim();
+        boolean hasCurrent = !current.isEmpty()
+                && !"等待對話開始…".equals(current);
+
+        if (!liveRequested || !hasCurrent) {
+            voiceTranscriptText.setText("");
+            voiceTranscriptText.setVisibility(View.GONE);
+            return;
+        }
+
+        String previous = previousLiveTranscript == null
+                ? ""
+                : previousLiveTranscript.trim();
+        String display = current;
+        if (!previous.isEmpty()
+                && !"等待對話開始…".equals(previous)
+                && !previous.equals(current)) {
+            display = previous + "\n" + current;
+        }
+        voiceTranscriptText.setText(display);
+        voiceTranscriptText.setVisibility(View.VISIBLE);
     }
 
     private void toggleVoiceControls() {
@@ -1268,6 +1362,34 @@ public class FloatingBubbleManager {
         return button;
     }
 
+    private LinearLayout makeConsoleActionCell(
+            DockIconButton button,
+            String label) {
+        LinearLayout cell = new LinearLayout(context);
+        cell.setOrientation(LinearLayout.VERTICAL);
+        cell.setGravity(Gravity.CENTER);
+        cell.setPadding(dp(2), 0, dp(2), 0);
+
+        cell.addView(
+                button,
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        dp(48)));
+
+        TextView caption = new TextView(context);
+        caption.setText(label);
+        caption.setTextSize(9.5f);
+        caption.setTextColor(Color.parseColor("#D4D4D8"));
+        caption.setGravity(Gravity.CENTER);
+        caption.setSingleLine(true);
+        cell.addView(
+                caption,
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        dp(18)));
+        return cell;
+    }
+
     private void showVoiceControls() {
         if (!canDrawOverlays() || voiceControlView != null || voiceControlsOpening) return;
         voiceControlsOpening = true;
@@ -1276,217 +1398,149 @@ public class FloatingBubbleManager {
                 if (!voiceControlsOpening) return;
                 try {
                     if (dialogView != null) hideDialog();
-                    int overlayType = Build.VERSION.SDK_INT >= 26 ? 2038 : WindowManager.LayoutParams.TYPE_PHONE;
+                    int overlayType = Build.VERSION.SDK_INT >= 26
+                            ? 2038
+                            : WindowManager.LayoutParams.TYPE_PHONE;
                     int screenWidth = windowManager.getDefaultDisplay().getWidth();
+                    int screenHeight = windowManager.getDefaultDisplay().getHeight();
 
-                    // 📱 Ergonomic Bottom Dock (matching Web UI style)
-                    int dockWidth = Math.min(dp(360), screenWidth - dp(24));
+                    int dockWidth = Math.min(dp(316), screenWidth - dp(24));
                     voiceControlParams = new WindowManager.LayoutParams(
                             dockWidth,
                             WindowManager.LayoutParams.WRAP_CONTENT,
                             overlayType,
                             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                                     | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
-                            PixelFormat.TRANSLUCENT
-                    );
-                    // Revised 0015: normalize to TOP|START so the existing
-                    // FloatingPanelController can drag + persist position.
+                            PixelFormat.TRANSLUCENT);
                     voiceControlParams.gravity = Gravity.TOP | Gravity.START;
                     voiceControlParams.x = Math.max(
                             dp(12),
                             (screenWidth - dockWidth) / 2);
                     voiceControlParams.y = Math.max(
                             getStatusBarHeight() + dp(18),
-                            windowManager.getDefaultDisplay().getHeight()
-                                    - dp(430));
+                            screenHeight - dp(350));
 
                     LinearLayout dock = new LinearLayout(context);
                     dock.setOrientation(LinearLayout.VERTICAL);
-                    dock.setPadding(dp(16), dp(14), dp(16), dp(20));
+                    dock.setPadding(dp(14), dp(12), dp(14), dp(14));
                     dock.setClipToPadding(false);
                     dock.setClipChildren(false);
 
                     GradientDrawable dockBg = new GradientDrawable();
-                    // Match the expanded bubble with a neutral dark gray console.
                     dockBg.setColor(Color.parseColor("#F23A3A3C"));
-                    dockBg.setCornerRadius(dp(24));
-                    dockBg.setStroke(dp(1.5f), Color.parseColor("#66717176"));
+                    dockBg.setCornerRadius(dp(22));
+                    dockBg.setStroke(dp(1), Color.parseColor("#666B7280"));
                     dock.setBackground(dockBg);
                     dock.setElevation(dp(16));
 
-                    // Title / Status header
+                    // Human-readable state is the visual anchor of the console.
                     LinearLayout headerRow = new LinearLayout(context);
                     headerRow.setOrientation(LinearLayout.HORIZONTAL);
                     headerRow.setGravity(Gravity.CENTER_VERTICAL);
-                    headerRow.setPadding(dp(4), 0, dp(4), dp(8));
+                    headerRow.setPadding(dp(2), 0, 0, dp(8));
 
-                    TextView title = new TextView(context);
-                    title.setText("Live 控制台");
-                    title.setTextSize(13);
-                    title.setTextColor(Color.parseColor("#38BDF8"));
-                    headerRow.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+                    LinearLayout statusStack = new LinearLayout(context);
+                    statusStack.setOrientation(LinearLayout.VERTICAL);
+                    statusStack.setGravity(Gravity.CENTER_VERTICAL);
 
-                    voiceInterruptionButton = new TextView(context);
-                    voiceInterruptionButton.setTextSize(11);
-                    voiceInterruptionButton.setPadding(dp(8), dp(3), dp(8), dp(3));
-                    voiceInterruptionButton.setOnClickListener(new View.OnClickListener() {
-                        @Override public void onClick(View v) {
-                            if (!NativeLiveService.isActive()) return;
-                            boolean enabled = NativeLiveService.toggleVoiceInterruption();
-                            Toast.makeText(context, enabled ? "已開啟自由說話打斷" : "已開啟防插話模式（避免喇叭打斷 AI）", Toast.LENGTH_SHORT).show();
-                            refreshVoiceControls();
-                        }
-                    });
-                    LinearLayout.LayoutParams interLp = new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-                    interLp.setMargins(0, 0, dp(6), 0);
-                    headerRow.addView(voiceInterruptionButton, interLp);
+                    voiceStatusText = new TextView(context);
+                    voiceStatusText.setTextSize(15);
+                    voiceStatusText.setTypeface(
+                            android.graphics.Typeface.DEFAULT_BOLD);
+                    voiceStatusText.setSingleLine(true);
+                    statusStack.addView(
+                            voiceStatusText,
+                            new LinearLayout.LayoutParams(
+                                    LinearLayout.LayoutParams.MATCH_PARENT,
+                                    LinearLayout.LayoutParams.WRAP_CONTENT));
 
-                    voiceWakeButton = new TextView(context);
-                    voiceWakeButton.setTextSize(11);
-                    voiceWakeButton.setPadding(dp(8), dp(3), dp(8), dp(3));
-                    updateWakeButtonUi(voiceWakeButton, isKeepAwakeActive());
-                    voiceWakeButton.setOnClickListener(new View.OnClickListener() {
-                        @Override public void onClick(View v) {
-                            vibrateSuccess();
-                            boolean next = toggleKeepAwake(context);
-                            updateWakeButtonUi(voiceWakeButton, next);
-                            Toast.makeText(context, next ? "☀️ 螢幕常亮已開啟（防止休眠）" : "🌙 螢幕常亮已關閉", Toast.LENGTH_SHORT).show();
-                        }
-                    });
-                    headerRow.addView(voiceWakeButton);
+                    // Reuse the old meter field as a quiet subtitle. Raw dB is
+                    // intentionally removed from the primary UI.
+                    voiceMeterText = new TextView(context);
+                    voiceMeterText.setTextSize(10.5f);
+                    voiceMeterText.setTextColor(Color.parseColor("#A1A1AA"));
+                    voiceMeterText.setPadding(0, dp(2), 0, 0);
+                    statusStack.addView(
+                            voiceMeterText,
+                            new LinearLayout.LayoutParams(
+                                    LinearLayout.LayoutParams.MATCH_PARENT,
+                                    LinearLayout.LayoutParams.WRAP_CONTENT));
+
+                    headerRow.addView(
+                            statusStack,
+                            new LinearLayout.LayoutParams(
+                                    0,
+                                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                                    1f));
+
+                    voiceSettingsToggleButton = makeVoiceSettingButton();
+                    voiceSettingsToggleButton.setText("⚙");
+                    voiceSettingsToggleButton.setTextSize(19);
+                    voiceSettingsToggleButton.setContentDescription("進階設定");
+                    voiceSettingsToggleButton.setOnClickListener(
+                            new View.OnClickListener() {
+                                @Override public void onClick(View v) {
+                                    if (voiceSettingsPanel == null) return;
+                                    boolean show =
+                                            voiceSettingsPanel.getVisibility()
+                                                    != View.VISIBLE;
+                                    voiceSettingsPanel.setVisibility(
+                                            show ? View.VISIBLE : View.GONE);
+                                    voiceSettingsPanel.requestLayout();
+                                    if (voiceControlView != null) {
+                                        voiceControlView.requestLayout();
+                                    }
+                                    if (!show && voiceSettingsChoices != null) {
+                                        voiceSettingsChoices.removeAllViews();
+                                    }
+                                }
+                            });
+                    headerRow.addView(
+                            voiceSettingsToggleButton,
+                            new LinearLayout.LayoutParams(dp(38), dp(38)));
 
                     TextView close = new TextView(context);
                     close.setText("✕");
                     close.setTextSize(18);
-                    close.setTextColor(Color.parseColor("#94A3B8"));
-                    close.setPadding(dp(12), 0, dp(4), 0);
+                    close.setGravity(Gravity.CENTER);
+                    close.setTextColor(Color.parseColor("#A1A1AA"));
+                    close.setContentDescription("關閉控制台");
                     close.setOnClickListener(new View.OnClickListener() {
-                        @Override public void onClick(View v) { hideVoiceControls(); }
+                        @Override public void onClick(View v) {
+                            hideVoiceControls();
+                        }
                     });
-                    headerRow.addView(close);
+                    LinearLayout.LayoutParams closeLp =
+                            new LinearLayout.LayoutParams(dp(38), dp(38));
+                    closeLp.setMargins(dp(4), 0, 0, 0);
+                    headerRow.addView(close, closeLp);
                     dock.addView(headerRow);
 
-                    LinearLayout statusRow = new LinearLayout(context);
-                    statusRow.setOrientation(LinearLayout.HORIZONTAL);
-                    statusRow.setGravity(Gravity.CENTER_VERTICAL);
-                    voiceStatusText = new TextView(context);
-                    voiceStatusText.setTextSize(12);
-                    voiceStatusText.setSingleLine(true);
-                    voiceStatusText.setPadding(dp(4), 0, dp(4), dp(4));
-                    statusRow.addView(voiceStatusText, new LinearLayout.LayoutParams(
-                            0, dp(40), 1f));
-
-                    // A compact icon sits directly below the close action and
-                    // keeps infrequent settings out of the call-control flow.
-                    voiceSettingsToggleButton = makeVoiceSettingButton();
-                    voiceSettingsToggleButton.setText("⚙");
-                    voiceSettingsToggleButton.setTextSize(20);
-                    voiceSettingsToggleButton.setContentDescription("開啟語音設定");
-                    voiceSettingsToggleButton.setOnClickListener(new View.OnClickListener() {
-                        @Override public void onClick(View v) {
-                            if (voiceSettingsPanel == null) return;
-                            voiceSettingsPanel.setVisibility(voiceSettingsPanel.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE);
-                        }
-                    });
-                    statusRow.addView(voiceSettingsToggleButton, new LinearLayout.LayoutParams(dp(40), dp(40)));
-                    dock.addView(statusRow);
-
-                    voiceMeterText = new TextView(context);
-                    voiceMeterText.setTextSize(11);
-                    voiceMeterText.setTextColor(Color.parseColor("#CBD5E1"));
-                    voiceMeterText.setPadding(dp(4), dp(4), dp(4), dp(8));
-                    dock.addView(voiceMeterText, new LinearLayout.LayoutParams(
-                            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
-
-                    voiceSettingsPanel = new LinearLayout(context);
-                    voiceSettingsPanel.setOrientation(LinearLayout.VERTICAL);
-                    voiceSettingsPanel.setVisibility(View.GONE);
-                    LinearLayout settingsRow = new LinearLayout(context);
-                    settingsRow.setOrientation(LinearLayout.HORIZONTAL);
-                    settingsRow.setGravity(Gravity.CENTER_VERTICAL);
-                    settingsRow.setPadding(0, 0, 0, dp(6));
-                    voiceSensitivityButton = makeVoiceSettingButton();
-                    voicePresetButton = makeVoiceSettingButton();
-                    voiceOutputButton = makeVoiceSettingButton();
-                    voiceSensitivityButton.setOnClickListener(new View.OnClickListener() {
-                        @Override public void onClick(View v) { showVoiceSettingChoices("sensitivity"); }
-                    });
-                    voicePresetButton.setOnClickListener(new View.OnClickListener() {
-                        @Override public void onClick(View v) { showVoiceSettingChoices("preset"); }
-                    });
-                    voiceOutputButton.setOnClickListener(new View.OnClickListener() {
-                        @Override public void onClick(View v) { showVoiceSettingChoices("output"); }
-                    });
-                    LinearLayout.LayoutParams settingLp = new LinearLayout.LayoutParams(0, dp(42), 1f);
-                    settingsRow.addView(voiceSensitivityButton, settingLp);
-                    LinearLayout.LayoutParams presetLp = new LinearLayout.LayoutParams(0, dp(42), 1f);
-                    presetLp.setMargins(dp(6), 0, dp(6), 0);
-                    settingsRow.addView(voicePresetButton, presetLp);
-                    settingsRow.addView(voiceOutputButton, new LinearLayout.LayoutParams(0, dp(42), 1f));
-                    voiceSettingsPanel.addView(settingsRow);
-                    voiceSettingsChoices = new LinearLayout(context);
-                    voiceSettingsChoices.setOrientation(LinearLayout.HORIZONTAL);
-                    voiceSettingsChoices.setGravity(Gravity.CENTER_VERTICAL);
-                    voiceSettingsChoices.setPadding(0, 0, 0, dp(8));
-                    voiceSettingsPanel.addView(voiceSettingsChoices);
-
-                    voiceTeachSendButton = makeVoiceSettingButton();
-                    voiceTeachSendButton.setText("⌁ 教導目前 App 的送出鍵");
-                    voiceTeachSendButton.setContentDescription("教導目前 App 的送出按鈕");
-                    voiceTeachSendButton.setOnClickListener(new View.OnClickListener() {
-                        @Override public void onClick(View v) {
-                            CrewAccessibilityService service = CrewAccessibilityService.getInstance();
-                            if (service == null) {
-                                Toast.makeText(context, "無障礙服務尚未啟用", Toast.LENGTH_SHORT).show();
-                                return;
-                            }
-                            if (!service.beginTeachElement("COMPOSER_SEND")) {
-                                Toast.makeText(context, "請先在目前聊天輸入框放入文字", Toast.LENGTH_SHORT).show();
-                            }
-                        }
-                    });
-                    LinearLayout.LayoutParams teachLp = new LinearLayout.LayoutParams(
-                            LinearLayout.LayoutParams.MATCH_PARENT, dp(42));
-                    teachLp.setMargins(0, 0, 0, dp(8));
-                    voiceSettingsPanel.addView(voiceTeachSendButton, teachLp);
-                    dock.addView(voiceSettingsPanel);
-
-                    voiceStopAgentButton = makeVoiceSettingButton();
-                    voiceStopAgentButton.setText("■ 停止任務");
-                    voiceStopAgentButton.setTextColor(Color.parseColor("#FDA4AF"));
-                    voiceStopAgentButton.setOnClickListener(new View.OnClickListener() {
-                        @Override public void onClick(View v) {
-                            if (NativeLiveService.stopAgentTask()) Toast.makeText(context, "Agent 任務已停止", Toast.LENGTH_SHORT).show();
-                            else Toast.makeText(context, "目前沒有執行中的 Agent 任務", Toast.LENGTH_SHORT).show();
-                            refreshVoiceControls();
-                        }
-                    });
-                    LinearLayout.LayoutParams stopTaskLp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(38));
-                    stopTaskLp.setMargins(0, 0, 0, dp(5));
-                    dock.addView(voiceStopAgentButton, stopTaskLp);
-
-                    // 📱 Ergonomic Bottom Dock matching Web UI:
-                    // Layout: [Camera Icon] [Screen Icon] [Center Large Mute/Interrupt Icon] [Hangup/Call Icon]
+                    // Primary controls: keep the existing polished Canvas icons.
                     LinearLayout row = new LinearLayout(context);
                     row.setOrientation(LinearLayout.HORIZONTAL);
-                    row.setClipToPadding(false);
+                    row.setGravity(Gravity.CENTER);
                     row.setClipChildren(false);
-                    row.setPadding(0, dp(4), 0, dp(6));
+                    row.setClipToPadding(false);
+                    row.setPadding(0, dp(3), 0, dp(3));
 
                     voiceCameraButton = makeDockIconButton();
                     voiceScreenButton = makeDockIconButton();
                     voiceMuteButton = makeDockIconButton();
                     voiceCallButton = makeDockIconButton();
+
                     voiceCameraButton.setContentDescription("切換相機分享");
                     voiceScreenButton.setContentDescription("切換螢幕分享");
-                    voiceMuteButton.setContentDescription("靜音或打斷助理");
+                    voiceMuteButton.setContentDescription("麥克風靜音或打斷 Gemini");
                     voiceCallButton.setContentDescription("開始或結束 Live 通話");
 
                     voiceCameraButton.setOnClickListener(new View.OnClickListener() {
                         @Override public void onClick(View v) {
                             if (!NativeLiveService.isActive()) {
-                                Toast.makeText(context, "請先開始通話並等待連線", Toast.LENGTH_SHORT).show();
+                                Toast.makeText(
+                                        context,
+                                        "請先開始通話並等待連線",
+                                        Toast.LENGTH_SHORT).show();
                                 return;
                             }
                             NativeLiveService.toggleCameraSharing();
@@ -1497,7 +1551,10 @@ public class FloatingBubbleManager {
                     voiceScreenButton.setOnClickListener(new View.OnClickListener() {
                         @Override public void onClick(View v) {
                             if (!NativeLiveService.isActive()) {
-                                Toast.makeText(context, "請先開始通話並等待連線", Toast.LENGTH_SHORT).show();
+                                Toast.makeText(
+                                        context,
+                                        "請先開始通話並等待連線",
+                                        Toast.LENGTH_SHORT).show();
                                 return;
                             }
                             NativeLiveService.toggleScreenSharing();
@@ -1508,7 +1565,11 @@ public class FloatingBubbleManager {
                     voiceMuteButton.setOnClickListener(new View.OnClickListener() {
                         @Override public void onClick(View v) {
                             if (!NativeLiveService.isActive()) return;
-                            NativeLiveService.toggleAgentMute();
+                            if (NativeLiveService.isAiSpeaking()) {
+                                NativeLiveService.interruptAiSpeech();
+                            } else {
+                                NativeLiveService.toggleAgentMute();
+                            }
                             refreshVoiceControls();
                         }
                     });
@@ -1520,30 +1581,281 @@ public class FloatingBubbleManager {
                         }
                     });
 
-                    LinearLayout.LayoutParams sideLp = new LinearLayout.LayoutParams(dp(54), dp(44));
-                    sideLp.setMargins(dp(3), 0, dp(3), 0);
+                    LinearLayout.LayoutParams cameraLp =
+                            new LinearLayout.LayoutParams(0, dp(70), 1f);
+                    LinearLayout.LayoutParams screenLp =
+                            new LinearLayout.LayoutParams(0, dp(70), 1f);
+                    LinearLayout.LayoutParams micLp =
+                            new LinearLayout.LayoutParams(0, dp(70), 1f);
+                    LinearLayout.LayoutParams callLp =
+                            new LinearLayout.LayoutParams(0, dp(70), 1f);
+                    cameraLp.setMargins(dp(3), 0, dp(3), 0);
+                    screenLp.setMargins(dp(3), 0, dp(3), 0);
+                    micLp.setMargins(dp(3), 0, dp(3), 0);
+                    callLp.setMargins(dp(3), 0, dp(3), 0);
 
-                    LinearLayout.LayoutParams centerLp = new LinearLayout.LayoutParams(0, dp(44), 1f);
-                    centerLp.setMargins(dp(4), 0, dp(4), 0);
-
-                    // 1. Camera (Left)
-                    row.addView(voiceCameraButton, sideLp);
-                    // 2. Screen (Left-Center)
-                    row.addView(voiceScreenButton, sideLp);
-                    // 3. Main Center Mute/Interrupt (Large Hero Pill)
-                    row.addView(voiceMuteButton, centerLp);
-                    // 4. Hangup (Right)
-                    row.addView(voiceCallButton, sideLp);
-
+                    row.addView(
+                            makeConsoleActionCell(voiceCameraButton, "相機"),
+                            cameraLp);
+                    row.addView(
+                            makeConsoleActionCell(voiceScreenButton, "畫面"),
+                            screenLp);
+                    row.addView(
+                            makeConsoleActionCell(voiceMuteButton, "麥克風"),
+                            micLp);
+                    row.addView(
+                            makeConsoleActionCell(voiceCallButton, "通話"),
+                            callLp);
                     dock.addView(row);
 
+                    // Contextual Stop appears only when there is actually
+                    // something useful to stop.
+                    voiceStopAgentButton = makeVoiceSettingButton();
+                    voiceStopAgentButton.setText("■ 停止目前任務");
+                    voiceStopAgentButton.setTextSize(11);
+                    voiceStopAgentButton.setTextColor(
+                            Color.parseColor("#FDA4AF"));
+                    applyVoiceSettingStyle(
+                            voiceStopAgentButton,
+                            Color.parseColor("#3F1D25"),
+                            Color.parseColor("#7F1D3A"),
+                            Color.parseColor("#FDA4AF"));
+                    voiceStopAgentButton.setVisibility(View.GONE);
+                    voiceStopAgentButton.setOnClickListener(
+                            new View.OnClickListener() {
+                                @Override public void onClick(View v) {
+                                    boolean handled = false;
+                                    if (NativeLiveService.hasActiveAgentTask()) {
+                                        handled = NativeLiveService.stopAgentTask();
+                                        if (handled) {
+                                            Toast.makeText(
+                                                    context,
+                                                    "Agent 任務已停止",
+                                                    Toast.LENGTH_SHORT).show();
+                                        }
+                                    } else if (NativeLiveService.isAiSpeaking()) {
+                                        handled =
+                                                NativeLiveService.interruptAiSpeech();
+                                        if (handled) {
+                                            Toast.makeText(
+                                                    context,
+                                                    "已停止 Gemini 回覆",
+                                                    Toast.LENGTH_SHORT).show();
+                                        }
+                                    }
+                                    if (!handled) {
+                                        Toast.makeText(
+                                                context,
+                                                "目前沒有可停止的任務",
+                                                Toast.LENGTH_SHORT).show();
+                                    }
+                                    refreshVoiceControls();
+                                }
+                            });
+                    LinearLayout.LayoutParams stopLp =
+                            new LinearLayout.LayoutParams(
+                                    LinearLayout.LayoutParams.MATCH_PARENT,
+                                    dp(38));
+                    stopLp.setMargins(0, dp(3), 0, dp(3));
+                    dock.addView(voiceStopAgentButton, stopLp);
+
+                    // Latest one or two conversation turns. Hidden until there
+                    // is real transcript content.
                     voiceTranscriptText = new TextView(context);
-                    voiceTranscriptText.setTextSize(11);
-                    voiceTranscriptText.setTextColor(Color.parseColor("#94A3B8"));
-                    voiceTranscriptText.setMaxLines(2);
-                    voiceTranscriptText.setPadding(dp(4), dp(7), dp(4), 0);
-                    dock.addView(voiceTranscriptText, new LinearLayout.LayoutParams(
-                            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+                    voiceTranscriptText.setTextSize(11.5f);
+                    voiceTranscriptText.setTextColor(
+                            Color.parseColor("#D4D4D8"));
+                    voiceTranscriptText.setMaxLines(3);
+                    voiceTranscriptText.setPadding(
+                            dp(10), dp(8), dp(10), dp(8));
+                    voiceTranscriptText.setVisibility(View.GONE);
+
+                    GradientDrawable transcriptBg = new GradientDrawable();
+                    transcriptBg.setColor(Color.parseColor("#CC2C2C2E"));
+                    transcriptBg.setCornerRadius(dp(12));
+                    transcriptBg.setStroke(
+                            dp(1), Color.parseColor("#52525B"));
+                    voiceTranscriptText.setBackground(transcriptBg);
+
+                    LinearLayout.LayoutParams transcriptLp =
+                            new LinearLayout.LayoutParams(
+                                    LinearLayout.LayoutParams.MATCH_PARENT,
+                                    LinearLayout.LayoutParams.WRAP_CONTENT);
+                    transcriptLp.setMargins(0, dp(5), 0, 0);
+                    dock.addView(voiceTranscriptText, transcriptLp);
+
+                    // Advanced controls stay behind the gear.
+                    voiceSettingsPanel = new LinearLayout(context);
+                    voiceSettingsPanel.setOrientation(LinearLayout.VERTICAL);
+                    voiceSettingsPanel.setPadding(
+                            dp(10), dp(9), dp(10), dp(10));
+                    voiceSettingsPanel.setVisibility(View.GONE);
+
+                    GradientDrawable settingsBg = new GradientDrawable();
+                    settingsBg.setColor(Color.parseColor("#E62C2C2E"));
+                    settingsBg.setCornerRadius(dp(14));
+                    settingsBg.setStroke(
+                            dp(1), Color.parseColor("#52525B"));
+                    voiceSettingsPanel.setBackground(settingsBg);
+
+                    TextView settingsTitle = new TextView(context);
+                    settingsTitle.setText("進階設定");
+                    settingsTitle.setTextSize(11);
+                    settingsTitle.setTextColor(
+                            Color.parseColor("#A1A1AA"));
+                    settingsTitle.setPadding(
+                            dp(2), 0, dp(2), dp(7));
+                    voiceSettingsPanel.addView(settingsTitle);
+
+                    LinearLayout modeRow = new LinearLayout(context);
+                    modeRow.setOrientation(LinearLayout.HORIZONTAL);
+                    modeRow.setGravity(Gravity.CENTER_VERTICAL);
+
+                    voiceInterruptionButton = makeVoiceSettingButton();
+                    voiceInterruptionButton.setTextSize(10);
+                    voiceInterruptionButton.setOnClickListener(
+                            new View.OnClickListener() {
+                                @Override public void onClick(View v) {
+                                    if (!NativeLiveService.isActive()) return;
+                                    boolean enabled =
+                                            NativeLiveService
+                                                    .toggleVoiceInterruption();
+                                    Toast.makeText(
+                                            context,
+                                            enabled
+                                                    ? "已開啟自由說話打斷"
+                                                    : "已開啟防插話模式",
+                                            Toast.LENGTH_SHORT).show();
+                                    refreshVoiceControls();
+                                }
+                            });
+                    modeRow.addView(
+                            voiceInterruptionButton,
+                            new LinearLayout.LayoutParams(
+                                    0, dp(40), 1f));
+
+                    voiceWakeButton = new TextView(context);
+                    voiceWakeButton.setTextSize(10);
+                    voiceWakeButton.setGravity(Gravity.CENTER);
+                    voiceWakeButton.setPadding(
+                            dp(6), 0, dp(6), 0);
+                    voiceWakeButton.setClickable(true);
+                    updateWakeButtonUi(
+                            voiceWakeButton,
+                            isKeepAwakeActive());
+                    voiceWakeButton.setOnClickListener(
+                            new View.OnClickListener() {
+                                @Override public void onClick(View v) {
+                                    vibrateSuccess();
+                                    boolean next =
+                                            toggleKeepAwake(context);
+                                    updateWakeButtonUi(
+                                            voiceWakeButton,
+                                            next);
+                                }
+                            });
+                    LinearLayout.LayoutParams wakeLp =
+                            new LinearLayout.LayoutParams(
+                                    0, dp(40), 1f);
+                    wakeLp.setMargins(dp(6), 0, 0, 0);
+                    modeRow.addView(voiceWakeButton, wakeLp);
+                    voiceSettingsPanel.addView(modeRow);
+
+                    LinearLayout settingsRow = new LinearLayout(context);
+                    settingsRow.setOrientation(LinearLayout.HORIZONTAL);
+                    settingsRow.setGravity(Gravity.CENTER_VERTICAL);
+                    settingsRow.setPadding(0, dp(6), 0, 0);
+
+                    voiceSensitivityButton = makeVoiceSettingButton();
+                    voicePresetButton = makeVoiceSettingButton();
+                    voiceOutputButton = makeVoiceSettingButton();
+
+                    voiceSensitivityButton.setOnClickListener(
+                            new View.OnClickListener() {
+                                @Override public void onClick(View v) {
+                                    showVoiceSettingChoices("sensitivity");
+                                }
+                            });
+                    voicePresetButton.setOnClickListener(
+                            new View.OnClickListener() {
+                                @Override public void onClick(View v) {
+                                    showVoiceSettingChoices("preset");
+                                }
+                            });
+                    voiceOutputButton.setOnClickListener(
+                            new View.OnClickListener() {
+                                @Override public void onClick(View v) {
+                                    showVoiceSettingChoices("output");
+                                }
+                            });
+
+                    settingsRow.addView(
+                            voiceSensitivityButton,
+                            new LinearLayout.LayoutParams(
+                                    0, dp(40), 1f));
+                    LinearLayout.LayoutParams presetLp =
+                            new LinearLayout.LayoutParams(
+                                    0, dp(40), 1f);
+                    presetLp.setMargins(dp(5), 0, dp(5), 0);
+                    settingsRow.addView(voicePresetButton, presetLp);
+                    settingsRow.addView(
+                            voiceOutputButton,
+                            new LinearLayout.LayoutParams(
+                                    0, dp(40), 1f));
+                    voiceSettingsPanel.addView(settingsRow);
+
+                    voiceSettingsChoices = new LinearLayout(context);
+                    voiceSettingsChoices.setOrientation(
+                            LinearLayout.HORIZONTAL);
+                    voiceSettingsChoices.setGravity(Gravity.CENTER_VERTICAL);
+                    voiceSettingsChoices.setPadding(0, dp(5), 0, 0);
+                    voiceSettingsPanel.addView(voiceSettingsChoices);
+
+                    voiceTeachSendButton = makeVoiceSettingButton();
+                    voiceTeachSendButton.setText(
+                            "⌁ 教導目前 App 的送出鍵");
+                    voiceTeachSendButton.setContentDescription(
+                            "教導目前 App 的送出按鈕");
+                    voiceTeachSendButton.setOnClickListener(
+                            new View.OnClickListener() {
+                                @Override public void onClick(View v) {
+                                    CrewAccessibilityService service =
+                                            CrewAccessibilityService
+                                                    .getInstance();
+                                    if (service == null) {
+                                        Toast.makeText(
+                                                context,
+                                                "無障礙服務尚未啟用",
+                                                Toast.LENGTH_SHORT).show();
+                                        return;
+                                    }
+                                    if (!service.beginTeachElement(
+                                            "COMPOSER_SEND")) {
+                                        Toast.makeText(
+                                                context,
+                                                "請先在目前聊天輸入框放入文字",
+                                                Toast.LENGTH_SHORT).show();
+                                    }
+                                }
+                            });
+                    LinearLayout.LayoutParams teachLp =
+                            new LinearLayout.LayoutParams(
+                                    LinearLayout.LayoutParams.MATCH_PARENT,
+                                    dp(40));
+                    teachLp.setMargins(0, dp(6), 0, 0);
+                    voiceSettingsPanel.addView(
+                            voiceTeachSendButton,
+                            teachLp);
+
+                    LinearLayout.LayoutParams settingsPanelLp =
+                            new LinearLayout.LayoutParams(
+                                    LinearLayout.LayoutParams.MATCH_PARENT,
+                                    LinearLayout.LayoutParams.WRAP_CONTENT);
+                    settingsPanelLp.setMargins(0, dp(7), 0, 0);
+                    dock.addView(
+                            voiceSettingsPanel,
+                            settingsPanelLp);
+
                     voiceControlView = dock;
                     voiceControlController = new FloatingPanelController(
                             context,
@@ -1552,7 +1864,8 @@ public class FloatingBubbleManager {
                             dock,
                             voiceControlParams);
                     voiceControlController.restorePosition();
-                    voiceControlController.attachDragHandle(title);
+                    voiceControlController.attachDragHandle(voiceStatusText);
+
                     windowManager.addView(dock, voiceControlParams);
                     refreshVoiceControls();
                     updateVoiceTelemetryUi();
@@ -1579,6 +1892,7 @@ public class FloatingBubbleManager {
                 voiceCameraButton = null;
                 voiceScreenButton = null;
                 voiceMuteButton = null;
+                voiceInterruptionButton = null;
                 voiceWakeButton = null;
                 voiceSensitivityButton = null;
                 voicePresetButton = null;
