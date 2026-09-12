@@ -1260,7 +1260,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                     ? LivePrompt.DECK_CREATE
                     : LivePrompt.DECK;
         }
-        String baseInstruction = LivePrompt.CORE + "\nVoice style: " + liveToneInstruction()
+        String baseInstruction = LivePrompt.CORE + "\nSpeaking personality: " + personalityInstruction()
                 + (deckInstruction.isEmpty() ? "" : "\n" + deckInstruction);
 
         if (customPrompt != null && !customPrompt.trim().isEmpty()) {
@@ -1271,6 +1271,13 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         }
         setup.put("systemInstruction", new JSONObject().put("parts", new JSONArray().put(new JSONObject().put("text", baseInstruction))));
         root.put("setup", setup); return root.toString();
+    }
+
+    private String personalityInstruction() {
+        if (appContext != null) {
+            return AppConfig.getPersonalityInstruction(appContext);
+        }
+        return liveToneInstruction();
     }
 
     private String liveToneInstruction() {

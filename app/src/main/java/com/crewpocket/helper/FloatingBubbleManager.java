@@ -1836,7 +1836,7 @@ public class FloatingBubbleManager {
                     voicePresetButton.setOnClickListener(
                             new View.OnClickListener() {
                                 @Override public void onClick(View v) {
-                                    showVoiceSettingChoices("preset");
+                                    showVoiceSettingChoices("personality");
                                 }
                             });
                     voiceOutputButton.setOnClickListener(
@@ -2077,7 +2077,7 @@ public class FloatingBubbleManager {
             applyVoiceSettingStyle(voiceSensitivityButton, Color.parseColor("#064E3B"), Color.parseColor("#10B981"), Color.parseColor("#6EE7B7"));
         }
         if (voicePresetButton != null) {
-            voicePresetButton.setText("🎭 角色 ›");
+            voicePresetButton.setText("◌ 個性 ›");
             applyVoiceSettingStyle(voicePresetButton, Color.parseColor("#312E81"), Color.parseColor("#818CF8"), Color.parseColor("#C7D2FE"));
         }
         if (voiceOutputButton != null) {
@@ -2125,15 +2125,19 @@ public class FloatingBubbleManager {
             addVoiceChoice("📞 通話", new Runnable() { @Override public void run() { AppConfig.setAudioOutput(context, "call"); Toast.makeText(context, "下次通話使用通話音訊", Toast.LENGTH_SHORT).show(); } });
             addVoiceChoice("🔊 媒體", new Runnable() { @Override public void run() { AppConfig.setAudioOutput(context, "media"); Toast.makeText(context, "下次通話使用媒體音訊", Toast.LENGTH_SHORT).show(); } });
         } else {
-            final String[] ids = {"warm", "professional", "teacher", "calm", "command"};
-            final String[] voices = {"Kore", "Charon", "Aoede", "Fenrir", "Puck"};
-            final String[] tones = {"warm", "professional", "lively", "calm", "urgent"};
+            final String[] ids = {"brief", "work", "chat", "teacher"};
+            final String[] labels = {"簡潔助手", "工作拍檔", "聊天型", "老師型"};
             for (int i = 0; i < ids.length; i++) {
                 final int index = i;
-                addVoiceChoice(voicePresetLabel(ids[i]), new Runnable() { @Override public void run() {
-                    AppConfig.applyVoicePreset(context, ids[index], voices[index], tones[index]);
-                    Toast.makeText(context, "角色將於下次通話套用", Toast.LENGTH_SHORT).show();
-                }});
+                addVoiceChoice(labels[i], new Runnable() {
+                    @Override public void run() {
+                        AppConfig.applyPersonalityTemplate(context, ids[index]);
+                        Toast.makeText(
+                                context,
+                                "個性將於下次通話套用",
+                                Toast.LENGTH_SHORT).show();
+                    }
+                });
             }
         }
     }

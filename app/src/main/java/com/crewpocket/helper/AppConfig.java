@@ -16,6 +16,16 @@ public class AppConfig {
     public static final String KEY_INTERRUPTION_SENSITIVITY = "interruption_sensitivity";
     public static final String KEY_AUDIO_OUTPUT = "audio_output";
     public static final String KEY_VOICE_PRESET = "voice_preset";
+
+    // 0091: voice and speaking personality are independent.
+    public static final String KEY_PERSONALITY_MIGRATED = "personality_migrated_v1";
+    public static final String KEY_PERSONALITY_VERBOSITY = "personality_verbosity";
+    public static final String KEY_PERSONALITY_INITIATIVE = "personality_initiative";
+    public static final String KEY_PERSONALITY_EXPRESSION = "personality_expression";
+    public static final String KEY_PERSONALITY_EXPLANATION = "personality_explanation";
+    public static final String KEY_PERSONALITY_HUMOR = "personality_humor";
+    public static final String KEY_PERSONALITY_DECISION = "personality_decision";
+
     /** Maximum automatic Gemini tool-result cycles in one Live agent task. */
     public static final String KEY_AGENT_MAX_STEPS = "agent_max_steps";
     /** 0031: minutes without a new user instruction before Live returns to IDLE. 0 disables. */
@@ -177,6 +187,275 @@ public class AppConfig {
         getPrefs(context).edit().putString(KEY_VOICE_PRESET, preset == null ? "custom" : preset)
                 .putString(KEY_VOICE_NAME, voice == null ? DEFAULT_VOICE : voice)
                 .putString(KEY_LIVE_TONE, isLiveTone(tone) ? tone : "warm").apply();
+    }
+
+
+
+    // ── 0091. Independent speaking personality ──
+
+    private static void ensurePersonalityMigrated(Context context) {
+        if (context == null) return;
+        SharedPreferences prefs = getPrefs(context);
+        if (prefs.getBoolean(KEY_PERSONALITY_MIGRATED, false)) return;
+
+        String tone = prefs.getString(KEY_LIVE_TONE, "warm");
+        SharedPreferences.Editor editor = prefs.edit();
+
+        if ("professional".equals(tone)) {
+            editor.putString(KEY_PERSONALITY_VERBOSITY, "short");
+            editor.putString(KEY_PERSONALITY_INITIATIVE, "balanced");
+            editor.putString(KEY_PERSONALITY_EXPRESSION, "direct");
+            editor.putString(KEY_PERSONALITY_EXPLANATION, "reason");
+            editor.putString(KEY_PERSONALITY_HUMOR, "none");
+            editor.putString(KEY_PERSONALITY_DECISION, "balanced");
+        } else if ("lively".equals(tone)) {
+            editor.putString(KEY_PERSONALITY_VERBOSITY, "balanced");
+            editor.putString(KEY_PERSONALITY_INITIATIVE, "proactive");
+            editor.putString(KEY_PERSONALITY_EXPRESSION, "lively");
+            editor.putString(KEY_PERSONALITY_EXPLANATION, "reason");
+            editor.putString(KEY_PERSONALITY_HUMOR, "light");
+            editor.putString(KEY_PERSONALITY_DECISION, "balanced");
+        } else if ("calm".equals(tone)) {
+            editor.putString(KEY_PERSONALITY_VERBOSITY, "balanced");
+            editor.putString(KEY_PERSONALITY_INITIATIVE, "quiet");
+            editor.putString(KEY_PERSONALITY_EXPRESSION, "natural");
+            editor.putString(KEY_PERSONALITY_EXPLANATION, "reason");
+            editor.putString(KEY_PERSONALITY_HUMOR, "none");
+            editor.putString(KEY_PERSONALITY_DECISION, "cautious");
+        } else if ("urgent".equals(tone)) {
+            editor.putString(KEY_PERSONALITY_VERBOSITY, "short");
+            editor.putString(KEY_PERSONALITY_INITIATIVE, "proactive");
+            editor.putString(KEY_PERSONALITY_EXPRESSION, "direct");
+            editor.putString(KEY_PERSONALITY_EXPLANATION, "answer");
+            editor.putString(KEY_PERSONALITY_HUMOR, "none");
+            editor.putString(KEY_PERSONALITY_DECISION, "decisive");
+        } else {
+            editor.putString(KEY_PERSONALITY_VERBOSITY, "balanced");
+            editor.putString(KEY_PERSONALITY_INITIATIVE, "balanced");
+            editor.putString(KEY_PERSONALITY_EXPRESSION, "natural");
+            editor.putString(KEY_PERSONALITY_EXPLANATION, "reason");
+            editor.putString(KEY_PERSONALITY_HUMOR, "light");
+            editor.putString(KEY_PERSONALITY_DECISION, "balanced");
+        }
+
+        editor.putBoolean(KEY_PERSONALITY_MIGRATED, true).apply();
+    }
+
+    private static String personalityValue(
+            Context context,
+            String key,
+            String fallback,
+            String a,
+            String b,
+            String c) {
+        if (context == null) return fallback;
+        ensurePersonalityMigrated(context);
+        String value = getPrefs(context).getString(key, fallback);
+        return a.equals(value) || b.equals(value) || c.equals(value)
+                ? value : fallback;
+    }
+
+    private static void setPersonalityValue(
+            Context context,
+            String key,
+            String value,
+            String fallback,
+            String a,
+            String b,
+            String c) {
+        if (context == null) return;
+        String clean = a.equals(value) || b.equals(value) || c.equals(value)
+                ? value : fallback;
+        getPrefs(context).edit()
+                .putBoolean(KEY_PERSONALITY_MIGRATED, true)
+                .putString(key, clean)
+                .apply();
+    }
+
+    public static String getPersonalityVerbosity(Context context) {
+        return personalityValue(
+                context, KEY_PERSONALITY_VERBOSITY,
+                "balanced", "short", "balanced", "detailed");
+    }
+
+    public static void setPersonalityVerbosity(Context context, String value) {
+        setPersonalityValue(
+                context, KEY_PERSONALITY_VERBOSITY, value,
+                "balanced", "short", "balanced", "detailed");
+    }
+
+    public static String getPersonalityInitiative(Context context) {
+        return personalityValue(
+                context, KEY_PERSONALITY_INITIATIVE,
+                "balanced", "quiet", "balanced", "proactive");
+    }
+
+    public static void setPersonalityInitiative(Context context, String value) {
+        setPersonalityValue(
+                context, KEY_PERSONALITY_INITIATIVE, value,
+                "balanced", "quiet", "balanced", "proactive");
+    }
+
+    public static String getPersonalityExpression(Context context) {
+        return personalityValue(
+                context, KEY_PERSONALITY_EXPRESSION,
+                "natural", "direct", "natural", "lively");
+    }
+
+    public static void setPersonalityExpression(Context context, String value) {
+        setPersonalityValue(
+                context, KEY_PERSONALITY_EXPRESSION, value,
+                "natural", "direct", "natural", "lively");
+    }
+
+    public static String getPersonalityExplanation(Context context) {
+        return personalityValue(
+                context, KEY_PERSONALITY_EXPLANATION,
+                "reason", "answer", "reason", "teach");
+    }
+
+    public static void setPersonalityExplanation(Context context, String value) {
+        setPersonalityValue(
+                context, KEY_PERSONALITY_EXPLANATION, value,
+                "reason", "answer", "reason", "teach");
+    }
+
+    public static String getPersonalityHumor(Context context) {
+        return personalityValue(
+                context, KEY_PERSONALITY_HUMOR,
+                "light", "none", "light", "playful");
+    }
+
+    public static void setPersonalityHumor(Context context, String value) {
+        setPersonalityValue(
+                context, KEY_PERSONALITY_HUMOR, value,
+                "light", "none", "light", "playful");
+    }
+
+    public static String getPersonalityDecisionStyle(Context context) {
+        return personalityValue(
+                context, KEY_PERSONALITY_DECISION,
+                "balanced", "cautious", "balanced", "decisive");
+    }
+
+    public static void setPersonalityDecisionStyle(Context context, String value) {
+        setPersonalityValue(
+                context, KEY_PERSONALITY_DECISION, value,
+                "balanced", "cautious", "balanced", "decisive");
+    }
+
+    public static void applyPersonalityTemplate(Context context, String template) {
+        if (context == null) return;
+
+        String verbosity = "balanced";
+        String initiative = "balanced";
+        String expression = "natural";
+        String explanation = "reason";
+        String humor = "light";
+        String decision = "balanced";
+
+        if ("brief".equals(template)) {
+            verbosity = "short";
+            initiative = "quiet";
+            expression = "direct";
+            explanation = "answer";
+            humor = "none";
+            decision = "balanced";
+        } else if ("work".equals(template)) {
+            verbosity = "short";
+            initiative = "proactive";
+            expression = "direct";
+            explanation = "reason";
+            humor = "none";
+            decision = "decisive";
+        } else if ("chat".equals(template)) {
+            verbosity = "detailed";
+            initiative = "balanced";
+            expression = "lively";
+            explanation = "reason";
+            humor = "playful";
+            decision = "balanced";
+        } else if ("teacher".equals(template)) {
+            verbosity = "detailed";
+            initiative = "proactive";
+            expression = "natural";
+            explanation = "teach";
+            humor = "light";
+            decision = "balanced";
+        }
+
+        getPrefs(context).edit()
+                .putBoolean(KEY_PERSONALITY_MIGRATED, true)
+                .putString(KEY_PERSONALITY_VERBOSITY, verbosity)
+                .putString(KEY_PERSONALITY_INITIATIVE, initiative)
+                .putString(KEY_PERSONALITY_EXPRESSION, expression)
+                .putString(KEY_PERSONALITY_EXPLANATION, explanation)
+                .putString(KEY_PERSONALITY_HUMOR, humor)
+                .putString(KEY_PERSONALITY_DECISION, decision)
+                .apply();
+    }
+
+    public static String getPersonalityInstruction(Context context) {
+        if (context == null) return "自然、清楚、簡潔地回應。";
+
+        StringBuilder out = new StringBuilder();
+
+        String verbosity = getPersonalityVerbosity(context);
+        if ("short".equals(verbosity)) {
+            out.append("回答偏精簡，通常一到三句；除非使用者要求詳細，不主動長篇展開。");
+        } else if ("detailed".equals(verbosity)) {
+            out.append("回答可以較完整，主動補足重要背景與細節，但避免無關贅述。");
+        } else {
+            out.append("回答長度適中，依問題複雜度自然調整。");
+        }
+
+        String initiative = getPersonalityInitiative(context);
+        if ("quiet".equals(initiative)) {
+            out.append("只回應使用者當下需求，少主動延伸或追加建議。");
+        } else if ("proactive".equals(initiative)) {
+            out.append("在不打擾的前提下，可主動指出一個真正有用的下一步或風險。");
+        } else {
+            out.append("必要時補充一個有用的下一步，但不要過度主動。");
+        }
+
+        String expression = getPersonalityExpression(context);
+        if ("direct".equals(expression)) {
+            out.append("表達直接俐落，先講重點，少寒暄。");
+        } else if ("lively".equals(expression)) {
+            out.append("表達較有活力與自然情緒，但不可浮誇。");
+        } else {
+            out.append("表達自然、平衡、像日常對話。");
+        }
+
+        String explanation = getPersonalityExplanation(context);
+        if ("answer".equals(explanation)) {
+            out.append("預設先給答案，不主動展開推導；被追問時再解釋。");
+        } else if ("teach".equals(explanation)) {
+            out.append("需要解釋時採教學方式，循序說明並用簡短例子幫助理解。");
+        } else {
+            out.append("重要結論後簡短說明原因。");
+        }
+
+        String humor = getPersonalityHumor(context);
+        if ("none".equals(humor)) {
+            out.append("避免刻意幽默。");
+        } else if ("playful".equals(humor)) {
+            out.append("非嚴肅情境可自然帶一些幽默感，但不要搶過內容本身。");
+        } else {
+            out.append("合適時可以偶爾有一點自然幽默。");
+        }
+
+        String decision = getPersonalityDecisionStyle(context);
+        if ("cautious".equals(decision)) {
+            out.append("提出建議時偏保守，清楚指出不確定性與風險。");
+        } else if ("decisive".equals(decision)) {
+            out.append("有足夠資訊時給明確建議與下一步，不要只列選項；高風險事項仍保持保守。");
+        } else {
+            out.append("建議保持平衡，資訊足夠時可以指出較推薦的選項。");
+        }
+
+        out.append("以上只影響表達與一般偏好，不得改變工具授權、安全限制或驗證規則。");
+        return out.toString();
     }
 
     // ── 8. Live Agent loop ──
