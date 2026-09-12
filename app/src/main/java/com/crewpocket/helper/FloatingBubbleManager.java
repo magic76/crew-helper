@@ -72,6 +72,7 @@ public class FloatingBubbleManager {
     private View pendingChoiceView = null;
     private WindowManager.LayoutParams pendingChoiceParams = null;
     private Runnable pendingChoiceTimeout = null;
+    private ScreenSelectionOverlay screenSelectionOverlay = null;
     private static final long MINI_STATUS_AUTO_HIDE_MS = 1800L;
     private static final int BUBBLE_SIZE_DP = 48;
     private static class DockIconButton extends View {
@@ -268,6 +269,96 @@ public class FloatingBubbleManager {
 
     public static synchronized FloatingBubbleManager getInstance() {
         return instance;
+    }
+
+
+    /**
+     * 0094 "Point at this" UX.
+     *
+     * Long-pressing the bubble opens a full-screen selector. The selected
+     * rectangle is only context. Runtime still owns all phone execution.
+     */
+    public void startRegionSelection() {
+        mainHandler.post(new Runnable() {
+            @Override public void run() {
+                if (!canDrawOverlays()) {
+                    Toast.makeText(
+                            context,
+                            "請先允許 Crew Helper 顯示懸浮視窗",
+                            Toast.LENGTH_SHORT).show();
+                    return;
+                }
+
+                collapseBubbleActions(false);
+                hideVoiceControls();
+
+                if (screenSelectionOverlay != null) {
+                    screenSelectionOverlay.dismiss();
+                    screenSelectionOverlay = null;
+                }
+
+                final ScreenSelectionOverlay overlay =
+                        new ScreenSelectionOverlay(context);
+                screenSelectionOverlay = overlay;
+
+                boolean shown = overlay.show(
+                        new ScreenSelectionOverlay.Callback() {
+                            @Override
+                            public void onSelected(
+                                    android.graphics.Rect region,
+                                    int screenWidth,
+                                    int screenHeight) {
+                                if (screenSelectionOverlay == overlay) {
+                                    screenSelectionOverlay = null;
+                                }
+
+                                SelectedRegionContext selected =
+                                        CrewAccessibilityService
+                                                .describeSelectedRegion(
+                                                        region,
+                                                        screenWidth,
+                                                        screenHeight);
+
+                                if (selected.hardSensitive) {
+                                    showCompactStatus(
+                                            "無法使用這個區域",
+                                            "框選內容包含密碼或敏感輸入");
+                                    return;
+                                }
+
+                                boolean accepted =
+                                        NativeLiveService.submitSelectedRegion(
+                                                context,
+                                                selected);
+                                if (!accepted) {
+                                    showCompactStatus(
+                                            "框選未送出",
+                                            "請確認 Gemini API Key 與麥克風權限");
+                                    return;
+                                }
+
+                                showCompactStatus(
+                                        "正在讀取框選",
+                                        "完成後直接說你想怎麼處理");
+                            }
+
+                            @Override
+                            public void onCancelled() {
+                                if (screenSelectionOverlay == overlay) {
+                                    screenSelectionOverlay = null;
+                                }
+                            }
+                        });
+
+                if (!shown) {
+                    screenSelectionOverlay = null;
+                    Toast.makeText(
+                            context,
+                            "無法開啟框選模式",
+                            Toast.LENGTH_SHORT).show();
+                }
+            }
+        });
     }
 
     public void showCompactStatus(final String title, final String detail) {
@@ -855,9 +946,14 @@ public class FloatingBubbleManager {
                                         long duration =
                                                 System.currentTimeMillis()
                                                         - touchStartTime;
-                                        if (dx < 18 && dy < 18 && duration < 450) {
-                                            vibrateShort();
-                                            toggleBubbleActionStrip();
+                                        if (dx < 18 && dy < 18) {
+                                            if (duration < 450) {
+                                                vibrateShort();
+                                                toggleBubbleActionStrip();
+                                            } else if (duration >= 650) {
+                                                vibrateShort();
+                                                startRegionSelection();
+                                            }
                                         }
                                     }
                                     snapBubbleToEdge();

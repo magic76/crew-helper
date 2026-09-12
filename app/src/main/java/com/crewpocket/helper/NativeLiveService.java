@@ -51,6 +51,7 @@ public class NativeLiveService extends Service {
     private static volatile boolean active;
     private static volatile boolean serviceRunning;
     private static NativeLiveService instance;
+    private static volatile SelectedRegionContext queuedSelectedRegion;
 
     interface RuntimeStateListener {
         void onRuntimeStateChanged();
@@ -677,6 +678,75 @@ public class NativeLiveService extends Service {
         }
     }
 
+
+    /**
+     * Store one short-lived explicit screen selection and make sure Live is
+     * available to consume it. The selection does not authorize any mutation.
+     */
+    static boolean submitSelectedRegion(
+            Context context,
+            SelectedRegionContext selected) {
+        if (context == null
+                || selected == null
+                || !selected.isFresh()
+                || selected.hardSensitive) {
+            return false;
+        }
+
+        String key = AppConfig.getGeminiApiKey(context);
+        if (key == null || key.trim().length() < 20) return false;
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+                && context.checkSelfPermission(
+                        android.Manifest.permission.RECORD_AUDIO)
+                        != PackageManager.PERMISSION_GRANTED) {
+            return false;
+        }
+
+        queuedSelectedRegion = selected;
+
+        NativeLiveService running = instance;
+        if (running != null) {
+            running.visualHandler.post(new Runnable() {
+                @Override public void run() {
+                    if (!active) running.enterActive("selected-region");
+                    running.flushSelectedRegionIfReady();
+                }
+            });
+        } else {
+            start(context);
+        }
+        return true;
+    }
+
+    private void flushSelectedRegionIfReady() {
+        SelectedRegionContext selected = queuedSelectedRegion;
+        if (selected == null) return;
+
+        if (!selected.isFresh()) {
+            queuedSelectedRegion = null;
+            return;
+        }
+
+        NativeGeminiLiveClient live = client;
+        if (!active || live == null || !live.isSetupReadyForSelection()) {
+            return;
+        }
+
+        if (live.sendSelectedRegion(selected)) {
+            queuedSelectedRegion = null;
+            return;
+        }
+
+        visualHandler.postDelayed(new Runnable() {
+            @Override public void run() {
+                if (queuedSelectedRegion != null) {
+                    flushSelectedRegionIfReady();
+                }
+            }
+        }, 280L);
+    }
+
     static void start(Context context) {
         NativeLiveService running = instance;
         if (running != null) {
@@ -1200,7 +1270,10 @@ public class NativeLiveService extends Service {
                 AppConfig.getInterruptionSensitivity(this), AppConfig.getAudioOutput(this),
                 new NativeGeminiLiveClient.Listener() {
                     @Override public void onStatus(String text) {
-                        if (text != null && text.contains("已連線")) reconnectAttempts = 0;
+                        if (text != null && text.contains("已連線")) {
+                            reconnectAttempts = 0;
+                            flushSelectedRegionIfReady();
+                        }
                         updateStatus(text, true);
 
                         NativeGeminiLiveClient live = client;

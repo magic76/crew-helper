@@ -152,6 +152,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private final Object pendingChoiceLock = new Object();
     private PendingUiChoice pendingUiChoice;
     private volatile boolean pendingChoiceExecuting = false;
+    private volatile SelectedRegionContext latestSelectedRegion;
 
     // 0046: Gemini Live may split toolCall/modelTurn/turnComplete across
     // different WebSocket frames. These flags describe the whole current
@@ -236,6 +237,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     String getStage() { return stage; }
     String getAudioOutputBackend() { return audioOutputBackend; }
     boolean canSendVisualFrame() { return running && System.currentTimeMillis() >= visualHoldUntil; }
+    boolean isSetupReadyForSelection() {
+        return running && setupReady && webSocket != null;
+    }
     void setAgentMaxSteps(int steps) { agentMaxSteps = Math.max(1, Math.min(100, steps)); }
     int getAgentMaxSteps() { return agentMaxSteps; }
     boolean hasActiveAgentTask() { synchronized (agentLock) { return activeAgentTask != null && !activeAgentTask.finished; } }
@@ -489,6 +493,190 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 } catch (Exception error) { Log.w(TAG, "相機影格傳送失敗：" + error.getMessage()); }
             }
         }, "crew-native-live-camera").start();
+    }
+
+
+    /**
+     * Send only the user-selected crop as visual context.
+     *
+     * IMPORTANT: this method deliberately does NOT update lastVisionWidth,
+     * lastVisionHeight, lastScreenWidth, or lastScreenHeight. A crop is never
+     * a valid coordinate space for phone execution.
+     */
+    boolean sendSelectedRegion(final SelectedRegionContext selected) {
+        if (selected == null
+                || !selected.isFresh()
+                || selected.hardSensitive
+                || !isSetupReadyForSelection()) {
+            return false;
+        }
+
+        if (!screenCaptureInProgress.compareAndSet(false, true)) {
+            return false;
+        }
+
+        latestSelectedRegion = selected;
+
+        new Thread(new Runnable() {
+            @Override public void run() {
+                try {
+                    JSONObject capture =
+                            helperPost("/screenshot", new JSONObject());
+                    if (!capture.optBoolean("success", false)) {
+                        throw new Exception(
+                                capture.optString(
+                                        "error",
+                                        "selected-region screenshot failed"));
+                    }
+
+                    String path = capture.optString(
+                            "latestPath",
+                            capture.optString("path", ""));
+                    if (path.isEmpty()) {
+                        throw new Exception(
+                                "selected-region screenshot path missing");
+                    }
+
+                    Bitmap full = BitmapFactory.decodeFile(path);
+                    if (full == null) {
+                        throw new Exception(
+                                "selected-region screenshot decode failed");
+                    }
+
+                    Bitmap crop;
+                    try {
+                        int imageWidth = full.getWidth();
+                        int imageHeight = full.getHeight();
+
+                        float sx = imageWidth
+                                / (float) Math.max(1, selected.screenWidth);
+                        float sy = imageHeight
+                                / (float) Math.max(1, selected.screenHeight);
+
+                        int left = clamp(
+                                Math.round(selected.bounds.left * sx),
+                                0,
+                                Math.max(0, imageWidth - 1));
+                        int top = clamp(
+                                Math.round(selected.bounds.top * sy),
+                                0,
+                                Math.max(0, imageHeight - 1));
+                        int right = clamp(
+                                Math.round(selected.bounds.right * sx),
+                                left + 1,
+                                imageWidth);
+                        int bottom = clamp(
+                                Math.round(selected.bounds.bottom * sy),
+                                top + 1,
+                                imageHeight);
+
+                        int padX = Math.max(
+                                4,
+                                Math.round((right - left) * 0.04f));
+                        int padY = Math.max(
+                                4,
+                                Math.round((bottom - top) * 0.04f));
+
+                        left = Math.max(0, left - padX);
+                        top = Math.max(0, top - padY);
+                        right = Math.min(imageWidth, right + padX);
+                        bottom = Math.min(imageHeight, bottom + padY);
+
+                        crop = Bitmap.createBitmap(
+                                full,
+                                left,
+                                top,
+                                Math.max(1, right - left),
+                                Math.max(1, bottom - top));
+                    } finally {
+                        full.recycle();
+                    }
+
+                    boolean sent = sendContextBitmapWithoutCoordinates(crop);
+                    if (!sent) {
+                        throw new Exception(
+                                "selected-region visual channel unavailable");
+                    }
+
+                    reportStage(
+                            "已讀取框選區域，直接說你想怎麼處理");
+                    if (appContext != null) {
+                        FloatingBubbleManager.getInstance(appContext)
+                                .showCompactStatus(
+                                        "已框選",
+                                        "直接說你想怎麼處理");
+                    }
+                } catch (Exception error) {
+                    Log.w(
+                            TAG,
+                            "框選區域傳送失敗："
+                                    + (error.getMessage() == null
+                                            ? error.getClass().getSimpleName()
+                                            : error.getMessage()));
+                    if (appContext != null) {
+                        FloatingBubbleManager.getInstance(appContext)
+                                .showCompactStatus(
+                                        "框選讀取失敗",
+                                        "請重新框選一次");
+                    }
+                } finally {
+                    screenCaptureInProgress.set(false);
+                }
+            }
+        }, "crew-selected-region").start();
+
+        return true;
+    }
+
+    private boolean sendContextBitmapWithoutCoordinates(Bitmap bitmap)
+            throws Exception {
+        if (bitmap == null) return false;
+
+        int maxEdge = 1024;
+        if (Math.max(bitmap.getWidth(), bitmap.getHeight()) > maxEdge) {
+            float scale = maxEdge
+                    / (float) Math.max(
+                            bitmap.getWidth(),
+                            bitmap.getHeight());
+            Bitmap scaled = Bitmap.createScaledBitmap(
+                    bitmap,
+                    Math.max(1, Math.round(bitmap.getWidth() * scale)),
+                    Math.max(1, Math.round(bitmap.getHeight() * scale)),
+                    true);
+            bitmap.recycle();
+            bitmap = scaled;
+        }
+
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        try {
+            bitmap.compress(
+                    Bitmap.CompressFormat.JPEG,
+                    78,
+                    output);
+        } finally {
+            bitmap.recycle();
+        }
+
+        JSONObject video = new JSONObject()
+                .put("mimeType", "image/jpeg")
+                .put(
+                        "data",
+                        Base64.encodeToString(
+                                output.toByteArray(),
+                                Base64.NO_WRAP));
+
+        return webSocket != null
+                && webSocket.send(
+                        new JSONObject()
+                                .put(
+                                        "realtimeInput",
+                                        new JSONObject().put("video", video))
+                                .toString());
+    }
+
+    private int clamp(int value, int min, int max) {
+        if (max < min) return min;
+        return Math.max(min, Math.min(max, value));
     }
 
     void sendScreenFrame() {
@@ -1313,6 +1501,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 .put("parameters", new JSONObject().put("type", "OBJECT")
                         .put("properties", phoneActionProperties)
                         .put("required", new JSONArray().put("action"))));
+        tools.put(new JSONObject().put("name", "get_selected_region").put("description",
+                "Read the latest screen region explicitly selected by the user by dragging a rectangle. Call when the user refers to 'this', 'here', '這個', '這裡', '剛剛框的' and you need the selected text/package metadata. The latest visual crop already corresponds to that selection. This is context only: NEVER treat crop coordinates as phone coordinates; phone execution must still use semantic Runtime actions and normal verification."));
         tools.put(new JSONObject().put("name", "inspect_ui").put("description",
                 "VISUAL OBSERVATION. Captures a fresh phone screenshot for you to inspect while Runtime separately keeps Accessibility state for execution. Use the screenshot as the primary source for what the user actually sees, especially prices, charts, WebView/custom UI, images and visually rendered text. Call once when you need a fresh view; do not SEARCH merely because a value was absent from prior semantic tool text."));
         tools.put(new JSONObject().put("name", "wait").put("description",
@@ -1676,6 +1866,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         try {
             shadowAgentRuntime.onActionExecuted(id);
             if (SemanticPhoneAction.ERROR_TOOL.equals(name)) result = args;
+            else if ("get_selected_region".equals(name)) result = getSelectedRegionContext();
             else if ("take_screenshot".equals(name)) result = captureAndSendScreen();
             else if ("inspect_ui".equals(name)) result = inspectUi(args);
             else if ("tap_element".equals(name)) result = tapSemanticElement(args);
@@ -1857,6 +2048,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
     private boolean isObservationTool(String name) {
         return "inspect_ui".equals(name)
+                || "get_selected_region".equals(name)
                 || "wait".equals(name)
                 || "teach_ui_element".equals(name)
                 || "list_active_schedules".equals(name)
@@ -3395,6 +3587,37 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         } catch (Exception ignored) {}
 
         return actionResult;
+    }
+
+
+    private JSONObject getSelectedRegionContext() throws Exception {
+        SelectedRegionContext selected = latestSelectedRegion;
+        if (selected == null) {
+            return new JSONObject()
+                    .put("success", false)
+                    .put("error", "NO_SELECTED_REGION")
+                    .put(
+                            "message",
+                            "使用者目前沒有有效的框選區域。");
+        }
+
+        if (!selected.isFresh()) {
+            latestSelectedRegion = null;
+            return new JSONObject()
+                    .put("success", false)
+                    .put("error", "SELECTED_REGION_EXPIRED")
+                    .put(
+                            "message",
+                            "先前框選已過期，請使用者重新框選。");
+        }
+
+        if (selected.hardSensitive) {
+            return new JSONObject()
+                    .put("success", false)
+                    .put("error", "SELECTED_REGION_SENSITIVE");
+        }
+
+        return selected.toModelJson();
     }
 
     /**

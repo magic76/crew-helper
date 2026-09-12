@@ -69,6 +69,136 @@ public class CrewAccessibilityService extends AccessibilityService {
         return learnedUiMappingStore;
     }
 
+    /**
+     * 0094 explicit selected-region context.
+     *
+     * Accessibility only contributes structure/text. The selection itself is
+     * user-authored and must never become a direct tap coordinate.
+     */
+    public static SelectedRegionContext describeSelectedRegion(
+            Rect region,
+            int screenWidth,
+            int screenHeight) {
+        CrewAccessibilityService service = instance;
+        if (service == null) {
+            return new SelectedRegionContext(
+                    region,
+                    screenWidth,
+                    screenHeight,
+                    "",
+                    "",
+                    false,
+                    System.currentTimeMillis());
+        }
+        return service.describeSelectedRegionInternal(
+                region,
+                screenWidth,
+                screenHeight);
+    }
+
+    private SelectedRegionContext describeSelectedRegionInternal(
+            Rect region,
+            int screenWidth,
+            int screenHeight) {
+        Rect safeRegion = region == null ? new Rect() : new Rect(region);
+        AccessibilityNodeInfo root = null;
+        String sourcePackage = "";
+        ArrayList<String> pieces = new ArrayList<String>();
+        boolean[] hardSensitive = new boolean[]{false};
+
+        try {
+            root = getRootInActiveWindow();
+            if (root != null) {
+                CharSequence pkg = root.getPackageName();
+                sourcePackage = pkg == null ? "" : pkg.toString();
+                collectSelectedRegionText(
+                        root,
+                        safeRegion,
+                        pieces,
+                        hardSensitive,
+                        0);
+            }
+        } catch (Exception ignored) {
+        } finally {
+            if (root != null) {
+                try { root.recycle(); } catch (Exception ignored) {}
+            }
+        }
+
+        StringBuilder semantic = new StringBuilder();
+        for (String piece : pieces) {
+            if (piece == null || piece.trim().isEmpty()) continue;
+            if (semantic.length() > 0) semantic.append(" · ");
+            semantic.append(piece.trim());
+            if (semantic.length() >= 1000) break;
+        }
+
+        String text = semantic.toString();
+        if (text.length() > 1000) text = text.substring(0, 1000);
+
+        return new SelectedRegionContext(
+                safeRegion,
+                screenWidth,
+                screenHeight,
+                sourcePackage,
+                text,
+                hardSensitive[0],
+                System.currentTimeMillis());
+    }
+
+    private void collectSelectedRegionText(
+            AccessibilityNodeInfo node,
+            Rect selected,
+            ArrayList<String> out,
+            boolean[] hardSensitive,
+            int depth) {
+        if (node == null || selected == null || depth > 30 || out.size() >= 18) {
+            return;
+        }
+
+        Rect nodeBounds = new Rect();
+        node.getBoundsInScreen(nodeBounds);
+        if (!Rect.intersects(nodeBounds, selected)) return;
+
+        if (SensitiveDataGuard.isHardBlockedInput(node)) {
+            hardSensitive[0] = true;
+            return;
+        }
+
+        boolean sensitive = SensitiveDataGuard.isSensitiveNode(node);
+        if (!sensitive && node.isVisibleToUser()) {
+            appendSelectedText(out, node.getText());
+            appendSelectedText(out, node.getContentDescription());
+        }
+
+        int count = node.getChildCount();
+        for (int i = 0; i < count && out.size() < 18; i++) {
+            AccessibilityNodeInfo child = node.getChild(i);
+            if (child == null) continue;
+            try {
+                collectSelectedRegionText(
+                        child,
+                        selected,
+                        out,
+                        hardSensitive,
+                        depth + 1);
+            } finally {
+                try { child.recycle(); } catch (Exception ignored) {}
+            }
+        }
+    }
+
+    private void appendSelectedText(
+            ArrayList<String> out,
+            CharSequence value) {
+        if (value == null) return;
+        String clean = value.toString().replaceAll("\\s+", " ").trim();
+        if (clean.isEmpty() || SensitiveDataGuard.REDACTED.equals(clean)) return;
+        if (clean.length() > 240) clean = clean.substring(0, 240);
+        if (!out.contains(clean)) out.add(clean);
+    }
+
+
     @Override
     public void onCreate() {
         super.onCreate();
