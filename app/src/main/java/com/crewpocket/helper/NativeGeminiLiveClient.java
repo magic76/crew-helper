@@ -1552,14 +1552,14 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 .put("text", new JSONObject().put("type", "STRING")
                         .put("description", "For TYPE exact text to enter; for SEARCH the query. TYPE never submits a message."))
                 .put("direction", new JSONObject().put("type", "STRING")
-                        .put("enum", new JSONArray().put("up").put("down").put("left").put("right"))
-                        .put("description", "Only for SCROLL."))
+                        .put("enum", new JSONArray().put("forward").put("backward").put("left").put("right"))
+                        .put("description", "Only for SCROLL. This is CONTENT/NAVIGATION direction, never finger gesture direction. forward = reveal later/below content or next page; backward = reveal earlier/above content or previous page. Use left/right only for explicitly horizontal content. Runtime converts this semantic direction into Android scrolling/swiping."))
                 .put("distance", new JSONObject().put("type", "STRING")
                         .put("enum", new JSONArray().put("short").put("normal").put("long").put("page"))
                         .put("description", "Optional SCROLL distance."));
         tools.put(new JSONObject().put("name", "phone_action")
                 .put("description",
-                        "Perform exactly ONE semantic phone step. Available actions: OPEN_APP, SEARCH, COMMIT_SEARCH, TAP, TYPE, SCROLL, BACK, HOME. COMMIT_SEARCH presses the current keyboard search/IME button only. Runtime owns selectors, focus, Android implementation and verification. SEARCH is one Runtime transaction; do not manually TAP search then TYPE. TYPE never submits a real message. Real message sending is current-screen only through send_text.")
+                        "Perform exactly ONE semantic phone step. Available actions: OPEN_APP, SEARCH, COMMIT_SEARCH, TAP, TYPE, SCROLL, BACK, HOME. COMMIT_SEARCH presses the current keyboard search/IME button only. Runtime owns selectors, focus, Android implementation and verification. For vertical SCROLL, use direction=forward to continue to later/below content or the next page, and direction=backward to return to earlier/above content or the previous page; never reason about the physical finger swipe direction. SEARCH is one Runtime transaction; do not manually TAP search then TYPE. TYPE never submits a real message. Real message sending is current-screen only through send_text.")
                 .put("parameters", new JSONObject().put("type", "OBJECT")
                         .put("properties", phoneActionProperties)
                         .put("required", new JSONArray().put("action"))));

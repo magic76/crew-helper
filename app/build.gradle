@@ -10,8 +10,17 @@ android {
         applicationId "com.crewpocket.helper"
         minSdk 24
         targetSdk 34
-        versionCode 107
-        versionName "1.8.70"
+
+        // 0102: Crew Helper ships only to modern 64-bit ARM Android devices.
+        // This prevents universal APKs from carrying unused x86/x86_64/armeabi-v7a
+        // native Sherpa/Oboe libraries. Google Play AAB delivery remains compatible
+        // with arm64-v8a devices.
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+
+        versionCode 108
+        versionName "1.8.71"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }

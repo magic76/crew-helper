@@ -69,13 +69,32 @@ final class SemanticPhoneAction {
         }
 
         if ("SCROLL".equals(action)) {
-            if (direction.isEmpty()) direction = "up";
-            if (!("up".equals(direction) || "down".equals(direction)
+            // 0102: direction is semantic content/navigation direction, never
+            // the physical finger gesture.  "forward" means reveal later/below
+            // content (or the next page); "backward" means reveal earlier/above
+            // content (or the previous page).  Runtime owns the Android gesture.
+            if (direction.isEmpty()) direction = "forward";
+
+            // Backward compatibility for an older model/session vocabulary.
+            // Do not expose up/down in the tool schema anymore.
+            if ("up".equals(direction)) direction = "forward";
+            else if ("down".equals(direction)) direction = "backward";
+
+            if (!("forward".equals(direction) || "backward".equals(direction)
                     || "left".equals(direction) || "right".equals(direction))) {
                 return error(action, "BAD_SCROLL_DIRECTION",
-                        "SCROLL direction 只能是 up/down/left/right。");
+                        "SCROLL direction 只能是 forward/backward/left/right；"
+                        + "forward=看後面/下方/下一頁，backward=看前面/上方/上一頁。");
             }
-            JSONObject out = new JSONObject().put("direction", direction);
+
+            // Existing trusted Runtime uses physical swipe vocabulary internally:
+            // up => finger bottom-to-top => Android scroll forward / reveal below.
+            // down => finger top-to-bottom => Android scroll backward / reveal above.
+            String runtimeDirection = direction;
+            if ("forward".equals(direction)) runtimeDirection = "up";
+            else if ("backward".equals(direction)) runtimeDirection = "down";
+
+            JSONObject out = new JSONObject().put("direction", runtimeDirection);
             if (!distance.isEmpty()) out.put("distance", distance);
             return mapped(action, "swipe_screen", out);
         }
