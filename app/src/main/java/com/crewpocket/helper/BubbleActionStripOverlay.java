@@ -27,6 +27,7 @@ final class BubbleActionStripOverlay extends LinearLayout {
         void onToggleMute();
         void onOpenConsole();
         void onInterrupt();
+        void onRegionSelection();
     }
 
     private static final int ICON_CALL = 1;
@@ -35,6 +36,7 @@ final class BubbleActionStripOverlay extends LinearLayout {
     private static final int ICON_MIC_ACTIVE = 4;
     private static final int ICON_MIC_MUTED = 5;
     private static final int ICON_SPEAKER = 6;
+    private static final int ICON_REGION = 7;
 
     private final Context context;
     private boolean showing = false;
@@ -56,7 +58,7 @@ final class BubbleActionStripOverlay extends LinearLayout {
     }
 
     int desiredHeightPx() {
-        int itemCount = NativeLiveService.isActive() ? 3 : 2;
+        int itemCount = NativeLiveService.isActive() ? 4 : 3;
         return dp(6) + itemCount * dp(44);
     }
 
@@ -124,6 +126,13 @@ final class BubbleActionStripOverlay extends LinearLayout {
             if (actions != null) actions.onOpenConsole();
         });
         addView(more, itemParams());
+
+        IconButton region = iconButton(ICON_REGION);
+        region.setContentDescription("框選截圖");
+        region.setOnClickListener(v -> {
+            if (actions != null) actions.onRegionSelection();
+        });
+        addView(region, itemParams());
     }
 
     private LinearLayout.LayoutParams itemParams() {
@@ -145,6 +154,8 @@ final class BubbleActionStripOverlay extends LinearLayout {
             fill = Color.argb(58, 76, 5, 25);
         } else if (icon == ICON_MIC_ACTIVE || icon == ICON_CALL) {
             fill = Color.argb(52, 19, 78, 74);
+        } else if (icon == ICON_REGION) {
+            fill = Color.argb(52, 30, 64, 175);
         } else {
             fill = Color.TRANSPARENT;
         }
@@ -194,6 +205,8 @@ final class BubbleActionStripOverlay extends LinearLayout {
                     ? Color.parseColor("#FB7185")
                     : icon == ICON_CALL
                     ? Color.parseColor("#67E8F9")
+                    : icon == ICON_REGION
+                    ? Color.parseColor("#93C5FD")
                     : Color.parseColor("#CBD5E1");
 
             paint.setColor(color);
@@ -224,6 +237,13 @@ final class BubbleActionStripOverlay extends LinearLayout {
                 canvas.drawCircle(cx - 6*d, cy, 1.8f*d, paint);
                 canvas.drawCircle(cx, cy, 1.8f*d, paint);
                 canvas.drawCircle(cx + 6*d, cy, 1.8f*d, paint);
+            } else if (icon == ICON_REGION) {
+                canvas.drawRect(cx - 6*d, cy - 6*d, cx + 6*d, cy + 6*d, paint);
+                paint.setStrokeWidth(3f * d);
+                canvas.drawLine(cx - 10*d, cy - 3*d, cx - 10*d, cy - 10*d, paint);
+                canvas.drawLine(cx - 10*d, cy - 10*d, cx - 3*d, cy - 10*d, paint);
+                canvas.drawLine(cx + 3*d, cy + 10*d, cx + 10*d, cy + 10*d, paint);
+                canvas.drawLine(cx + 10*d, cy + 10*d, cx + 10*d, cy + 3*d, paint);
             } else if (icon == ICON_SPEAKER) {
                 android.graphics.Path speaker = new android.graphics.Path();
                 speaker.moveTo(cx - 7*d, cy - 3*d);

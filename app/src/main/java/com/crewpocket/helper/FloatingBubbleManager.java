@@ -1245,6 +1245,11 @@ public class FloatingBubbleManager {
                 }
                 refreshVoiceControls();
             }
+
+            @Override public void onRegionSelection() {
+                collapseBubbleActions(false);
+                startRegionSelection();
+            }
         };
     }
 

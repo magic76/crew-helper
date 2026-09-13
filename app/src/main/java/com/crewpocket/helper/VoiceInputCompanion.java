@@ -1,19 +1,25 @@
 package com.crewpocket.helper;
 
 import android.content.Context;
+import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.PixelFormat;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.Bundle;
 import android.provider.Settings;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.speech.RecognitionListener;
+import android.speech.RecognizerIntent;
+import android.speech.SpeechRecognizer;
 
 /**
  * Keyboard companion overlay.
@@ -33,6 +39,9 @@ final class VoiceInputCompanion {
     private WindowManager.LayoutParams params;
     private int lastImeTop = -1;
     private String lastPackage = "";
+    private SpeechRecognizer recognizer;
+    private boolean listening;
+    private boolean stopRequested;
 
     static synchronized VoiceInputCompanion getInstance(Context context) {
         if (instance == null) {
@@ -107,57 +116,8 @@ final class VoiceInputCompanion {
         bg.setStroke(dp(1), Color.parseColor("#3F3F46"));
         root.setBackground(bg);
 
-        TextView brand = makeLabel("Crew");
-        brand.setTextColor(Color.parseColor("#67E8F9"));
-        brand.setGravity(Gravity.CENTER);
-        brand.setPadding(dp(10), 0, dp(12), 0);
-        root.addView(
-                brand,
-                new LinearLayout.LayoutParams(
-                        dp(58),
-                        dp(40)));
-
-        TextView dictate = makeAction(
-                "🎙 說話",
-                new View.OnClickListener() {
-                    @Override public void onClick(View v) {
-                        begin("dictate");
-                    }
-                });
-        root.addView(
-                dictate,
-                new LinearLayout.LayoutParams(
-                        0,
-                        dp(40),
-                        1f));
-
-        TextView rewrite = makeAction(
-                "✨ 潤飾",
-                new View.OnClickListener() {
-                    @Override public void onClick(View v) {
-                        begin("rewrite");
-                    }
-                });
-        root.addView(
-                rewrite,
-                new LinearLayout.LayoutParams(
-                        0,
-                        dp(40),
-                        1f));
-
-        TextView translate = makeAction(
-                "🌐 翻譯",
-                new View.OnClickListener() {
-                    @Override public void onClick(View v) {
-                        begin("translate");
-                    }
-                });
-        root.addView(
-                translate,
-                new LinearLayout.LayoutParams(
-                        0,
-                        dp(40),
-                        1f));
+        TextView dictate = makeHoldAction();
+        root.addView(dictate, new LinearLayout.LayoutParams(dp(52), dp(40)));
 
         params = new WindowManager.LayoutParams(
                 WindowManager.LayoutParams.MATCH_PARENT,
@@ -182,9 +142,35 @@ final class VoiceInputCompanion {
         }
     }
 
-    private void begin(String mode) {
+    private TextView makeHoldAction() {
+        TextView view = makeLabel("🎙");
+        view.setTextSize(19f);
+        view.setGravity(Gravity.CENTER);
+        view.setContentDescription("按住說話，放開後輸入");
+        view.setClickable(true);
+        view.setOnTouchListener((v, event) -> {
+            if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                beginListening();
+                return true;
+            }
+            if (event.getActionMasked() == MotionEvent.ACTION_UP
+                    || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
+                endListening();
+                return true;
+            }
+            return true;
+        });
+
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(Color.argb(55, 19, 78, 74));
+        bg.setCornerRadius(dp(11));
+        view.setBackground(bg);
+        return view;
+    }
+
+    private void beginListening() {
         JSONObjectSafe armed = JSONObjectSafe.from(
-                FocusedInputRuntime.arm(context, mode));
+                FocusedInputRuntime.arm(context, "dictate"));
         if (!armed.success) {
             Toast.makeText(
                     context,
@@ -192,36 +178,51 @@ final class VoiceInputCompanion {
                     Toast.LENGTH_SHORT).show();
             return;
         }
-
-        boolean accepted = NativeLiveService.beginFocusedInputCompanion(
-                context,
-                mode);
-
-        if (!accepted) {
+        if (!SpeechRecognizer.isRecognitionAvailable(context)) {
             FocusedInputRuntime.clear();
-            Toast.makeText(
-                    context,
-                    "請確認 Gemini API Key 與麥克風權限",
-                    Toast.LENGTH_SHORT).show();
+            Toast.makeText(context, "手機沒有可用的語音辨識服務", Toast.LENGTH_SHORT).show();
             return;
         }
-
-        FloatingBubbleManager manager =
-                FloatingBubbleManager.getInstance(context);
-
-        if ("dictate".equals(mode)) {
-            manager.showCompactStatus(
-                    "AI 語音輸入",
-                    "請直接說你想輸入的內容");
-        } else if ("rewrite".equals(mode)) {
-            manager.showCompactStatus(
-                    "AI 語音輸入",
-                    "正在潤飾目前文字");
-        } else {
-            manager.showCompactStatus(
-                    "AI 語音輸入",
-                    "正在翻譯目前文字");
+        stopRequested = false;
+        listening = true;
+        if (recognizer == null) {
+            recognizer = SpeechRecognizer.createSpeechRecognizer(context);
+            recognizer.setRecognitionListener(new RecognitionListener() {
+                public void onReadyForSpeech(Bundle b) {}
+                public void onBeginningOfSpeech() {}
+                public void onRmsChanged(float v) {}
+                public void onBufferReceived(byte[] b) {}
+                public void onEndOfSpeech() {}
+                public void onPartialResults(Bundle b) {}
+                public void onEvent(int t, Bundle b) {}
+                public void onError(int e) {
+                    if (!stopRequested) Toast.makeText(context, "語音辨識失敗，請再試一次", Toast.LENGTH_SHORT).show();
+                    listening = false;
+                }
+                public void onResults(Bundle b) {
+                    listening = false;
+                    String text = b == null ? "" : b.getStringArrayList(
+                            SpeechRecognizer.RESULTS_RECOGNITION) == null ? "" :
+                            b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).get(0);
+                    if (text == null || text.trim().isEmpty()) return;
+                    org.json.JSONObject result = FocusedInputRuntime.write(text.trim(), "insert");
+                    if (!result.optBoolean("success", false)) {
+                        Toast.makeText(context, "語音已辨識，但無法寫入輸入框", Toast.LENGTH_SHORT).show();
+                    }
+                }
+            });
         }
+        Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "zh-TW");
+        intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false);
+        recognizer.startListening(intent);
+    }
+
+    private void endListening() {
+        if (!listening || recognizer == null) return;
+        stopRequested = true;
+        recognizer.stopListening();
     }
 
     private TextView makeAction(
