@@ -33,6 +33,11 @@ final class FluidBubbleView extends View {
     private float rotationAngle = 0f;
     private boolean isFlowing = false;
     private boolean isSuccessFlash = false;
+    // 0110: visual-only microphone activity. This never gates audio.
+    private float microphoneActivity = 0f;
+    private boolean microphoneSending = false;
+    private boolean contextReadyFlash = false;
+    private int contextReadyFlashGeneration = 0;
 
     // 0090: explicit Agent state, independent of Gemini Live state.
     private boolean agentWorking = false;
@@ -170,6 +175,10 @@ final class FluidBubbleView extends View {
             duration = 1200L;
         } else if (nativeVoiceState == 2) {
             duration = 1500L;
+        } else if (nativeVoiceState == 1
+                && microphoneSending
+                && microphoneActivity > 0.12f) {
+            duration = 1550L;
         } else if (nativeVoiceState == 1) {
             duration = 2500L;
         } else {
@@ -198,6 +207,34 @@ final class FluidBubbleView extends View {
                 invalidate();
             }
         }, 850);
+    }
+
+    /** 0110: microphone telemetry drives visuals only; Server VAD remains authoritative. */
+    public void setMicrophoneActivity(double dbfs, boolean sending) {
+        float normalized = 0f;
+        if (sending && dbfs > -72d) {
+            normalized = (float) ((dbfs + 58d) / 40d);
+            normalized = Math.max(0f, Math.min(1f, normalized));
+        }
+        microphoneActivity = microphoneActivity * 0.42f + normalized * 0.58f;
+        if (!sending && microphoneActivity < 0.04f) microphoneActivity = 0f;
+        microphoneSending = sending;
+        updateRotationSpeed();
+        invalidate();
+    }
+
+    /** Explicit selected-region context is ready for the next voice instruction. */
+    public void flashContextReady() {
+        final int generation = ++contextReadyFlashGeneration;
+        contextReadyFlash = true;
+        invalidate();
+        postDelayed(new Runnable() {
+            @Override public void run() {
+                if (generation != contextReadyFlashGeneration) return;
+                contextReadyFlash = false;
+                invalidate();
+            }
+        }, 900L);
     }
 
     public void setAgentWorking(boolean working) {
@@ -244,6 +281,10 @@ final class FluidBubbleView extends View {
 
     public void setNativeVoiceState(int state) {
         this.nativeVoiceState = state;
+        if (state != 1) {
+            microphoneActivity = 0f;
+            microphoneSending = false;
+        }
         updateRotationSpeed();
         invalidate();
     }
@@ -287,14 +328,20 @@ final class FluidBubbleView extends View {
             ringPaint.setShader(rimGradient);
             ringPaint.setStyle(Paint.Style.STROKE);
             ringPaint.setStrokeCap(Paint.Cap.ROUND);
-            ringPaint.setStrokeWidth(Math.max(2f, radius * 0.075f));
+            float listeningBoost = nativeVoiceState == 1 && microphoneSending
+                    ? microphoneActivity : 0f;
+            ringPaint.setStrokeWidth(Math.max(
+                    2f,
+                    radius * (0.075f + 0.035f * listeningBoost)));
             ringPaint.setAlpha(
                     agentWorking
                             ? 78
                             : (nativeVoiceState == 0
                                     && !isFlowing
                                     && !agentNeedsAttention
-                                    ? 90 : 225));
+                                    ? 90
+                                    : Math.min(255,
+                                            205 + Math.round(50f * listeningBoost))));
             RectF stateRing = new RectF(
                     ringPaint.getStrokeWidth() / 2f,
                     ringPaint.getStrokeWidth() / 2f,
@@ -302,6 +349,23 @@ final class FluidBubbleView extends View {
                     getHeight() - ringPaint.getStrokeWidth() / 2f);
             canvas.drawOval(stateRing, ringPaint);
             ringPaint.setShader(null);
+        }
+
+        if (nativeVoiceState == 1
+                && microphoneSending
+                && microphoneActivity > 0.06f
+                && !agentWorking
+                && !agentNeedsAttention) {
+            glowPaint.setShader(null);
+            glowPaint.setColor(Color.parseColor("#38BDF8"));
+            glowPaint.setAlpha(28 + Math.round(72f * microphoneActivity));
+            glowPaint.setStrokeWidth(Math.max(3f, radius * 0.055f));
+            float haloInset = Math.max(3f, radius * 0.11f);
+            RectF listeningHalo = new RectF(
+                    haloInset, haloInset,
+                    getWidth() - haloInset,
+                    getHeight() - haloInset);
+            canvas.drawOval(listeningHalo, glowPaint);
         }
 
         if (agentWorking) {
@@ -344,6 +408,21 @@ final class FluidBubbleView extends View {
                     getWidth() - resultInset,
                     getHeight() - resultInset);
             canvas.drawOval(resultRing, ringPaint);
+        }
+
+        if (contextReadyFlash) {
+            ringPaint.setStyle(Paint.Style.STROKE);
+            ringPaint.setShader(null);
+            ringPaint.setStrokeCap(Paint.Cap.ROUND);
+            ringPaint.setStrokeWidth(Math.max(3f, radius * 0.095f));
+            ringPaint.setColor(Color.parseColor("#2DD4BF"));
+            ringPaint.setAlpha(250);
+            float contextInset = ringPaint.getStrokeWidth();
+            RectF contextRing = new RectF(
+                    contextInset, contextInset,
+                    getWidth() - contextInset,
+                    getHeight() - contextInset);
+            canvas.drawOval(contextRing, ringPaint);
         }
 
         if (isSuccessFlash) {
