@@ -905,7 +905,7 @@ public class FloatingBubbleManager {
                             };
                             mainHandler.postDelayed(
                                     regionLongPressRunnable,
-                                    2200L);
+                                    1500L);
                         }
 
                         @Override
@@ -1002,7 +1002,7 @@ public class FloatingBubbleManager {
                                     if (!moved
                                             && !regionLongPressTriggered
                                             && System.currentTimeMillis()
-                                                    - touchStartTime >= 2200L) {
+                                                    - touchStartTime >= 1500L) {
                                         regionLongPressTriggered = true;
                                         vibrateShort();
                                         startRegionSelection();
