@@ -238,8 +238,15 @@ public class CrewAccessibilityService extends AccessibilityService {
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
-        // Input-method companion was removed; accessibility remains available
-        // for the normal Crew runtime only.
+        if (event == null) return;
+        int type = event.getEventType();
+        if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+                || type == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
+                || type == AccessibilityEvent.TYPE_WINDOWS_CHANGED
+                || type == AccessibilityEvent.TYPE_VIEW_SCROLLED
+                || type == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) {
+            NativeLiveService.markScreenDirtyFromAccessibility();
+        }
     }
 
     @Override

@@ -33,7 +33,9 @@ final class AudioIncidentRecorder {
     private static final int MAX_TRANSCRIPT_CHARS = 600;
 
     private final Context context;
-    private final ArrayDeque<byte[]> ring = new ArrayDeque<byte[]>();
+    // Fixed rolling PCM ring: no new byte[] for every 40 ms microphone frame.
+    private final byte[] ring = new byte[MAX_RING_BYTES];
+    private int ringWritePosition;
     private int ringBytes;
 
     private String latestTranscript = "";
@@ -57,14 +59,25 @@ final class AudioIncidentRecorder {
                 & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
     }
 
-    synchronized void onUpstreamPcm(byte[] pcm, double rms, double noiseFloor, double gate) {
-        if (!isDebugBuild() || pcm == null || pcm.length == 0) return;
-        byte[] copy = Arrays.copyOf(pcm, pcm.length);
-        ring.addLast(copy);
-        ringBytes += copy.length;
-        while (ringBytes > MAX_RING_BYTES && !ring.isEmpty()) {
-            byte[] old = ring.removeFirst();
-            ringBytes -= old.length;
+    synchronized void onUpstreamPcm(
+            byte[] pcm,
+            int count,
+            double rms,
+            double noiseFloor,
+            double gate) {
+        if (!isDebugBuild() || pcm == null || pcm.length == 0 || count <= 0) return;
+        int safeCount = Math.min(count, pcm.length);
+        if (safeCount >= MAX_RING_BYTES) {
+            System.arraycopy(pcm, safeCount - MAX_RING_BYTES, ring, 0, MAX_RING_BYTES);
+            ringWritePosition = 0;
+            ringBytes = MAX_RING_BYTES;
+        } else {
+            int first = Math.min(safeCount, MAX_RING_BYTES - ringWritePosition);
+            System.arraycopy(pcm, 0, ring, ringWritePosition, first);
+            int remaining = safeCount - first;
+            if (remaining > 0) System.arraycopy(pcm, first, ring, 0, remaining);
+            ringWritePosition = (ringWritePosition + safeCount) % MAX_RING_BYTES;
+            ringBytes = Math.min(MAX_RING_BYTES, ringBytes + safeCount);
         }
         lastRms = rms;
         lastNoiseFloor = noiseFloor;
@@ -84,7 +97,7 @@ final class AudioIncidentRecorder {
         latestTranscript = "<typed input length=" + (text == null ? 0 : text.length()) + ">";
         latestTranscriptAt = System.currentTimeMillis();
         latestInputKind = "typed";
-        ring.clear();
+        ringWritePosition = 0;
         ringBytes = 0;
         lastRms = 0;
         lastNoiseFloor = 0;
@@ -153,10 +166,15 @@ final class AudioIncidentRecorder {
         return new File(context.getFilesDir(), "audio-incidents");
     }
 
-    private byte[] snapshotPcm() throws Exception {
-        ByteArrayOutputStream out = new ByteArrayOutputStream(Math.max(0, ringBytes));
-        for (byte[] chunk : ring) out.write(chunk);
-        return out.toByteArray();
+    private synchronized byte[] snapshotPcm() {
+        byte[] out = new byte[Math.max(0, ringBytes)];
+        if (ringBytes <= 0) return out;
+        int start = (ringWritePosition - ringBytes + MAX_RING_BYTES) % MAX_RING_BYTES;
+        int first = Math.min(ringBytes, MAX_RING_BYTES - start);
+        System.arraycopy(ring, start, out, 0, first);
+        int remaining = ringBytes - first;
+        if (remaining > 0) System.arraycopy(ring, 0, out, first, remaining);
+        return out;
     }
 
     private static JSONObject sanitizeArgs(JSONObject args) {

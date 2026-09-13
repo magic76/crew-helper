@@ -251,6 +251,10 @@ final class AgentInspectorStore {
             out.append("Task: none captured yet\n");
         }
 
+        out.append("\n\n")
+                .append(PerformanceMetrics.buildReport())
+                .append("\n");
+
         if (events.length() > 0) {
             out.append("\nRecent runtime stages:\n");
             for (int i = 0; i < events.length(); i++) {
@@ -273,6 +277,7 @@ final class AgentInspectorStore {
                 .edit()
                 .clear()
                 .apply();
+        PerformanceMetrics.reset();
     }
 
     private static boolean isAgentStatus(String rawStatus, boolean activeTask) {

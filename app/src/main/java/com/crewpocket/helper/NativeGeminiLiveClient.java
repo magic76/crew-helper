@@ -375,6 +375,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if (connection != null) try { connection.disconnect(); } catch (Exception ignored) {}
         Thread worker = activeToolThread;
         if (worker != null) worker.interrupt();
+        PerformanceMetrics.recordAgentTask(
+                Math.max(0L, System.currentTimeMillis() - task.startedAt));
         reportStage("Agent 任務已停止：" + task.endReason);
         shadowAgentRuntime.onTaskCancelled(task.taskId, task.endReason);
         agentRuntimeV2.onTaskCancelled(task.taskId, task.endReason);
@@ -699,13 +701,19 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         }
         new Thread(new Runnable() {
             @Override public void run() {
+                long perfStarted = android.os.SystemClock.elapsedRealtime();
+                boolean perfSuccess = false;
                 try {
                     JSONObject result = captureAndSendScreen();
+                    perfSuccess = result.optBoolean("success", false);
                     long sequence = ++screenFrameSequence;
-                    Log.d(TAG, result.optBoolean("success") ? "螢幕影格 #" + sequence + " 已送達 Gemini（" + System.currentTimeMillis() + "）" : "螢幕影格 #" + sequence + " 未送達 Gemini：" + result.optString("error"));
+                    Log.d(TAG, perfSuccess ? "螢幕影格 #" + sequence + " 已送達 Gemini（" + System.currentTimeMillis() + "）" : "螢幕影格 #" + sequence + " 未送達 Gemini：" + result.optString("error"));
                 } catch (Exception error) {
                     Log.w(TAG, "螢幕影格傳送失敗：" + error.getMessage());
                 } finally {
+                    PerformanceMetrics.recordScreenFrame(
+                            android.os.SystemClock.elapsedRealtime() - perfStarted,
+                            perfSuccess);
                     screenCaptureInProgress.set(false);
                 }
             }
@@ -1943,6 +1951,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             audioIncidentRecorder.captureBeforeFirstMutation(task.taskId, name, args);
         }
         JSONObject result = new JSONObject();
+        long toolStartedAt = android.os.SystemClock.elapsedRealtime();
         activeToolThread = Thread.currentThread();
         try {
             shadowAgentRuntime.onActionExecuted(id);
@@ -2025,7 +2034,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             else result.put("success", false).put("error", "不支援的原生工具：" + name);
         } catch (Exception error) {
             try { result.put("success", false).put("error", error.getMessage() == null ? "工具執行失敗" : error.getMessage()); } catch (Exception ignored) {}
-        } finally { activeToolConnection = null; }
+        } finally {
+            activeToolConnection = null;
+            PerformanceMetrics.recordTool(
+                    name, android.os.SystemClock.elapsedRealtime() - toolStartedAt);
+        }
         try {
             if (task.cancelled) result = new JSONObject().put("success", false).put("cancelled", true).put("error", "使用者已停止任務");
             if (runtimeV2Enforced) {
@@ -2711,6 +2724,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             if (activeAgentTask == task) activeAgentTask = null;
             conversationGoalTouchedAt = System.currentTimeMillis();
         }
+        PerformanceMetrics.recordAgentTask(
+                Math.max(0L, System.currentTimeMillis() - task.startedAt));
         reportStage(task.status);
     }
 
@@ -4677,22 +4692,21 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 continue;
             }
 
-            byte[] chunk = (count == pcm.length) ? pcm.clone() : Arrays.copyOf(pcm, count);
-
-            // 0097: when interruption is allowed, full PCM continues upstream even
-            // while Gemini speaks. Gemini's server VAD decides whether activity is
-            // real speech and emits serverContent.interrupted; handleJson() already
-            // stops local playback on that authoritative event.
+            // Do not locally replace PCM with silence. Energy-only gating is not a real VAD.
             reportMicrophoneLevel(rms, gateThreshold, true);
 
+            // 0099 audio hot path: encode only the valid slice directly. This
+            // removes a 25 Hz pcm.clone()/Arrays.copyOf() and JSONObject tree.
             try {
-                JSONObject root = new JSONObject(); JSONObject audio = new JSONObject();
-                audio.put("mimeType", "audio/pcm;rate=16000");
-                audio.put("data", Base64.encodeToString(chunk, Base64.NO_WRAP));
-                root.put("realtimeInput", new JSONObject().put("audio", audio));
-                if (!webSocket.send(root.toString())) throw new Exception("audio send failed");
+                String encoded = Base64.encodeToString(
+                        pcm, 0, count, Base64.NO_WRAP);
+                String payload = "{\"realtimeInput\":{\"audio\":{"
+                        + "\"mimeType\":\"audio/pcm;rate=16000\","
+                        + "\"data\":\"" + encoded + "\"}}}";
+                if (!webSocket.send(payload)) throw new Exception("audio send failed");
                 if (audioIncidentRecorder != null) {
-                    audioIncidentRecorder.onUpstreamPcm(chunk, rms, noiseFloor, gateThreshold);
+                    audioIncidentRecorder.onUpstreamPcm(
+                            pcm, count, rms, noiseFloor, gateThreshold);
                 }
             } catch (Exception error) { fail("麥克風串流失敗：" + error.getMessage(), error); }
         }

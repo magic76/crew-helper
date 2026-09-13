@@ -116,6 +116,12 @@ public class NativeLiveService extends Service {
     private boolean alwaysOnEnabled;
     private boolean sharingCamera;
     private boolean sharingScreen;
+    // 0099: screen sharing is event-driven when Accessibility is available.
+    private static final long SCREEN_DIRTY_DEBOUNCE_MS = 180L;
+    private static final long SCREEN_HEARTBEAT_MS = 8000L;
+    private static final long SCREEN_NO_ACCESSIBILITY_POLL_MS = 2000L;
+    private volatile boolean screenVisualDirty = true;
+    private long lastScreenVisualSentAtMs;
     private int reconnectAttempts;
     private boolean stopRequested;
     /** 0031: wall-clock of the latest real user transcript/typed instruction. */
@@ -826,6 +832,15 @@ public class NativeLiveService extends Service {
         return instance != null && instance.toggleVisualSharing(false);
     }
 
+    static void markScreenDirtyFromAccessibility() {
+        final NativeLiveService running = instance;
+        if (running == null || !active || !running.sharingScreen) return;
+        running.screenVisualDirty = true;
+        running.visualHandler.removeCallbacks(running.visualFrameSender);
+        running.visualHandler.postDelayed(
+                running.visualFrameSender, SCREEN_DIRTY_DEBOUNCE_MS);
+    }
+
     /** 0085: one-shot screen observation for the Bubble Mini Console. */
     static boolean sendScreenSnapshot() {
         NativeLiveService running = instance;
@@ -1068,6 +1083,7 @@ public class NativeLiveService extends Service {
         runtimeState = RuntimeState.ACTIVE;
         active = true;
         stopRequested = false;
+        PerformanceMetrics.markLiveRequested();
         lastUserInstructionAtMs = System.currentTimeMillis();
         armLiveIdleTimeout();
         reconnectAttempts = 0;
@@ -1263,6 +1279,7 @@ public class NativeLiveService extends Service {
                     @Override public void onStatus(String text) {
                         if (text != null && text.contains("已連線")) {
                             reconnectAttempts = 0;
+                            PerformanceMetrics.markLiveConnected();
                             flushSelectedRegionIfReady();
                         }
                         updateStatus(text, true);
@@ -1299,10 +1316,12 @@ public class NativeLiveService extends Service {
                     @Override public void onTranscript(String role, String text) {
                         if ("你".equals(role) && text != null && !text.trim().isEmpty()) {
                             noteLiveUserInstruction();
+                            PerformanceMetrics.markUserTranscript();
                         }
                         FloatingBubbleManager.getInstance(NativeLiveService.this).updateLiveTranscript(role, text);
                     }
                     @Override public void onSpeakingChanged(boolean speaking) {
+                        if (speaking) PerformanceMetrics.markAiSpeechStarted();
                         FloatingBubbleManager.getInstance(
                                 NativeLiveService.this)
                                 .refreshVoiceControls();
@@ -1363,7 +1382,12 @@ public class NativeLiveService extends Service {
             sharingScreen = !sharingScreen;
             if (sharingScreen) {
                 sharingCamera = false;
+                screenVisualDirty = true;
+                lastScreenVisualSentAtMs = 0L;
                 CameraPreviewOverlay.getInstance(this).hide();
+            } else {
+                screenVisualDirty = true;
+                lastScreenVisualSentAtMs = 0L;
             }
         }
         visualHandler.removeCallbacks(visualFrameSender);
@@ -1375,9 +1399,14 @@ public class NativeLiveService extends Service {
     private final Runnable visualFrameSender = new Runnable() {
         @Override public void run() {
             if (!active || client == null) return;
+
             if (!client.canSendVisualFrame()) {
-                // Never feed vision frames while Gemini is producing the answer.
-            } else if (sharingCamera) {
+                if (sharingCamera) visualHandler.postDelayed(this, 2000L);
+                else if (sharingScreen) visualHandler.postDelayed(this, 500L);
+                return;
+            }
+
+            if (sharingCamera) {
                 if (CameraPreviewOverlay.getInstance(NativeLiveService.this).isShowing()) {
                     byte[] liveFrame = CameraPreviewOverlay.getInstance(NativeLiveService.this).getLatestJpegFrame();
                     if (liveFrame != null && liveFrame.length > 0) {
@@ -1394,10 +1423,26 @@ public class NativeLiveService extends Service {
                         @Override public void onError(String error) { updateStatus("相機影格失敗：" + error, true); }
                     });
                 }
-            } else if (sharingScreen) {
-                client.sendScreenFrame();
+                visualHandler.postDelayed(this, 2000L);
+                return;
             }
-            if (sharingCamera || sharingScreen) visualHandler.postDelayed(this, 2000);
+
+            if (sharingScreen) {
+                long now = System.currentTimeMillis();
+                boolean accessibilityEvents = CrewAccessibilityService.isServiceRunning();
+                boolean heartbeatDue = lastScreenVisualSentAtMs <= 0L
+                        || now - lastScreenVisualSentAtMs >= SCREEN_HEARTBEAT_MS;
+                if (screenVisualDirty || heartbeatDue || !accessibilityEvents) {
+                    screenVisualDirty = false;
+                    lastScreenVisualSentAtMs = now;
+                    client.sendScreenFrame();
+                } else {
+                    PerformanceMetrics.recordScreenCleanSkip();
+                }
+                visualHandler.postDelayed(
+                        this,
+                        accessibilityEvents ? SCREEN_HEARTBEAT_MS : SCREEN_NO_ACCESSIBILITY_POLL_MS);
+            }
         }
     };
 
