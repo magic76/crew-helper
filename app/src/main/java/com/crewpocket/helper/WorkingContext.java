@@ -16,6 +16,7 @@ final class WorkingContext {
     private static final int MAX_FIELD_CHARS = 160;
     private static final int MAX_GOAL_CHARS = 480;
     private static final int MAX_TURN_CHARS = 320;
+    private static final int MAX_SELECTED_CHARS = 280;
 
     private String rootGoal = "";
     private String latestUserTurn = "";
@@ -25,6 +26,8 @@ final class WorkingContext {
     private String previousScreenFingerprint = "";
     private String lastResult = "";
     private String pendingTask = "";
+    private String selectedSourcePackage = "";
+    private String selectedReference = "";
     private final ArrayDeque<String> lastActions = new ArrayDeque<String>();
 
     synchronized void observe(String app, String fingerprint) {
@@ -41,10 +44,6 @@ final class WorkingContext {
         currentStableScreenKey = clip(stableScreenKey, MAX_FIELD_CHARS);
     }
 
-    /**
-     * Start a truly new short-lived task capsule.
-     * Called when the existing conversation goal expired or does not exist.
-     */
     synchronized void startNewGoal(String value) {
         rootGoal = clip(value, MAX_GOAL_CHARS);
         latestUserTurn = clip(value, MAX_TURN_CHARS);
@@ -54,20 +53,12 @@ final class WorkingContext {
         lastActions.clear();
     }
 
-    /**
-     * Continue an existing short-lived task capsule.
-     *
-     * Keep recent execution evidence, but the newest user turn is always the
-     * authoritative instruction. Any old pending state is invalidated because
-     * the user has just spoken again.
-     */
     synchronized void beginUserTurn(String value) {
         latestUserTurn = clip(value, MAX_TURN_CHARS);
         if (rootGoal.isEmpty()) rootGoal = clip(value, MAX_GOAL_CHARS);
         pendingTask = "";
     }
 
-    /** Backward-compatible caller: treat as the newest user turn, not a hard reset. */
     synchronized void setGoalHint(String value) {
         beginUserTurn(value);
     }
@@ -78,6 +69,16 @@ final class WorkingContext {
 
     synchronized void updateLastResult(String value) {
         lastResult = clip(value, MAX_FIELD_CHARS);
+    }
+
+    synchronized void setSelectedReference(String packageName, String semanticText) {
+        selectedSourcePackage = clip(packageName, MAX_FIELD_CHARS);
+        selectedReference = clip(semanticText, MAX_SELECTED_CHARS);
+    }
+
+    synchronized void clearSelectedReference() {
+        selectedSourcePackage = "";
+        selectedReference = "";
     }
 
     synchronized void recordAction(String action, String result) {
@@ -102,7 +103,9 @@ final class WorkingContext {
                .put("previousScreen", previousScreenFingerprint)
                .put("lastActions", actions)
                .put("lastResult", lastResult)
-               .put("pendingTask", pendingTask);
+               .put("pendingTask", pendingTask)
+               .put("selectedSourcePackage", selectedSourcePackage)
+               .put("selectedReference", selectedReference);
         } catch (Exception ignored) {}
         return out;
     }
@@ -110,8 +113,6 @@ final class WorkingContext {
     synchronized JSONObject toModelJson() {
         JSONObject out = new JSONObject();
         try {
-            // Keep the old "goal" key, but redefine it safely as the newest
-            // user instruction. rootGoal is only an optional continuity anchor.
             if (!latestUserTurn.isEmpty()) out.put("goal", latestUserTurn);
             if (!rootGoal.isEmpty() && !rootGoal.equals(latestUserTurn)) {
                 out.put("rootGoal", rootGoal);
@@ -119,6 +120,15 @@ final class WorkingContext {
             if (!currentApp.isEmpty()) out.put("currentApp", currentApp);
             if (!currentScreenFingerprint.isEmpty()) {
                 out.put("currentScreen", currentScreenFingerprint);
+            }
+            if (!currentStableScreenKey.isEmpty()) {
+                out.put("stableScreen", currentStableScreenKey);
+            }
+            if (!selectedSourcePackage.isEmpty()) {
+                out.put("selectedSourcePackage", selectedSourcePackage);
+            }
+            if (!selectedReference.isEmpty()) {
+                out.put("selectedReference", selectedReference);
             }
 
             if (!lastActions.isEmpty()) {
@@ -133,16 +143,14 @@ final class WorkingContext {
         return out;
     }
 
-    /**
-     * Hard reset only for a truly new/expired conversation goal.
-     * Do not call this for every finalized utterance.
-     */
     synchronized void resetTransientForNewGoal() {
         rootGoal = "";
         latestUserTurn = "";
         previousScreenFingerprint = "";
         lastResult = "";
         pendingTask = "";
+        selectedSourcePackage = "";
+        selectedReference = "";
         lastActions.clear();
     }
 
@@ -155,12 +163,14 @@ final class WorkingContext {
         previousScreenFingerprint = "";
         lastResult = "";
         pendingTask = "";
+        selectedSourcePackage = "";
+        selectedReference = "";
         lastActions.clear();
     }
 
     private static String clip(String value, int max) {
         if (value == null) return "";
-        String out = value.trim();
+        String out = value.replaceAll("\s+", " ").trim();
         return out.length() <= max ? out : out.substring(0, max);
     }
 }

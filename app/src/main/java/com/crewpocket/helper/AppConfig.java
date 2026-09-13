@@ -17,11 +17,6 @@ public class AppConfig {
     public static final String KEY_AUDIO_OUTPUT = "audio_output";
     public static final String KEY_VOICE_PRESET = "voice_preset";
 
-    /** Keyboard companion removed in 1.8.65; retained as a hard-off bridge
-     * for old service code during preference migration. */
-    public static boolean isVoiceInputCompanionEnabled(Context context) {
-        return false;
-    }
 
     // 0091: voice and speaking personality are independent.
     public static final String KEY_PERSONALITY_MIGRATED = "personality_migrated_v1";

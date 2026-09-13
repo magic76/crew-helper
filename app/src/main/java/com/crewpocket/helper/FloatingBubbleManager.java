@@ -273,10 +273,10 @@ public class FloatingBubbleManager {
 
 
     /**
-     * 0094 "Point at this" UX.
+     * 0098 "Point at this" UX.
      *
-     * Long-pressing the bubble opens a full-screen selector. The selected
-     * rectangle is only context. Runtime still owns all phone execution.
+     * The explicit Region action opens a selector. Selection freezes the
+     * current pixels as context but never starts Live or authorizes a tap.
      */
     public void startRegionSelection() {
         mainHandler.post(new Runnable() {
@@ -326,20 +326,45 @@ public class FloatingBubbleManager {
                                     return;
                                 }
 
-                                boolean accepted =
-                                        NativeLiveService.submitSelectedRegion(
-                                                context,
-                                                selected);
-                                if (!accepted) {
-                                    showCompactStatus(
-                                            "框選未送出",
-                                            "請確認 Gemini API Key 與麥克風權限");
-                                    return;
-                                }
-
                                 showCompactStatus(
-                                        "正在讀取框選",
-                                        "完成後直接說你想怎麼處理");
+                                        "正在保存選取",
+                                        "只記住這個區域，不會自動操作");
+
+                                SelectedRegionSnapshotStore.capture(
+                                        context,
+                                        selected,
+                                        new SelectedRegionSnapshotStore.Callback() {
+                                            @Override
+                                            public void onResult(
+                                                    SelectedRegionContext frozen,
+                                                    String error) {
+                                                if (frozen == null) {
+                                                    showCompactStatus(
+                                                            "無法保存選取",
+                                                            error == null || error.trim().isEmpty()
+                                                                    ? "請確認輔助使用服務已啟用"
+                                                                    : error);
+                                                    return;
+                                                }
+
+                                                boolean accepted =
+                                                        NativeLiveService.submitSelectedRegion(
+                                                                context,
+                                                                frozen);
+                                                if (!accepted) {
+                                                    showCompactStatus(
+                                                            "選取未保存",
+                                                            "請重新選取一次");
+                                                    return;
+                                                }
+
+                                                showCompactStatus(
+                                                        "已選取這個",
+                                                        NativeLiveService.isActive()
+                                                                ? "直接說你想怎麼處理"
+                                                                : "兩分鐘內開始語音，再說你想怎麼處理");
+                                            }
+                                        });
                             }
 
                             @Override

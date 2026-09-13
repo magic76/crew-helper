@@ -52,7 +52,6 @@ public class NativeLiveService extends Service {
     private static volatile boolean serviceRunning;
     private static NativeLiveService instance;
     private static volatile SelectedRegionContext queuedSelectedRegion;
-    private static volatile String queuedFocusedInputMode = "";
 
     interface RuntimeStateListener {
         void onRuntimeStateChanged();
@@ -681,67 +680,9 @@ public class NativeLiveService extends Service {
 
 
     /**
-     * Store one short-lived explicit screen selection and make sure Live is
-     * available to consume it. The selection does not authorize any mutation.
+     * Store one short-lived explicit screen selection without starting Live.
+     * The selection is context only and never authorizes any mutation.
      */
-
-    static boolean beginFocusedInputCompanion(
-            Context context,
-            String mode) {
-        if (context == null
-                || !AppConfig.isVoiceInputCompanionEnabled(context)) {
-            return false;
-        }
-
-        String key = AppConfig.getGeminiApiKey(context);
-        if (key == null || key.trim().length() < 20) {
-            return false;
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
-                && context.checkSelfPermission(
-                        android.Manifest.permission.RECORD_AUDIO)
-                        != PackageManager.PERMISSION_GRANTED) {
-            return false;
-        }
-
-        queuedFocusedInputMode =
-                "rewrite".equals(mode)
-                        ? "rewrite"
-                        : ("translate".equals(mode)
-                                ? "translate"
-                                : "dictate");
-
-        NativeLiveService running = instance;
-        if (running != null) {
-            running.visualHandler.post(new Runnable() {
-                @Override public void run() {
-                    if (!active) {
-                        running.enterActive("focused-input");
-                    }
-                    running.flushFocusedInputCompanionIfReady();
-                }
-            });
-        } else {
-            start(context);
-        }
-        return true;
-    }
-
-    private void flushFocusedInputCompanionIfReady() {
-        String mode = queuedFocusedInputMode;
-        if (mode == null || mode.isEmpty()) return;
-
-        NativeGeminiLiveClient live = client;
-        if (!active
-                || live == null
-                || !live.isSetupReadyForFocusedInput()) {
-            return;
-        }
-
-        queuedFocusedInputMode = "";
-        live.armFocusedInputCompanion(mode);
-    }
 
     static boolean submitSelectedRegion(
             Context context,
@@ -749,32 +690,22 @@ public class NativeLiveService extends Service {
         if (context == null
                 || selected == null
                 || !selected.isFresh()
-                || selected.hardSensitive) {
+                || selected.hardSensitive
+                || !selected.hasFrozenSnapshot()) {
             return false;
         }
 
-        String key = AppConfig.getGeminiApiKey(context);
-        if (key == null || key.trim().length() < 20) return false;
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
-                && context.checkSelfPermission(
-                        android.Manifest.permission.RECORD_AUDIO)
-                        != PackageManager.PERMISSION_GRANTED) {
-            return false;
-        }
-
+        // 0098: selecting something is context-only. It must never start Live,
+        // claim the microphone, or create a model turn by itself.
         queuedSelectedRegion = selected;
 
         NativeLiveService running = instance;
-        if (running != null) {
+        if (running != null && active) {
             running.visualHandler.post(new Runnable() {
                 @Override public void run() {
-                    if (!active) running.enterActive("selected-region");
                     running.flushSelectedRegionIfReady();
                 }
             });
-        } else {
-            start(context);
         }
         return true;
     }
@@ -1333,7 +1264,6 @@ public class NativeLiveService extends Service {
                         if (text != null && text.contains("已連線")) {
                             reconnectAttempts = 0;
                             flushSelectedRegionIfReady();
-                            flushFocusedInputCompanionIfReady();
                         }
                         updateStatus(text, true);
 
