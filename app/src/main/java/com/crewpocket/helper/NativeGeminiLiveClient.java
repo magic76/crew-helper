@@ -4700,10 +4700,26 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private static final int SERVER_VAD_PREFIX_PADDING_MS = 80;
     private static final int SERVER_VAD_SILENCE_DURATION_MS = 450;
 
+    // 0101: while Gemini is audibly speaking, keep a tiny Android-side admission
+    // gate in front of server VAD. Runtime does NOT decide the turn and does NOT
+    // call triggerLocalInterruption(); it only withholds likely speaker echo until
+    // several consecutive frames look like close-range human speech. Gemini
+    // remains the authoritative interruption/turn detector once audio is admitted.
+    private static final int BARGE_IN_MAX_CANDIDATE_FRAMES = 8;
+
     private void sendMic() {
         byte[] pcm = new byte[1280]; // 40ms @ 16kHz 16-bit mono
         int calibrationFrames = 0;
         double[] calibrationSamples = new double[CALIBRATION_FRAMES];
+
+        // Fixed buffers avoid re-introducing the 25 Hz allocation churn removed
+        // by 0099. Only candidate speech during AI playback is copied here.
+        byte[][] bargeInCandidatePcm =
+                new byte[BARGE_IN_MAX_CANDIDATE_FRAMES][pcm.length];
+        int[] bargeInCandidateLengths = new int[BARGE_IN_MAX_CANDIDATE_FRAMES];
+        int bargeInCandidateCount = 0;
+        int consecutiveBargeInFrames = 0;
+        boolean bargeInGateOpen = false;
 
         while (running && recorder != null && webSocket != null) {
             int count = recorder.read(pcm, 0, pcm.length); if (count <= 0) continue;
@@ -4728,45 +4744,124 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 }
             }
 
-            // Diagnostic meter threshold only. It no longer authorizes interruption
-            // and never gates normal upstream PCM. This keeps the existing UI/audio
-            // incident recorder useful without pretending RMS is a real VAD.
             double modeBase = "noisy".equals(mode) ? 1.45 : ("quiet".equals(mode) ? 0.65 : 0.90);
             double gateMultiplier = modeBase + suppression * 0.008;
             double minBase = "noisy".equals(mode) ? 0.022 : ("quiet".equals(mode) ? 0.002 : 0.006);
             double minGate = minBase + suppression * 0.00010;
             double gateThreshold = Math.max(minGate, noiseFloor * gateMultiplier);
 
-            // Learn background level only while Gemini is not talking. This value is
-            // telemetry now; a quiet user frame below it is still sent to Gemini.
-            if (!aiSpeaking && rms < gateThreshold) {
-                noiseFloor = noiseFloor * 0.985 + Math.min(rms, 0.18) * 0.015;
+            // Outside AI playback there is no local speech gate at all. Normal user
+            // turns still go straight to Gemini Server VAD with zero added latency.
+            if (!aiSpeaking) {
+                bargeInGateOpen = false;
+                consecutiveBargeInFrames = 0;
+                bargeInCandidateCount = 0;
+                if (rms < gateThreshold) {
+                    noiseFloor = noiseFloor * 0.985 + Math.min(rms, 0.18) * 0.015;
+                }
+                reportMicrophoneLevel(rms, gateThreshold, true);
+                if (!sendMicChunk(pcm, count, rms, gateThreshold)) break;
+                continue;
             }
 
-            if (aiSpeaking && !allowVoiceInterruption) {
-                // Explicit no-interruption mode remains Runtime-owned: do not feed
-                // microphone audio upstream while the assistant is speaking.
+            if (!allowVoiceInterruption) {
+                // Existing explicit protection mode: AI speech owns the channel.
+                bargeInGateOpen = false;
+                consecutiveBargeInFrames = 0;
+                bargeInCandidateCount = 0;
                 reportMicrophoneLevel(rms, gateThreshold, false);
                 continue;
             }
 
-            // Do not locally replace PCM with silence. Energy-only gating is not a real VAD.
-            reportMicrophoneLevel(rms, gateThreshold, true);
+            if (!bargeInGateOpen) {
+                // AEC/NS remain the first line of defense. This gate is deliberately
+                // active only during assistant playback to catch residual self-echo.
+                boolean outputAudible = System.currentTimeMillis() < lastPlaybackActiveAt;
+                double sensitivity = interruptionSensitivity / 100.0;
+                int requiredFrames = 4
+                        + (int) Math.round((1.0 - sensitivity) * 3.0)
+                        + (outputAudible ? 1 : 0);
+                requiredFrames = Math.max(4,
+                        Math.min(BARGE_IN_MAX_CANDIDATE_FRAMES, requiredFrames));
 
-            // 0099 audio hot path: encode only the valid slice directly. This
-            // removes a 25 Hz pcm.clone()/Arrays.copyOf() and JSONObject tree.
-            try {
-                String encoded = Base64.encodeToString(
-                        pcm, 0, count, Base64.NO_WRAP);
-                String payload = "{\"realtimeInput\":{\"audio\":{"
-                        + "\"mimeType\":\"audio/pcm;rate=16000\","
-                        + "\"data\":\"" + encoded + "\"}}}";
-                if (!webSocket.send(payload)) throw new Exception("audio send failed");
-                if (audioIncidentRecorder != null) {
-                    audioIncidentRecorder.onUpstreamPcm(
-                            pcm, count, rms, noiseFloor, gateThreshold);
+                double baseInterrupt = ("noisy".equals(mode) ? 0.060 : 0.042)
+                        + suppression * 0.00016
+                        + (outputAudible ? 0.010 : 0.0)
+                        + (1.0 - sensitivity) * 0.018
+                        - sensitivity * 0.006;
+                double floorMultiplier = ("noisy".equals(mode) ? 2.15 : 1.70)
+                        + suppression * 0.006
+                        + (1.0 - sensitivity) * 0.40;
+                double interruptThreshold = Math.max(
+                        baseInterrupt, noiseFloor * floorMultiplier);
+
+                if (rms >= interruptThreshold) {
+                    consecutiveBargeInFrames++;
+                    if (bargeInCandidateCount < BARGE_IN_MAX_CANDIDATE_FRAMES) {
+                        System.arraycopy(pcm, 0,
+                                bargeInCandidatePcm[bargeInCandidateCount], 0, count);
+                        bargeInCandidateLengths[bargeInCandidateCount] = count;
+                        bargeInCandidateCount++;
+                    }
+
+                    if (consecutiveBargeInFrames >= requiredFrames) {
+                        bargeInGateOpen = true;
+                        Log.i(TAG, "0101 barge-in gate opened after "
+                                + consecutiveBargeInFrames + " frames; threshold="
+                                + interruptThreshold + " rms=" + rms);
+
+                        // Flush only the candidate speech frames. We intentionally do
+                        // not prepend arbitrary pre-candidate audio because that is
+                        // exactly where residual speaker echo tends to live.
+                        for (int i = 0; i < bargeInCandidateCount; i++) {
+                            int bufferedCount = bargeInCandidateLengths[i];
+                            byte[] buffered = bargeInCandidatePcm[i];
+                            double bufferedRms = calculateRms(buffered, bufferedCount);
+                            if (!sendMicChunk(buffered, bufferedCount,
+                                    bufferedRms, interruptThreshold)) return;
+                        }
+                        bargeInCandidateCount = 0;
+                        consecutiveBargeInFrames = 0;
+                        reportMicrophoneLevel(rms, interruptThreshold, true);
+                        // Current frame was already included in the candidate flush.
+                        continue;
+                    }
+                } else {
+                    consecutiveBargeInFrames = 0;
+                    bargeInCandidateCount = 0;
                 }
-            } catch (Exception error) { fail("麥克風串流失敗：" + error.getMessage(), error); }
+
+                reportMicrophoneLevel(rms, interruptThreshold, false);
+                continue;
+            }
+
+            // The local gate has admitted likely human speech. From this point on
+            // full PCM flows continuously and Gemini Server VAD remains responsible
+            // for emitting serverContent.interrupted and ending the old model turn.
+            reportMicrophoneLevel(rms, gateThreshold, true);
+            if (!sendMicChunk(pcm, count, rms, gateThreshold)) break;
+        }
+    }
+
+    /** 0099 hot-path encoding retained; 0101 reuses it for buffered barge-in frames. */
+    private boolean sendMicChunk(byte[] pcm, int count, double rms, double gateThreshold) {
+        try {
+            WebSocket socket = webSocket;
+            if (socket == null) return false;
+            String encoded = Base64.encodeToString(
+                    pcm, 0, count, Base64.NO_WRAP);
+            String payload = "{\"realtimeInput\":{\"audio\":{"
+                    + "\"mimeType\":\"audio/pcm;rate=16000\","
+                    + "\"data\":\"" + encoded + "\"}}}";
+            if (!socket.send(payload)) throw new Exception("audio send failed");
+            if (audioIncidentRecorder != null) {
+                audioIncidentRecorder.onUpstreamPcm(
+                        pcm, count, rms, noiseFloor, gateThreshold);
+            }
+            return true;
+        } catch (Exception error) {
+            fail("麥克風串流失敗：" + error.getMessage(), error);
+            return false;
         }
     }
     private double calculateZeroCrossingRate(byte[] pcm, int count) {
