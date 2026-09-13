@@ -38,6 +38,7 @@ import okio.ByteString;
 
 /** Gemini Live backed by OkHttp's production WebSocket implementation. */
 final class NativeGeminiLiveClient extends WebSocketListener {
+    // 0100 latency trace: diagnose model-vs-runtime wait and reject stale post-finish tools.
     // 0073: AgentRuntimeV2 production authority is staged per action/package.
     private static final String TAG = "CrewNativeLive";
     interface Listener {
@@ -139,6 +140,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     // Tool calls retain the generation that created them, preventing an old
     // model turn from mutating the phone after the user has changed their mind.
     private long userIntentGeneration = 0L;
+    // 0100 latency trace + stale same-intent tool guard.
+    private long lastFinishedIntentGeneration = -1L;
+    private String lastFinishedTaskId = "";
     private MemoryRuleIndex memoryRuleIndex;
     private String lastMemoryDispatchKey = "";
     private long lastMemoryDispatchAt = 0L;
@@ -369,12 +373,16 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             pendingToolCalls.clear();
             clearAgentResponseWatchdogLocked();
             agentHistory.add(task);
+            lastFinishedIntentGeneration = task.intentGeneration;
+            lastFinishedTaskId = task.taskId;
             activeAgentTask = null;
         }
         HttpURLConnection connection = activeToolConnection;
         if (connection != null) try { connection.disconnect(); } catch (Exception ignored) {}
         Thread worker = activeToolThread;
         if (worker != null) worker.interrupt();
+        PerformanceMetrics.markAgentTaskFinished(
+                task.taskId, task.intentGeneration, "CANCELLED");
         PerformanceMetrics.recordAgentTask(
                 Math.max(0L, System.currentTimeMillis() - task.startedAt));
         reportStage("Agent 任務已停止：" + task.endReason);
@@ -437,6 +445,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         String shadowTaskId = "";
         synchronized (agentLock) {
             userIntentGeneration++;
+            PerformanceMetrics.markAgentUserIntent(userIntentGeneration);
             // Calls that have not started belong to the old utterance. An
             // executing call is additionally guarded by its generation below.
             pendingToolCalls.clear();
@@ -458,6 +467,27 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
     private boolean isCurrentUserIntent(long generation) {
         synchronized (agentLock) { return generation == userIntentGeneration; }
+    }
+
+    private boolean isFinishedIntentGeneration(long generation) {
+        synchronized (agentLock) {
+            return generation >= 0L
+                    && generation == lastFinishedIntentGeneration
+                    && (activeAgentTask == null || activeAgentTask.finished);
+        }
+    }
+
+    private void sendFinishedIntentToolResponse(String id, String name) {
+        try {
+            sendToolResponse(id, name, new JSONObject()
+                    .put("success", false)
+                    .put("stale", true)
+                    .put("blockedByRuntime", true)
+                    .put("taskState", "DONE")
+                    .put("error", "TASK_ALREADY_FINISHED")
+                    .put("instruction",
+                            "This user intent already finished. Do not call more tools; wait for a new user instruction."));
+        } catch (Exception ignored) {}
     }
 
     boolean sendText(String text) {
@@ -1809,6 +1839,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             sendBlockedToolResponse(id, requestedName, "使用者已有新指令，舊操作已取消。");
             return;
         }
+        if (isFinishedIntentGeneration(callIntentGeneration)) {
+            PerformanceMetrics.recordStalePostFinishTool(requestedName);
+            sendFinishedIntentToolResponse(id, requestedName);
+            return;
+        }
         // 0034: model-facing semantic action -> existing trusted Runtime tool.
         final SemanticPhoneAction.Resolution semantic;
         try {
@@ -1947,6 +1982,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                     ActionExpectation.forRuntimeAction(name),
                     latestActionObservation);
         }
+        PerformanceMetrics.markAgentToolStarted(
+                task.taskId, task.intentGeneration, name);
         if (isMutationTool(name) && audioIncidentRecorder != null) {
             audioIncidentRecorder.captureBeforeFirstMutation(task.taskId, name, args);
         }
@@ -2036,8 +2073,15 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             try { result.put("success", false).put("error", error.getMessage() == null ? "工具執行失敗" : error.getMessage()); } catch (Exception ignored) {}
         } finally {
             activeToolConnection = null;
-            PerformanceMetrics.recordTool(
-                    name, android.os.SystemClock.elapsedRealtime() - toolStartedAt);
+            long toolElapsedMs = android.os.SystemClock.elapsedRealtime() - toolStartedAt;
+            PerformanceMetrics.recordTool(name, toolElapsedMs);
+            PerformanceMetrics.markAgentToolRuntime(
+                    task.taskId, task.intentGeneration, name, toolElapsedMs);
+        }
+        if (task.finished || task.cancelled || !isCurrentUserIntent(callIntentGeneration)) {
+            PerformanceMetrics.recordStaleCompletion(name);
+            try { sendFinishedIntentToolResponse(id, requestedName); } catch (Exception ignored) {}
+            return;
         }
         try {
             if (task.cancelled) result = new JSONObject().put("success", false).put("cancelled", true).put("error", "使用者已停止任務");
@@ -2064,6 +2108,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             updateAgentStabilityAfterResult(task, name, args, result);
             task.addStep(name, result);
             sendToolResponse(id, requestedName, result);
+            PerformanceMetrics.markAgentToolResultSent(
+                    task.taskId, task.intentGeneration, name);
             if (task.blockedReason != null) {
                 requestAgentConclusion(task, task.blockedReason);
             } else if (shouldSuspendAgentForUser(result)) {
@@ -2116,6 +2162,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 touchConversationGoal("最近工具：" + name);
                 conversationGoalTaskIndex++;
                 activeAgentTask = new AgentTaskRecord("agent_" + System.currentTimeMillis());
+                activeAgentTask.intentGeneration = userIntentGeneration;
                 activeAgentTask.goalId = conversationGoalId;
                 activeAgentTask.goalTaskIndex = conversationGoalTaskIndex;
                 reportStage("Agent 任務開始：" + activeAgentTask.taskId);
@@ -2625,6 +2672,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     }
 
     private void markAgentUserVisibleReplyProduced() {
+        String taskId = "";
+        long intentGeneration = -1L;
         synchronized (agentLock) {
             if (activeAgentTask != null
                     && activeAgentTask.awaitingModel
@@ -2632,7 +2681,12 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                     && !activeAgentTask.cancelled) {
                 activeAgentTask.userVisibleReplyProducedSinceLastAction = true;
                 activeAgentTask.finalSpeechRetryCount = 0;
+                taskId = activeAgentTask.taskId;
+                intentGeneration = activeAgentTask.intentGeneration;
             }
+        }
+        if (!taskId.isEmpty()) {
+            PerformanceMetrics.markAgentFinalSpeech(taskId, intentGeneration);
         }
     }
 
@@ -2721,9 +2775,13 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             task.status = "Agent 任務結束：" + reason;
             agentHistory.add(task);
             if (agentHistory.size() > 20) agentHistory.remove(0);
+            lastFinishedIntentGeneration = task.intentGeneration;
+            lastFinishedTaskId = task.taskId;
             if (activeAgentTask == task) activeAgentTask = null;
             conversationGoalTouchedAt = System.currentTimeMillis();
         }
+        PerformanceMetrics.markAgentTaskFinished(
+                task.taskId, task.intentGeneration, "FINISHED");
         PerformanceMetrics.recordAgentTask(
                 Math.max(0L, System.currentTimeMillis() - task.startedAt));
         reportStage(task.status);
@@ -4774,6 +4832,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         final String taskId;
         String goalId = "";
         int goalTaskIndex = 0;
+        long intentGeneration = -1L;
         final long startedAt = System.currentTimeMillis();
         final ArrayList<String> stepsSummary = new ArrayList<String>();
         final java.util.HashMap<String, Integer> toolCounts = new java.util.HashMap<String, Integer>();
