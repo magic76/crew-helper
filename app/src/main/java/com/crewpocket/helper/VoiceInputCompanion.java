@@ -15,6 +15,7 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.LinearLayout;
+import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
 import android.speech.RecognitionListener;
@@ -108,7 +109,7 @@ final class VoiceInputCompanion {
         LinearLayout root = new LinearLayout(context);
         root.setOrientation(LinearLayout.HORIZONTAL);
         root.setGravity(Gravity.CENTER_VERTICAL);
-        root.setPadding(dp(8), dp(4), dp(8), dp(4));
+        root.setPadding(0, dp(4), 0, dp(4));
 
         GradientDrawable bg = new GradientDrawable();
         bg.setColor(Color.argb(244, 24, 24, 27));
@@ -116,11 +117,11 @@ final class VoiceInputCompanion {
         bg.setStroke(dp(1), Color.parseColor("#3F3F46"));
         root.setBackground(bg);
 
-        TextView dictate = makeHoldAction();
+        ImageView dictate = makeHoldAction();
         root.addView(dictate, new LinearLayout.LayoutParams(dp(52), dp(40)));
 
         params = new WindowManager.LayoutParams(
-                WindowManager.LayoutParams.MATCH_PARENT,
+                dp(52),
                 dp(48),
                 Build.VERSION.SDK_INT >= 26
                         ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -142,10 +143,11 @@ final class VoiceInputCompanion {
         }
     }
 
-    private TextView makeHoldAction() {
-        TextView view = makeLabel("🎙");
-        view.setTextSize(19f);
-        view.setGravity(Gravity.CENTER);
+    private ImageView makeHoldAction() {
+        ImageView view = new ImageView(context);
+        view.setImageResource(R.drawable.crew_assistant_bubble);
+        view.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+        view.setPadding(dp(8), dp(6), dp(8), dp(6));
         view.setContentDescription("按住說話，放開後輸入");
         view.setClickable(true);
         view.setOnTouchListener((v, event) -> {
