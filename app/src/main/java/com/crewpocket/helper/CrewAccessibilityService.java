@@ -59,7 +59,6 @@ public class CrewAccessibilityService extends AccessibilityService {
     private volatile String lastTextInputMethod = "NONE";
     private volatile String lastTextInputFailure = "";
     private volatile boolean lastTextInputVerified = false;
-    private Runnable voiceInputCompanionRefreshRunnable;
 
     public static boolean isServiceRunning() { return instance != null; }
     public static CrewAccessibilityService getInstance() {
@@ -200,91 +199,6 @@ public class CrewAccessibilityService extends AccessibilityService {
     }
 
 
-
-    /**
-     * 0096 Keyboard Companion.
-     *
-     * Accessibility detects a focused editable + visible IME. It exposes only
-     * the currently focused non-sensitive field. The companion never presses
-     * Enter, Search, Done, or Send.
-     */
-    private void scheduleVoiceInputCompanionRefresh() {
-        if (mainHandler == null) return;
-        if (voiceInputCompanionRefreshRunnable == null) {
-            voiceInputCompanionRefreshRunnable = new Runnable() {
-                @Override public void run() {
-                    refreshVoiceInputCompanion();
-                }
-            };
-        }
-        mainHandler.removeCallbacks(voiceInputCompanionRefreshRunnable);
-        mainHandler.postDelayed(
-                voiceInputCompanionRefreshRunnable,
-                90L);
-    }
-
-    private void refreshVoiceInputCompanion() {
-        VoiceInputCompanion companion =
-                VoiceInputCompanion.getInstance(this);
-
-        if (!AppConfig.isVoiceInputCompanionEnabled(this)) {
-            companion.hide();
-            return;
-        }
-
-        boolean imeVisible = false;
-        int imeTop = Integer.MAX_VALUE;
-
-        try {
-            List<AccessibilityWindowInfo> windows = getWindows();
-            if (windows != null) {
-                Rect bounds = new Rect();
-                for (AccessibilityWindowInfo window : windows) {
-                    if (window == null
-                            || window.getType()
-                                    != AccessibilityWindowInfo.TYPE_INPUT_METHOD) {
-                        continue;
-                    }
-                    window.getBoundsInScreen(bounds);
-                    imeTop = Math.min(imeTop, bounds.top);
-                    imeVisible = true;
-                }
-            }
-
-        } catch (Exception ignored) {}
-
-        AccessibilityNodeInfo target =
-                findFocusedEditableNodeForCompanion();
-
-        if (!imeVisible || target == null) {
-            if (target != null) {
-                try { target.recycle(); } catch (Exception ignored) {}
-            }
-            companion.hide();
-            return;
-        }
-
-        try {
-            if (SensitiveDataGuard.isHardBlockedInput(target)) {
-                companion.hide();
-                return;
-            }
-
-            CharSequence pkg = target.getPackageName();
-            String packageName = pkg == null ? "" : pkg.toString();
-            if (getPackageName().equals(packageName)) {
-                companion.hide();
-                return;
-            }
-
-            companion.update(
-                    true,
-                    imeTop == Integer.MAX_VALUE ? 0 : imeTop,
-                    packageName);
-        } finally {
-            try { target.recycle(); } catch (Exception ignored) {}
-        }
-    }
 
     public static JSONObject getFocusedInputSnapshot() {
         CrewAccessibilityService service = instance;
@@ -617,7 +531,6 @@ public class CrewAccessibilityService extends AccessibilityService {
         if (learnedUiMappingStore == null) learnedUiMappingStore = new LearnedUiMappingStore(this);
         if (uiTeachOverlay == null) uiTeachOverlay = new UiTeachOverlay(this);
         if (appCatalog == null) { appCatalog = new AppCatalog(this); appCatalog.prewarm(); }
-        scheduleVoiceInputCompanionRefresh();
         try {
             AccessibilityServiceInfo info = getServiceInfo();
             if (info == null) {
@@ -633,14 +546,8 @@ public class CrewAccessibilityService extends AccessibilityService {
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
-        try {
-            scheduleVoiceInputCompanionRefresh();
-        } catch (Exception error) {
-            Log.w(
-                    TAG,
-                    "Voice input companion event ignored: "
-                            + error.getMessage());
-        }
+        // Input-method companion was removed; accessibility remains available
+        // for the normal Crew runtime only.
     }
 
     @Override
@@ -694,10 +601,6 @@ public class CrewAccessibilityService extends AccessibilityService {
     @Override
     public void onDestroy() {
         isRunning = false;
-        FocusedInputRuntime.clear();
-        try {
-            VoiceInputCompanion.getInstance(this).hide();
-        } catch (Exception ignored) {}
         setScreenKeepAwake(false);
         try {
             if (serverSocket != null && !serverSocket.isClosed()) {

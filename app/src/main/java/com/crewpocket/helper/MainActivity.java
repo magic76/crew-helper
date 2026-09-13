@@ -1025,41 +1025,6 @@ public class MainActivity extends Activity
                 }));
 
 
-        final boolean voiceInputCompanion =
-                AppConfig.isVoiceInputCompanionEnabled(this);
-        pageContent.addView(makeSettingsRow(
-                "⌨",
-                I18n.get(this, "AI 語音輸入", "AI Voice Input"),
-                voiceInputCompanion
-                        ? I18n.get(this, "鍵盤出現時顯示 Crew Bar", "Show Crew Bar above keyboard")
-                        : I18n.get(this, "關閉", "Off"),
-                voiceInputCompanion
-                        ? CrewTheme.TEAL_300
-                        : CrewTheme.TEXT_MUTED,
-                new View.OnClickListener() {
-                    @Override public void onClick(View v) {
-                        boolean next =
-                                !AppConfig.isVoiceInputCompanionEnabled(
-                                        MainActivity.this);
-                        AppConfig.setVoiceInputCompanionEnabled(
-                                MainActivity.this,
-                                next);
-                        Toast.makeText(
-                                MainActivity.this,
-                                next
-                                        ? I18n.get(
-                                                MainActivity.this,
-                                                "AI 語音輸入已開啟",
-                                                "AI Voice Input enabled")
-                                        : I18n.get(
-                                                MainActivity.this,
-                                                "AI 語音輸入已關閉",
-                                                "AI Voice Input disabled"),
-                                Toast.LENGTH_SHORT).show();
-                        renderSettingsPage();
-                    }
-                }));
-
         boolean keepAwake =
                 FloatingBubbleManager.isKeepAwakeActive();
         pageContent.addView(makeSettingsRow(
