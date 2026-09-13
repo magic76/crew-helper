@@ -31,6 +31,8 @@ public class MainActivity extends Activity
     private FluidBubbleView homeOrb;
     private String homeRuntimeSignature = "";
     private final Button[] navButtons = new Button[3];
+    private static final int[] NAV_ICONS = new int[]{
+            CrewIcons.VOICE, CrewIcons.PRESENTATION, CrewIcons.SETTINGS};
     private int activeTab = 0;
 
     private int dp(float val) {
@@ -214,8 +216,12 @@ public class MainActivity extends Activity
         Button liveButton = new Button(this);
         liveButton.setText(
                 liveActive
-                        ? "● " + I18n.get(this, "通話中 · 開啟控制", "Live · Open controls")
-                        : "🎙 " + I18n.get(this, "開始對話", "Start conversation"));
+                        ? I18n.get(this, "通話中 · 開啟控制", "Live · Open controls")
+                        : I18n.get(this, "開始對話", "Start conversation"));
+        liveButton.setCompoundDrawables(
+                CrewIcons.drawable(this, CrewIcons.VOICE, Color.WHITE, dp(20)),
+                null, null, null);
+        liveButton.setCompoundDrawablePadding(dp(8));
         liveButton.setTextSize(15);
         liveButton.setTypeface(Typeface.DEFAULT_BOLD);
         liveButton.setTextColor(Color.WHITE);
@@ -728,7 +734,11 @@ public class MainActivity extends Activity
                 "Give Gemini a topic to create and present, or present an existing deck."));
 
         Button createDeckBtn = new Button(this);
-        createDeckBtn.setText("✨ " + I18n.get(this, "AI 建立新簡報", "Create with AI"));
+        createDeckBtn.setText(I18n.get(this, "AI 建立新簡報", "Create with AI"));
+        createDeckBtn.setCompoundDrawables(
+                CrewIcons.drawable(this, CrewIcons.SPARKLE, Color.WHITE, dp(20)),
+                null, null, null);
+        createDeckBtn.setCompoundDrawablePadding(dp(8));
         createDeckBtn.setTextSize(16);
         createDeckBtn.setTypeface(Typeface.DEFAULT_BOLD);
         createDeckBtn.setTextColor(Color.WHITE);
@@ -760,7 +770,7 @@ public class MainActivity extends Activity
         createHint.setPadding(dp(4), 0, dp(4), dp(16));
         pageContent.addView(createHint);
 
-        addSectionTitle(pageContent, I18n.get(this, "📁 我的簡報", "MY PRESENTATIONS"));
+        addSectionTitle(pageContent, I18n.get(this, "我的簡報", "MY PRESENTATIONS"));
 
         try {
             org.json.JSONObject res = DeckRepository.listDecks();
@@ -1175,9 +1185,9 @@ public class MainActivity extends Activity
         nav.setBackgroundColor(CrewTheme.BG_SURFACE);
 
         String[] labels = new String[]{
-            I18n.get(this, "🎙️ 助理", "🎙️ Assistant"),
-            I18n.get(this, "▣ 簡報", "▣ Decks"),
-            I18n.get(this, "⚙️ 設定", "⚙️ Settings")
+            I18n.get(this, "助理", "Assistant"),
+            I18n.get(this, "簡報", "Decks"),
+            I18n.get(this, "設定", "Settings")
         };
         for (int i = 0; i < labels.length; i++) {
             final int index = i;
@@ -1187,8 +1197,14 @@ public class MainActivity extends Activity
             button.setTypeface(Typeface.DEFAULT_BOLD);
             button.setGravity(Gravity.CENTER);
             button.setAllCaps(false);
-            button.setPadding(0, 0, 0, 0);
+            button.setPadding(0, dp(2), 0, 0);
             button.setMinHeight(dp(44));
+            button.setCompoundDrawables(
+                    null,
+                    CrewIcons.drawable(this, NAV_ICONS[i], CrewTheme.TEXT_MUTED, dp(18)),
+                    null,
+                    null);
+            button.setCompoundDrawablePadding(dp(1));
             button.setOnClickListener(new View.OnClickListener() {
                 @Override public void onClick(View v) { renderTab(index); }
             });
@@ -1203,7 +1219,13 @@ public class MainActivity extends Activity
             Button button = navButtons[i];
             if (button == null) continue;
             boolean selected = i == activeTab;
-            button.setTextColor(selected ? CrewTheme.TEAL_300 : CrewTheme.TEXT_MUTED);
+            int navColor = selected ? CrewTheme.TEAL_300 : CrewTheme.TEXT_MUTED;
+            button.setTextColor(navColor);
+            button.setCompoundDrawables(
+                    null,
+                    CrewIcons.drawable(this, NAV_ICONS[i], navColor, dp(18)),
+                    null,
+                    null);
             button.setBackground(CrewTheme.createCard(this,
                 selected ? Color.argb(35, 45, 212, 191) : Color.TRANSPARENT,
                 selected ? CrewTheme.BORDER_TEAL : Color.TRANSPARENT, 12));
@@ -1211,10 +1233,12 @@ public class MainActivity extends Activity
     }
 
     private void addPageHeading(String icon, String title, String description) {
-        TextView iconView = new TextView(this);
-        iconView.setText(icon);
-        iconView.setTextSize(27);
-        pageContent.addView(iconView);
+        CrewIconView iconView = new CrewIconView(this);
+        int iconId = CrewIcons.fromLegacyToken(icon);
+        iconView.setIcon(iconId == CrewIcons.NONE ? CrewIcons.SPARKLE : iconId,
+                CrewTheme.TEAL_300);
+        iconView.setIconScale(0.72f);
+        pageContent.addView(iconView, new LinearLayout.LayoutParams(dp(34), dp(34)));
         TextView titleView = new TextView(this);
         titleView.setText(title);
         titleView.setTextSize(23);
@@ -1363,10 +1387,11 @@ public class MainActivity extends Activity
         card.setOnClickListener(onClick);
 
         // Icon Badge Container
-        TextView iconView = new TextView(this);
-        iconView.setText(icon);
-        iconView.setTextSize(18);
-        iconView.setGravity(Gravity.CENTER);
+        CrewIconView iconView = new CrewIconView(this);
+        int deckIcon = CrewIcons.fromLegacyToken(icon);
+        iconView.setIcon(deckIcon == CrewIcons.NONE ? CrewIcons.PRESENTATION : deckIcon,
+                accentColor);
+        iconView.setIconScale(0.58f);
         iconView.setBackground(CrewTheme.createIconBadge(this, accentColor, 12));
         LinearLayout.LayoutParams iconLp = new LinearLayout.LayoutParams(dp(42), dp(42));
         iconLp.setMargins(0, 0, dp(14), 0);
@@ -1820,11 +1845,10 @@ public class MainActivity extends Activity
                 14));
         row.setOnClickListener(listener);
 
-        TextView icon = new TextView(this);
-        icon.setText(iconText);
-        icon.setTextSize(15);
-        icon.setGravity(Gravity.CENTER);
-        icon.setTextColor(CrewTheme.TEXT_SECONDARY);
+        CrewIconView icon = new CrewIconView(this);
+        int iconId = resolveSettingsIcon(iconText, titleText);
+        icon.setIcon(iconId, CrewTheme.TEXT_SECONDARY);
+        icon.setIconScale(0.58f);
         row.addView(
                 icon,
                 new LinearLayout.LayoutParams(dp(34), dp(42)));
@@ -1873,6 +1897,22 @@ public class MainActivity extends Activity
         lp.setMargins(0, 0, 0, dp(6));
         outer.addView(row, lp);
         return outer;
+    }
+
+    private int resolveSettingsIcon(String token, String title) {
+        String value = title == null ? "" : title;
+        if (value.contains("Agent Inspector")) return CrewIcons.INSPECTOR;
+        if (value.contains("懸浮球") || value.toLowerCase().contains("floating bubble")) {
+            return CrewIcons.BUBBLE;
+        }
+        if (value.contains("診斷") || value.toLowerCase().contains("diagnostic")) {
+            return CrewIcons.DIAGNOSTICS;
+        }
+        if (value.contains("喚醒靈敏度") || value.toLowerCase().contains("wake sensitivity")) {
+            return CrewIcons.SENSITIVITY;
+        }
+        int mapped = CrewIcons.fromLegacyToken(token);
+        return mapped == CrewIcons.NONE ? CrewIcons.SETTINGS : mapped;
     }
 
     private String personalitySummary() {

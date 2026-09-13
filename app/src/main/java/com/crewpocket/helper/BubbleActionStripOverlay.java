@@ -1,23 +1,14 @@
 package com.crewpocket.helper;
 
 import android.content.Context;
-import android.graphics.Canvas;
 import android.graphics.Color;
-import android.graphics.Paint;
-import android.graphics.RectF;
 import android.graphics.drawable.GradientDrawable;
 import android.view.Gravity;
-import android.view.View;
 import android.widget.LinearLayout;
 
 /**
- * Restored compact embedded action rail.
- *
- * The Crew bubble owns this tiny first-level shortcut rail:
- * - Live inactive: Start, More
- * - Live active: Mic/Interrupt, End, More
- *
- * Full camera/screen/transcript/settings controls belong in Live Console.
+ * Compact first-level bubble action rail.
+ * 0111 shares its icon language with Live Console/Main UI through CrewIcons.
  */
 final class BubbleActionStripOverlay extends LinearLayout {
     static final int ACTION_STRIP_GAP_DP = 0;
@@ -94,7 +85,7 @@ final class BubbleActionStripOverlay extends LinearLayout {
             final int primaryIcon =
                     speaking ? ICON_SPEAKER
                             : (muted ? ICON_MIC_MUTED : ICON_MIC_ACTIVE);
-            IconButton primary = iconButton(primaryIcon);
+            CrewIconView primary = iconButton(primaryIcon);
             primary.setContentDescription(
                     speaking ? "打斷助理"
                             : (muted ? "取消靜音" : "麥克風靜音"));
@@ -105,14 +96,14 @@ final class BubbleActionStripOverlay extends LinearLayout {
             });
             addView(primary, itemParams());
 
-            IconButton end = iconButton(ICON_HANGUP);
+            CrewIconView end = iconButton(ICON_HANGUP);
             end.setContentDescription("結束語音通話");
             end.setOnClickListener(v -> {
                 if (actions != null) actions.onToggleCall();
             });
             addView(end, itemParams());
         } else {
-            IconButton start = iconButton(ICON_CALL);
+            CrewIconView start = iconButton(ICON_CALL);
             start.setContentDescription("開始語音對話");
             start.setOnClickListener(v -> {
                 if (actions != null) actions.onToggleCall();
@@ -120,14 +111,14 @@ final class BubbleActionStripOverlay extends LinearLayout {
             addView(start, itemParams());
         }
 
-        IconButton more = iconButton(ICON_MORE);
+        CrewIconView more = iconButton(ICON_MORE);
         more.setContentDescription("更多控制");
         more.setOnClickListener(v -> {
             if (actions != null) actions.onOpenConsole();
         });
         addView(more, itemParams());
 
-        IconButton region = iconButton(ICON_REGION);
+        CrewIconView region = iconButton(ICON_REGION);
         region.setContentDescription("框選截圖");
         region.setOnClickListener(v -> {
             if (actions != null) actions.onRegionSelection();
@@ -143,21 +134,40 @@ final class BubbleActionStripOverlay extends LinearLayout {
         return lp;
     }
 
-    private IconButton iconButton(int icon) {
-        IconButton button = new IconButton(context);
-        button.setIcon(icon);
+    private CrewIconView iconButton(int icon) {
+        CrewIconView button = new CrewIconView(context);
+        button.setIconScale(0.64f);
 
+        int color;
         int fill;
         if (icon == ICON_SPEAKER) {
+            color = Color.parseColor("#FCD34D");
             fill = Color.argb(72, 120, 53, 15);
-        } else if (icon == ICON_MIC_MUTED || icon == ICON_HANGUP) {
+            button.setIcon(CrewIcons.INTERRUPT, color);
+        } else if (icon == ICON_MIC_MUTED) {
+            color = Color.parseColor("#FDA4AF");
             fill = Color.argb(58, 76, 5, 25);
-        } else if (icon == ICON_MIC_ACTIVE || icon == ICON_CALL) {
+            button.setIcon(CrewIcons.MIC_MUTED, color);
+        } else if (icon == ICON_HANGUP) {
+            color = Color.parseColor("#FB7185");
+            fill = Color.argb(58, 76, 5, 25);
+            button.setIcon(CrewIcons.HANGUP, color);
+        } else if (icon == ICON_MIC_ACTIVE) {
+            color = Color.parseColor("#5EEAD4");
             fill = Color.argb(52, 19, 78, 74);
+            button.setIcon(CrewIcons.MIC, color);
+        } else if (icon == ICON_CALL) {
+            color = Color.parseColor("#67E8F9");
+            fill = Color.argb(52, 19, 78, 74);
+            button.setIcon(CrewIcons.VOICE, color);
         } else if (icon == ICON_REGION) {
+            color = Color.parseColor("#93C5FD");
             fill = Color.argb(52, 30, 64, 175);
+            button.setIcon(CrewIcons.REGION, color);
         } else {
+            color = Color.parseColor("#CBD5E1");
             fill = Color.TRANSPARENT;
+            button.setIcon(CrewIcons.MORE, color);
         }
 
         GradientDrawable bg = new GradientDrawable();
@@ -171,100 +181,5 @@ final class BubbleActionStripOverlay extends LinearLayout {
     private int dp(float value) {
         return Math.round(
                 value * context.getResources().getDisplayMetrics().density);
-    }
-
-    private static final class IconButton extends View {
-        private int icon = ICON_CALL;
-        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-
-        IconButton(Context context) {
-            super(context);
-            paint.setStrokeCap(Paint.Cap.ROUND);
-            paint.setStrokeJoin(Paint.Join.ROUND);
-        }
-
-        void setIcon(int value) {
-            icon = value;
-            invalidate();
-        }
-
-        @Override
-        protected void onDraw(Canvas canvas) {
-            super.onDraw(canvas);
-            float d = getResources().getDisplayMetrics().density;
-            float cx = getWidth() / 2f;
-            float cy = getHeight() / 2f;
-
-            int color = icon == ICON_SPEAKER
-                    ? Color.parseColor("#FCD34D")
-                    : icon == ICON_MIC_MUTED
-                    ? Color.parseColor("#FDA4AF")
-                    : icon == ICON_MIC_ACTIVE
-                    ? Color.parseColor("#5EEAD4")
-                    : icon == ICON_HANGUP
-                    ? Color.parseColor("#FB7185")
-                    : icon == ICON_CALL
-                    ? Color.parseColor("#67E8F9")
-                    : icon == ICON_REGION
-                    ? Color.parseColor("#93C5FD")
-                    : Color.parseColor("#CBD5E1");
-
-            paint.setColor(color);
-            paint.setStrokeWidth(2.05f * d);
-            paint.setStyle(Paint.Style.STROKE);
-
-            if (icon == ICON_CALL || icon == ICON_MIC_ACTIVE || icon == ICON_MIC_MUTED) {
-                RectF cap = new RectF(
-                        cx - 3.4f*d, cy - 8*d,
-                        cx + 3.4f*d, cy + 1*d);
-                canvas.drawRoundRect(cap, 3.4f*d, 3.4f*d, paint);
-                RectF cradle = new RectF(
-                        cx - 6.3f*d, cy - 4*d,
-                        cx + 6.3f*d, cy + 4*d);
-                canvas.drawArc(cradle, 0, 180, false, paint);
-                canvas.drawLine(cx, cy + 4*d, cx, cy + 7*d, paint);
-                canvas.drawLine(cx - 4*d, cy + 7*d, cx + 4*d, cy + 7*d, paint);
-                if (icon == ICON_MIC_MUTED) {
-                    canvas.drawLine(cx - 8*d, cy + 8*d, cx + 8*d, cy - 8*d, paint);
-                }
-            } else if (icon == ICON_HANGUP) {
-                canvas.drawLine(cx - 5.5f*d, cy - 5.5f*d,
-                        cx + 5.5f*d, cy + 5.5f*d, paint);
-                canvas.drawLine(cx + 5.5f*d, cy - 5.5f*d,
-                        cx - 5.5f*d, cy + 5.5f*d, paint);
-            } else if (icon == ICON_MORE) {
-                paint.setStyle(Paint.Style.FILL);
-                canvas.drawCircle(cx - 6*d, cy, 1.8f*d, paint);
-                canvas.drawCircle(cx, cy, 1.8f*d, paint);
-                canvas.drawCircle(cx + 6*d, cy, 1.8f*d, paint);
-            } else if (icon == ICON_REGION) {
-                canvas.drawRect(cx - 6*d, cy - 6*d, cx + 6*d, cy + 6*d, paint);
-                paint.setStrokeWidth(3f * d);
-                canvas.drawLine(cx - 10*d, cy - 3*d, cx - 10*d, cy - 10*d, paint);
-                canvas.drawLine(cx - 10*d, cy - 10*d, cx - 3*d, cy - 10*d, paint);
-                canvas.drawLine(cx + 3*d, cy + 10*d, cx + 10*d, cy + 10*d, paint);
-                canvas.drawLine(cx + 10*d, cy + 10*d, cx + 10*d, cy + 3*d, paint);
-            } else if (icon == ICON_SPEAKER) {
-                android.graphics.Path speaker = new android.graphics.Path();
-                speaker.moveTo(cx - 7*d, cy - 3*d);
-                speaker.lineTo(cx - 4*d, cy - 3*d);
-                speaker.lineTo(cx + 1*d, cy - 7*d);
-                speaker.lineTo(cx + 1*d, cy + 7*d);
-                speaker.lineTo(cx - 4*d, cy + 3*d);
-                speaker.lineTo(cx - 7*d, cy + 3*d);
-                speaker.close();
-                paint.setStyle(Paint.Style.FILL);
-                canvas.drawPath(speaker, paint);
-                paint.setStyle(Paint.Style.STROKE);
-                RectF wave1 = new RectF(
-                        cx - 2*d, cy - 4*d,
-                        cx + 6*d, cy + 4*d);
-                canvas.drawArc(wave1, -45, 90, false, paint);
-                RectF wave2 = new RectF(
-                        cx - 2*d, cy - 8*d,
-                        cx + 10*d, cy + 8*d);
-                canvas.drawArc(wave2, -45, 90, false, paint);
-            }
-        }
     }
 }
