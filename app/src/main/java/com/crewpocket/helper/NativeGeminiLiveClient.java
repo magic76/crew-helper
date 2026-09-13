@@ -4401,6 +4401,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         int consecutiveBargeInFrames = 0;
         boolean bargeInGateOpen = false;
 
+        // 0108: normal-listening noise guard is stateful per Live mic thread.
+        // It bypasses quiet environments and never owns AudioRecord.
+        ActiveNoiseAdmissionGate activeNoiseGate =
+                new ActiveNoiseAdmissionGate(pcm.length);
+
         while (running && recorder != null && webSocket != null) {
             int count = recorder.read(pcm, 0, pcm.length); if (count <= 0) continue;
             if (agentMuted) continue;
@@ -4439,8 +4444,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             double minGate = minBase + suppression * 0.00010;
             double gateThreshold = Math.max(minGate, noiseFloor * gateMultiplier);
 
-            // Outside AI playback there is no local speech gate at all. Normal user
-            // turns still go straight to Gemini Server VAD with zero added latency.
+            // 0108: normal listening stays zero-added-latency in quiet environments.
+            // Once the calibrated ambient floor is clearly noisy, require a short
+            // run of speech-like frames before exposing audio to Gemini Server VAD.
+            // A fixed pre-roll preserves the first word, and trailing audio remains
+            // long enough for the server's 450 ms end-of-speech detector to close.
             if (!aiSpeaking) {
                 bargeInGateOpen = false;
                 consecutiveBargeInFrames = 0;
@@ -4448,10 +4456,49 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 if (rms < gateThreshold) {
                     noiseFloor = noiseFloor * 0.985 + Math.min(rms, 0.18) * 0.015;
                 }
-                reportMicrophoneLevel(rms, gateThreshold, true);
-                if (!sendMicChunk(pcm, count, rms, gateThreshold)) break;
+
+                double zcr = calculateZeroCrossingRate(pcm, count);
+                ActiveNoiseAdmissionGate.Action noiseAction = activeNoiseGate.accept(
+                        pcm, count, rms, zcr, noiseFloor, mode, suppression,
+                        calibrationFrames >= CALIBRATION_FRAMES);
+                double activeGateThreshold = Math.max(
+                        gateThreshold, activeNoiseGate.lastThreshold());
+
+                if (noiseAction == ActiveNoiseAdmissionGate.Action.SUPPRESS) {
+                    PerformanceMetrics.recordActiveNoiseFrameSuppressed();
+                    reportMicrophoneLevel(rms, activeGateThreshold, false);
+                    continue;
+                }
+
+                if (noiseAction == ActiveNoiseAdmissionGate.Action.FLUSH_PREROLL) {
+                    PerformanceMetrics.recordActiveNoiseSpeechAdmission();
+                    int bufferedFrames = activeNoiseGate.bufferedFrameCount();
+                    for (int i = 0; i < bufferedFrames; i++) {
+                        byte[] buffered = activeNoiseGate.bufferedFrame(i);
+                        int bufferedCount = activeNoiseGate.bufferedLength(i);
+                        if (buffered == null || bufferedCount <= 0) continue;
+                        double bufferedRms = calculateRms(buffered, bufferedCount);
+                        if (!sendMicChunk(buffered, bufferedCount,
+                                bufferedRms, activeGateThreshold)) return;
+                    }
+                    activeNoiseGate.clearBufferedFrames();
+                    reportMicrophoneLevel(rms, activeGateThreshold, true);
+                    // Current frame is already part of the pre-roll flush.
+                    continue;
+                }
+
+                reportMicrophoneLevel(rms,
+                        noiseAction == ActiveNoiseAdmissionGate.Action.BYPASS
+                                ? gateThreshold : activeGateThreshold,
+                        true);
+                if (!sendMicChunk(pcm, count, rms,
+                        noiseAction == ActiveNoiseAdmissionGate.Action.BYPASS
+                                ? gateThreshold : activeGateThreshold)) break;
                 continue;
             }
+
+            // 0101 remains the sole local admission policy while AI output is audible.
+            activeNoiseGate.reset();
 
             if (!allowVoiceInterruption) {
                 // Existing explicit protection mode: AI speech owns the channel.

@@ -47,6 +47,9 @@ final class PerformanceMetrics {
     // 0105: counts only; never stores search query/package/user text.
     private static long semanticSearchExecutions;
     private static long duplicateSearchesSuppressed;
+    // 0108: privacy-safe counters only; no PCM, dB values or classifications retained.
+    private static long activeNoiseFramesSuppressed;
+    private static long activeNoiseSpeechAdmissions;
 
     private PerformanceMetrics() {}
 
@@ -188,6 +191,14 @@ final class PerformanceMetrics {
         duplicateSearchesSuppressed++;
     }
 
+    static synchronized void recordActiveNoiseFrameSuppressed() {
+        activeNoiseFramesSuppressed++;
+    }
+
+    static synchronized void recordActiveNoiseSpeechAdmission() {
+        activeNoiseSpeechAdmissions++;
+    }
+
     static synchronized String buildReport() {
         StringBuilder out = new StringBuilder();
         out.append("Performance (rolling up to ").append(MAX_SAMPLES).append(" samples)\n");
@@ -206,6 +217,10 @@ final class PerformanceMetrics {
                 .append(" clean-skipped=").append(screenFramesSkippedClean).append("\n");
         out.append("Search guard: executed=").append(semanticSearchExecutions)
                 .append(" duplicate-suppressed=").append(duplicateSearchesSuppressed)
+                .append("\n");
+        out.append("Active noise guard: suppressed-frames=")
+                .append(activeNoiseFramesSuppressed)
+                .append(" speech-admissions=").append(activeNoiseSpeechAdmissions)
                 .append("\n");
 
         appendAgentTrace(out, lastFinishedTrace);
@@ -275,6 +290,8 @@ final class PerformanceMetrics {
         lastStaleTool = "";
         semanticSearchExecutions = 0L;
         duplicateSearchesSuppressed = 0L;
+        activeNoiseFramesSuppressed = 0L;
+        activeNoiseSpeechAdmissions = 0L;
     }
 
     private static AgentTrace ensureTrace(String taskId, long generation) {
