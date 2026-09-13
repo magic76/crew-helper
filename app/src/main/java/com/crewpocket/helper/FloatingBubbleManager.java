@@ -948,6 +948,12 @@ public class FloatingBubbleManager {
                                         initialTouchY = event.getRawY();
                                     }
 
+                                    // Do not update an overlay's window position for
+                                    // tiny finger jitter. Updating WindowManager during
+                                    // an active touch can emit ACTION_CANCEL and would
+                                    // cancel the 3-second hold timer.
+                                    if (!moved) return true;
+
                                     int targetX = initialX
                                             + (int) (event.getRawX() - initialTouchX);
                                     int targetY = initialY
