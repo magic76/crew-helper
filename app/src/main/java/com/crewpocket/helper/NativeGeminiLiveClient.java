@@ -1481,6 +1481,21 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         String safeVoice = mapToSupportedVoice(voiceName);
         generation.put("speechConfig", new JSONObject().put("voiceConfig", new JSONObject().put("prebuiltVoiceConfig", new JSONObject().put("voiceName", safeVoice))));
         setup.put("generationConfig", generation);
+
+        // 0097: Gemini server VAD is the speech/turn authority. Android keeps
+        // capture/AEC/NS, but Runtime no longer guesses speech from RMS energy.
+        JSONObject automaticActivityDetection = new JSONObject()
+                .put("disabled", false)
+                .put("startOfSpeechSensitivity", "START_SENSITIVITY_HIGH")
+                .put("endOfSpeechSensitivity", "END_SENSITIVITY_LOW")
+                .put("prefixPaddingMs", SERVER_VAD_PREFIX_PADDING_MS)
+                .put("silenceDurationMs", SERVER_VAD_SILENCE_DURATION_MS);
+        setup.put("realtimeInputConfig", new JSONObject()
+                .put("automaticActivityDetection", automaticActivityDetection)
+                .put("activityHandling", "START_OF_ACTIVITY_INTERRUPTS"));
+        Log.i(TAG, "0097 server VAD active: start=HIGH end=LOW prefix="
+                + SERVER_VAD_PREFIX_PADDING_MS + "ms silence="
+                + SERVER_VAD_SILENCE_DURATION_MS + "ms");
         // Match the web Live session: its context is continuously compressed,
         // and Gemini can renew the socket before the upstream lifetime expires.
         setup.put("contextWindowCompression", new JSONObject().put("triggerTokens", "25000")
@@ -4757,10 +4772,13 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private volatile long lastMeterReportAt = 0;
     private double noiseFloor = 0.015;
     private static final int CALIBRATION_FRAMES = 20; // 800 ms at 40 ms/frame
+    // 0097 tuning: deliberately easy to start, reluctant to cut a natural pause.
+    // Change these only with recorded A/B evidence from a real device.
+    private static final int SERVER_VAD_PREFIX_PADDING_MS = 80;
+    private static final int SERVER_VAD_SILENCE_DURATION_MS = 450;
 
     private void sendMic() {
         byte[] pcm = new byte[1280]; // 40ms @ 16kHz 16-bit mono
-        int consecutiveVoiceFrames = 0;
         int calibrationFrames = 0;
         double[] calibrationSamples = new double[CALIBRATION_FRAMES];
 
@@ -4772,8 +4790,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             String mode = noiseMode;
             int suppression = noiseSuppression;
 
-            // First 0.8 s establishes a local acoustic baseline and is never sent upstream.
-            // It prevents the server VAD from treating connection-time background noise as speech.
+            // Keep the first 0.8 s as a passive acoustic baseline for diagnostics.
+            // 0097 intentionally still sends these frames upstream: server VAD owns
+            // speech-start detection, so Runtime must not eat the user's first word.
             if (calibrationFrames < CALIBRATION_FRAMES) {
                 calibrationSamples[calibrationFrames] = rms;
                 calibrationFrames++;
@@ -4782,85 +4801,40 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                     double baseline = 0;
                     for (int i = 0; i < 12; i++) baseline += calibrationSamples[i];
                     noiseFloor = Math.max(0.008, baseline / 12.0);
-                    // This is an audio status, not a connection stage.  Do not overwrite
-                    // setupComplete in the connection watchdog with a calibration message.
-                    listener.onStatus("環境降噪已校正（" + mode + "）");
+                    listener.onStatus("環境音基線已校正（" + mode + "）");
                 }
-                // Calibration is observational only. Never silence the user's first words.
             }
 
-            // The environment bar only guards *interruptions while Gemini speaks*.
-            // It never replaces outgoing PCM with silence, so quiet user speech remains safe.
+            // Diagnostic meter threshold only. It no longer authorizes interruption
+            // and never gates normal upstream PCM. This keeps the existing UI/audio
+            // incident recorder useful without pretending RMS is a real VAD.
             double modeBase = "noisy".equals(mode) ? 1.45 : ("quiet".equals(mode) ? 0.65 : 0.90);
             double gateMultiplier = modeBase + suppression * 0.008;
             double minBase = "noisy".equals(mode) ? 0.022 : ("quiet".equals(mode) ? 0.002 : 0.006);
             double minGate = minBase + suppression * 0.00010;
             double gateThreshold = Math.max(minGate, noiseFloor * gateMultiplier);
-            // Energy is the fail-open source of truth.  The old zero-crossing condition
-            // rejected soft vowels on some Android microphones, leaving Gemini silent.
-            boolean speechCandidate = rms >= gateThreshold;
 
-            // Learn only frames rejected as speech. This lets the floor rise in a busy street
-            // without slowly learning the user's own voice as "noise".
-            if (!speechCandidate && !aiSpeaking) {
+            // Learn background level only while Gemini is not talking. This value is
+            // telemetry now; a quiet user frame below it is still sent to Gemini.
+            if (!aiSpeaking && rms < gateThreshold) {
                 noiseFloor = noiseFloor * 0.985 + Math.min(rms, 0.18) * 0.015;
             }
 
-            if (aiSpeaking) {
-                if (!allowVoiceInterruption) {
-                    // 🛡️ 防插話保護模式：AI 說話時麥克風完全靜音，徹底杜絕任何環境音插話
-                    consecutiveVoiceFrames = 0;
-                    continue;
-                }
-
-                // Speaker echo can be continuous, particularly immediately after a
-                // tool result. Hardware AEC is active, so do not require shouting:
-                // normal close-range speech should interrupt within about 0.3 s.
-                // The center button remains an instant interrupt.
-                boolean outputAudible = System.currentTimeMillis() < lastPlaybackActiveAt;
-                int requiredVoiceFrames = 5 + (suppression + 30) / 35 + (outputAudible ? 2 : 0);
-                double baseInterrupt = ("noisy".equals(mode) ? 0.070 : 0.048)
-                        + suppression * 0.00022 + (outputAudible ? 0.010 : 0.0);
-                double floorMultiplier = ("noisy".equals(mode) ? 2.1 : 1.65) + suppression * 0.008;
-                // 0 = deliberate / resistant to stray sound; 100 = quickest barge-in.
-                // Keep a floor so a click or residual speaker echo cannot instantly cut speech.
-                double sensitivity = interruptionSensitivity / 100.0;
-                requiredVoiceFrames += Math.round((1.0 - sensitivity) * 7.0 - sensitivity * 2.0);
-                requiredVoiceFrames = Math.max(2, requiredVoiceFrames);
-                baseInterrupt += (1.0 - sensitivity) * 0.035 - sensitivity * 0.012;
-                floorMultiplier += (1.0 - sensitivity) * 0.55 - sensitivity * 0.20;
-                double interruptThreshold = Math.max(baseInterrupt, noiseFloor * floorMultiplier);
-                if (speechCandidate && rms >= interruptThreshold) {
-                    consecutiveVoiceFrames++;
-                    if (consecutiveVoiceFrames >= requiredVoiceFrames) {
-                        triggerLocalInterruption();
-                        consecutiveVoiceFrames = 0;
-                    }
-                } else {
-                    // Do not let separate bursts accumulate into a false interruption.
-                    consecutiveVoiceFrames = 0;
-                }
-
-                // 若尚未確認為明確插話指令，暫緩將喇叭音訊回傳給 Gemini，避免伺服器端迴音干擾
-                if (aiSpeaking) {
-                    // The microphone is live; only upstream transmission is held
-                    // while the assistant speaks. Keep the meter fresh so voice
-                    // diagnostics never report a false missing-microphone error.
-                    reportMicrophoneLevel(rms, gateThreshold, false);
-                    continue;
-                }
-            } else {
-                consecutiveVoiceFrames = 0;
+            if (aiSpeaking && !allowVoiceInterruption) {
+                // Explicit no-interruption mode remains Runtime-owned: do not feed
+                // microphone audio upstream while the assistant is speaking.
+                reportMicrophoneLevel(rms, gateThreshold, false);
+                continue;
             }
 
             byte[] chunk = (count == pcm.length) ? pcm.clone() : Arrays.copyOf(pcm, count);
 
-            // Do not locally replace PCM with silence.  Energy-only gating is not a real VAD
-            // and can suppress quiet human speech; Android's hardware NoiseSuppressor remains
-            // active while all captured speech is delivered to Gemini.
+            // 0097: when interruption is allowed, full PCM continues upstream even
+            // while Gemini speaks. Gemini's server VAD decides whether activity is
+            // real speech and emits serverContent.interrupted; handleJson() already
+            // stops local playback on that authoritative event.
             reportMicrophoneLevel(rms, gateThreshold, true);
 
-            // 🎙️ 連續即時串流給 Gemini Live
             try {
                 JSONObject root = new JSONObject(); JSONObject audio = new JSONObject();
                 audio.put("mimeType", "audio/pcm;rate=16000");
@@ -4873,7 +4847,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             } catch (Exception error) { fail("麥克風串流失敗：" + error.getMessage(), error); }
         }
     }
-
     private double calculateZeroCrossingRate(byte[] pcm, int count) {
         if (count < 4) return 0;
         int crossings = 0;
