@@ -16,7 +16,9 @@ import android.graphics.SweepGradient;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.Handler;
+import android.os.HandlerThread;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.Base64;
 
 import android.os.Vibrator;
@@ -54,6 +56,7 @@ public class FloatingBubbleManager {
     private final Context context;
     private final WindowManager windowManager;
     private final Handler mainHandler;
+    private final Handler holdHandler;
     private final Vibrator vibrator;
 
     private FluidBubbleView bubbleView = null;
@@ -253,6 +256,9 @@ public class FloatingBubbleManager {
         this.context = context.getApplicationContext();
         this.windowManager = (WindowManager) this.context.getSystemService(Context.WINDOW_SERVICE);
         this.mainHandler = new Handler(Looper.getMainLooper());
+        HandlerThread holdThread = new HandlerThread("crew-bubble-hold-timer");
+        holdThread.start();
+        this.holdHandler = new Handler(holdThread.getLooper());
         this.vibrator = (Vibrator) this.context.getSystemService(Context.VIBRATOR_SERVICE);
     }
 
@@ -880,13 +886,13 @@ public class FloatingBubbleManager {
                         private int initialX, initialY;
                         private float initialTouchX, initialTouchY;
                         private long touchStartTime;
-                        private boolean moved = false;
-                        private boolean regionLongPressTriggered = false;
+                        private volatile boolean moved = false;
+                        private volatile boolean regionLongPressTriggered = false;
                         private Runnable regionLongPressRunnable = null;
 
                         private void cancelRegionLongPress() {
                             if (regionLongPressRunnable != null) {
-                                mainHandler.removeCallbacks(regionLongPressRunnable);
+                                holdHandler.removeCallbacks(regionLongPressRunnable);
                                 regionLongPressRunnable = null;
                             }
                         }
@@ -903,7 +909,7 @@ public class FloatingBubbleManager {
                                     startRegionSelection();
                                 }
                             };
-                            mainHandler.postDelayed(
+                            holdHandler.postDelayed(
                                     regionLongPressRunnable,
                                     1500L);
                         }
@@ -923,7 +929,7 @@ public class FloatingBubbleManager {
                                     initialY = bubbleParams.y;
                                     initialTouchX = event.getRawX();
                                     initialTouchY = event.getRawY();
-                                    touchStartTime = System.currentTimeMillis();
+                                    touchStartTime = SystemClock.elapsedRealtime();
                                     moved = false;
                                     regionLongPressTriggered = false;
                                     armRegionLongPress();
@@ -987,7 +993,7 @@ public class FloatingBubbleManager {
                                         float dy = Math.abs(
                                                 event.getRawY() - initialTouchY);
                                         long duration =
-                                                System.currentTimeMillis()
+                                                SystemClock.elapsedRealtime()
                                                         - touchStartTime;
                                         if (dx < dp(14)
                                                 && dy < dp(14)
