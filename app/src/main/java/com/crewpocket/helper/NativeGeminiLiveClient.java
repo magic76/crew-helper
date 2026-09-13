@@ -1574,7 +1574,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                                         .put("description", "Public http/https URL to read")))
                         .put("required", new JSONArray().put("url"))));
         tools.put(new JSONObject().put("name", "create_note").put("description",
-                "Create a persistent Crew Notebook note ONLY when the user explicitly asks to save, note, remember in the notebook, or add to notes. If the user selected a URL and asks you to parse and save it: get_selected_region -> read_web_page -> create_note.")
+                "Create a persistent Crew Notebook note ONLY when the user explicitly asks to save, note, remember in the notebook, or add to notes. In normal Crew use, an unqualified request such as 記一下/記下來/存到記事本/用記事本記下來 means Crew Notebook unless the user explicitly names another notes app. If the user selected a URL and asks you to parse and save it: get_selected_region -> read_web_page -> create_note.")
                 .put("parameters", new JSONObject().put("type", "OBJECT")
                         .put("properties", new JSONObject()
                                 .put("title", new JSONObject().put("type", "STRING"))
@@ -1729,6 +1729,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private boolean isNormalPhoneModelTool(String name) {
         return "phone_action".equals(name)
                 || "inspect_ui".equals(name)
+                // 0103: Crew Notebook is a first-class normal-mode capability.
+                // Keep the surface intentionally small: create/search/list only.
+                || "create_note".equals(name)
+                || "search_notes".equals(name)
+                || "list_notes".equals(name)
                 || "send_text".equals(name)
                 || "end_voice_session".equals(name);
     }
