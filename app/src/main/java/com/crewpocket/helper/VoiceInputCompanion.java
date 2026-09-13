@@ -1,14 +1,21 @@
 package com.crewpocket.helper;
 
 import android.content.Context;
-import android.content.Intent;
+import android.media.AudioFormat;
+import android.media.AudioRecord;
+import android.media.MediaRecorder;
+import android.util.Base64;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import android.graphics.Color;
 import android.graphics.PixelFormat;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
-import android.os.Bundle;
 import android.provider.Settings;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -18,9 +25,6 @@ import android.widget.LinearLayout;
 import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
-import android.speech.RecognitionListener;
-import android.speech.RecognizerIntent;
-import android.speech.SpeechRecognizer;
 
 /**
  * Keyboard companion overlay.
@@ -40,9 +44,9 @@ final class VoiceInputCompanion {
     private WindowManager.LayoutParams params;
     private int lastImeTop = -1;
     private String lastPackage = "";
-    private SpeechRecognizer recognizer;
-    private boolean listening;
-    private boolean stopRequested;
+    private AudioRecord recorder;
+    private Thread recorderThread;
+    private volatile boolean listening;
 
     static synchronized VoiceInputCompanion getInstance(Context context) {
         if (instance == null) {
@@ -180,51 +184,109 @@ final class VoiceInputCompanion {
                     Toast.LENGTH_SHORT).show();
             return;
         }
-        if (!SpeechRecognizer.isRecognitionAvailable(context)) {
+        int min = AudioRecord.getMinBufferSize(16000,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT);
+        int bufferSize = Math.max(8192, min * 2);
+        try {
+            recorder = new AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                    16000, AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT, bufferSize);
+            recorder.startRecording();
+        } catch (Exception error) {
             FocusedInputRuntime.clear();
-            Toast.makeText(context, "手機沒有可用的語音辨識服務", Toast.LENGTH_SHORT).show();
+            Toast.makeText(context, "無法啟動麥克風", Toast.LENGTH_SHORT).show();
             return;
         }
-        stopRequested = false;
         listening = true;
-        if (recognizer == null) {
-            recognizer = SpeechRecognizer.createSpeechRecognizer(context);
-            recognizer.setRecognitionListener(new RecognitionListener() {
-                public void onReadyForSpeech(Bundle b) {}
-                public void onBeginningOfSpeech() {}
-                public void onRmsChanged(float v) {}
-                public void onBufferReceived(byte[] b) {}
-                public void onEndOfSpeech() {}
-                public void onPartialResults(Bundle b) {}
-                public void onEvent(int t, Bundle b) {}
-                public void onError(int e) {
-                    if (!stopRequested) Toast.makeText(context, "語音辨識失敗，請再試一次", Toast.LENGTH_SHORT).show();
-                    listening = false;
+        recorderThread = new Thread(() -> {
+            ByteArrayOutputStream audio = new ByteArrayOutputStream();
+            short[] samples = new short[2048];
+            while (listening && recorder != null) {
+                int count = recorder.read(samples, 0, samples.length);
+                if (count <= 0) continue;
+                for (int i = 0; i < count; i++) {
+                    audio.write(samples[i] & 0xff);
+                    audio.write((samples[i] >> 8) & 0xff);
                 }
-                public void onResults(Bundle b) {
-                    listening = false;
-                    String text = b == null ? "" : b.getStringArrayList(
-                            SpeechRecognizer.RESULTS_RECOGNITION) == null ? "" :
-                            b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).get(0);
-                    if (text == null || text.trim().isEmpty()) return;
-                    org.json.JSONObject result = FocusedInputRuntime.write(text.trim(), "insert");
-                    if (!result.optBoolean("success", false)) {
-                        Toast.makeText(context, "語音已辨識，但無法寫入輸入框", Toast.LENGTH_SHORT).show();
-                    }
-                }
-            });
-        }
-        Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "zh-TW");
-        intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false);
-        recognizer.startListening(intent);
+            }
+            sendToGemini(audio.toByteArray());
+        }, "crew-gemini-ptt-recorder");
+        recorderThread.start();
     }
 
     private void endListening() {
-        if (!listening || recognizer == null) return;
-        stopRequested = true;
-        recognizer.stopListening();
+        if (!listening || recorder == null) return;
+        listening = false;
+        try { recorder.stop(); } catch (Exception ignored) {}
+        recorder.release();
+        recorder = null;
+    }
+
+    private void sendToGemini(final byte[] pcm) {
+        new Thread(() -> {
+            try {
+                if (pcm == null || pcm.length < 1600) {
+                    FocusedInputRuntime.clear();
+                    return;
+                }
+                byte[] wav = wav(pcm);
+                org.json.JSONObject part = new org.json.JSONObject();
+                part.put("inline_data", new org.json.JSONObject()
+                        .put("mime_type", "audio/wav")
+                        .put("data", Base64.encodeToString(wav, Base64.NO_WRAP)));
+                org.json.JSONObject prompt = new org.json.JSONObject().put("text",
+                        "Transcribe the user's speech exactly. Detect Chinese or English automatically. "
+                        + "Return only the transcription, no explanation, no translation, no punctuation changes.");
+                org.json.JSONArray contents = new org.json.JSONArray().put(
+                        new org.json.JSONObject().put("role", "user")
+                                .put("parts", new org.json.JSONArray().put(prompt).put(part)));
+                URL url = new URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key="
+                        + AppConfig.getGeminiApiKey(context));
+                HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("POST");
+                connection.setDoOutput(true);
+                connection.setRequestProperty("Content-Type", "application/json");
+                byte[] body = new org.json.JSONObject().put("contents", contents)
+                        .toString().getBytes(StandardCharsets.UTF_8);
+                connection.getOutputStream().write(body);
+                InputStream input = connection.getResponseCode() >= 400
+                        ? connection.getErrorStream() : connection.getInputStream();
+                byte[] response = readAll(input);
+                org.json.JSONObject json = new org.json.JSONObject(new String(response, StandardCharsets.UTF_8));
+                String text = json.optJSONArray("candidates").getJSONObject(0)
+                        .optJSONObject("content").optJSONArray("parts")
+                        .getJSONObject(0).optString("text", "").trim();
+                if (!text.isEmpty()) {
+                    org.json.JSONObject result = FocusedInputRuntime.write(text, "insert");
+                    if (!result.optBoolean("success", false)) showToast("語音已辨識，但無法寫入");
+                }
+                connection.disconnect();
+            } catch (Exception error) {
+                FocusedInputRuntime.clear();
+                showToast("Gemini 語音辨識失敗");
+            }
+        }, "crew-gemini-transcribe").start();
+    }
+
+    private byte[] wav(byte[] pcm) {
+        byte[] out = new byte[44 + pcm.length];
+        java.nio.ByteBuffer b = java.nio.ByteBuffer.wrap(out).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        b.put("RIFF".getBytes(StandardCharsets.US_ASCII)).putInt(36 + pcm.length).put("WAVE".getBytes(StandardCharsets.US_ASCII));
+        b.put("fmt ".getBytes(StandardCharsets.US_ASCII)).putInt(16).putShort((short)1).putShort((short)1).putInt(16000).putInt(32000).putShort((short)2).putShort((short)16);
+        b.put("data".getBytes(StandardCharsets.US_ASCII)).putInt(pcm.length).put(pcm);
+        return out;
+    }
+
+    private byte[] readAll(InputStream input) throws Exception {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] buffer = new byte[4096]; int count;
+        while ((count = input.read(buffer)) != -1) out.write(buffer, 0, count);
+        return out.toByteArray();
+    }
+
+    private void showToast(final String message) {
+        mainHandler.post(() -> Toast.makeText(context, message, Toast.LENGTH_SHORT).show());
     }
 
     private TextView makeAction(
