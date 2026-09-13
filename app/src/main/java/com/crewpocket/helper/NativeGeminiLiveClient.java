@@ -148,9 +148,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     // 0052: standalone "送出/發送/send" is owned directly by Runtime.
     private volatile boolean runtimeSendCurrentExecuting = false;
     private AudioIncidentRecorder audioIncidentRecorder;
-    // 0107: local "小酷停止" uses the ACTIVE Gemini mic PCM as a sidecar.
-    // It never opens a second AudioRecord, preserving single-owner audio.
-    private final SherpaEmergencyCommandDetector emergencyCommandDetector;
     private volatile PendingCondition pendingCondition = null;
     private final Object pendingChoiceLock = new Object();
     private PendingUiChoice pendingUiChoice;
@@ -194,15 +191,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         });
         this.memoryRuleIndex = this.appContext == null ? null : new MemoryRuleIndex(this.appContext);
         this.audioIncidentRecorder = this.appContext == null ? null : new AudioIncidentRecorder(this.appContext);
-        this.emergencyCommandDetector = this.appContext == null
-                ? null
-                : new SherpaEmergencyCommandDetector(
-                        this.appContext,
-                        new SherpaEmergencyCommandDetector.Listener() {
-                            @Override public void onEmergencyStop() {
-                                handleLocalEmergencyStop();
-                            }
-                        });
         this.apiKey = apiKey;
         this.voiceName = voiceName == null || voiceName.trim().isEmpty() ? AppConfig.DEFAULT_VOICE : voiceName.trim();
         this.noiseMode = "quiet".equals(noiseMode) || "noisy".equals(noiseMode) ? noiseMode : "auto";
@@ -271,58 +259,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             if (activeAgentTask != null) records.put(activeAgentTask.toJson());
             return records;
         }
-    }
-
-    /**
-     * 0107 deterministic local emergency brake.
-     *
-     * This is intentionally not a Gemini conversation turn. The local KWS
-     * stops playback, cancels current/queued Agent work, invalidates same-turn
-     * post-stop tools, clears pending choice/wait state, and waits for the next
-     * real user instruction.
-     */
-    private void handleLocalEmergencyStop() {
-        if (!running) return;
-        agentWatchdogHandler.post(new Runnable() {
-            @Override public void run() {
-                if (!running) return;
-
-                markCurrentTurnInterrupted();
-                if (aiSpeaking) {
-                    aiSpeaking = false;
-                    stopPlayback();
-                    listener.onSpeakingChanged(false);
-                } else {
-                    stopPlayback();
-                }
-
-                cancelDeckAutoAdvance();
-                pendingCondition = null;
-                if (hasPendingUiChoice()) clearPendingUiChoiceSilently();
-                pendingChoiceExecuting = false;
-                shadowAgentRuntime.onInterrupted("LOCAL_EMERGENCY_STOP");
-                agentRuntimeV2.onInterrupted("LOCAL_EMERGENCY_STOP");
-
-                boolean cancelled = cancelAgentTask("本機語音「小酷停止」");
-                synchronized (agentLock) {
-                    // If Gemini had not opened an AgentTaskRecord yet, still
-                    // reject any later tool call from the pre-stop user turn.
-                    if (activeAgentTask == null) {
-                        lastFinishedIntentGeneration = userIntentGeneration;
-                        lastFinishedTaskId = "local-emergency-stop";
-                        pendingToolCalls.clear();
-                        clearAgentResponseWatchdogLocked();
-                    }
-                }
-
-                reportStage(cancelled ? "已停止目前任務" : "已停止");
-                if (appContext != null) {
-                    FloatingBubbleManager.getInstance(appContext)
-                            .showCompactStatus("已停止", "小酷停止");
-                }
-                Log.i(TAG, "Local emergency stop executed");
-            }
-        });
     }
 
     /**
@@ -1230,8 +1166,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
     private boolean isStopAgentTaskPhrase(String text) {
         String clean = text == null ? "" : text.replaceAll("\\s+", "");
-        return clean.contains("小酷停止")
-                || clean.contains("停止任務") || clean.contains("取消任務") || clean.contains("停止執行") || clean.contains("停止agent")
+        return clean.contains("停止任務") || clean.contains("取消任務") || clean.contains("停止執行") || clean.contains("停止agent")
                 || clean.contains("停止簡報") || clean.contains("暫停簡報") || clean.contains("不要翻頁") || clean.contains("先別翻頁") || clean.contains("關閉簡報");
     }
 
@@ -4263,7 +4198,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         createAudioPlayer();
         startPlaybackWorker();
         recorder.startRecording();
-        if (emergencyCommandDetector != null) emergencyCommandDetector.start();
         new Thread(new Runnable() { @Override public void run() { sendMic(); } }, "crew-native-live-mic").start();
     }
 
@@ -4409,15 +4343,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         while (running && recorder != null && webSocket != null) {
             int count = recorder.read(pcm, 0, pcm.length); if (count <= 0) continue;
             if (agentMuted) continue;
-
-            // 0107: sidecar KWS sees the same AEC/NS microphone PCM as Gemini.
-            // Feed it only when an emergency stop is meaningful, keeping
-            // ordinary Live conversation free of extra KWS CPU work.
-            SherpaEmergencyCommandDetector localEmergency = emergencyCommandDetector;
-            if (localEmergency != null
-                    && (hasActiveAgentTask() || aiSpeaking || deckAutoAdvanceActive)) {
-                localEmergency.offerPcm16(pcm, count);
-            }
 
             double rms = calculateRms(pcm, count);
             String mode = noiseMode;
@@ -4718,7 +4643,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         stopAudio(); listener.onStopped(message);
     }
     private void stopAudio() {
-        if (emergencyCommandDetector != null) emergencyCommandDetector.stop();
         audioPlaybackRunning = false;
         audioQueue.clear();
         if (usingOboeOutput) { NativeOboeOutput.stop(); usingOboeOutput = false; }
