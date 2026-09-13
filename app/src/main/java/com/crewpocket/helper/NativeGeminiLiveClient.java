@@ -3904,7 +3904,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         // actually SEARCH, Runtime commits the focused search field itself so
         // a weak model does not need another tool call for the keyboard Search.
         if (reply.optBoolean("success", false) && userActionScope.shouldAutoCommitSearch()) {
-            userActionScope.markSearchQueryEntered();
+            String transactionPackage = latestActionObservation == null
+                    ? "" : latestActionObservation.packageName;
+            userActionScope.markSearchQueryEntered(
+                    text, transactionPackage, userIntentGeneration);
 
             JSONObject commit;
             try {
@@ -3990,6 +3993,32 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                             + "禁止重新 SEARCH/TYPE；請依目前畫面確認或繼續觀察。");
         }
 
+        String currentSearchPackage = latestActionObservation == null
+                ? "" : latestActionObservation.packageName;
+        if (currentSearchPackage.isEmpty()) {
+            JSONObject screen = readSemanticScreenQuietly();
+            if (screen != null) {
+                currentSearchPackage = screen.optString("package", "");
+            }
+        }
+
+        if (userActionScope.shouldSuppressDuplicateSearch(
+                text, currentSearchPackage, userIntentGeneration)) {
+            PerformanceMetrics.recordDuplicateSearchSuppressed();
+            return new JSONObject()
+                    .put("success", true)
+                    .put("stepResult", "STEP_OK")
+                    .put("action", "APP_SEARCH")
+                    .put("searchTransaction", "ALREADY_SUBMITTED")
+                    .put("duplicateSuppressed", true)
+                    .put("taskState", "IN_PROGRESS")
+                    .put("completionEvidence", "SEARCH_DUPLICATE_SUPPRESSED")
+                    .put("instruction",
+                            "Runtime 已經提交同一筆搜尋；不要重新 SEARCH/TYPE/COMMIT_SEARCH。"
+                            + "請先 inspect_ui 一次確認目前結果畫面，再繼續選結果或導航。");
+        }
+
+        PerformanceMetrics.recordSearchExecution();
         JSONObject reply = helperPost("/search_in_app", new JSONObject().put("query", text));
         workingContext.recordAction("app_search",
                 reply.optBoolean("success", false) ? "submitted" : "failed");
@@ -4003,7 +4032,13 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         // Only now can Runtime truthfully say the query entered a proven
         // search field. Completion requires query-excluding result-surface
         // evidence from AppSearchRuntime.
-        userActionScope.markSearchQueryEntered();
+        String observedSearchPackage = latestActionObservation == null
+                ? currentSearchPackage : latestActionObservation.packageName;
+        if (observedSearchPackage == null || observedSearchPackage.isEmpty()) {
+            observedSearchPackage = currentSearchPackage;
+        }
+        userActionScope.markSearchQueryEntered(
+                text, observedSearchPackage, userIntentGeneration);
 
         boolean resultsObserved = reply.optBoolean("resultsObserved", false);
         boolean commitDispatched = reply.optBoolean("commitDispatched", false);
@@ -4030,6 +4065,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         }
 
         if (commitDispatched) {
+            // The physical Search/IME submit has already left Runtime. Even if
+            // result evidence is one frame late, repeating the same SEARCH would
+            // overwrite a successful transaction and destabilize Maps.
+            userActionScope.markSearchSubmissionDispatched();
             return observed
                     .put("searchTransaction", "PENDING_RESULTS")
                     .put("taskState", "IN_PROGRESS")
@@ -4131,6 +4170,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         JSONObject reply = helperPost("/commit_search", new JSONObject());
         workingContext.recordAction("search_commit",
                 reply.optBoolean("success", false) ? "submitted" : "failed");
+        if (reply.optBoolean("success", false)) {
+            userActionScope.markSearchCommitted();
+        }
         if (!reply.optBoolean("success", false)) {
             reply.put("instruction",
                     "目前沒有可確認的搜尋輸入框或搜尋鍵；不要改點搜尋結果，請先回到搜尋欄。" );

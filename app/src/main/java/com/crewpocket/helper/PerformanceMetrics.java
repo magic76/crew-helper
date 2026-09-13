@@ -44,6 +44,9 @@ final class PerformanceMetrics {
     private static long stalePostFinishToolsBlocked;
     private static long staleCompletionsSuppressed;
     private static String lastStaleTool = "";
+    // 0105: counts only; never stores search query/package/user text.
+    private static long semanticSearchExecutions;
+    private static long duplicateSearchesSuppressed;
 
     private PerformanceMetrics() {}
 
@@ -177,6 +180,14 @@ final class PerformanceMetrics {
         lastStaleTool = safeName(tool);
     }
 
+    static synchronized void recordSearchExecution() {
+        semanticSearchExecutions++;
+    }
+
+    static synchronized void recordDuplicateSearchSuppressed() {
+        duplicateSearchesSuppressed++;
+    }
+
     static synchronized String buildReport() {
         StringBuilder out = new StringBuilder();
         out.append("Performance (rolling up to ").append(MAX_SAMPLES).append(" samples)\n");
@@ -193,6 +204,9 @@ final class PerformanceMetrics {
         out.append("Screen sharing: sent=").append(screenFramesSent)
                 .append(" failed=").append(screenFramesFailed)
                 .append(" clean-skipped=").append(screenFramesSkippedClean).append("\n");
+        out.append("Search guard: executed=").append(semanticSearchExecutions)
+                .append(" duplicate-suppressed=").append(duplicateSearchesSuppressed)
+                .append("\n");
 
         appendAgentTrace(out, lastFinishedTrace);
         out.append("Post-finish stale tools: blocked=").append(stalePostFinishToolsBlocked)
@@ -259,6 +273,8 @@ final class PerformanceMetrics {
         stalePostFinishToolsBlocked = 0L;
         staleCompletionsSuppressed = 0L;
         lastStaleTool = "";
+        semanticSearchExecutions = 0L;
+        duplicateSearchesSuppressed = 0L;
     }
 
     private static AgentTrace ensureTrace(String taskId, long generation) {

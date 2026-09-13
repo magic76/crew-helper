@@ -23,6 +23,11 @@ final class UserActionScope {
     private String searchContinuation = "";
     private boolean searchQueryEntered;
     private boolean searchCommitted;
+    // 0105: ephemeral, current-turn search transaction identity. Never persisted.
+    private boolean searchSubmissionDispatched;
+    private String searchTransactionQuery = "";
+    private String searchTransactionPackage = "";
+    private long searchTransactionGeneration = -1L;
     private boolean searchResultSelected;
     private boolean searchResultSelectionDispatched;
     private String selectedSearchResult = "";
@@ -77,6 +82,10 @@ final class UserActionScope {
         openSearchResultAuthorized = openResult;
         searchQueryEntered = false;
         searchCommitted = false;
+        searchSubmissionDispatched = false;
+        searchTransactionQuery = "";
+        searchTransactionPackage = "";
+        searchTransactionGeneration = -1L;
         searchResultSelected = false;
         searchResultSelectionDispatched = false;
         selectedSearchResult = "";
@@ -173,6 +182,10 @@ final class UserActionScope {
         if (!searchIntent) return false;
         searchQueryEntered = true;
         searchCommitted = false;
+        searchSubmissionDispatched = false;
+        searchTransactionQuery = "";
+        searchTransactionPackage = "";
+        searchTransactionGeneration = -1L;
         searchResultSelectionDispatched = false;
         searchResultSelected = false;
         dispatchedSearchResult = "";
@@ -180,10 +193,42 @@ final class UserActionScope {
         return true;
     }
 
+    /** 0105: bind the in-memory search transaction to this exact user turn. */
+    synchronized boolean markSearchQueryEntered(
+            String query, String packageName, long generation) {
+        if (!markSearchQueryEntered()) return false;
+        searchTransactionQuery = normalizeSearchTransactionQuery(query);
+        searchTransactionPackage = normalizeSearchPackage(packageName);
+        searchTransactionGeneration = generation;
+        return true;
+    }
+
+    /** Commit/IME dispatch is enough to make an identical same-turn SEARCH non-idempotent. */
+    synchronized void markSearchSubmissionDispatched() {
+        expireIfNeeded();
+        if (!searchIntent || !searchQueryEntered) return;
+        searchSubmissionDispatched = true;
+    }
+
+    synchronized boolean shouldSuppressDuplicateSearch(
+            String query, String packageName, long generation) {
+        expireIfNeeded();
+        if (!searchIntent || !searchSubmissionDispatched) return false;
+        if (generation < 0L || generation != searchTransactionGeneration) return false;
+
+        String normalizedQuery = normalizeSearchTransactionQuery(query);
+        String normalizedPackage = normalizeSearchPackage(packageName);
+        return !normalizedQuery.isEmpty()
+                && normalizedQuery.equals(searchTransactionQuery)
+                && !normalizedPackage.isEmpty()
+                && normalizedPackage.equals(searchTransactionPackage);
+    }
+
     synchronized boolean markSearchCommitted() {
         expireIfNeeded();
         if (!searchIntent) return false;
         searchQueryEntered = true;
+        searchSubmissionDispatched = true;
         searchCommitted = true;
         return isSearchOnlyLocked();
     }
@@ -259,6 +304,10 @@ final class UserActionScope {
         searchContinuation = "";
         searchQueryEntered = false;
         searchCommitted = false;
+        searchSubmissionDispatched = false;
+        searchTransactionQuery = "";
+        searchTransactionPackage = "";
+        searchTransactionGeneration = -1L;
         searchResultSelected = false;
         searchResultSelectionDispatched = false;
         selectedSearchResult = "";
@@ -478,6 +527,16 @@ final class UserActionScope {
             if (!n.isEmpty() && value.contains(n)) return true;
         }
         return false;
+    }
+
+    private static String normalizeSearchTransactionQuery(String text) {
+        return TextMatch.caseFold(text == null ? "" : text)
+                .replaceAll("\\s+", " ")
+                .trim();
+    }
+
+    private static String normalizeSearchPackage(String packageName) {
+        return TextMatch.caseFold(packageName == null ? "" : packageName).trim();
     }
 
     private static String normalize(String text) {
