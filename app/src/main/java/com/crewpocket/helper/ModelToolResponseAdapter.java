@@ -108,9 +108,9 @@ final class ModelToolResponseAdapter {
 
         if (NEED_USER.equals(status)) {
             if ("MULTIPLE_MATCHES".equals(upper(result.optString("status", "")))) {
-                return "找到多個選項，需要使用者選一個。";
+                return "找到多個選項；用一句話讀出 screen.choices 並問使用者要哪個，然後等待回答。";
             }
-            return "需要使用者選擇後才能繼續。";
+            return "有多個可信結果；用一句話讀出 screen.choices 並詢問使用者，等待第一個/第二個/名稱/取消。";
         }
 
         if (WAIT.equals(status)) {

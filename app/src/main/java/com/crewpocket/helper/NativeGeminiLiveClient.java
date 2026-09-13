@@ -58,6 +58,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private final Listener listener;
     /** App-owned storage must not depend on AccessibilityService being alive. */
     private final Context appContext;
+    private final NotebookToolHandler notebookToolHandler;
     private volatile boolean running;
     private volatile String stage = "尚未開始";
     private OkHttpClient httpClient;
@@ -186,6 +187,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     }
     NativeGeminiLiveClient(Context context, String apiKey, String serverUrl, String voiceName, String noiseMode, int noiseSuppression, String liveTone, String customPrompt, int interruptionSensitivity, String audioOutput, Listener listener) {
         this.appContext = context == null ? null : context.getApplicationContext();
+        this.notebookToolHandler = new NotebookToolHandler(this.appContext);
         this.memoryRuleIndex = this.appContext == null ? null : new MemoryRuleIndex(this.appContext);
         this.audioIncidentRecorder = this.appContext == null ? null : new AudioIncidentRecorder(this.appContext);
         this.apiKey = apiKey;
@@ -1502,7 +1504,12 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         }
         setup.put("inputAudioTranscription", new JSONObject());
         setup.put("outputAudioTranscription", new JSONObject());
-        setup.put("tools", new JSONArray().put(new JSONObject().put("functionDeclarations", buildToolDeclarations())));
+        setup.put("tools", new JSONArray().put(new JSONObject().put(
+                "functionDeclarations",
+                LiveToolCatalog.build(
+                        isDeckSessionMode(),
+                        "create".equals(deckStartupMode),
+                        "present".equals(deckStartupMode)))));
         String customPrompt = this.customPrompt;
         String deckInstruction = "";
         if (isDeckSessionMode()) {
@@ -1539,228 +1546,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         return "溫暖親切；自然帶有友善起伏，讓人容易感受關心，但保持簡潔。";
     }
 
-    private JSONArray buildToolDeclarations() throws Exception {
-        JSONArray tools = new JSONArray();
-        JSONObject phoneActionProperties = new JSONObject()
-                .put("action", new JSONObject().put("type", "STRING")
-                                .put("enum", new JSONArray()
-                                .put("OPEN_APP").put("SEARCH").put("COMMIT_SEARCH").put("TAP").put("TYPE")
-                                .put("SCROLL").put("BACK").put("HOME"))
-                        .put("description", "Choose exactly one semantic next action; Runtime decides Android implementation."))
-                .put("target", new JSONObject().put("type", "STRING")
-                        .put("description", "Human semantic target or App name. Examples: Google, Search, Wi-Fi, first result. Do not pass coordinates/resource IDs."))
-                .put("text", new JSONObject().put("type", "STRING")
-                        .put("description", "For TYPE exact text to enter; for SEARCH the query. TYPE never submits a message."))
-                .put("direction", new JSONObject().put("type", "STRING")
-                        .put("enum", new JSONArray().put("forward").put("backward").put("left").put("right"))
-                        .put("description", "Only for SCROLL. This is CONTENT/NAVIGATION direction, never finger gesture direction. forward = reveal later/below content or next page; backward = reveal earlier/above content or previous page. Use left/right only for explicitly horizontal content. Runtime converts this semantic direction into Android scrolling/swiping."))
-                .put("distance", new JSONObject().put("type", "STRING")
-                        .put("enum", new JSONArray().put("short").put("normal").put("long").put("page"))
-                        .put("description", "Optional SCROLL distance."));
-        tools.put(new JSONObject().put("name", "phone_action")
-                .put("description",
-                        "Perform exactly ONE semantic phone step. Available actions: OPEN_APP, SEARCH, COMMIT_SEARCH, TAP, TYPE, SCROLL, BACK, HOME. COMMIT_SEARCH presses the current keyboard search/IME button only. Runtime owns selectors, focus, Android implementation and verification. For vertical SCROLL, use direction=forward to continue to later/below content or the next page, and direction=backward to return to earlier/above content or the previous page; never reason about the physical finger swipe direction. SEARCH is one Runtime transaction; do not manually TAP search then TYPE. TYPE never submits a real message. Real message sending is current-screen only through send_text.")
-                .put("parameters", new JSONObject().put("type", "OBJECT")
-                        .put("properties", phoneActionProperties)
-                        .put("required", new JSONArray().put("action"))));
-        tools.put(new JSONObject().put("name", "get_selected_region").put("description",
-                "Read the latest screen region explicitly selected by the user by dragging a rectangle. Call when the user refers to 'this', 'here', '這個', '這裡', '剛剛框的' and you need the selected text/package metadata. The latest visual crop already corresponds to that selection. This is context only: NEVER treat crop coordinates as phone coordinates; phone execution must still use semantic Runtime actions and normal verification."));
-
-        tools.put(new JSONObject().put("name", "read_web_page").put("description",
-                "Read a public http/https webpage as plain text for understanding or Notebook enrichment. Use this when the user explicitly asks to parse/summarize a URL, including a URL from get_selected_region. No JS, cookies, authentication, localhost, or private-network destinations.")
-                .put("parameters", new JSONObject().put("type", "OBJECT")
-                        .put("properties", new JSONObject()
-                                .put("url", new JSONObject().put("type", "STRING")
-                                        .put("description", "Public http/https URL to read")))
-                        .put("required", new JSONArray().put("url"))));
-        tools.put(new JSONObject().put("name", "create_note").put("description",
-                "Create a persistent Crew Notebook note ONLY when the user explicitly asks to save, note, remember in the notebook, or add to notes. In normal Crew use, an unqualified request such as 記一下/記下來/存到記事本/用記事本記下來 means Crew Notebook unless the user explicitly names another notes app. If the user selected a URL and asks you to parse and save it: get_selected_region -> read_web_page -> create_note.")
-                .put("parameters", new JSONObject().put("type", "OBJECT")
-                        .put("properties", new JSONObject()
-                                .put("title", new JSONObject().put("type", "STRING"))
-                                .put("content", new JSONObject().put("type", "STRING"))
-                                .put("source_url", new JSONObject().put("type", "STRING"))
-                                .put("tags", new JSONObject().put("type", "ARRAY")
-                                        .put("items", new JSONObject().put("type", "STRING"))))
-                        .put("required", new JSONArray()
-                                .put("title")
-                                .put("content"))));
-        tools.put(new JSONObject().put("name", "update_note").put("description",
-                "Update an existing Crew Notebook note. Use only when the user clearly asks to modify/append/organize an existing note.")
-                .put("parameters", new JSONObject().put("type", "OBJECT")
-                        .put("properties", new JSONObject()
-                                .put("note_id", new JSONObject().put("type", "STRING"))
-                                .put("title", new JSONObject().put("type", "STRING"))
-                                .put("content", new JSONObject().put("type", "STRING"))
-                                .put("source_url", new JSONObject().put("type", "STRING"))
-                                .put("tags", new JSONObject().put("type", "ARRAY")
-                                        .put("items", new JSONObject().put("type", "STRING"))))
-                        .put("required", new JSONArray().put("note_id"))));
-        tools.put(new JSONObject().put("name", "get_note").put("description",
-                "Read one Crew Notebook note by note_id.")
-                .put("parameters", new JSONObject().put("type", "OBJECT")
-                        .put("properties", new JSONObject()
-                                .put("note_id", new JSONObject().put("type", "STRING")))
-                        .put("required", new JSONArray().put("note_id"))));
-        tools.put(new JSONObject().put("name", "search_notes").put("description",
-                "Search the user's explicit Crew Notebook by title, content, source URL, or tag. Use this for questions such as '我之前是不是記過...' instead of guessing from conversation memory.")
-                .put("parameters", new JSONObject().put("type", "OBJECT")
-                        .put("properties", new JSONObject()
-                                .put("query", new JSONObject().put("type", "STRING"))
-                                .put("limit", new JSONObject().put("type", "NUMBER")))
-                        .put("required", new JSONArray().put("query"))));
-        tools.put(new JSONObject().put("name", "list_notes").put("description",
-                "List recent Crew Notebook notes with short previews.")
-                .put("parameters", new JSONObject().put("type", "OBJECT")
-                        .put("properties", new JSONObject()
-                                .put("limit", new JSONObject().put("type", "NUMBER")))));
-        tools.put(new JSONObject().put("name", "delete_note").put("description",
-                "Delete one Crew Notebook note ONLY when the user explicitly asks to delete that note.")
-                .put("parameters", new JSONObject().put("type", "OBJECT")
-                        .put("properties", new JSONObject()
-                                .put("note_id", new JSONObject().put("type", "STRING")))
-                        .put("required", new JSONArray().put("note_id"))));
-
-        tools.put(new JSONObject().put("name", "inspect_ui").put("description",
-                "VISUAL OBSERVATION. Captures a fresh phone screenshot for you to inspect while Runtime separately keeps Accessibility state for execution. Use the screenshot as the primary source for what the user actually sees, especially prices, charts, WebView/custom UI, images and visually rendered text. Call once when you need a fresh view; do not SEARCH merely because a value was absent from prior semantic tool text."));
-        tools.put(new JSONObject().put("name", "wait").put("description",
-                "Wait for a screen condition after an asynchronous action. Runtime polls and returns the latest state.")
-                .put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject()
-                        .put("condition", new JSONObject().put("type", "STRING")
-                                .put("enum", new JSONArray().put("screen_change").put("element_appears").put("element_disappears"))
-                                .put("description", "Condition to wait for (default screen_change)"))
-                        .put("element_id", new JSONObject().put("type", "STRING")
-                                .put("description", "Optional element id only when inspect_ui explicitly returned one for a wait condition."))
-                        .put("timeout_ms", new JSONObject().put("type", "INTEGER")
-                                .put("description", "Maximum wait milliseconds (default 5000, max 15000)")))));
-        tools.put(new JSONObject().put("name", "send_text").put("description",
-                "CURRENT SCREEN ONLY: use only when THIS turn contains new message text plus an explicit send verb. Pass the exact text once. Runtime performs TYPE then SEND_CURRENT and verifies one submit attempt. Standalone commands such as 送出/發送/send are intercepted directly by Runtime before model tool selection. Never search for or navigate to a recipient.")
-                .put("parameters", new JSONObject().put("type", "OBJECT")
-                        .put("properties", new JSONObject()
-                                .put("text", new JSONObject().put("type", "STRING")
-                                        .put("description", "Exact new message text from this user turn.")))
-                        .put("required", new JSONArray().put("text"))));
-        tools.put(new JSONObject().put("name", "schedule_reminder").put("description", "Set a countdown timer / reminder in seconds. When time is up, the assistant vibrates and announces the message.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("delay_seconds", new JSONObject().put("type", "NUMBER").put("description", "Delay in seconds, e.g. 300 for 5 minutes")).put("message", new JSONObject().put("type", "STRING").put("description", "Reminder text to speak when timer expires")).put("label", new JSONObject().put("type", "STRING").put("description", "Short label for the timer"))).put("required", new JSONArray().put("delay_seconds"))));
-        tools.put(new JSONObject().put("name", "start_screen_monitor").put("description", "Start periodic background screen checks or wait until a specific condition/text appears on screen.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("interval_seconds", new JSONObject().put("type", "NUMBER").put("description", "Interval between checks in seconds (e.g. 60)")).put("duration_minutes", new JSONObject().put("type", "NUMBER").put("description", "Total monitoring duration in minutes (default 10)")).put("target_condition", new JSONObject().put("type", "STRING").put("description", "Optional text/word to look for on screen (e.g. '已送達', '完成')")).put("label", new JSONObject().put("type", "STRING").put("description", "Short task name"))).put("required", new JSONArray().put("interval_seconds"))));
-        tools.put(new JSONObject().put("name", "list_active_schedules").put("description", "List all currently active timers, background screen monitors, and countdowns with their remaining time.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject())));
-        tools.put(new JSONObject().put("name", "cancel_schedule").put("description", "Cancel one or all active timers/screen monitors.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("task_id", new JSONObject().put("type", "STRING").put("description", "Optional task ID to cancel, e.g. 'timer_1'")).put("label_hint", new JSONObject().put("type", "STRING").put("description", "Optional keyword/label of the timer to cancel")).put("cancel_all", new JSONObject().put("type", "BOOLEAN").put("description", "Set true to cancel all active timers and monitors")))));
-        tools.put(new JSONObject().put("name", "take_screenshot").put("description", "Capture the phone screen ONLY when inspect_ui has no nodes (e.g. Canvas, Unity, WebGL, custom game UI) or user explicitly requests it."));
-        tools.put(new JSONObject().put("name", "end_voice_session").put("description", "End the voice call only for an explicit call-ending command: '結束通話', '掛斷電話', or '退出語音助理'. Never infer this from '關閉', '退出', '再見', '先這樣', or a request to close an app, window, or feature."));
-        tools.put(new JSONObject().put("name", "list_decks").put("description", "List trusted locally installed Live Decks available for a presentation, story, or teaching flow. Call before opening a deck when its ID is unknown."));
-        tools.put(new JSONObject().put("name", "open_deck").put("description", "Open a trusted Live Deck by deckId and show its first card full-screen. Returns that card's concise presentation data.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("deck_id", new JSONObject().put("type", "STRING").put("description", "ID returned by list_decks"))).put("required", new JSONArray().put("deck_id"))));
-        tools.put(new JSONObject().put("name", "get_deck_card").put("description", "Read concise, structured information for one card in the currently open Deck. Use its facts, speakerNotes, and allowedNext to decide the next presentation action.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("card_id", new JSONObject().put("type", "STRING").put("description", "Card ID from allowedNext; omit only to reread the visible card")))));
-        tools.put(new JSONObject().put("name", "present_deck_card").put("description", "Show a selected card from the currently open Deck full-screen. Only use a card ID supplied by get_deck_card or list_decks results.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("card_id", new JSONObject().put("type", "STRING").put("description", "Card ID to display; omit to refresh current card")))));
-        tools.put(new JSONObject().put("name", "advance_deck").put("description", "Advance to the next card in the currently open Deck after the current card has been explained. Read the returned card data before speaking about it."));
-        JSONObject metricProperties = new JSONObject().put("label", new JSONObject().put("type", "STRING"))
-                .put("value", new JSONObject().put("type", "STRING"));
-        JSONObject cardProperties = new JSONObject()
-                .put("type", new JSONObject().put("type", "STRING").put("enum", new JSONArray().put("cover").put("content").put("metric").put("timeline").put("compare")))
-                .put("title", new JSONObject().put("type", "STRING"))
-                .put("subtitle", new JSONObject().put("type", "STRING"))
-                .put("body", new JSONObject().put("type", "STRING"))
-                .put("image", new JSONObject().put("type", "STRING").put("description", "Optional HTTPS image URL or assetId"))
-                .put("imageCaption", new JSONObject().put("type", "STRING").put("description", "Optional image caption"))
-                .put("speakerNotes", new JSONObject().put("type", "STRING"))
-                .put("facts", new JSONObject().put("type", "ARRAY").put("items", new JSONObject().put("type", "STRING")))
-                .put("items", new JSONObject().put("type", "ARRAY").put("items", new JSONObject().put("type", "STRING")))
-                .put("metrics", new JSONObject().put("type", "ARRAY").put("items", new JSONObject().put("type", "OBJECT").put("properties", metricProperties)));
-        JSONObject ephemeralProperties = new JSONObject().put("title", new JSONObject().put("type", "STRING").put("description", "Presentation title"))
-                .put("cards", new JSONObject().put("type", "ARRAY").put("description", "3–8 cards in speaking order with optional HTTPS images")
-                        .put("items", new JSONObject().put("type", "OBJECT").put("properties", cardProperties)));
-        tools.put(new JSONObject().put("name", "create_ephemeral_deck").put("description", "Create a temporary, session-only Deck for explaining a general topic when the user did not select an imported Deck. Use 3–8 concise cards with optional HTTPS web image URLs based on known information. The first card is displayed immediately.")
-                .put("parameters", new JSONObject().put("type", "OBJECT").put("properties", ephemeralProperties).put("required", new JSONArray().put("title").put("cards"))));
-        tools.put(new JSONObject().put("name", "list_deck_images").put("description", "List images bundled inside the currently imported Deck. Returns safe assetId values; call before attaching an image. Session-only decks can directly use HTTPS image URLs."));
-        tools.put(new JSONObject().put("name", "attach_deck_image").put("description", "Attach a listed imported image to a future Deck card. Current and already presented cards are locked to avoid visual disruption.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject()
-                .put("card_id", new JSONObject().put("type", "STRING"))
-                .put("asset_id", new JSONObject().put("type", "STRING"))
-                .put("caption", new JSONObject().put("type", "STRING"))).put("required", new JSONArray().put("card_id").put("asset_id"))));
-        JSONObject stringArraySchema = new JSONObject().put("type", "ARRAY").put("items", new JSONObject().put("type", "STRING"));
-        JSONObject editProperties = new JSONObject().put("title", new JSONObject().put("type", "STRING")).put("subtitle", new JSONObject().put("type", "STRING"))
-                .put("body", new JSONObject().put("type", "STRING")).put("image", new JSONObject().put("type", "STRING")).put("imageCaption", new JSONObject().put("type", "STRING"))
-                .put("speakerNotes", new JSONObject().put("type", "STRING"))
-                .put("facts", stringArraySchema).put("items", stringArraySchema);
-        tools.put(new JSONObject().put("name", "update_deck_card").put("description", "Rewrite only a future card to adapt the remaining presentation after a user request. The current card is locked.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("card_id", new JSONObject().put("type", "STRING")).put("patch", new JSONObject().put("type", "OBJECT").put("properties", editProperties))).put("required", new JSONArray().put("card_id").put("patch"))));
-        JSONObject insertedCardProperties = new JSONObject().put("type", new JSONObject().put("type", "STRING")).put("title", new JSONObject().put("type", "STRING"))
-                .put("subtitle", new JSONObject().put("type", "STRING")).put("body", new JSONObject().put("type", "STRING"))
-                .put("image", new JSONObject().put("type", "STRING")).put("imageCaption", new JSONObject().put("type", "STRING"))
-                .put("speakerNotes", new JSONObject().put("type", "STRING"))
-                .put("facts", stringArraySchema).put("items", stringArraySchema);
-        tools.put(new JSONObject().put("name", "insert_deck_card").put("description", "Insert one supplementary card after the current or another future card when the user asks for a missing explanation. The inserted card becomes part of the remaining presentation.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("after_card_id", new JSONObject().put("type", "STRING")).put("card", new JSONObject().put("type", "OBJECT").put("properties", insertedCardProperties))).put("required", new JSONArray().put("after_card_id").put("card"))));
-        tools.put(new JSONObject().put("name", "remove_future_deck_card").put("description", "Remove a not-yet-presented card that is now redundant. Current and already presented cards are locked.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("card_id", new JSONObject().put("type", "STRING"))).put("required", new JSONArray().put("card_id"))));
-        return filterModelFacingTools(tools);
-    }
-
-    /** 0082: keep the Live model surface small and mode-specific. */
-    private JSONArray filterModelFacingTools(JSONArray declared) {
-        JSONArray exposed = new JSONArray();
-        boolean deckMode = isDeckSessionMode();
-        boolean createMode = "create".equals(deckStartupMode);
-        boolean presentMode = "present".equals(deckStartupMode);
-
-        for (int i = 0; i < declared.length(); i++) {
-            JSONObject tool = declared.optJSONObject(i);
-            if (tool == null) continue;
-            String name = tool.optString("name", "");
-
-            boolean allow;
-            if (!deckMode) {
-                allow = isNormalPhoneModelTool(name);
-            } else if (createMode) {
-                allow = "create_ephemeral_deck".equals(name)
-                        || "end_voice_session".equals(name);
-            } else if (presentMode) {
-                allow = "end_voice_session".equals(name)
-                        || isDeckPresentationModelTool(name);
-            } else {
-                allow = isNormalPhoneModelTool(name) || isDeckModelTool(name);
-            }
-
-            if (allow) exposed.put(tool);
-        }
-
-        Log.i(TAG, "0082 model tool surface: "
-                + exposed.length()
-                + (createMode ? " (deck create)"
-                    : (presentMode ? " (deck presenter)"
-                        : (deckMode ? " (legacy deck)" : " (normal phone)"))));
-        return exposed;
-    }
-
-    private boolean isNormalPhoneModelTool(String name) {
-        return "phone_action".equals(name)
-                || "inspect_ui".equals(name)
-                // 0103: Crew Notebook is a first-class normal-mode capability.
-                // Keep the surface intentionally small: create/search/list only.
-                || "create_note".equals(name)
-                || "search_notes".equals(name)
-                || "list_notes".equals(name)
-                || "send_text".equals(name)
-                || "end_voice_session".equals(name);
-    }
-
-    private boolean isDeckPresentationModelTool(String name) {
-        return "get_deck_card".equals(name)
-                || "present_deck_card".equals(name)
-                || "list_deck_images".equals(name)
-                || "attach_deck_image".equals(name)
-                || "update_deck_card".equals(name)
-                || "insert_deck_card".equals(name)
-                || "remove_future_deck_card".equals(name);
-    }
-
-    private boolean isDeckModelTool(String name) {
-        return "list_decks".equals(name)
-                || "open_deck".equals(name)
-                || "get_deck_card".equals(name)
-                || "present_deck_card".equals(name)
-                || "advance_deck".equals(name)
-                || "create_ephemeral_deck".equals(name)
-                || "list_deck_images".equals(name)
-                || "attach_deck_image".equals(name)
-                || "update_deck_card".equals(name)
-                || "insert_deck_card".equals(name)
-                || "remove_future_deck_card".equals(name);
-    }
 
 
     private void executeToolAsync(final JSONObject call) {
@@ -2000,12 +1785,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             if (SemanticPhoneAction.ERROR_TOOL.equals(name)) result = args;
             else if ("get_selected_region".equals(name)) result = getSelectedRegionContext();
             else if ("read_web_page".equals(name)) result = readWebPage(args);
-            else if ("create_note".equals(name)) result = createNotebookNote(args);
-            else if ("update_note".equals(name)) result = updateNotebookNote(args);
-            else if ("get_note".equals(name)) result = getNotebookNote(args);
-            else if ("search_notes".equals(name)) result = searchNotebookNotes(args);
-            else if ("list_notes".equals(name)) result = listNotebookNotes(args);
-            else if ("delete_note".equals(name)) result = deleteNotebookNote(args);
+            else if (NotebookToolHandler.handles(name)) {
+                result = notebookToolHandler.execute(name, args);
+            }
             else if ("take_screenshot".equals(name)) result = captureAndSendScreen();
             else if ("inspect_ui".equals(name)) result = inspectUi(args);
             else if ("tap_element".equals(name)) result = tapSemanticElement(args);
@@ -3187,17 +2969,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         }
         workingContext.setPendingTask("WAITING_USER_CHOICE");
 
-        FloatingBubbleManager.getInstance(appContext).showPendingChoices(
-                "選擇搜尋結果",
-                options,
-                new FloatingBubbleManager.PendingChoiceCallback() {
-                    @Override public void onChoice(String elementId) {
-                        NativeLiveService.selectPendingUiChoice(elementId);
-                    }
-                    @Override public void onCancel() {
-                        NativeLiveService.cancelPendingUiChoice();
-                    }
-                });
+        // 0104: choice state is headless. Gemini speaks the compact choices;
+        // the next user utterance is resolved deterministically by PendingUiChoice.
 
         JSONArray compact = new JSONArray();
         for (int i = 0; i < options.size(); i++) {
@@ -3211,7 +2984,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 .put("searchSelection", "USER_CHOICE_PENDING")
                 .put("choices", compact)
                 .put("instruction",
-                        "已顯示「選擇搜尋結果」。等待使用者點選或說第一個/第二個/結果名稱；等待期間禁止任何手機 mutation。");
+                        "不要顯示額外 Crew 選項 UI。請用語音簡短列出 choices 並詢問使用者；等待第一個/第二個/結果名稱/取消。等待期間禁止任何手機 mutation。");
     }
 
     private boolean verifySearchResultOpened(
@@ -3284,9 +3057,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             if (pendingUiChoice == null) return false;
             if (pendingUiChoice.expired()) {
                 pendingUiChoice = null;
-                try {
-                    FloatingBubbleManager.getInstance(appContext).hidePendingChoices();
-                } catch (Exception ignored) {}
                 workingContext.setPendingTask("");
                 return false;
             }
@@ -3298,9 +3068,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         synchronized (pendingChoiceLock) {
             pendingUiChoice = null;
         }
-        try {
-            FloatingBubbleManager.getInstance(appContext).hidePendingChoices();
-        } catch (Exception ignored) {}
         workingContext.setPendingTask("");
     }
 
@@ -3344,7 +3111,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             pendingChoiceExecuting = true;
         }
 
-        FloatingBubbleManager.getInstance(appContext).hidePendingChoices();
         workingContext.setPendingTask("SELECTING_SEARCH_RESULT");
 
         new Thread(new Runnable() {
@@ -3430,7 +3196,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             pendingUiChoice = null;
         }
         pendingChoiceExecuting = false;
-        FloatingBubbleManager.getInstance(appContext).hidePendingChoices();
         workingContext.setPendingTask("");
         resumeAgentAfterUserChoice("使用者取消搜尋結果選擇");
         sendInternalAgentDirective(
@@ -3766,69 +3531,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         return SafeWebPageReader.read(args.optString("url", ""));
     }
 
-    private NoteStore notebookStore() {
-        return appContext == null ? null : new NoteStore(appContext);
-    }
 
-    private JSONObject createNotebookNote(JSONObject args) {
-        NoteStore store = notebookStore();
-        if (store == null) return notebookError("NOTEBOOK_CONTEXT_UNAVAILABLE");
-        JSONArray tags = args.optJSONArray("tags");
-        return store.create(args.optString("title", ""), args.optString("content", ""),
-                args.optString("source_url", ""), tags == null ? new JSONArray() : tags);
-    }
-
-    private JSONObject updateNotebookNote(JSONObject args) {
-        NoteStore store = notebookStore();
-        if (store == null) return notebookError("NOTEBOOK_CONTEXT_UNAVAILABLE");
-        JSONObject patch = new JSONObject();
-        try {
-            if (args.has("title")) patch.put("title", args.optString("title"));
-            if (args.has("content")) patch.put("content", args.optString("content"));
-            if (args.has("source_url")) patch.put("sourceUrl", args.optString("source_url"));
-            if (args.has("tags")) patch.put("tags", args.optJSONArray("tags"));
-        } catch (Exception ignored) {}
-        return store.update(args.optString("note_id", ""), patch);
-    }
-
-    private JSONObject getNotebookNote(JSONObject args) {
-        NoteStore store = notebookStore();
-        return store == null ? notebookError("NOTEBOOK_CONTEXT_UNAVAILABLE") : store.get(args.optString("note_id", ""));
-    }
-
-    private JSONObject searchNotebookNotes(JSONObject args) {
-        NoteStore store = notebookStore();
-        if (store == null) return notebookError("NOTEBOOK_CONTEXT_UNAVAILABLE");
-        JSONObject out = new JSONObject();
-        try { JSONArray notes = store.search(args.optString("query", ""), args.optInt("limit", 20)); out.put("success", true).put("notes", notes).put("count", notes.length()); }
-        catch (Exception ignored) {}
-        return out;
-    }
-
-    private JSONObject listNotebookNotes(JSONObject args) {
-        NoteStore store = notebookStore();
-        if (store == null) return notebookError("NOTEBOOK_CONTEXT_UNAVAILABLE");
-        JSONObject out = new JSONObject();
-        try { JSONArray notes = store.list(args.optInt("limit", 20)); out.put("success", true).put("notes", notes).put("count", notes.length()); }
-        catch (Exception ignored) {}
-        return out;
-    }
-
-    private JSONObject deleteNotebookNote(JSONObject args) {
-        NoteStore store = notebookStore();
-        if (store == null) return notebookError("NOTEBOOK_CONTEXT_UNAVAILABLE");
-        boolean deleted = store.delete(args.optString("note_id", ""));
-        JSONObject out = new JSONObject();
-        try { out.put("success", deleted); if (!deleted) out.put("error", "NOTE_NOT_FOUND"); }
-        catch (Exception ignored) {}
-        return out;
-    }
-
-    private JSONObject notebookError(String code) {
-        JSONObject out = new JSONObject();
-        try { out.put("success", false).put("error", code); } catch (Exception ignored) {}
-        return out;
-    }
 
     private JSONObject getSelectedRegionContext() throws Exception {
         SelectedRegionContext selected = latestSelectedRegion;
