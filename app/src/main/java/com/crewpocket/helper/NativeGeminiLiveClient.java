@@ -59,6 +59,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     /** App-owned storage must not depend on AccessibilityService being alive. */
     private final Context appContext;
     private final NotebookToolHandler notebookToolHandler;
+    private final LiveVisionController visionController;
     private volatile boolean running;
     private volatile String stage = "尚未開始";
     private OkHttpClient httpClient;
@@ -78,12 +79,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private volatile long visualHoldUntil;
     private volatile boolean setupReady;
     private long screenFrameSequence;
-    // Dimensions of the latest image actually shown to Gemini.  They can be
-    // smaller than the physical 1440x3120 screen after compression.
-    private volatile int lastVisionWidth = 1;
-    private volatile int lastVisionHeight = 1;
-    private volatile int lastScreenWidth = 1;
-    private volatile int lastScreenHeight = 1;
     private final Set<String> handledToolCalls = new HashSet<String>();
     /**
      * A Gemini Live function-call may be re-delivered while its first copy is
@@ -188,6 +183,12 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     NativeGeminiLiveClient(Context context, String apiKey, String serverUrl, String voiceName, String noiseMode, int noiseSuppression, String liveTone, String customPrompt, int interruptionSensitivity, String audioOutput, Listener listener) {
         this.appContext = context == null ? null : context.getApplicationContext();
         this.notebookToolHandler = new NotebookToolHandler(this.appContext);
+        this.visionController = new LiveVisionController(new LiveVisionController.Sender() {
+            @Override public boolean send(String payload) {
+                WebSocket socket = NativeGeminiLiveClient.this.webSocket;
+                return socket != null && socket.send(payload);
+            }
+        });
         this.memoryRuleIndex = this.appContext == null ? null : new MemoryRuleIndex(this.appContext);
         this.audioIncidentRecorder = this.appContext == null ? null : new AudioIncidentRecorder(this.appContext);
         this.apiKey = apiKey;
@@ -524,8 +525,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         new Thread(new Runnable() {
             @Override public void run() {
                 try {
-                    JSONObject video = new JSONObject().put("mimeType", "image/jpeg").put("data", Base64.encodeToString(jpegBytes, Base64.NO_WRAP));
-                    boolean sent = webSocket != null && webSocket.send(new JSONObject().put("realtimeInput", new JSONObject().put("video", video)).toString());
+                    boolean sent = visionController.sendJpegBytes(jpegBytes);
                     Log.d(TAG, sent ? "即時相機視訊影格已送達 Gemini" : "即時相機視訊影格未送達");
                 } catch (Exception error) { Log.w(TAG, "相機影格傳送失敗：" + error.getMessage()); }
             }
@@ -537,7 +537,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         new Thread(new Runnable() {
             @Override public void run() {
                 try {
-                    boolean sent = sendImageFile(path, false);
+                    boolean sent = visionController.sendImageFile(path, false);
                     Log.d(TAG, sent ? "相機影格已送達 Gemini" : "相機影格未送達 Gemini");
                 } catch (Exception error) { Log.w(TAG, "相機影格傳送失敗：" + error.getMessage()); }
             }
@@ -548,8 +548,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     /**
      * Send only the user-selected crop as visual context.
      *
-     * IMPORTANT: this method deliberately does NOT update lastVisionWidth,
-     * lastVisionHeight, lastScreenWidth, or lastScreenHeight. A crop is never
+     * IMPORTANT: this method deliberately does NOT update visionController.lastVisionWidth(),
+     * visionController.lastVisionHeight(), visionController.lastScreenWidth(), or visionController.lastScreenHeight(). A crop is never
      * a valid coordinate space for phone execution.
      */
     boolean sendSelectedRegion(final SelectedRegionContext selected) {
@@ -572,77 +572,12 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         new Thread(new Runnable() {
             @Override public void run() {
                 try {
-                    String path = selected.snapshotPath == null
-                            ? ""
-                            : selected.snapshotPath.trim();
-                    if (path.isEmpty() || !new File(path).isFile()) {
-                        throw new Exception(
-                                "selected-region frozen snapshot missing");
-                    }
-
-                    Bitmap full = BitmapFactory.decodeFile(path);
-                    if (full == null) {
-                        throw new Exception(
-                                "selected-region screenshot decode failed");
-                    }
-
-                    Bitmap crop;
-                    try {
-                        int imageWidth = full.getWidth();
-                        int imageHeight = full.getHeight();
-
-                        float sx = imageWidth
-                                / (float) Math.max(1, selected.screenWidth);
-                        float sy = imageHeight
-                                / (float) Math.max(1, selected.screenHeight);
-
-                        int left = clamp(
-                                Math.round(selected.bounds.left * sx),
-                                0,
-                                Math.max(0, imageWidth - 1));
-                        int top = clamp(
-                                Math.round(selected.bounds.top * sy),
-                                0,
-                                Math.max(0, imageHeight - 1));
-                        int right = clamp(
-                                Math.round(selected.bounds.right * sx),
-                                left + 1,
-                                imageWidth);
-                        int bottom = clamp(
-                                Math.round(selected.bounds.bottom * sy),
-                                top + 1,
-                                imageHeight);
-
-                        int padX = Math.max(
-                                4,
-                                Math.round((right - left) * 0.04f));
-                        int padY = Math.max(
-                                4,
-                                Math.round((bottom - top) * 0.04f));
-
-                        left = Math.max(0, left - padX);
-                        top = Math.max(0, top - padY);
-                        right = Math.min(imageWidth, right + padX);
-                        bottom = Math.min(imageHeight, bottom + padY);
-
-                        crop = Bitmap.createBitmap(
-                                full,
-                                left,
-                                top,
-                                Math.max(1, right - left),
-                                Math.max(1, bottom - top));
-                    } finally {
-                        full.recycle();
-                    }
-
-                    boolean sent = sendContextBitmapWithoutCoordinates(crop);
+                    boolean sent = visionController.sendSelectedRegionSnapshot(selected);
                     if (!sent) {
-                        throw new Exception(
-                                "selected-region visual channel unavailable");
+                        throw new Exception("selected-region visual channel unavailable");
                     }
 
-                    reportStage(
-                            "已讀取框選區域，直接說你想怎麼處理");
+                    reportStage("已讀取框選區域，直接說你想怎麼處理");
                     if (appContext != null) {
                         FloatingBubbleManager.getInstance(appContext)
                                 .showCompactStatus(
@@ -671,56 +606,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         return true;
     }
 
-    private boolean sendContextBitmapWithoutCoordinates(Bitmap bitmap)
-            throws Exception {
-        if (bitmap == null) return false;
 
-        int maxEdge = 1024;
-        if (Math.max(bitmap.getWidth(), bitmap.getHeight()) > maxEdge) {
-            float scale = maxEdge
-                    / (float) Math.max(
-                            bitmap.getWidth(),
-                            bitmap.getHeight());
-            Bitmap scaled = Bitmap.createScaledBitmap(
-                    bitmap,
-                    Math.max(1, Math.round(bitmap.getWidth() * scale)),
-                    Math.max(1, Math.round(bitmap.getHeight() * scale)),
-                    true);
-            bitmap.recycle();
-            bitmap = scaled;
-        }
-
-        ByteArrayOutputStream output = new ByteArrayOutputStream();
-        try {
-            bitmap.compress(
-                    Bitmap.CompressFormat.JPEG,
-                    78,
-                    output);
-        } finally {
-            bitmap.recycle();
-        }
-
-        JSONObject video = new JSONObject()
-                .put("mimeType", "image/jpeg")
-                .put(
-                        "data",
-                        Base64.encodeToString(
-                                output.toByteArray(),
-                                Base64.NO_WRAP));
-
-        return webSocket != null
-                && webSocket.send(
-                        new JSONObject()
-                                .put(
-                                        "realtimeInput",
-                                        new JSONObject().put("video", video))
-                                .toString());
-    }
-
-    private int clamp(int value, int min, int max) {
-        if (max < min) return min;
-        return Math.max(min, Math.min(max, value));
-    }
 
     void sendScreenFrame() {
         if (!running || !setupReady || webSocket == null) {
@@ -1455,7 +1341,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         // Keep the configured current Gemini Live voice intact.  The old client
         // collapsed 30 picker entries into five voices, so audition and calls
         // never matched.  Legacy names are retained only for existing installs.
-        for (MainActivity.VoiceInfo voice : MainActivity.ALL_VOICES) {
+        for (VoiceInfo voice : VoiceCatalog.ALL_VOICES) {
             if (voice.name.equalsIgnoreCase(v)) return voice.name;
         }
         if ("Ganymede".equalsIgnoreCase(v)) return "Gacrux";
@@ -2618,8 +2504,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         String distance = args.optString("distance", "normal").toLowerCase();
         
         JSONObject metrics = helperGet("/status");
-        int width = metrics.optInt("screenWidth", lastScreenWidth);
-        int height = metrics.optInt("screenHeight", lastScreenHeight);
+        int width = metrics.optInt("screenWidth", visionController.lastScreenWidth());
+        int height = metrics.optInt("screenHeight", visionController.lastScreenHeight());
         if (width <= 1 || height <= 1) return new JSONObject().put("success", false).put("error", "無法取得目前裝置螢幕尺寸");
         // Default normal uses proportions so it works on every resolution.
         int x1 = Math.round(width * 0.50f), y1 = Math.round(height * 0.74f), x2 = Math.round(width * 0.50f), y2 = Math.round(height * 0.22f);
@@ -2798,24 +2684,24 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         // 📐 2. Explicit coordinate conversion.  The visual frame sent to the
         // model is normally max 1280px on its long edge, not the device size.
         if (!resolvedFromNode && "image".equals(coordinateSpace)) {
-            if (lastScreenWidth <= 1 || lastScreenHeight <= 1) return new JSONObject().put("success", false).put("error", "尚未取得目前螢幕尺寸，請先要求查看螢幕後再依影像座標點擊");
-            targetX = (targetX / Math.max(1, lastVisionWidth)) * lastScreenWidth;
-            targetY = (targetY / Math.max(1, lastVisionHeight)) * lastScreenHeight;
+            if (visionController.lastScreenWidth() <= 1 || visionController.lastScreenHeight() <= 1) return new JSONObject().put("success", false).put("error", "尚未取得目前螢幕尺寸，請先要求查看螢幕後再依影像座標點擊");
+            targetX = (targetX / Math.max(1, visionController.lastVisionWidth())) * visionController.lastScreenWidth();
+            targetY = (targetY / Math.max(1, visionController.lastVisionHeight())) * visionController.lastScreenHeight();
         } else if (!resolvedFromNode && "normalized_1000".equals(coordinateSpace)) {
-            if (lastScreenWidth <= 1 || lastScreenHeight <= 1) return new JSONObject().put("success", false).put("error", "尚未取得目前螢幕尺寸，請先 inspect_ui 或查看螢幕");
-            targetX = (targetX / 1000.0) * lastScreenWidth;
-            targetY = (targetY / 1000.0) * lastScreenHeight;
+            if (visionController.lastScreenWidth() <= 1 || visionController.lastScreenHeight() <= 1) return new JSONObject().put("success", false).put("error", "尚未取得目前螢幕尺寸，請先 inspect_ui 或查看螢幕");
+            targetX = (targetX / 1000.0) * visionController.lastScreenWidth();
+            targetY = (targetY / 1000.0) * visionController.lastScreenHeight();
         } else if (!resolvedFromNode && coordinateSpace.isEmpty() && targetX <= 1.0 && targetY <= 1.0 && (targetX > 0 || targetY > 0)) {
-            targetX = targetX * Math.max(1, lastScreenWidth);
-            targetY = targetY * Math.max(1, lastScreenHeight);
+            targetX = targetX * Math.max(1, visionController.lastScreenWidth());
+            targetY = targetY * Math.max(1, visionController.lastScreenHeight());
         } else if (!resolvedFromNode && coordinateSpace.isEmpty() && targetX <= 1000.0 && targetY <= 1000.0 && targetX > 0 && targetY > 0 && targetY < 1200) {
-            targetX = (targetX / 1000.0) * Math.max(1, lastScreenWidth);
-            targetY = (targetY / 1000.0) * Math.max(1, lastScreenHeight);
+            targetX = (targetX / 1000.0) * Math.max(1, visionController.lastScreenWidth());
+            targetY = (targetY / 1000.0) * Math.max(1, visionController.lastScreenHeight());
         }
 
         JSONObject reply = helperPost("/tap", new JSONObject().put("x", Math.round(targetX)).put("y", Math.round(targetY)));
         reply.put("resolvedFrom", resolvedFromNode ? "ui_node" : (coordinateSpace.isEmpty() ? "legacy" : coordinateSpace));
-        reply.put("visionSize", lastVisionWidth + "x" + lastVisionHeight).put("screenSize", lastScreenWidth + "x" + lastScreenHeight);
+        reply.put("visionSize", visionController.lastVisionWidth() + "x" + visionController.lastVisionHeight()).put("screenSize", visionController.lastScreenWidth() + "x" + visionController.lastScreenHeight());
         workingContext.recordAction("tap_screen", reply.optBoolean("success", false) ? "submitted" : "failed");
         return autoObserveAfterMutation(reply, "tap_screen");
     }
@@ -4193,32 +4079,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if (!capture.optBoolean("success")) return capture;
         String path = capture.optString("latestPath", capture.optString("path", ""));
         if (path.isEmpty()) return new JSONObject().put("success", false).put("error", "截圖未提供檔案路徑");
-        if (!sendImageFile(path, true)) return new JSONObject().put("success", false).put("error", "截圖已取得，但 Gemini 連線不可用");
+        if (!visionController.sendImageFile(path, true)) return new JSONObject().put("success", false).put("error", "截圖已取得，但 Gemini 連線不可用");
         return new JSONObject().put("success", true).put("silent", capture.optBoolean("silent")).put("message", "最新手機螢幕已傳送，請只依這張畫面回答。");
     }
 
-    private boolean sendImageFile(String path, boolean isScreenFrame) throws Exception {
-        Bitmap bitmap = BitmapFactory.decodeFile(path);
-        if (bitmap == null) return false;
-        int sourceWidth = bitmap.getWidth();
-        int sourceHeight = bitmap.getHeight();
-        int maxEdge = 1024;
-        if (Math.max(bitmap.getWidth(), bitmap.getHeight()) > maxEdge) {
-            float scale = maxEdge / (float) Math.max(bitmap.getWidth(), bitmap.getHeight());
-            Bitmap scaled = Bitmap.createScaledBitmap(bitmap, Math.round(bitmap.getWidth() * scale), Math.round(bitmap.getHeight() * scale), true);
-            bitmap.recycle(); bitmap = scaled;
-        }
-        lastVisionWidth = bitmap.getWidth();
-        lastVisionHeight = bitmap.getHeight();
-        if (isScreenFrame) {
-            lastScreenWidth = sourceWidth;
-            lastScreenHeight = sourceHeight;
-        }
-        ByteArrayOutputStream output = new ByteArrayOutputStream();
-        bitmap.compress(Bitmap.CompressFormat.JPEG, 72, output); bitmap.recycle();
-        JSONObject video = new JSONObject().put("mimeType", "image/jpeg").put("data", Base64.encodeToString(output.toByteArray(), Base64.NO_WRAP));
-        return webSocket != null && webSocket.send(new JSONObject().put("realtimeInput", new JSONObject().put("video", video)).toString());
-    }
 
     private JSONObject helperPost(String endpoint, JSONObject payload) throws Exception {
         HttpURLConnection connection = null;

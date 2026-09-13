@@ -134,7 +134,7 @@ final class GeminiVoicePreviewClient {
     private static boolean isSupported(String name) { return canonical(name) != null; }
     private static String canonical(String name) {
         if (name == null) return null;
-        for (MainActivity.VoiceInfo voice : MainActivity.ALL_VOICES) if (voice.name.equalsIgnoreCase(name.trim())) return voice.name;
+        for (VoiceInfo voice : VoiceCatalog.ALL_VOICES) if (voice.name.equalsIgnoreCase(name.trim())) return voice.name;
         return null;
     }
 }
