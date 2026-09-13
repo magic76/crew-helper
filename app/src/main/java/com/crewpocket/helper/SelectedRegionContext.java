@@ -118,11 +118,14 @@ final class SelectedRegionContext {
 
             out.put(
                     "instruction",
-                    "The latest visual crop is the area explicitly selected by "
-                    + "the user. Interpret words such as 'this', 'here', '這個', "
-                    + "'這裡' as referring to this selection. The crop is context "
-                    + "only, never a tap-coordinate space. Use normal semantic "
-                    + "Runtime actions and fresh inspect_ui verification for phone actions.");
+                    "The frozen visual crop has already been sent as the primary "
+                    + "evidence for the area explicitly selected by the user. Interpret "
+                    + "words such as 'this', 'here', '這個', '這裡' as referring "
+                    + "to this selection. If the crop answers the question, answer "
+                    + "directly and do not call inspect_ui to re-observe it. inspect_ui "
+                    + "is only for required evidence outside the selection. The crop is "
+                    + "context only, never a tap-coordinate space; phone mutations still "
+                    + "use normal semantic Runtime actions and verification.");
         } catch (Exception ignored) {}
         return out;
     }

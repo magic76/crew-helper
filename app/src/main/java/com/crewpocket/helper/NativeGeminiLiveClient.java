@@ -576,6 +576,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                     if (!sent) {
                         throw new Exception("selected-region visual channel unavailable");
                     }
+                    PerformanceMetrics.recordSelectedRegionCropContext();
 
                     reportStage("已讀取框選區域，直接說你想怎麼處理");
                     if (appContext != null) {
@@ -1669,13 +1670,25 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         try {
             shadowAgentRuntime.onActionExecuted(id);
             if (SemanticPhoneAction.ERROR_TOOL.equals(name)) result = args;
-            else if ("get_selected_region".equals(name)) result = getSelectedRegionContext();
+            else if ("get_selected_region".equals(name)) {
+                SelectedRegionContext selected = latestSelectedRegion;
+                if (selected != null && selected.isFresh() && !selected.hardSensitive) {
+                    PerformanceMetrics.recordSelectedRegionMetadataFallback();
+                }
+                result = getSelectedRegionContext();
+            }
             else if ("read_web_page".equals(name)) result = readWebPage(args);
             else if (NotebookToolHandler.handles(name)) {
                 result = notebookToolHandler.execute(name, args);
             }
             else if ("take_screenshot".equals(name)) result = captureAndSendScreen();
-            else if ("inspect_ui".equals(name)) result = inspectUi(args);
+            else if ("inspect_ui".equals(name)) {
+                SelectedRegionContext selected = latestSelectedRegion;
+                if (selected != null && selected.isFresh() && !selected.hardSensitive) {
+                    PerformanceMetrics.recordSelectedRegionFullScreenInspect();
+                }
+                result = inspectUi(args);
+            }
             else if ("tap_element".equals(name)) result = tapSemanticElement(args);
             else if ("wait".equals(name)) result = waitForCondition(args);
             else if ("launch_app".equals(name)) result = launchApp(args);

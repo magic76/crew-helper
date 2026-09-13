@@ -42,7 +42,7 @@ final class LiveToolCatalog {
                         .put("properties", phoneActionProperties)
                         .put("required", new JSONArray().put("action"))));
         tools.put(new JSONObject().put("name", "get_selected_region").put("description",
-                "Read the latest screen region explicitly selected by the user by dragging a rectangle. Call when the user refers to 'this', 'here', '這個', '這裡', '剛剛框的' and you need the selected text/package metadata. The latest visual crop already corresponds to that selection. This is context only: NEVER treat crop coordinates as phone coordinates; phone execution must still use semantic Runtime actions and normal verification."));
+                "METADATA FALLBACK for the latest explicit user-selected region. The frozen visual crop has already been sent to you. If the crop itself answers the user's question, answer directly and DO NOT call this tool. Call only when selected text/package/bounds metadata is actually needed. Never treat crop coordinates as phone coordinates; phone execution still uses semantic Runtime actions and normal verification."));
 
         tools.put(new JSONObject().put("name", "read_web_page").put("description",
                 "Read a public http/https webpage as plain text for understanding or Notebook enrichment. Use this when the user explicitly asks to parse/summarize a URL, including a URL from get_selected_region. No JS, cookies, authentication, localhost, or private-network destinations.")
@@ -100,7 +100,7 @@ final class LiveToolCatalog {
                         .put("required", new JSONArray().put("note_id"))));
 
         tools.put(new JSONObject().put("name", "inspect_ui").put("description",
-                "VISUAL OBSERVATION. Captures a fresh phone screenshot for you to inspect while Runtime separately keeps Accessibility state for execution. Use the screenshot as the primary source for what the user actually sees, especially prices, charts, WebView/custom UI, images and visually rendered text. Call once when you need a fresh view; do not SEARCH merely because a value was absent from prior semantic tool text."));
+                "FULL-SCREEN VISUAL FALLBACK. Captures a fresh phone screenshot while Runtime separately keeps Accessibility state for execution. Normally use it for current full-screen prices, charts, WebView/custom UI, images or visually rendered text. SELECTED-REGION EXCEPTION: when the user just framed a region and that frozen crop can answer the question, do NOT call inspect_ui merely to see it again; answer from the crop. Call inspect_ui only if the user asks about content outside that selection or the crop genuinely lacks required evidence. Call once when needed; do not SEARCH merely because a value was absent from prior semantic tool text."));
         tools.put(new JSONObject().put("name", "wait").put("description",
                 "Wait for a screen condition after an asynchronous action. Runtime polls and returns the latest state.")
                 .put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject()

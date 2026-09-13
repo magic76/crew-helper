@@ -50,6 +50,10 @@ final class PerformanceMetrics {
     // 0108: privacy-safe counters only; no PCM, dB values or classifications retained.
     private static long activeNoiseFramesSuppressed;
     private static long activeNoiseSpeechAdmissions;
+    // 0112: selected-region routing counts only. No crop, text, package, bounds or query is retained.
+    private static long selectedRegionCropContexts;
+    private static long selectedRegionMetadataFallbacks;
+    private static long selectedRegionFullScreenInspects;
 
     private PerformanceMetrics() {}
 
@@ -199,6 +203,18 @@ final class PerformanceMetrics {
         activeNoiseSpeechAdmissions++;
     }
 
+    static synchronized void recordSelectedRegionCropContext() {
+        selectedRegionCropContexts++;
+    }
+
+    static synchronized void recordSelectedRegionMetadataFallback() {
+        selectedRegionMetadataFallbacks++;
+    }
+
+    static synchronized void recordSelectedRegionFullScreenInspect() {
+        selectedRegionFullScreenInspects++;
+    }
+
     static synchronized String buildReport() {
         StringBuilder out = new StringBuilder();
         out.append("Performance (rolling up to ").append(MAX_SAMPLES).append(" samples)\n");
@@ -221,6 +237,11 @@ final class PerformanceMetrics {
         out.append("Active noise guard: suppressed-frames=")
                 .append(activeNoiseFramesSuppressed)
                 .append(" speech-admissions=").append(activeNoiseSpeechAdmissions)
+                .append("\n");
+        out.append("Selected region routing: crop-context=")
+                .append(selectedRegionCropContexts)
+                .append(" metadata-fallback=").append(selectedRegionMetadataFallbacks)
+                .append(" full-screen-inspect=").append(selectedRegionFullScreenInspects)
                 .append("\n");
 
         appendAgentTrace(out, lastFinishedTrace);
@@ -292,6 +313,9 @@ final class PerformanceMetrics {
         duplicateSearchesSuppressed = 0L;
         activeNoiseFramesSuppressed = 0L;
         activeNoiseSpeechAdmissions = 0L;
+        selectedRegionCropContexts = 0L;
+        selectedRegionMetadataFallbacks = 0L;
+        selectedRegionFullScreenInspects = 0L;
     }
 
     private static AgentTrace ensureTrace(String taskId, long generation) {
