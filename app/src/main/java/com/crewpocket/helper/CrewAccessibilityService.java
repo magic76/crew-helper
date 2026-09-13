@@ -250,6 +250,7 @@ public class CrewAccessibilityService extends AccessibilityService {
                     imeVisible = true;
                 }
             }
+
         } catch (Exception ignored) {}
 
         AccessibilityNodeInfo target =
@@ -526,6 +527,31 @@ public class CrewAccessibilityService extends AccessibilityService {
                         try { root.recycle(); }
                         catch (Exception ignored) {}
                     }
+                }
+            }
+
+            // Some IMEs/apps expose the focused editor only through the active
+            // application root, not through getWindows().
+            AccessibilityNodeInfo activeRoot = getRootInActiveWindow();
+            if (activeRoot != null) {
+                AccessibilityNodeInfo focused = null;
+                try {
+                    focused = activeRoot.findFocus(
+                            AccessibilityNodeInfo.FOCUS_INPUT);
+                    if (focused != null
+                            && focused.isEditable()
+                            && focused.isVisibleToUser()) {
+                        CharSequence pkg = focused.getPackageName();
+                        String packageName = pkg == null ? "" : pkg.toString();
+                        if (!getPackageName().equals(packageName)) {
+                            return AccessibilityNodeInfo.obtain(focused);
+                        }
+                    }
+                } finally {
+                    if (focused != null) {
+                        try { focused.recycle(); } catch (Exception ignored) {}
+                    }
+                    try { activeRoot.recycle(); } catch (Exception ignored) {}
                 }
             }
         } catch (Exception ignored) {}

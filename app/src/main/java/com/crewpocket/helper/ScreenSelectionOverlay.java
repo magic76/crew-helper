@@ -17,6 +17,7 @@ import android.view.View;
 import android.view.WindowManager;
 import android.graphics.PixelFormat;
 import android.widget.Toast;
+import android.util.Log;
 
 /**
  * Full-screen explicit selection surface.
@@ -25,6 +26,7 @@ import android.widget.Toast;
  * scrolls, types, or performs any phone mutation.
  */
 final class ScreenSelectionOverlay {
+    private static final String TAG = "CrewSelectionOverlay";
     interface Callback {
         void onSelected(Rect region, int screenWidth, int screenHeight);
         void onCancelled();
@@ -69,6 +71,7 @@ final class ScreenSelectionOverlay {
             windowManager.addView(view, lp);
             return true;
         } catch (Exception error) {
+            Log.e(TAG, "Unable to attach selection overlay", error);
             view = null;
             this.callback = null;
             return false;

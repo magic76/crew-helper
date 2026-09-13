@@ -354,7 +354,7 @@ public class FloatingBubbleManager {
                     screenSelectionOverlay = null;
                     Toast.makeText(
                             context,
-                            "無法開啟框選模式",
+                            "框選視窗無法開啟，請重新允許懸浮視窗權限",
                             Toast.LENGTH_SHORT).show();
                 }
             }
@@ -968,6 +968,13 @@ public class FloatingBubbleManager {
                                 case MotionEvent.ACTION_UP:
                                 case MotionEvent.ACTION_CANCEL:
                                     cancelRegionLongPress();
+                                    if (regionLongPressTriggered) {
+                                        // The selector is already being opened. Do not
+                                        // turn the release into a tap or move event.
+                                        snapBubbleToEdge();
+                                        scheduleAutoDock();
+                                        return true;
+                                    }
                                     if (!moved && !regionLongPressTriggered) {
                                         float dx = Math.abs(
                                                 event.getRawX() - initialTouchX);
