@@ -153,6 +153,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private PendingUiChoice pendingUiChoice;
     private volatile boolean pendingChoiceExecuting = false;
     private volatile SelectedRegionContext latestSelectedRegion;
+    private volatile String focusedInputCompanionMode = "";
 
     // 0046: Gemini Live may split toolCall/modelTurn/turnComplete across
     // different WebSocket frames. These flags describe the whole current
@@ -239,6 +240,52 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     boolean canSendVisualFrame() { return running && System.currentTimeMillis() >= visualHoldUntil; }
     boolean isSetupReadyForSelection() {
         return running && setupReady && webSocket != null;
+    }
+
+    boolean isSetupReadyForFocusedInput() {
+        return running && setupReady && webSocket != null;
+    }
+
+    void armFocusedInputCompanion(String mode) {
+        focusedInputCompanionMode =
+                "rewrite".equals(mode)
+                        ? "rewrite"
+                        : ("translate".equals(mode)
+                                ? "translate"
+                                : "dictate");
+
+        if ("rewrite".equals(focusedInputCompanionMode)) {
+            sendInternalAgentDirective(
+                    "【Crew Focused Input / Rewrite】使用者剛剛明確點了『潤飾』。"
+                    + "現在只處理目前已聚焦的輸入欄位。"
+                    + "先呼叫 get_focused_input，將既有文字改得更自然清楚，"
+                    + "再呼叫 write_focused_input(mode=replace_all) 一次。"
+                    + "禁止 send_text、禁止 Enter/Search/Done、禁止任何導航或點擊。"
+                    + "完成後只簡短說已改好，不要送出。");
+            return;
+        }
+
+        if ("translate".equals(focusedInputCompanionMode)) {
+            sendInternalAgentDirective(
+                    "【Crew Focused Input / Translate】使用者剛剛明確點了『翻譯』。"
+                    + "現在只處理目前已聚焦的輸入欄位。"
+                    + "先呼叫 get_focused_input。中文內容翻成自然英文；"
+                    + "非中文內容預設翻成繁體中文。"
+                    + "再呼叫 write_focused_input(mode=replace_all) 一次。"
+                    + "禁止 send_text、禁止 Enter/Search/Done、禁止任何導航或點擊。"
+                    + "完成後只簡短說已翻好，不要送出。");
+            return;
+        }
+
+        sendInternalAgentDirective(
+                "【Crew Focused Input / Dictate Armed】使用者剛剛明確點了『說話』。"
+                + "現在進入一次性的 AI 語音輸入模式。"
+                + "不要說話、不要呼叫工具，等待下一句真正的使用者語音。"
+                + "下一句是在表達『想輸入到目前欄位的內容或寫法』，"
+                + "不是要你操作其他 App。收到後先 get_focused_input，"
+                + "將使用者意思整理成可直接放進輸入框的文字，"
+                + "再 write_focused_input 一次。"
+                + "禁止 send_text、禁止 Enter/Search/Done、禁止點擊或導航。");
     }
     void setAgentMaxSteps(int steps) { agentMaxSteps = Math.max(1, Math.min(100, steps)); }
     int getAgentMaxSteps() { return agentMaxSteps; }
@@ -1161,6 +1208,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
      * Runtime owns the physical SEND_CURRENT operation.
      */
     private boolean tryHandleRuntimeSendCurrent(String inputText) {
+        if (FocusedInputRuntime.isActive()) {
+            // Voice Input Companion is write-only. A phrase such as
+            // "跟他說..." describes text to compose, not permission to submit.
+            return false;
+        }
         if (!UserActionScope.isStandaloneCurrentScreenSendCommand(inputText)) {
             return false;
         }
@@ -1504,6 +1556,25 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         tools.put(new JSONObject().put("name", "get_selected_region").put("description",
                 "Read the latest screen region explicitly selected by the user by dragging a rectangle. Call when the user refers to 'this', 'here', '這個', '這裡', '剛剛框的' and you need the selected text/package metadata. The latest visual crop already corresponds to that selection. This is context only: NEVER treat crop coordinates as phone coordinates; phone execution must still use semantic Runtime actions and normal verification."));
 
+        tools.put(new JSONObject().put("name", "get_focused_input")
+                .put("description",
+                        "Read the current non-sensitive focused editable field after the user explicitly activated Crew AI Voice Input. Returns current text, selection, package, and session mode. This is observational only.")
+                .put("parameters", new JSONObject().put("type", "OBJECT")
+                        .put("properties", new JSONObject())));
+        tools.put(new JSONObject().put("name", "write_focused_input")
+                .put("description",
+                        "Write text only into the exact focused field explicitly authorized by Crew AI Voice Input. NEVER sends/submits. Never presses Enter/Search/Done. mode=insert inserts/replaces current selection; mode=replace_all replaces field text; mode=replace_selection replaces selection/cursor range.")
+                .put("parameters", new JSONObject().put("type", "OBJECT")
+                        .put("properties", new JSONObject()
+                                .put("text", new JSONObject().put("type", "STRING"))
+                                .put("mode", new JSONObject().put("type", "STRING")
+                                        .put("enum", new JSONArray()
+                                                .put("insert")
+                                                .put("replace_all")
+                                                .put("replace_selection"))))
+                        .put("required", new JSONArray().put("text"))));
+
+
         tools.put(new JSONObject().put("name", "read_web_page").put("description",
                 "Read a public http/https webpage as plain text for understanding or Notebook enrichment. Use this when the user explicitly asks to parse/summarize a URL, including a URL from get_selected_region. No JS, cookies, authentication, localhost, or private-network destinations.")
                 .put("parameters", new JSONObject().put("type", "OBJECT")
@@ -1826,6 +1897,16 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             }
         }
 
+        if (FocusedInputRuntime.isActive()
+                && isMutationTool(name)
+                && !"write_focused_input".equals(name)) {
+            sendBlockedToolResponse(
+                    id,
+                    requestedName,
+                    "FOCUSED_INPUT_WRITE_ONLY：目前是 Crew AI 語音輸入模式，只允許讀取/寫入目前輸入框；禁止送出、Enter、搜尋提交、點擊、滑動或導航。");
+            return;
+        }
+
         if ((runtimeShortcutExecuting
                 || runtimeSendCurrentExecuting
                 || System.currentTimeMillis() < runtimeShortcutGuardUntil)
@@ -1922,6 +2003,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         try {
             shadowAgentRuntime.onActionExecuted(id);
             if (SemanticPhoneAction.ERROR_TOOL.equals(name)) result = args;
+            else if ("get_focused_input".equals(name)) result = getFocusedInputContext();
+            else if ("write_focused_input".equals(name)) result = writeFocusedInput(args);
             else if ("get_selected_region".equals(name)) result = getSelectedRegionContext();
             else if ("read_web_page".equals(name)) result = readWebPage(args);
             else if ("create_note".equals(name)) result = createNotebookNote(args);
@@ -2111,6 +2194,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
     private boolean isObservationTool(String name) {
         return "inspect_ui".equals(name)
+                || "get_focused_input".equals(name)
                 || "get_selected_region".equals(name)
                 || "read_web_page".equals(name)
                 || "get_note".equals(name)
@@ -2188,7 +2272,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 || "search_current_app".equals(name)
                 || "commit_search".equals(name)
                 || "send_text".equals(name)
-                || "press_key".equals(name);
+                || "press_key".equals(name)
+                || "write_focused_input".equals(name);
     }
 
     private AgentTaskRecord peekActiveAgentTask() {
@@ -3657,6 +3742,22 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     }
 
 
+
+
+    private JSONObject getFocusedInputContext() {
+        return FocusedInputRuntime.context();
+    }
+
+    private JSONObject writeFocusedInput(JSONObject args) {
+        JSONObject result = FocusedInputRuntime.write(
+                args.optString("text", ""),
+                args.optString("mode", ""));
+
+        if (result.optBoolean("success", false)) {
+            focusedInputCompanionMode = "";
+        }
+        return result;
+    }
 
     private JSONObject readWebPage(JSONObject args) {
         return SafeWebPageReader.read(args.optString("url", ""));

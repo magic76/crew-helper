@@ -59,6 +59,7 @@ public class CrewAccessibilityService extends AccessibilityService {
     private volatile String lastTextInputMethod = "NONE";
     private volatile String lastTextInputFailure = "";
     private volatile boolean lastTextInputVerified = false;
+    private Runnable voiceInputCompanionRefreshRunnable;
 
     public static boolean isServiceRunning() { return instance != null; }
     public static CrewAccessibilityService getInstance() {
@@ -199,6 +200,374 @@ public class CrewAccessibilityService extends AccessibilityService {
     }
 
 
+
+    /**
+     * 0096 Keyboard Companion.
+     *
+     * Accessibility detects a focused editable + visible IME. It exposes only
+     * the currently focused non-sensitive field. The companion never presses
+     * Enter, Search, Done, or Send.
+     */
+    private void scheduleVoiceInputCompanionRefresh() {
+        if (mainHandler == null) return;
+        if (voiceInputCompanionRefreshRunnable == null) {
+            voiceInputCompanionRefreshRunnable = new Runnable() {
+                @Override public void run() {
+                    refreshVoiceInputCompanion();
+                }
+            };
+        }
+        mainHandler.removeCallbacks(voiceInputCompanionRefreshRunnable);
+        mainHandler.postDelayed(
+                voiceInputCompanionRefreshRunnable,
+                90L);
+    }
+
+    private void refreshVoiceInputCompanion() {
+        VoiceInputCompanion companion =
+                VoiceInputCompanion.getInstance(this);
+
+        if (!AppConfig.isVoiceInputCompanionEnabled(this)) {
+            companion.hide();
+            return;
+        }
+
+        boolean imeVisible = false;
+        int imeTop = Integer.MAX_VALUE;
+
+        try {
+            List<AccessibilityWindowInfo> windows = getWindows();
+            if (windows != null) {
+                Rect bounds = new Rect();
+                for (AccessibilityWindowInfo window : windows) {
+                    if (window == null
+                            || window.getType()
+                                    != AccessibilityWindowInfo.TYPE_INPUT_METHOD) {
+                        continue;
+                    }
+                    window.getBoundsInScreen(bounds);
+                    imeTop = Math.min(imeTop, bounds.top);
+                    imeVisible = true;
+                }
+            }
+        } catch (Exception ignored) {}
+
+        AccessibilityNodeInfo target =
+                findFocusedEditableNodeForCompanion();
+
+        if (!imeVisible || target == null) {
+            if (target != null) {
+                try { target.recycle(); } catch (Exception ignored) {}
+            }
+            companion.hide();
+            return;
+        }
+
+        try {
+            if (SensitiveDataGuard.isHardBlockedInput(target)) {
+                companion.hide();
+                return;
+            }
+
+            CharSequence pkg = target.getPackageName();
+            String packageName = pkg == null ? "" : pkg.toString();
+            if (getPackageName().equals(packageName)) {
+                companion.hide();
+                return;
+            }
+
+            companion.update(
+                    true,
+                    imeTop == Integer.MAX_VALUE ? 0 : imeTop,
+                    packageName);
+        } finally {
+            try { target.recycle(); } catch (Exception ignored) {}
+        }
+    }
+
+    public static JSONObject getFocusedInputSnapshot() {
+        CrewAccessibilityService service = instance;
+        if (service == null) {
+            return focusedInputError("ACCESSIBILITY_UNAVAILABLE");
+        }
+        return service.getFocusedInputSnapshotInternal();
+    }
+
+    public static JSONObject writeFocusedInput(
+            String text,
+            String mode,
+            String expectedTargetKey) {
+        CrewAccessibilityService service = instance;
+        if (service == null) {
+            return focusedInputError("ACCESSIBILITY_UNAVAILABLE");
+        }
+
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            return service.writeFocusedInputInternal(
+                    text,
+                    mode,
+                    expectedTargetKey);
+        }
+
+        final Object lock = new Object();
+        final JSONObject[] result = new JSONObject[1];
+        service.mainHandler.post(new Runnable() {
+            @Override public void run() {
+                try {
+                    result[0] = service.writeFocusedInputInternal(
+                            text,
+                            mode,
+                            expectedTargetKey);
+                } finally {
+                    synchronized (lock) {
+                        lock.notifyAll();
+                    }
+                }
+            }
+        });
+
+        synchronized (lock) {
+            try {
+                if (result[0] == null) lock.wait(1800L);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
+
+        return result[0] == null
+                ? focusedInputError("FOCUSED_INPUT_TIMEOUT")
+                : result[0];
+    }
+
+    private JSONObject getFocusedInputSnapshotInternal() {
+        AccessibilityNodeInfo target =
+                findFocusedEditableNodeForCompanion();
+        if (target == null) {
+            return focusedInputError("NO_FOCUSED_EDITABLE");
+        }
+
+        try {
+            if (SensitiveDataGuard.isHardBlockedInput(target)) {
+                JSONObject blocked =
+                        focusedInputError("SENSITIVE_INPUT_BLOCKED");
+                try { blocked.put("sensitive", true); }
+                catch (Exception ignored) {}
+                return blocked;
+            }
+
+            CharSequence pkg = target.getPackageName();
+            String packageName = pkg == null ? "" : pkg.toString();
+
+            CharSequence current = target.getText();
+            String currentText =
+                    current == null ? "" : current.toString();
+            if (currentText.length() > 8000) {
+                currentText = currentText.substring(0, 8000);
+            }
+
+            JSONObject out = new JSONObject();
+            try {
+                out.put("success", true);
+                out.put("sensitive", false);
+                out.put("package", packageName);
+                out.put("targetKey", focusedInputTargetKey(target));
+                out.put("text", currentText);
+                out.put(
+                        "selectionStart",
+                        target.getTextSelectionStart());
+                out.put(
+                        "selectionEnd",
+                        target.getTextSelectionEnd());
+                out.put("textLength", currentText.length());
+            } catch (Exception ignored) {}
+            return out;
+        } finally {
+            try { target.recycle(); } catch (Exception ignored) {}
+        }
+    }
+
+    private JSONObject writeFocusedInputInternal(
+            String replacement,
+            String mode,
+            String expectedTargetKey) {
+        AccessibilityNodeInfo target =
+                findFocusedEditableNodeForCompanion();
+        if (target == null) {
+            return focusedInputError("NO_FOCUSED_EDITABLE");
+        }
+
+        try {
+            if (SensitiveDataGuard.isHardBlockedInput(target)) {
+                return focusedInputError("SENSITIVE_INPUT_BLOCKED");
+            }
+
+            String currentKey = focusedInputTargetKey(target);
+            if (expectedTargetKey == null
+                    || expectedTargetKey.isEmpty()
+                    || !expectedTargetKey.equals(currentKey)) {
+                return focusedInputError("FOCUSED_INPUT_TARGET_CHANGED");
+            }
+
+            String incoming =
+                    replacement == null ? "" : replacement;
+            CharSequence currentSequence = target.getText();
+            String current = currentSequence == null
+                    ? ""
+                    : currentSequence.toString();
+
+            int start = target.getTextSelectionStart();
+            int end = target.getTextSelectionEnd();
+            if (start < 0 || start > current.length()) {
+                start = current.length();
+            }
+            if (end < 0 || end > current.length()) {
+                end = start;
+            }
+            if (end < start) {
+                int swap = start;
+                start = end;
+                end = swap;
+            }
+
+            String writeMode =
+                    mode == null ? "insert" : mode;
+            String desired;
+
+            if ("replace_all".equals(writeMode)) {
+                desired = incoming;
+            } else {
+                desired = current.substring(0, start)
+                        + incoming
+                        + current.substring(end);
+            }
+
+            if (desired.length() > 50_000) {
+                return focusedInputError("FOCUSED_INPUT_TOO_LARGE");
+            }
+
+            target.performAction(
+                    AccessibilityNodeInfo.ACTION_FOCUS);
+
+            Bundle args = new Bundle();
+            args.putCharSequence(
+                    AccessibilityNodeInfo
+                            .ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                    desired);
+
+            boolean accepted = target.performAction(
+                    AccessibilityNodeInfo.ACTION_SET_TEXT,
+                    args);
+
+            String method = "ACTION_SET_TEXT";
+            if (!accepted) {
+                accepted = pasteIntoTarget(target, desired);
+                method = "ACTION_PASTE";
+            }
+
+            if (!accepted) {
+                return focusedInputError("FOCUSED_INPUT_WRITE_FAILED");
+            }
+
+            moveCursorToEnd(target, desired.length());
+
+            JSONObject out = new JSONObject();
+            try {
+                out.put("success", true);
+                out.put("method", method);
+                out.put("mode", writeMode);
+                out.put("textLength", desired.length());
+                out.put(
+                        "message",
+                        "文字已寫入目前輸入框；未送出。");
+            } catch (Exception ignored) {}
+            return out;
+        } finally {
+            try { target.recycle(); } catch (Exception ignored) {}
+        }
+    }
+
+    private AccessibilityNodeInfo
+            findFocusedEditableNodeForCompanion() {
+        try {
+            List<AccessibilityWindowInfo> windows = getWindows();
+            if (windows != null) {
+                for (int i = windows.size() - 1; i >= 0; i--) {
+                    AccessibilityWindowInfo window = windows.get(i);
+                    if (window == null
+                            || window.getType()
+                                    != AccessibilityWindowInfo.TYPE_APPLICATION) {
+                        continue;
+                    }
+
+                    AccessibilityNodeInfo root = window.getRoot();
+                    if (root == null) continue;
+
+                    AccessibilityNodeInfo focused = null;
+                    try {
+                        focused = root.findFocus(
+                                AccessibilityNodeInfo.FOCUS_INPUT);
+                        if (focused != null
+                                && focused.isEditable()
+                                && focused.isVisibleToUser()) {
+                            CharSequence pkg =
+                                    focused.getPackageName();
+                            String packageName =
+                                    pkg == null ? "" : pkg.toString();
+
+                            if (!getPackageName().equals(packageName)) {
+                                return AccessibilityNodeInfo.obtain(focused);
+                            }
+                        }
+                    } finally {
+                        if (focused != null) {
+                            try { focused.recycle(); }
+                            catch (Exception ignored) {}
+                        }
+                        try { root.recycle(); }
+                        catch (Exception ignored) {}
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+
+        return null;
+    }
+
+    private String focusedInputTargetKey(
+            AccessibilityNodeInfo node) {
+        if (node == null) return "";
+
+        Rect bounds = new Rect();
+        node.getBoundsInScreen(bounds);
+
+        CharSequence pkg = node.getPackageName();
+        CharSequence clazz = node.getClassName();
+        String viewId = node.getViewIdResourceName();
+
+        return (pkg == null ? "" : pkg.toString())
+                + "|"
+                + (viewId == null ? "" : viewId)
+                + "|"
+                + (clazz == null ? "" : clazz.toString())
+                + "|"
+                + bounds.left
+                + ","
+                + bounds.top
+                + ","
+                + bounds.right
+                + ","
+                + bounds.bottom;
+    }
+
+    private static JSONObject focusedInputError(String code) {
+        JSONObject out = new JSONObject();
+        try {
+            out.put("success", false);
+            out.put("error", code);
+        } catch (Exception ignored) {}
+        return out;
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -222,6 +591,7 @@ public class CrewAccessibilityService extends AccessibilityService {
         if (learnedUiMappingStore == null) learnedUiMappingStore = new LearnedUiMappingStore(this);
         if (uiTeachOverlay == null) uiTeachOverlay = new UiTeachOverlay(this);
         if (appCatalog == null) { appCatalog = new AppCatalog(this); appCatalog.prewarm(); }
+        scheduleVoiceInputCompanionRefresh();
         try {
             AccessibilityServiceInfo info = getServiceInfo();
             if (info == null) {
@@ -238,8 +608,12 @@ public class CrewAccessibilityService extends AccessibilityService {
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
         try {
+            scheduleVoiceInputCompanionRefresh();
         } catch (Exception error) {
-            Log.w(TAG, "Shortcut recorder event ignored: " + error.getMessage());
+            Log.w(
+                    TAG,
+                    "Voice input companion event ignored: "
+                            + error.getMessage());
         }
     }
 
@@ -294,6 +668,10 @@ public class CrewAccessibilityService extends AccessibilityService {
     @Override
     public void onDestroy() {
         isRunning = false;
+        FocusedInputRuntime.clear();
+        try {
+            VoiceInputCompanion.getInstance(this).hide();
+        } catch (Exception ignored) {}
         setScreenKeepAwake(false);
         try {
             if (serverSocket != null && !serverSocket.isClosed()) {

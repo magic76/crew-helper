@@ -15,6 +15,8 @@ public class AppConfig {
     public static final String KEY_LIVE_TONE = "live_tone";
     public static final String KEY_INTERRUPTION_SENSITIVITY = "interruption_sensitivity";
     public static final String KEY_AUDIO_OUTPUT = "audio_output";
+    public static final String KEY_VOICE_INPUT_COMPANION =
+            "voice_input_companion_enabled";
     public static final String KEY_VOICE_PRESET = "voice_preset";
 
     // 0091: voice and speaking personality are independent.
@@ -175,6 +177,29 @@ public class AppConfig {
     public static void setAudioOutput(Context context, String output) {
         if (context == null) return;
         getPrefs(context).edit().putString(KEY_AUDIO_OUTPUT, "media".equals(output) ? "media" : "call").apply();
+    }
+
+    // 0096: AI voice input bar above the user's existing keyboard.
+    public static boolean isVoiceInputCompanionEnabled(Context context) {
+        return context != null
+                && getPrefs(context).getBoolean(
+                        KEY_VOICE_INPUT_COMPANION,
+                        true);
+    }
+
+    public static void setVoiceInputCompanionEnabled(
+            Context context,
+            boolean enabled) {
+        if (context == null) return;
+        getPrefs(context).edit()
+                .putBoolean(KEY_VOICE_INPUT_COMPANION, enabled)
+                .apply();
+        if (!enabled) {
+            try {
+                VoiceInputCompanion.getInstance(context).hide();
+            } catch (Exception ignored) {}
+            FocusedInputRuntime.clear();
+        }
     }
 
     public static String getVoicePreset(Context context) {

@@ -938,7 +938,7 @@ public class FloatingBubbleManager {
                                     float moveDist = (float) Math.hypot(
                                             event.getRawX() - initialTouchX,
                                             event.getRawY() - initialTouchY);
-                                    if (moveDist > 18 && !moved) {
+                                    if (moveDist > dp(14) && !moved) {
                                         moved = true;
                                         cancelRegionLongPress();
                                         collapseBubbleActions(false);
@@ -976,10 +976,23 @@ public class FloatingBubbleManager {
                                         long duration =
                                                 System.currentTimeMillis()
                                                         - touchStartTime;
-                                        if (dx < 18 && dy < 18 && duration < 450) {
+                                        if (dx < dp(14)
+                                                && dy < dp(14)
+                                                && duration < 450) {
                                             vibrateShort();
                                             toggleBubbleActionStrip();
                                         }
+                                    }
+                                    // Normal path fires at 3s while the
+                                    // finger is still down. This is only a
+                                    // fallback for a briefly blocked main loop.
+                                    if (!moved
+                                            && !regionLongPressTriggered
+                                            && System.currentTimeMillis()
+                                                    - touchStartTime >= 3000L) {
+                                        regionLongPressTriggered = true;
+                                        vibrateShort();
+                                        startRegionSelection();
                                     }
                                     regionLongPressTriggered = false;
                                     snapBubbleToEdge();

@@ -119,6 +119,53 @@ public class NotebookActivity extends Activity {
 
         root.addView(header);
 
+
+        LinearLayout aiHint = new LinearLayout(this);
+        aiHint.setOrientation(LinearLayout.VERTICAL);
+        aiHint.setPadding(dp(13), dp(10), dp(13), dp(10));
+        aiHint.setBackground(CrewTheme.createCard(
+                this,
+                Color.argb(34, 20, 184, 166),
+                CrewTheme.BORDER_TEAL,
+                14));
+
+        TextView aiHintTitle = new TextView(this);
+        aiHintTitle.setText(I18n.get(
+                this,
+                "💡 想叫 Crew 幫你存？",
+                "💡 Want Crew to save something?"));
+        aiHintTitle.setTextSize(11.5f);
+        aiHintTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        aiHintTitle.setTextColor(CrewTheme.TEAL_300);
+        aiHint.addView(aiHintTitle);
+
+        TextView aiHintPhrase = new TextView(this);
+        aiHintPhrase.setText(I18n.get(
+                this,
+                "直接說：「把這個記下來」",
+                "Say: “Save this to my notebook.”"));
+        aiHintPhrase.setTextSize(13);
+        aiHintPhrase.setTypeface(Typeface.DEFAULT_BOLD);
+        aiHintPhrase.setTextColor(CrewTheme.TEXT_PRIMARY);
+        aiHintPhrase.setPadding(0, dp(3), 0, 0);
+        aiHint.addView(aiHintPhrase);
+
+        TextView aiHintDetail = new TextView(this);
+        aiHintDetail.setText(I18n.get(
+                this,
+                "也可以先框選網址、文字或畫面，再說這句。",
+                "You can select a URL, text, or screen region first."));
+        aiHintDetail.setTextSize(10);
+        aiHintDetail.setTextColor(CrewTheme.TEXT_SECONDARY);
+        aiHintDetail.setPadding(0, dp(2), 0, 0);
+        aiHint.addView(aiHintDetail);
+
+        LinearLayout.LayoutParams aiHintLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        aiHintLp.setMargins(0, dp(14), 0, dp(2));
+        root.addView(aiHint, aiHintLp);
+
         searchInput = new EditText(this);
         searchInput.setSingleLine(true);
         searchInput.setHint(I18n.get(this, "搜尋記事", "Search notes"));
