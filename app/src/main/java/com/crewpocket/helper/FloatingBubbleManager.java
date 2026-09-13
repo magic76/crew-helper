@@ -905,7 +905,7 @@ public class FloatingBubbleManager {
                             };
                             mainHandler.postDelayed(
                                     regionLongPressRunnable,
-                                    3000L);
+                                    2200L);
                         }
 
                         @Override
@@ -938,7 +938,7 @@ public class FloatingBubbleManager {
                                     float moveDist = (float) Math.hypot(
                                             event.getRawX() - initialTouchX,
                                             event.getRawY() - initialTouchY);
-                                    if (moveDist > dp(14) && !moved) {
+                                    if (moveDist > dp(32) && !moved) {
                                         moved = true;
                                         cancelRegionLongPress();
                                         collapseBubbleActions(false);
@@ -996,13 +996,13 @@ public class FloatingBubbleManager {
                                             toggleBubbleActionStrip();
                                         }
                                     }
-                                    // Normal path fires at 3s while the
+                                    // Normal path fires while the
                                     // finger is still down. This is only a
                                     // fallback for a briefly blocked main loop.
                                     if (!moved
                                             && !regionLongPressTriggered
                                             && System.currentTimeMillis()
-                                                    - touchStartTime >= 3000L) {
+                                                    - touchStartTime >= 2200L) {
                                         regionLongPressTriggered = true;
                                         vibrateShort();
                                         startRegionSelection();
