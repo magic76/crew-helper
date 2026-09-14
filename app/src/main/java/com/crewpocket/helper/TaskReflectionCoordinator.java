@@ -8,6 +8,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.util.HashSet;
+import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -61,6 +62,7 @@ final class TaskReflectionCoordinator {
     private static void runReflection(Context context,
                                       String rawStatus,
                                       JSONObject task) {
+        final long startedAt = System.currentTimeMillis();
         try {
             String packageName = currentPackage();
             int failedSteps = failedStepCount(task.optJSONArray("steps"));
@@ -75,12 +77,16 @@ final class TaskReflectionCoordinator {
                     cancelled,
                     usedSendText,
                     packageName)) {
+                ReflectionHistoryStore.record(
+                        context, "SKIPPED", "POLICY", elapsed(startedAt));
                 Log.d(TAG, "skip task reflection by policy");
                 return;
             }
 
             String apiKey = AppConfig.getGeminiApiKey(context);
             if (apiKey == null || apiKey.trim().length() < 20) {
+                ReflectionHistoryStore.record(
+                        context, "SKIPPED", "NO_API_KEY", elapsed(startedAt));
                 Log.d(TAG, "skip task reflection: api key unavailable");
                 return;
             }
@@ -99,6 +105,16 @@ final class TaskReflectionCoordinator {
             JSONObject reflection = new GeminiTaskReflector(apiKey).reflect(episode);
             JSONObject stored = new ReflectionLessonStore(context)
                     .record(packageName, appLabel, reflection);
+
+            String historyStatus;
+            if (stored.optBoolean("stored", false)) {
+                historyStatus = stored.optString("state", "STORED");
+            } else {
+                historyStatus = stored.optString("reason", "NOT_REMEMBERED");
+            }
+            ReflectionHistoryStore.record(
+                    context, "SUCCESS", historyStatus, elapsed(startedAt));
+
             Log.i(TAG, "post-task reflection complete: stored="
                     + stored.optBoolean("stored", false)
                     + " state=" + stored.optString("state", "SKIPPED")
@@ -106,11 +122,32 @@ final class TaskReflectionCoordinator {
         } catch (Exception error) {
             // Reflection is best-effort and never allowed to affect Live latency,
             // execution, user-visible status, or task completion.
-            Log.d(TAG, "post-task reflection skipped: "
-                    + (error.getMessage() == null
-                    ? error.getClass().getSimpleName()
-                    : error.getMessage()));
+            String code = safeErrorCode(error);
+            ReflectionHistoryStore.record(
+                    context, "ERROR", code, elapsed(startedAt));
+            Log.d(TAG, "post-task reflection skipped: " + code);
         }
+    }
+
+    private static long elapsed(long startedAt) {
+        return Math.max(0L, System.currentTimeMillis() - startedAt);
+    }
+
+    private static String safeErrorCode(Exception error) {
+        String message = error == null || error.getMessage() == null
+                ? "" : error.getMessage().trim().toUpperCase(Locale.ROOT);
+        if (message.startsWith("REFLECTION_HTTP_")) {
+            return message.replaceAll("[^A-Z0-9_]", "_");
+        }
+        if (message.startsWith("REFLECTION_")) {
+            String code = message.replaceAll("[^A-Z0-9_]", "_");
+            return code.length() <= 48 ? code : code.substring(0, 48);
+        }
+        if (message.contains("TIMEOUT")) return "TIMEOUT";
+        if (message.contains("GEMINI_API_KEY_MISSING")) return "NO_API_KEY";
+        return error == null
+                ? "UNKNOWN_ERROR"
+                : error.getClass().getSimpleName().toUpperCase(Locale.ROOT);
     }
 
     private static String currentPackage() {
