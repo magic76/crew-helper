@@ -170,7 +170,7 @@ final class WorkingContext {
 
     private static String clip(String value, int max) {
         if (value == null) return "";
-        String out = value.replaceAll("\s+", " ").trim();
+        String out = value.replaceAll("\\s+", " ").trim();
         return out.length() <= max ? out : out.substring(0, max);
     }
 }
