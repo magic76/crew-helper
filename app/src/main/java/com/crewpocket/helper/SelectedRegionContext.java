@@ -132,7 +132,7 @@ final class SelectedRegionContext {
 
     private static String clean(String value, int max) {
         if (value == null) return "";
-        String result = value.replaceAll("\s+", " ").trim();
+        String result = value.replaceAll("\\s+", " ").trim();
         return result.length() <= max ? result : result.substring(0, max);
     }
 
