@@ -81,7 +81,10 @@ final class UserActionScope {
 
         boolean navigation = hasNavigationIntent(value);
         boolean search = hasSearchIntent(value) || navigation;
-        boolean resultSelection = search;
+        // Runtime's deterministic result-selection adapter is currently Maps-only.
+        // Reserve it for navigation flows. Generic "search then open/select" stays
+        // authorized but returns the fresh result screen to Live for a semantic TAP.
+        boolean resultSelection = navigation;
         boolean openResult = navigation || hasPostSearchOpenIntent(value);
 
         namedRecipientMessagingUnsupported = isNamedRecipientMessagingRequest(text);
