@@ -70,8 +70,8 @@ public class AgentInspectorActivity extends Activity {
 
         TextView privacy = new TextView(this);
         privacy.setText(
-                "只保存工具名稱、成功/失敗、步數與狀態分類；"
-                + "不保存螢幕截圖、對話內容、工具參數、模型回答、API Key 或 Bridge Token。");
+                "只保存工具名稱、成功/失敗、步數、狀態分類與 Reflection 時間/結果/延遲；"
+                + "不保存螢幕截圖、對話內容、Lesson 文字、工具參數、模型回答、API Key 或 Bridge Token。");
         privacy.setTextSize(11);
         privacy.setTextColor(CrewTheme.TEXT_SECONDARY);
         privacy.setPadding(0, dp(14), 0, dp(10));
@@ -114,10 +114,11 @@ public class AgentInspectorActivity extends Activity {
         clear.setTextColor(Color.parseColor("#FDA4AF"));
         clear.setOnClickListener(v -> {
             AgentInspectorStore.clear(AgentInspectorActivity.this);
+            ReflectionHistoryStore.clear(AgentInspectorActivity.this);
             refreshReport();
             Toast.makeText(
                     AgentInspectorActivity.this,
-                    "Inspector 已清除",
+                    "Inspector 與 Reflection History 已清除",
                     Toast.LENGTH_SHORT).show();
         });
 
@@ -139,7 +140,9 @@ public class AgentInspectorActivity extends Activity {
     private String buildFullReport() {
         return AgentInspectorStore.buildReport(this)
                 + "\n\n"
-                + ReflectionLearningStats.buildReport(this);
+                + ReflectionLearningStats.buildReport(this)
+                + "\n\n"
+                + ReflectionHistoryStore.buildReport(this);
     }
 
     private void refreshReport() {
