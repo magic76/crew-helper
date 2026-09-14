@@ -144,7 +144,7 @@ final class ReflectionLessonStore {
                             collapse(appLabel),
                             "Auto learned · " + goal,
                             existing.optString("lesson", lesson),
-                            AppPlaybookStore.SOURCE_REFLECTION);
+                            AppPlaybookStore.SOURCE_MANUAL);
                     if (promoted.optBoolean("success", false)) {
                         existing.put("state", STATE_VERIFIED)
                                 .put("playbookRuleId", promoted.optString("ruleId", ""))
