@@ -52,7 +52,7 @@ final class LiveToolCatalog {
                                         .put("description", "Public http/https URL to read")))
                         .put("required", new JSONArray().put("url"))));
         tools.put(new JSONObject().put("name", "create_note").put("description",
-                "PERSISTENT CREW NOTEBOOK ONLY. Use when the user explicitly asks to save/note/remember content; unqualified 記一下/記下來/remember this means Crew Notebook unless another notes app is named. Do NOT use create_note to put text into a visible UI field such as settings, a system prompt editor, a form, search box, or chat composer; use phone_action(TYPE) for those. If a selected URL must be parsed and saved: get_selected_region -> read_web_page -> create_note.")
+                "PERSISTENT CREW NOTEBOOK ONLY. Use when the user explicitly asks to save/note/remember content; unqualified 記一下/記下來/remember this means Crew Notebook unless another notes app is named. Do NOT use create_note to put text into a visible UI field such as settings, a system prompt editor, a form, search box, or chat composer; use phone_action(TYPE) for those. App-operational learning such as how the current App behaves belongs to remember_app_guidance, not Notebook. If a selected URL must be parsed and saved: get_selected_region -> read_web_page -> create_note.")
                 .put("parameters", new JSONObject().put("type", "OBJECT")
                         .put("properties", new JSONObject()
                                 .put("title", new JSONObject().put("type", "STRING"))
@@ -98,6 +98,18 @@ final class LiveToolCatalog {
                         .put("properties", new JSONObject()
                                 .put("note_id", new JSONObject().put("type", "STRING")))
                         .put("required", new JSONArray().put("note_id"))));
+
+        tools.put(new JSONObject().put("name", "remember_app_guidance").put("description",
+                "CURRENT APP ONLY. Use only when THIS turn explicitly asks Crew to learn/remember an operational fact, workflow hint, UI convention, or pitfall about the currently visible App. Runtime chooses the foreground package; never provide or infer a package. This stores guidance only, not executable code or authorization. Do not store personal facts, message bodies, credentials, OTPs, payment data, or Notebook content.")
+                .put("parameters", new JSONObject().put("type", "OBJECT")
+                        .put("properties", new JSONObject()
+                                .put("title", new JSONObject().put("type", "STRING")
+                                        .put("description", "Optional short label for the learned app guidance"))
+                                .put("guidance", new JSONObject().put("type", "STRING")
+                                        .put("description", "Concise reusable operational guidance for this app")))
+                        .put("required", new JSONArray().put("guidance"))));
+        tools.put(new JSONObject().put("name", "list_app_guidance").put("description",
+                "Read built-in and user-learned operational guidance for the CURRENT foreground App. Use when the user asks what Crew knows/learned about this App; do not use it as a required pre-step for normal phone actions."));
 
         tools.put(new JSONObject().put("name", "inspect_ui").put("description",
                 "FULL-SCREEN VISUAL FALLBACK. Captures a fresh phone screenshot while Runtime separately keeps Accessibility state for execution. Normally use it for current full-screen prices, charts, WebView/custom UI, images or visually rendered text. SELECTED-REGION EXCEPTION: when the user just framed a region and that frozen crop can answer the question, do NOT call inspect_ui merely to see it again; answer from the crop. Call inspect_ui only if the user asks about content outside that selection or the crop genuinely lacks required evidence. Call once when needed; do not SEARCH merely because a value was absent from prior semantic tool text."));
@@ -212,6 +224,8 @@ final class LiveToolCatalog {
                 || "create_note".equals(name)
                 || "search_notes".equals(name)
                 || "list_notes".equals(name)
+                || "remember_app_guidance".equals(name)
+                || "list_app_guidance".equals(name)
                 || "send_text".equals(name)
                 || "end_voice_session".equals(name);
     }

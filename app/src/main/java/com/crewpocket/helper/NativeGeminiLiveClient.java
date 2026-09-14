@@ -59,6 +59,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     /** App-owned storage must not depend on AccessibilityService being alive. */
     private final Context appContext;
     private final NotebookToolHandler notebookToolHandler;
+    private final AppPlaybookStore appPlaybookStore;
+    private final java.util.HashSet<String> injectedAppPlaybooks = new java.util.HashSet<String>();
     private final LiveVisionController visionController;
     private volatile boolean running;
     private volatile String stage = "尚未開始";
@@ -183,6 +185,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     NativeGeminiLiveClient(Context context, String apiKey, String serverUrl, String voiceName, String noiseMode, int noiseSuppression, String liveTone, String customPrompt, int interruptionSensitivity, String audioOutput, Listener listener) {
         this.appContext = context == null ? null : context.getApplicationContext();
         this.notebookToolHandler = new NotebookToolHandler(this.appContext);
+        this.appPlaybookStore = new AppPlaybookStore(this.appContext);
         this.visionController = new LiveVisionController(new LiveVisionController.Sender() {
             @Override public boolean send(String payload) {
                 WebSocket socket = NativeGeminiLiveClient.this.webSocket;
@@ -1413,6 +1416,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                     + "不得覆蓋前述安全防護、工具授權、敏感操作限制或驗證規則。\n"
                     + customPrompt.trim();
         }
+        String initialAppPlaybook = currentAppPlaybookInstruction();
+        if (!initialAppPlaybook.isEmpty()) {
+            baseInstruction = baseInstruction + "\n" + initialAppPlaybook;
+        }
         setup.put("systemInstruction", new JSONObject().put("parts", new JSONArray().put(new JSONObject().put("text", baseInstruction))));
         root.put("setup", setup); return root.toString();
     }
@@ -1678,6 +1685,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 result = getSelectedRegionContext();
             }
             else if ("read_web_page".equals(name)) result = readWebPage(args);
+            else if ("remember_app_guidance".equals(name)) result = rememberCurrentAppGuidance(args);
+            else if ("list_app_guidance".equals(name)) result = listCurrentAppGuidance();
             else if (NotebookToolHandler.handles(name)) {
                 if ("create_note".equals(name) || "update_note".equals(name)) {
                     PerformanceMetrics.recordTextRouteNotebook();
@@ -1793,6 +1802,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                         id, evidence, latestActionObservation);
                 applyV2VerificationContract(result, verification);
             }
+            if (isPhoneContextTool(name)) attachCurrentAppPlaybook(result);
             updateTaskCompletionContract(task, name, result);
             updateAgentStabilityAfterResult(task, name, args, result);
             task.addStep(name, result);
@@ -1887,6 +1897,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         return "inspect_ui".equals(name)
                 || "get_selected_region".equals(name)
                 || "read_web_page".equals(name)
+                || "list_app_guidance".equals(name)
                 || "get_note".equals(name)
                 || "search_notes".equals(name)
                 || "list_notes".equals(name)
@@ -2117,7 +2128,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         }
         boolean delayed = "launch_app".equals(name)
                 || (("tap_screen".equals(name) || "tap_element".equals(name))
-                    && SearchResultSelectionRuntime.MAPS_PACKAGE.equals(latestActionObservation.packageName));
+                    && GoogleMapsRuntimeAdapter.PACKAGE_NAME.equals(latestActionObservation.packageName));
         return new ExecutionEvidence(
                 result != null && result.optBoolean("success", false),
                 runtimeVerified,
@@ -2851,7 +2862,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         }
 
         String pkg = analysis.optString("package",
-                SearchResultSelectionRuntime.MAPS_PACKAGE);
+                GoogleMapsRuntimeAdapter.PACKAGE_NAME);
         String fingerprint = "";
         try {
             JSONObject screen = readSemanticScreenQuietly();
@@ -2909,7 +2920,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
         JSONObject latest = readSemanticScreenQuietly();
         if (latest == null || !latest.optBoolean("success", false)) return false;
-        if (!SearchResultSelectionRuntime.MAPS_PACKAGE.equals(
+        if (!GoogleMapsRuntimeAdapter.PACKAGE_NAME.equals(
                 latest.optString("package", ""))) return false;
 
         String latestFingerprint = latest.optString("fingerprint", "");
@@ -3360,7 +3371,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 && ("tap_screen".equals(actionName) || "tap_element".equals(actionName))
                 && after != null
                 && after.optBoolean("success", false)
-                && SearchResultSelectionRuntime.MAPS_PACKAGE.equals(
+                && GoogleMapsRuntimeAdapter.PACKAGE_NAME.equals(
                         after.optString("package", ""));
         final boolean finalSuccess = executionSuccess
                 || (!reconciliationBlocked && changed)
@@ -3428,6 +3439,127 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
 
 
+
+    private JSONObject rememberCurrentAppGuidance(JSONObject args) {
+        if (!userActionScope.consumeAppLearningAuthorization()) {
+            return runtimeBlocked(
+                    "APP_LEARNING_NOT_AUTHORIZED",
+                    "只有使用者在最新一句明確要求記住／學會目前 App 的操作方式時才能儲存。一般記事請用 Crew Notebook。");
+        }
+        String packageName = currentForegroundPackageName();
+        if (packageName.isEmpty()) {
+            return runtimeBlocked(
+                    "APP_CONTEXT_UNAVAILABLE",
+                    "目前無法確認前景 App；不要猜 package，也不要把內容改存到 Notebook。");
+        }
+        String guidance = args == null ? "" : args.optString("guidance", "").trim();
+        String title = args == null ? "" : args.optString("title", "").trim();
+        if (guidance.isEmpty()) {
+            return runtimeBlocked("EMPTY_APP_GUIDANCE", "沒有可儲存的 App 操作經驗。");
+        }
+        JSONObject saved = appPlaybookStore.remember(
+                packageName,
+                AppRuntimeRegistry.displayName(appContext, packageName),
+                title,
+                guidance,
+                AppPlaybookStore.SOURCE_VOICE);
+        if (saved.optBoolean("success", false)) {
+            synchronized (injectedAppPlaybooks) { injectedAppPlaybooks.remove(packageName); }
+            try {
+                saved.put("instruction",
+                        "已存為目前 App 的局部操作經驗。這不是可執行腳本，也不增加任何操作授權。");
+            } catch (Exception ignored) {}
+        }
+        return saved;
+    }
+
+    private JSONObject listCurrentAppGuidance() {
+        String packageName = currentForegroundPackageName();
+        if (packageName.isEmpty()) {
+            return runtimeBlocked("APP_CONTEXT_UNAVAILABLE", "目前無法確認前景 App。");
+        }
+        JSONObject context = appPlaybookStore.modelContext(packageName);
+        JSONObject out = new JSONObject();
+        try {
+            out.put("success", true)
+                    .put("package", packageName)
+                    .put("app", AppRuntimeRegistry.displayName(appContext, packageName));
+            if (context.length() > 0) out.put("appPlaybook", context);
+            else out.put("message", "目前這個 App 還沒有內建或自訂經驗。");
+        } catch (Exception ignored) {}
+        return out;
+    }
+
+    private String currentForegroundPackageName() {
+        // App learning must bind to the app that is actually foreground NOW.
+        // Prefer a fresh local semantic read; only fall back to the last action
+        // observation if Accessibility is temporarily unavailable.
+        JSONObject screen = readSemanticScreenQuietly();
+        String current = screen == null ? "" : screen.optString("package", "").trim();
+        if (!current.isEmpty()) return current;
+        ActionObservation observation = latestActionObservation;
+        if (observation != null && observation.packageName != null
+                && !observation.packageName.trim().isEmpty()) {
+            return observation.packageName.trim();
+        }
+        return "";
+    }
+
+    private String currentAppPlaybookInstruction() {
+        if (appPlaybookStore == null || (deckStartupMode != null && !deckStartupMode.isEmpty())) {
+            return "";
+        }
+        try {
+            String packageName = currentForegroundPackageName();
+            if (packageName.isEmpty()) return "";
+            String instruction = appPlaybookStore.systemInstructionFor(packageName);
+            if (!instruction.isEmpty()) {
+                synchronized (injectedAppPlaybooks) { injectedAppPlaybooks.add(packageName); }
+            }
+            return instruction;
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
+    private boolean isPhoneContextTool(String name) {
+        return "inspect_ui".equals(name)
+                || "get_selected_region".equals(name)
+                || "wait".equals(name)
+                || "launch_app".equals(name)
+                || "swipe_screen".equals(name)
+                || "tap_element".equals(name)
+                || "tap_screen".equals(name)
+                || "type_text".equals(name)
+                || "search_current_app".equals(name)
+                || "commit_search".equals(name)
+                || "press_key".equals(name)
+                || "take_screenshot".equals(name);
+    }
+
+    private void attachCurrentAppPlaybook(JSONObject result) {
+        if (result == null || appPlaybookStore == null) return;
+        String packageName = result.optString("package", "").trim();
+        JSONObject after = result.optJSONObject("after");
+        if (packageName.isEmpty() && after != null) {
+            packageName = after.optString("package", "").trim();
+        }
+        JSONObject fallback = result.optJSONObject("semanticFallback");
+        if (packageName.isEmpty() && fallback != null) {
+            packageName = fallback.optString("package", "").trim();
+        }
+        if (packageName.isEmpty()) packageName = currentForegroundPackageName();
+        if (packageName.isEmpty()) return;
+        synchronized (injectedAppPlaybooks) {
+            if (injectedAppPlaybooks.contains(packageName)) return;
+        }
+        JSONObject context = appPlaybookStore.modelContext(packageName);
+        if (context.length() == 0) return;
+        try {
+            result.put("appPlaybook", context);
+            synchronized (injectedAppPlaybooks) { injectedAppPlaybooks.add(packageName); }
+        } catch (Exception ignored) {}
+    }
 
     private JSONObject readWebPage(JSONObject args) {
         return SafeWebPageReader.read(args.optString("url", ""));
@@ -4165,6 +4297,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         // the weak Live model a tiny, stable phone-control contract.
         final JSONObject modelResult =
                 ModelToolResponseAdapter.forModel(name, result);
+        JSONObject appPlaybook = result == null ? null : result.optJSONObject("appPlaybook");
+        if (appPlaybook != null && appPlaybook.length() > 0) {
+            modelResult.put("appPlaybook", appPlaybook);
+        }
 
         JSONArray responses = new JSONArray();
         responses.put(new JSONObject().put("response", new JSONObject().put("result", modelResult)).put("id", id).put("name", name));

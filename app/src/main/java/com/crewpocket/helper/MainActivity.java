@@ -1109,6 +1109,23 @@ public class MainActivity extends Activity
                 pageContent,
                 I18n.get(this, "進階", "ADVANCED"));
 
+        AppPlaybookStore appPlaybooks = new AppPlaybookStore(this);
+        pageContent.addView(makeSettingsRow(
+                CrewIcons.PHONE_ACTIONS,
+                I18n.get(this, "App 經驗", "App Playbooks"),
+                appPlaybooks.learnedRuleCount() + " "
+                        + I18n.get(this, "條自訂", "learned") + " · "
+                        + AppRuntimeRegistry.builtInPackages().size() + " "
+                        + I18n.get(this, "個內建", "built-in"),
+                CrewTheme.TEAL_300,
+                new View.OnClickListener() {
+                    @Override public void onClick(View v) {
+                        startActivity(new Intent(
+                                MainActivity.this,
+                                AppPlaybookActivity.class));
+                    }
+                }));
+
         String customPrompt =
                 AppConfig.getCustomSystemPrompt(this);
         pageContent.addView(makeSettingsRow(

@@ -996,8 +996,8 @@ public class CrewAccessibilityService extends AccessibilityService {
                     @Override
                     public void run() {
                         try {
-                            selectionResult[0] = SearchResultSelectionRuntime
-                                    .analyze(CrewAccessibilityService.this,
+                            selectionResult[0] = GoogleMapsRuntimeAdapter
+                                    .analyzeSearchCandidates(CrewAccessibilityService.this,
                                             query == null ? "" : query)
                                     .toString();
                         } catch (Exception error) {

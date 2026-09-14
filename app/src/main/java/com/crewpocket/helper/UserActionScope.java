@@ -34,11 +34,19 @@ final class UserActionScope {
     private String dispatchedSearchResult = "";
     private long updatedAtMs;
     private boolean endCallAuthorized;
+    private boolean appLearningAuthorized;
 
     synchronized boolean consumeEndCallAuthorization() {
         expireIfNeeded();
         boolean authorized = endCallAuthorized;
         endCallAuthorized = false;
+        return authorized;
+    }
+
+    synchronized boolean consumeAppLearningAuthorization() {
+        expireIfNeeded();
+        boolean authorized = appLearningAuthorized;
+        appLearningAuthorized = false;
         return authorized;
     }
 
@@ -52,17 +60,23 @@ final class UserActionScope {
 
     private void update(String text) {
         String value = normalize(text);
+        boolean explicitAppLearning = hasAppLearningIntent(text);
 
         // Fail closed on negated / hypothetical / explanatory discussions.
         if (containsAny(value, "不要", "別", "不用", "取消", "停止", "怎麼", "如何", "如果", "假如",
                 "don't", "dont", "do not", "never", "cancel", "stop", "how to", "if ")) {
             clearActionGrants();
+            // Negated operational guidance such as “記住，以後不要點這個”
+            // may be learned, while every phone-action grant remains cleared.
+            appLearningAuthorized = explicitAppLearning;
             updatedAtMs = System.currentTimeMillis();
             return;
         }
 
         endCallAuthorized = value.matches("(?:請|幫我|请|帮我)?(?:結束通話|结束通话|掛斷電話|挂断电话|退出語音助理|退出语音助理)(?:吧|謝謝|谢谢)?")
                 || value.matches("(?:please)?(?:endthecall|hangup|exitthevoiceassistant)(?:please)?");
+
+        appLearningAuthorized = explicitAppLearning;
 
         boolean navigation = hasNavigationIntent(value);
         boolean search = hasSearchIntent(value) || navigation;
@@ -298,6 +312,7 @@ final class UserActionScope {
         messageTransactionHandled = false;
         namedRecipientMessagingUnsupported = false;
         endCallAuthorized = false;
+        appLearningAuthorized = false;
         searchIntent = false;
         openSearchResultAuthorized = false;
         searchResultSelectionRequested = false;
@@ -312,6 +327,25 @@ final class UserActionScope {
         searchResultSelectionDispatched = false;
         selectedSearchResult = "";
         dispatchedSearchResult = "";
+    }
+
+    private static boolean hasAppLearningIntent(String rawText) {
+        if (rawText == null || rawText.trim().isEmpty()) return false;
+        String value = normalize(rawText);
+        String folded = TextMatch.caseFold(rawText);
+        boolean remember = containsAny(value,
+                "記住", "记住", "記起來", "记起来", "學起來", "学起来",
+                "學會", "学会", "記得這個", "记得这个")
+                || folded.matches(".*\b(remember|learn)\b.*");
+        if (!remember) return false;
+        return containsAny(value,
+                "這個app", "这个app", "這個應用", "这个应用",
+                "這個程式", "这个程序", "這個操作", "这个操作",
+                "這個流程", "这个流程", "剛剛的操作", "刚刚的操作",
+                "剛剛的流程", "刚刚的流程", "按鈕", "按钮",
+                "頁面", "页面", "畫面", "画面", "搜尋", "搜索",
+                "導航", "导航", "欄位", "栏位")
+                || folded.matches(".*\b(app|application|workflow|flow|operation|screen|button|search|navigation)\b.*");
     }
 
     static boolean looksLikeSendTarget(String metadata) {
