@@ -239,7 +239,7 @@ public class MainActivity extends Activity
 
         NoteStore notebookStore = new NoteStore(this);
         root.addView(makeSettingsRow(
-                "📝",
+                CrewIcons.NOTEBOOK,
                 I18n.get(this, "記事本", "Notebook"),
                 notebookStore.count() + " " + I18n.get(this, "篇", "notes"),
                 CrewTheme.TEAL_300,
@@ -727,7 +727,7 @@ public class MainActivity extends Activity
     private void renderDecksPage() {
         pageContent.removeAllViews();
 
-        addPageHeading("▣",
+        addPageHeading(CrewIcons.PRESENTATION,
             I18n.get(this, "AI 簡報", "AI Presentations"),
             I18n.get(this,
                 "說一個主題，Gemini 幫你建立並主講；也可以直接主講既有簡報。",
@@ -783,7 +783,7 @@ public class MainActivity extends Activity
                     int cardCount = deck.optInt("cards", 0);
 
                     pageContent.addView(makeDeckActionCard(
-                        "▣",
+                        CrewIcons.PRESENTATION,
                         deckTitle,
                         cardCount + " " + I18n.get(
                                 MainActivity.this,
@@ -817,10 +817,10 @@ public class MainActivity extends Activity
             }
         } catch (Exception ignored) {}
 
-        addSectionTitle(pageContent, I18n.get(this, "⋯ 更多", "MORE"));
+        addSectionTitle(pageContent, I18n.get(this, "更多", "MORE"));
 
         pageContent.addView(makeDeckActionCard(
-            "➕",
+            CrewIcons.PLUS,
             I18n.get(this, "進階：匯入 Deck 資料夾", "Advanced: Import Deck Folder"),
             I18n.get(this,
                 "給已經準備好 deck.json 與圖片的外部簡報使用；一般 AI 建立簡報不需要這個。",
@@ -842,7 +842,7 @@ public class MainActivity extends Activity
         pageContent.removeAllViews();
 
         addPageHeading(
-                "⚙",
+                CrewIcons.SETTINGS,
                 I18n.get(this, "設定", "Settings"),
                 I18n.get(
                         this,
@@ -854,7 +854,7 @@ public class MainActivity extends Activity
                 I18n.get(this, "語音與個性", "VOICE & PERSONALITY"));
 
         pageContent.addView(makeSettingsRow(
-                "🗣",
+                CrewIcons.VOICE,
                 I18n.get(this, "音色", "Voice"),
                 AppConfig.getVoiceName(this),
                 CrewTheme.TEAL_300,
@@ -865,7 +865,7 @@ public class MainActivity extends Activity
                 }));
 
         pageContent.addView(makeSettingsRow(
-                "◌",
+                CrewIcons.PERSONALITY,
                 I18n.get(this, "說話個性", "Speaking Personality"),
                 personalitySummary(),
                 CrewTheme.INDIGO_400,
@@ -880,7 +880,7 @@ public class MainActivity extends Activity
         final int interruption =
                 AppConfig.getInterruptionSensitivity(this);
         pageContent.addView(makeSettingsRow(
-                "↯",
+                CrewIcons.INTERRUPT,
                 I18n.get(this, "插話靈敏度", "Interruption Sensitivity"),
                 interruptionSummary(interruption),
                 CrewTheme.EMERALD_400,
@@ -891,7 +891,7 @@ public class MainActivity extends Activity
                 }));
 
         pageContent.addView(makeSettingsRow(
-                "🔊",
+                CrewIcons.AUDIO,
                 I18n.get(this, "音訊輸出", "Audio Output"),
                 audioOutputSummary(),
                 CrewTheme.CYAN_400,
@@ -904,7 +904,7 @@ public class MainActivity extends Activity
         final int liveIdleMinutes =
                 AppConfig.getLiveIdleTimeoutMinutes(this);
         pageContent.addView(makeSettingsRow(
-                "⏱",
+                CrewIcons.CLOCK,
                 I18n.get(this, "閒置自動結束", "Live Idle Auto-End"),
                 liveIdleMinutes <= 0
                         ? I18n.get(this, "關閉", "Off")
@@ -922,7 +922,7 @@ public class MainActivity extends Activity
                 I18n.get(this, "喚醒與待命", "WAKE & STANDBY"));
 
         pageContent.addView(makeSettingsRow(
-                "⌁",
+                CrewIcons.WAKE,
                 I18n.get(this, "喚醒詞", "Wake Phrase"),
                 "「" + AppConfig.getWakePhrase(this) + "」",
                 CrewTheme.TEAL_300,
@@ -934,7 +934,7 @@ public class MainActivity extends Activity
 
         boolean alwaysOn = AppConfig.isAlwaysOnEnabled(this);
         pageContent.addView(makeSettingsRow(
-                "🎧",
+                CrewIcons.ALWAYS_ON,
                 I18n.get(this, "全天待命", "Always-On Wake"),
                 alwaysOn
                         ? I18n.get(this, "開啟", "On")
@@ -950,7 +950,7 @@ public class MainActivity extends Activity
 
         final int wakeSensitivity = AppConfig.getWakeSensitivity(this);
         pageContent.addView(makeSettingsRow(
-                "◉",
+                CrewIcons.SENSITIVITY,
                 I18n.get(this, "喚醒靈敏度", "Wake Sensitivity"),
                 wakeSensitivitySummary(wakeSensitivity),
                 CrewTheme.TEAL_300,
@@ -963,7 +963,7 @@ public class MainActivity extends Activity
         boolean notificationReady =
                 notificationPermissionGranted() && notificationsEnabled();
         pageContent.addView(makeSettingsRow(
-                "🔔",
+                CrewIcons.BELL,
                 I18n.get(this, "通知", "Notifications"),
                 notificationReady
                         ? I18n.get(this, "已允許", "Allowed")
@@ -984,7 +984,7 @@ public class MainActivity extends Activity
         boolean accessibility =
                 CrewAccessibilityService.isServiceRunning();
         pageContent.addView(makeSettingsRow(
-                "🛡",
+                CrewIcons.PHONE_ACTIONS,
                 I18n.get(this, "螢幕操作", "Screen Actions"),
                 accessibility
                         ? I18n.get(this, "已啟用", "Enabled")
@@ -1000,7 +1000,7 @@ public class MainActivity extends Activity
 
         boolean overlay = hasOverlayPermission();
         pageContent.addView(makeSettingsRow(
-                "◉",
+                CrewIcons.BUBBLE,
                 I18n.get(this, "懸浮球權限", "Floating Bubble Permission"),
                 overlay
                         ? I18n.get(this, "已允許", "Allowed")
@@ -1020,7 +1020,7 @@ public class MainActivity extends Activity
                                 android.Manifest.permission.CAMERA)
                                 == PackageManager.PERMISSION_GRANTED;
         pageContent.addView(makeSettingsRow(
-                "📸",
+                CrewIcons.CAMERA,
                 I18n.get(this, "相機", "Camera"),
                 cameraReady
                         ? I18n.get(this, "已允許", "Allowed")
@@ -1038,7 +1038,7 @@ public class MainActivity extends Activity
         boolean keepAwake =
                 FloatingBubbleManager.isKeepAwakeActive();
         pageContent.addView(makeSettingsRow(
-                "☀",
+                CrewIcons.SUN,
                 I18n.get(this, "螢幕常亮", "Keep Screen Awake"),
                 keepAwake
                         ? I18n.get(this, "開啟", "On")
@@ -1072,7 +1072,7 @@ public class MainActivity extends Activity
                 I18n.get(this, "App", "APP"));
 
         pageContent.addView(makeSettingsRow(
-                "🔐",
+                CrewIcons.KEY,
                 I18n.get(this, "Gemini API Key", "Gemini API Key"),
                 hasGeminiKey()
                         ? I18n.get(this, "已設定", "Configured")
@@ -1087,7 +1087,7 @@ public class MainActivity extends Activity
                 }));
 
         pageContent.addView(makeSettingsRow(
-                "🌐",
+                CrewIcons.GLOBE,
                 I18n.get(this, "語言", "Language"),
                 I18n.get(this, "中文", "English"),
                 CrewTheme.INDIGO_400,
@@ -1098,7 +1098,7 @@ public class MainActivity extends Activity
                 }));
 
         pageContent.addView(makeSettingsRow(
-                "⌘",
+                CrewIcons.DIAGNOSTICS,
                 I18n.get(this, "診斷資訊與版本", "Diagnostics & Version"),
                 appVersionSummary(),
                 CrewTheme.TEXT_SECONDARY,
@@ -1115,7 +1115,7 @@ public class MainActivity extends Activity
         String customPrompt =
                 AppConfig.getCustomSystemPrompt(this);
         pageContent.addView(makeSettingsRow(
-                "🧠",
+                CrewIcons.BRAIN,
                 I18n.get(this, "進階自訂指令", "Advanced Custom Instructions"),
                 customPrompt == null || customPrompt.trim().isEmpty()
                         ? I18n.get(this, "未設定", "Not configured")
@@ -1130,7 +1130,7 @@ public class MainActivity extends Activity
                 }));
 
         pageContent.addView(makeSettingsRow(
-                "⌁",
+                CrewIcons.INSPECTOR,
                 "Agent Inspector",
                 I18n.get(
                         this,
@@ -1232,11 +1232,9 @@ public class MainActivity extends Activity
         }
     }
 
-    private void addPageHeading(String icon, String title, String description) {
+    private void addPageHeading(int iconId, String title, String description) {
         CrewIconView iconView = new CrewIconView(this);
-        int iconId = CrewIcons.fromLegacyToken(icon);
-        iconView.setIcon(iconId == CrewIcons.NONE ? CrewIcons.SPARKLE : iconId,
-                CrewTheme.TEAL_300);
+        iconView.setIcon(iconId, CrewTheme.TEAL_300);
         iconView.setIconScale(0.72f);
         pageContent.addView(iconView, new LinearLayout.LayoutParams(dp(34), dp(34)));
         TextView titleView = new TextView(this);
@@ -1291,7 +1289,7 @@ public class MainActivity extends Activity
             return false;
         }
         manager.showBubble(onShown);
-        Toast.makeText(this, I18n.get(this, "🎙️ 浮動泡泡已啟用！短按開啟控制台，長按開始／結束 Live 通話", "🎙️ Floating Bubble enabled! Tap for controls; long-press to start or end a Live call"), Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, I18n.get(this, "浮動泡泡已啟用！短按開啟控制台，長按開始／結束 Live 通話", "Floating Bubble enabled! Tap for controls; long-press to start or end a Live call"), Toast.LENGTH_SHORT).show();
         return true;
     }
 
@@ -1322,7 +1320,7 @@ public class MainActivity extends Activity
 
     private void requestCameraPermission() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || checkSelfPermission(android.Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-            Toast.makeText(this, I18n.get(this, "✅ 相機權限已就緒！", "✅ Camera permission ready!"), Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, I18n.get(this, "相機權限已就緒！", "Camera permission ready!"), Toast.LENGTH_SHORT).show();
         } else {
             requestPermissions(new String[]{android.Manifest.permission.CAMERA}, 101);
         }
@@ -1347,7 +1345,7 @@ public class MainActivity extends Activity
         }
 
         new android.app.AlertDialog.Builder(this)
-            .setTitle(I18n.get(this, "⏱️ 語音閒置自動結束", "⏱️ Live Idle Auto-End"))
+            .setTitle(I18n.get(this, "語音閒置自動結束", "Live Idle Auto-End"))
             .setSingleChoiceItems(labels, checked, new android.content.DialogInterface.OnClickListener() {
                 @Override public void onClick(android.content.DialogInterface dialog, int which) {
                     AppConfig.setLiveIdleTimeoutMinutes(MainActivity.this, values[which]);
@@ -1374,7 +1372,7 @@ public class MainActivity extends Activity
             .show();
     }
 
-    private View makeDeckActionCard(String icon, String titleText, String descText, int accentColor, View.OnClickListener onClick) {
+    private View makeDeckActionCard(int iconId, String titleText, String descText, int accentColor, View.OnClickListener onClick) {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.HORIZONTAL);
         card.setGravity(Gravity.CENTER_VERTICAL);
@@ -1388,9 +1386,7 @@ public class MainActivity extends Activity
 
         // Icon Badge Container
         CrewIconView iconView = new CrewIconView(this);
-        int deckIcon = CrewIcons.fromLegacyToken(icon);
-        iconView.setIcon(deckIcon == CrewIcons.NONE ? CrewIcons.PRESENTATION : deckIcon,
-                accentColor);
+        iconView.setIcon(iconId, accentColor);
         iconView.setIconScale(0.58f);
         iconView.setBackground(CrewTheme.createIconBadge(this, accentColor, 12));
         LinearLayout.LayoutParams iconLp = new LinearLayout.LayoutParams(dp(42), dp(42));
@@ -1461,7 +1457,7 @@ public class MainActivity extends Activity
         layout.setBackgroundColor(CrewTheme.BG_PRIMARY);
 
         TextView titleView = new TextView(this);
-        titleView.setText(I18n.get(this, "🛡️ 無障礙服務使用說明 (Prominent Disclosure)", "🛡️ Accessibility Service Prominent Disclosure"));
+        titleView.setText(I18n.get(this, "無障礙服務使用說明 (Prominent Disclosure)", "Accessibility Service Prominent Disclosure"));
         titleView.setTextSize(15);
         titleView.setTypeface(Typeface.DEFAULT_BOLD);
         titleView.setTextColor(CrewTheme.TEXT_PRIMARY);
@@ -1599,7 +1595,7 @@ public class MainActivity extends Activity
         layout.addView(sensitivityRow);
 
         android.app.AlertDialog.Builder builder = new android.app.AlertDialog.Builder(this)
-            .setTitle(I18n.get(this, "🎧 全天語音喚醒", "🎧 Always-On Wake Word"))
+            .setTitle(I18n.get(this, "全天語音喚醒", "Always-On Wake Word"))
             .setView(layout)
             .setPositiveButton(
                 I18n.get(this,
@@ -1668,7 +1664,7 @@ public class MainActivity extends Activity
         layout.setBackgroundColor(CrewTheme.BG_PRIMARY);
 
         TextView titleView = new TextView(this);
-        titleView.setText(I18n.get(this, "⚙️ Gemini API 設定", "⚙️ Gemini API Settings"));
+        titleView.setText(I18n.get(this, "Gemini API 設定", "Gemini API Settings"));
         titleView.setTextSize(16);
         titleView.setTypeface(Typeface.DEFAULT_BOLD);
         titleView.setTextColor(CrewTheme.TEXT_PRIMARY);
@@ -1684,8 +1680,8 @@ public class MainActivity extends Activity
 
         TextView keyHintLink = new TextView(this);
         keyHintLink.setText(I18n.get(this,
-            "🔗 免費申請 Gemini API Key (aistudio.google.com) ↗",
-            "🔗 Get Free Gemini API Key (aistudio.google.com) ↗"));
+            "免費申請 Gemini API Key (aistudio.google.com) ↗",
+            "Get Free Gemini API Key (aistudio.google.com) ↗"));
         keyHintLink.setTextSize(11);
         keyHintLink.setTextColor(CrewTheme.CYAN_400);
         keyHintLink.setPadding(0, dp(2), 0, dp(4));
@@ -1735,8 +1731,8 @@ public class MainActivity extends Activity
                             MainActivity.this, keyInput.getText().toString().trim());
                     Toast.makeText(MainActivity.this,
                             I18n.get(MainActivity.this,
-                                "✅ Gemini API Key 已儲存！",
-                                "✅ Gemini API Key saved!"),
+                                "Gemini API Key 已儲存！",
+                                "Gemini API Key saved!"),
                             Toast.LENGTH_SHORT).show();
                     if (activeTab == 2) {
                         renderSettingsPage();
@@ -1753,9 +1749,9 @@ public class MainActivity extends Activity
     private void showLanguageDialog() {
         android.app.AlertDialog.Builder builder = new android.app.AlertDialog.Builder(this);
         String[] languages = new String[]{
-            "🌐 跟隨系統 (System Default)",
-            "🇹🇼 繁體中文 (Traditional Chinese)",
-            "🇺🇸 English"
+            "跟隨系統 (System Default)",
+            "繁體中文 (Traditional Chinese)",
+            "English"
         };
         String current = AppConfig.getLanguage(this);
         int checkedItem = "zh".equalsIgnoreCase(current) ? 1 : ("en".equalsIgnoreCase(current) ? 2 : 0);
@@ -1806,13 +1802,13 @@ public class MainActivity extends Activity
         container.addView(input);
 
         new android.app.AlertDialog.Builder(this)
-            .setTitle("🧠 " + I18n.get(this, "自訂語音模型 Prompt", "Custom Voice Prompt"))
+            .setTitle(I18n.get(this, "自訂語音模型 Prompt", "Custom Voice Prompt"))
             .setMessage(I18n.get(this, "在此設定專屬於您的 AI 角色、稱呼與說話風格。此設定具最高優先權，將於下次通話生效。", "Define your AI persona, tone, and preferences. Takes top priority in live sessions."))
             .setView(container)
             .setPositiveButton(I18n.get(this, "儲存", "Save"), new android.content.DialogInterface.OnClickListener() {
                 @Override public void onClick(android.content.DialogInterface d, int which) {
                     AppConfig.setCustomSystemPrompt(MainActivity.this, input.getText().toString());
-                    Toast.makeText(MainActivity.this, I18n.get(MainActivity.this, "✅ 已儲存自訂 Prompt！", "✅ Custom Prompt saved!"), Toast.LENGTH_SHORT).show();
+                    Toast.makeText(MainActivity.this, I18n.get(MainActivity.this, "已儲存自訂 Prompt！", "Custom Prompt saved!"), Toast.LENGTH_SHORT).show();
                     if (activeTab == 3) renderTab(3);
                 }
             })
@@ -1829,7 +1825,7 @@ public class MainActivity extends Activity
 
 
     private View makeSettingsRow(
-            String iconText,
+            int iconId,
             String titleText,
             String valueText,
             int valueColor,
@@ -1846,7 +1842,6 @@ public class MainActivity extends Activity
         row.setOnClickListener(listener);
 
         CrewIconView icon = new CrewIconView(this);
-        int iconId = resolveSettingsIcon(iconText, titleText);
         icon.setIcon(iconId, CrewTheme.TEXT_SECONDARY);
         icon.setIconScale(0.58f);
         row.addView(
@@ -1897,22 +1892,6 @@ public class MainActivity extends Activity
         lp.setMargins(0, 0, 0, dp(6));
         outer.addView(row, lp);
         return outer;
-    }
-
-    private int resolveSettingsIcon(String token, String title) {
-        String value = title == null ? "" : title;
-        if (value.contains("Agent Inspector")) return CrewIcons.INSPECTOR;
-        if (value.contains("懸浮球") || value.toLowerCase().contains("floating bubble")) {
-            return CrewIcons.BUBBLE;
-        }
-        if (value.contains("診斷") || value.toLowerCase().contains("diagnostic")) {
-            return CrewIcons.DIAGNOSTICS;
-        }
-        if (value.contains("喚醒靈敏度") || value.toLowerCase().contains("wake sensitivity")) {
-            return CrewIcons.SENSITIVITY;
-        }
-        int mapped = CrewIcons.fromLegacyToken(token);
-        return mapped == CrewIcons.NONE ? CrewIcons.SETTINGS : mapped;
     }
 
     private String personalitySummary() {
@@ -2133,7 +2112,7 @@ public class MainActivity extends Activity
         root.setBackgroundColor(CrewTheme.BG_PRIMARY);
 
         TextView titleView = new TextView(this);
-        titleView.setText(I18n.get(this, "🗣️ 語音助理音色選擇 (全 30 款)", "🗣️ Select Voice Persona (30 Voices)"));
+        titleView.setText(I18n.get(this, "語音助理音色選擇 (全 30 款)", "Select Voice Persona (30 Voices)"));
         titleView.setTextSize(16);
         titleView.setTypeface(Typeface.DEFAULT_BOLD);
         titleView.setTextColor(CrewTheme.TEXT_PRIMARY);
@@ -2141,7 +2120,7 @@ public class MainActivity extends Activity
         root.addView(titleView);
 
         TextView subtitleView = new TextView(this);
-        subtitleView.setText(I18n.get(this, "點擊「▶️ 試聽」可播放聲音，點擊卡片直接選用。", "Tap '▶️ Preview' to listen, tap card to select."));
+        subtitleView.setText(I18n.get(this, "點擊「試聽」可播放聲音，點擊卡片直接選用。", "Tap 'Preview' to listen, tap card to select."));
         subtitleView.setTextSize(11);
         subtitleView.setTextColor(CrewTheme.TEXT_SECONDARY);
         subtitleView.setPadding(0, 0, 0, dp(12));
@@ -2200,7 +2179,7 @@ public class MainActivity extends Activity
                     nameBadgeRow.setGravity(Gravity.CENTER_VERTICAL);
 
                     TextView nameView = new TextView(MainActivity.this);
-                    nameView.setText((voice.isFemale ? "👩 " : "👨 ") + voice.name);
+                    nameView.setText(voice.name);
                     nameView.setTextSize(13);
                     nameView.setTypeface(Typeface.DEFAULT_BOLD);
                     nameView.setTextColor(isSelected ? CrewTheme.TEAL_300 : CrewTheme.TEXT_PRIMARY);
@@ -2219,7 +2198,7 @@ public class MainActivity extends Activity
 
                     // Audition Button
                     Button previewBtn = new Button(MainActivity.this);
-                    previewBtn.setText("▶️ " + I18n.get(MainActivity.this, "試聽", "Play"));
+                    previewBtn.setText(I18n.get(MainActivity.this, "試聽", "Play"));
                     previewBtn.setTextSize(11);
                     previewBtn.setTextColor(CrewTheme.CYAN_400);
                     previewBtn.setTypeface(Typeface.DEFAULT_BOLD);
@@ -2240,7 +2219,7 @@ public class MainActivity extends Activity
                     itemCard.setOnClickListener(new View.OnClickListener() {
                         @Override public void onClick(View v) {
                             AppConfig.setVoiceName(MainActivity.this, voice.name);
-                            Toast.makeText(MainActivity.this, I18n.get(MainActivity.this, "✅ 已選用音色：" + voice.name, "✅ Switched to " + voice.name), Toast.LENGTH_SHORT).show();
+                            Toast.makeText(MainActivity.this, I18n.get(MainActivity.this, "已選用音色：" + voice.name, "Switched to " + voice.name), Toast.LENGTH_SHORT).show();
                             if (dialogRef[0] != null) dialogRef[0].dismiss();
                             recreate();
                         }
@@ -2253,9 +2232,9 @@ public class MainActivity extends Activity
 
         // Tab Buttons
         String[] tabLabels = new String[]{
-            I18n.get(this, "🌟 全部 (30)", "🌟 All (30)"),
-            I18n.get(this, "👩 女性 (15)", "👩 Female (15)"),
-            I18n.get(this, "👨 男性 (15)", "👨 Male (15)")
+            I18n.get(this, "全部 (30)", "All (30)"),
+            I18n.get(this, "女性 (15)", "Female (15)"),
+            I18n.get(this, "男性 (15)", "Male (15)")
         };
 
         final Button[] tabButtons = new Button[3];
@@ -2323,7 +2302,7 @@ public class MainActivity extends Activity
             Toast.makeText(this, I18n.get(this, "正在匯入 Deck…", "Importing Deck..."), Toast.LENGTH_SHORT).show();
             org.json.JSONObject res = DeckRepository.importDeckTree(this, data.getData());
             if (res.optBoolean("success", false)) {
-                Toast.makeText(this, "✅ " + res.optString("message"), Toast.LENGTH_LONG).show();
+                Toast.makeText(this, res.optString("message"), Toast.LENGTH_LONG).show();
                 if (activeTab == 1) renderDecksPage();
             } else {
                 Toast.makeText(this, "❌ " + res.optString("error"), Toast.LENGTH_LONG).show();
