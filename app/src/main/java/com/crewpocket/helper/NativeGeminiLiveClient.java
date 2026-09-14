@@ -3262,8 +3262,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 JSONObject compact = ModelScreenView.compact(last, "WAIT_CONDITION");
                 try {
                     compact.put("conditionMet", true)
-                           .put("condition", type.name())
-                           .put("runtimeContext", workingContext.toModelJson());
+                           .put("condition", type.name());
                 } catch (Exception ignored) {}
                 return compact;
             }
@@ -3278,8 +3277,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             out.put("success", true)
                .put("conditionMet", false)
                .put("condition", type.name())
-               .put("timeout", true)
-               .put("runtimeContext", workingContext.toModelJson());
+               .put("timeout", true);
         } catch (Exception ignored) {}
         return out;
     }

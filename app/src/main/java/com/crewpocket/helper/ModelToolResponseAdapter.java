@@ -54,7 +54,9 @@ final class ModelToolResponseAdapter {
         return "phone_action".equals(toolName)
                 || "inspect_ui".equals(toolName)
                 || "send_text".equals(toolName)
-                || "end_voice_session".equals(toolName);
+                || "end_voice_session".equals(toolName)
+                || "wait".equals(toolName)
+                || "take_screenshot".equals(toolName);
     }
 
     private static String status(JSONObject result) {
@@ -114,6 +116,9 @@ final class ModelToolResponseAdapter {
         }
 
         if (WAIT.equals(status)) {
+            if ("wait".equals(toolName)) {
+                return "等待逾時；請重新觀察目前畫面，不要直接重複原操作。";
+            }
             if ("SEARCH".equals(semantic)
                     || "search_current_app".equals(runtime)
                     || "commit_search".equals(runtime)
@@ -163,6 +168,9 @@ final class ModelToolResponseAdapter {
 
         if (isVerifiedSend(result) || "send_text".equals(toolName)) {
             return "訊息已送出。";
+        }
+        if ("wait".equals(toolName)) {
+            return "等待的畫面已出現。";
         }
         if ("inspect_ui".equals(toolName)) {
             if (result.optBoolean("visualSent", false)) {
