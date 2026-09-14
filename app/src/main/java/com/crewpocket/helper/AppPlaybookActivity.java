@@ -104,8 +104,8 @@ public class AppPlaybookActivity extends Activity {
 
         TextView explanation = new TextView(this);
         explanation.setText(I18n.get(this,
-                "在任何 App 裡可以直接對 Crew 說「記住這個操作，以後在這個 App…」。這裡只保存操作經驗，不是可執行腳本，也不會繞過送出、付款、帳號或敏感操作的授權。",
-                "Tell Crew in any app to remember how that app works. These are operational hints, not executable scripts, and they never bypass send/payment/account/sensitive-action authorization."));
+                "在任何 App 裡展開 Crew 泡泡，語音通話中按腦圖示「教 Crew」，再說一句要記住的操作規則；也可以直接說「教你一個規則…」。這裡只保存操作經驗，不是可執行腳本，也不會繞過送出、付款、帳號或敏感操作的授權。",
+                "In any app, expand the Crew bubble during a Live call, tap the brain icon to Teach Crew, then say one operating rule. You can also say 'teach you a rule...'. These are operational hints, not executable scripts, and they never bypass send/payment/account/sensitive-action authorization."));
         explanation.setTextSize(11);
         explanation.setTextColor(CrewTheme.TEXT_SECONDARY);
         explanation.setLineSpacing(dp(2), 1.08f);

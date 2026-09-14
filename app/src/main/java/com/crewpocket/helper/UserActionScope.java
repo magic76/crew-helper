@@ -335,8 +335,9 @@ final class UserActionScope {
         String folded = TextMatch.caseFold(rawText);
         boolean remember = containsAny(value,
                 "記住", "记住", "記起來", "记起来", "學起來", "学起来",
-                "學會", "学会", "記得這個", "记得这个")
-                || folded.matches(".*\b(remember|learn)\b.*");
+                "學會", "学会", "記得這個", "记得这个",
+                "教你一個規則", "教你一个规则")
+                || folded.matches(".*\b(remember|learn|teach)\b.*");
         if (!remember) return false;
         return containsAny(value,
                 "這個app", "这个app", "這個應用", "这个应用",
@@ -344,8 +345,9 @@ final class UserActionScope {
                 "這個流程", "这个流程", "剛剛的操作", "刚刚的操作",
                 "剛剛的流程", "刚刚的流程", "按鈕", "按钮",
                 "頁面", "页面", "畫面", "画面", "搜尋", "搜索",
-                "導航", "导航", "欄位", "栏位")
-                || folded.matches(".*\b(app|application|workflow|flow|operation|screen|button|search|navigation)\b.*");
+                "導航", "导航", "欄位", "栏位",
+                "規則", "规则", "操作經驗", "操作经验", "app經驗", "app经验")
+                || folded.matches(".*\b(app|application|workflow|flow|operation|screen|button|search|navigation|rule|guidance|tip)\b.*");
     }
 
     static boolean looksLikeSendTarget(String metadata) {

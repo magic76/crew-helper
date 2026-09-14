@@ -109,7 +109,7 @@ final class LiveToolCatalog {
                                         .put("description", "Concise reusable operational guidance for this app")))
                         .put("required", new JSONArray().put("guidance"))));
         tools.put(new JSONObject().put("name", "list_app_guidance").put("description",
-                "Read built-in and user-learned operational guidance for the CURRENT foreground App. Use when the user asks what Crew knows/learned about this App; do not use it as a required pre-step for normal phone actions."));
+                "READ ONLY. Read built-in and user-learned operational guidance for the CURRENT foreground App only when the user asks what Crew already knows/learned. NEVER use this for a request to remember/teach a new rule; teaching is a write operation owned by Runtime/remember_app_guidance. Do not use it as a required pre-step for normal phone actions."));
 
         tools.put(new JSONObject().put("name", "inspect_ui").put("description",
                 "FULL-SCREEN VISUAL FALLBACK. Captures a fresh phone screenshot while Runtime separately keeps Accessibility state for execution. Normally use it for current full-screen prices, charts, WebView/custom UI, images or visually rendered text. SELECTED-REGION EXCEPTION: when the user just framed a region and that frozen crop can answer the question, do NOT call inspect_ui merely to see it again; answer from the crop. Call inspect_ui only if the user asks about content outside that selection or the crop genuinely lacks required evidence. Call once when needed; do not SEARCH merely because a value was absent from prior semantic tool text."));

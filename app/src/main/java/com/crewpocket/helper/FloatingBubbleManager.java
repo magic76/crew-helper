@@ -268,6 +268,15 @@ public class FloatingBubbleManager {
         });
     }
 
+    public void onAppTeachStateChanged(final String title, final String detail) {
+        mainHandler.post(new Runnable() {
+            @Override public void run() {
+                refreshBubbleActionStripIfShowing();
+            }
+        });
+        showCompactStatus(title, detail);
+    }
+
     public void showCompactStatus(final String title, final String detail) {
         mainHandler.post(new Runnable() {
             @Override
@@ -297,13 +306,15 @@ public class FloatingBubbleManager {
                         || lower.contains("無法");
                 boolean attention = lower.contains("需要你")
                         || lower.contains("需要權限")
-                        || lower.contains("選擇");
+                        || lower.contains("選擇")
+                        || lower.contains("正在學習");
                 boolean contextReady = lower.contains("已框選")
                         || lower.contains("已選取");
                 boolean done = lower.contains("完成")
                         || lower.contains("已開")
                         || lower.contains("已送")
-                        || lower.contains("找到");
+                        || lower.contains("找到")
+                        || lower.contains("已記住");
 
                 if (compactStatusView != null) {
                     try { windowManager.removeViewImmediate(compactStatusView); }
@@ -1065,6 +1076,11 @@ public class FloatingBubbleManager {
                     showCompactStatus("已打斷", "");
                 }
                 refreshVoiceControls();
+            }
+
+            @Override public void onTeachCurrentApp() {
+                NativeLiveService.toggleAppTeachMode();
+                refreshBubbleActionStripIfShowing();
             }
 
             @Override public void onRegionSelection() {

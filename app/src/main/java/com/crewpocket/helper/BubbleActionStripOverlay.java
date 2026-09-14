@@ -18,6 +18,7 @@ final class BubbleActionStripOverlay extends LinearLayout {
         void onToggleMute();
         void onOpenConsole();
         void onInterrupt();
+        void onTeachCurrentApp();
         void onRegionSelection();
     }
 
@@ -28,6 +29,7 @@ final class BubbleActionStripOverlay extends LinearLayout {
     private static final int ICON_MIC_MUTED = 5;
     private static final int ICON_SPEAKER = 6;
     private static final int ICON_REGION = 7;
+    private static final int ICON_TEACH = 8;
 
     private final Context context;
     private boolean showing = false;
@@ -49,7 +51,7 @@ final class BubbleActionStripOverlay extends LinearLayout {
     }
 
     int desiredHeightPx() {
-        int itemCount = NativeLiveService.isActive() ? 4 : 3;
+        int itemCount = NativeLiveService.isActive() ? 5 : 3;
         return dp(6) + itemCount * dp(44);
     }
 
@@ -118,6 +120,16 @@ final class BubbleActionStripOverlay extends LinearLayout {
         });
         addView(more, itemParams());
 
+        if (live) {
+            final boolean teaching = NativeLiveService.isAppTeachModeArmed();
+            CrewIconView teach = iconButton(ICON_TEACH);
+            teach.setContentDescription(teaching ? "取消教 Crew" : "教 Crew");
+            teach.setOnClickListener(v -> {
+                if (actions != null) actions.onTeachCurrentApp();
+            });
+            addView(teach, itemParams());
+        }
+
         CrewIconView region = iconButton(ICON_REGION);
         region.setContentDescription("框選截圖");
         region.setOnClickListener(v -> {
@@ -164,6 +176,13 @@ final class BubbleActionStripOverlay extends LinearLayout {
             color = Color.parseColor("#93C5FD");
             fill = Color.argb(52, 30, 64, 175);
             button.setIcon(CrewIcons.REGION, color);
+        } else if (icon == ICON_TEACH) {
+            boolean teaching = NativeLiveService.isAppTeachModeArmed();
+            color = Color.parseColor(teaching ? "#FCD34D" : "#A7F3D0");
+            fill = teaching
+                    ? Color.argb(72, 120, 53, 15)
+                    : Color.argb(52, 19, 78, 74);
+            button.setIcon(CrewIcons.BRAIN, color);
         } else {
             color = Color.parseColor("#CBD5E1");
             fill = Color.TRANSPARENT;

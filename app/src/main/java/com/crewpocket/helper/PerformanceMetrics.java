@@ -59,6 +59,12 @@ final class PerformanceMetrics {
     private static long textRouteSend;
     private static long textRouteNotebook;
     private static long textRouteTypeRemappedToSend;
+    // 0117: App teaching counters only; no package, guidance or transcript text.
+    private static long appTeachArmed;
+    private static long appTeachSaved;
+    private static long appTeachCancelled;
+    private static long appTeachExpired;
+    private static long appTeachToolSuppressed;
 
     private PerformanceMetrics() {}
 
@@ -236,6 +242,12 @@ final class PerformanceMetrics {
         textRouteTypeRemappedToSend++;
     }
 
+    static synchronized void recordAppTeachArmed() { appTeachArmed++; }
+    static synchronized void recordAppTeachSaved() { appTeachSaved++; }
+    static synchronized void recordAppTeachCancelled() { appTeachCancelled++; }
+    static synchronized void recordAppTeachExpired() { appTeachExpired++; }
+    static synchronized void recordAppTeachToolSuppressed() { appTeachToolSuppressed++; }
+
     static synchronized String buildReport() {
         StringBuilder out = new StringBuilder();
         out.append("Performance (rolling up to ").append(MAX_SAMPLES).append(" samples)\n");
@@ -268,6 +280,12 @@ final class PerformanceMetrics {
                 .append(" send=").append(textRouteSend)
                 .append(" notebook=").append(textRouteNotebook)
                 .append(" type-remapped-to-send=").append(textRouteTypeRemappedToSend)
+                .append("\n");
+        out.append("App teaching: armed=").append(appTeachArmed)
+                .append(" saved=").append(appTeachSaved)
+                .append(" cancelled=").append(appTeachCancelled)
+                .append(" expired=").append(appTeachExpired)
+                .append(" tool-suppressed=").append(appTeachToolSuppressed)
                 .append("\n");
 
         appendAgentTrace(out, lastFinishedTrace);
@@ -346,6 +364,11 @@ final class PerformanceMetrics {
         textRouteSend = 0L;
         textRouteNotebook = 0L;
         textRouteTypeRemappedToSend = 0L;
+        appTeachArmed = 0L;
+        appTeachSaved = 0L;
+        appTeachCancelled = 0L;
+        appTeachExpired = 0L;
+        appTeachToolSuppressed = 0L;
     }
 
     private static AgentTrace ensureTrace(String taskId, long generation) {

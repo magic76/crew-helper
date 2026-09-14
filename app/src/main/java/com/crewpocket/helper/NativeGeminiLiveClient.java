@@ -61,6 +61,12 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private final NotebookToolHandler notebookToolHandler;
     private final AppPlaybookStore appPlaybookStore;
     private final java.util.HashSet<String> injectedAppPlaybooks = new java.util.HashSet<String>();
+    // 0117: one-shot App teaching is Runtime-owned, never inferred from a model tool choice.
+    private static final long APP_TEACH_MODE_TTL_MS = 45_000L;
+    private volatile boolean appTeachModeArmed = false;
+    private volatile long appTeachModeUntilMs = 0L;
+    private volatile long runtimeAppTeachHandledGeneration = -1L;
+    private volatile String runtimeAppTeachHandledMessage = "";
     private final LiveVisionController visionController;
     private volatile boolean running;
     private volatile String stage = "尚未開始";
@@ -507,6 +513,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
             beginNewUserIntent(input);
             userActionScope.updateFromUserText(input);
+            if (tryHandleRuntimeAppTeaching(input)) {
+                listener.onTranscript("你", input);
+                return true;
+            }
             if (tryHandleRuntimeSendCurrent(input)) {
                 listener.onTranscript("你", input);
                 return true;
@@ -760,6 +770,39 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     }
 
     boolean isAgentMuted() { return agentMuted; }
+
+    boolean isAppTeachModeArmed() {
+        if (appTeachModeArmed && System.currentTimeMillis() > appTeachModeUntilMs) {
+            clearAppTeachModeState();
+            PerformanceMetrics.recordAppTeachExpired();
+        }
+        return appTeachModeArmed;
+    }
+
+    boolean armAppTeachMode() {
+        if (!running) return false;
+        appTeachModeArmed = true;
+        appTeachModeUntilMs = System.currentTimeMillis() + APP_TEACH_MODE_TTL_MS;
+        PerformanceMetrics.recordAppTeachArmed();
+        return true;
+    }
+
+    boolean cancelAppTeachMode() {
+        boolean wasArmed = isAppTeachModeArmed();
+        clearAppTeachModeState();
+        if (wasArmed) PerformanceMetrics.recordAppTeachCancelled();
+        return wasArmed;
+    }
+
+    private void clearAppTeachModeState() {
+        appTeachModeArmed = false;
+        appTeachModeUntilMs = 0L;
+    }
+
+    private boolean isRuntimeAppTeachHandledGeneration(long generation) {
+        return generation >= 0L && generation == runtimeAppTeachHandledGeneration;
+    }
+
     boolean isAiSpeaking() { return aiSpeaking; }
     boolean isVoiceInterruptionAllowed() { return allowVoiceInterruption; }
     boolean isSetupReady() { return setupReady; }
@@ -957,6 +1000,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             }
 
             userActionScope.updateFromUserText(completeUserInput);
+            if (tryHandleRuntimeAppTeaching(completeUserInput)) return;
             if (tryHandleRuntimeSendCurrent(completeUserInput)) return;
             if (isStopAgentTaskPhrase(completeUserInput)) {
                 cancelDeckAutoAdvance();
@@ -1526,6 +1570,19 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if (isFinishedIntentGeneration(callIntentGeneration)) {
             PerformanceMetrics.recordStalePostFinishTool(requestedName);
             sendFinishedIntentToolResponse(id, requestedName);
+            return;
+        }
+        if (isRuntimeAppTeachHandledGeneration(callIntentGeneration)) {
+            PerformanceMetrics.recordAppTeachToolSuppressed();
+            JSONObject handled = new JSONObject();
+            try {
+                handled.put("success", true);
+                handled.put("runtimeHandled", "APP_TEACH");
+                handled.put("message", runtimeAppTeachHandledMessage.isEmpty()
+                        ? "Runtime 已處理這次 App 教學；不要再呼叫工具，只要簡短回覆使用者。"
+                        : runtimeAppTeachHandledMessage);
+                sendToolResponse(id, requestedName, handled);
+            } catch (Exception ignored) {}
             return;
         }
         // 0034: model-facing semantic action -> existing trusted Runtime tool.
@@ -3439,6 +3496,75 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
 
 
+
+    private boolean tryHandleRuntimeAppTeaching(String input) {
+        boolean armedBefore = isAppTeachModeArmed();
+        AppTeachIntent intent = AppTeachIntent.parse(input, armedBefore);
+        if (intent.kind == AppTeachIntent.Kind.NONE) return false;
+
+        runtimeAppTeachHandledGeneration = userIntentGeneration;
+        userActionScope.consumeAppLearningAuthorization();
+
+        if (intent.kind == AppTeachIntent.Kind.CANCEL) {
+            clearAppTeachModeState();
+            PerformanceMetrics.recordAppTeachCancelled();
+            runtimeAppTeachHandledMessage =
+                    "App 教學已取消；不要呼叫工具，只要簡短確認已取消。";
+            NativeLiveService.notifyAppTeachFeedback("已取消 App 教學", "");
+            reportStage("已取消 App 教學");
+            return true;
+        }
+
+        if (intent.kind == AppTeachIntent.Kind.ARM) {
+            appTeachModeArmed = true;
+            appTeachModeUntilMs = System.currentTimeMillis() + APP_TEACH_MODE_TTL_MS;
+            PerformanceMetrics.recordAppTeachArmed();
+            runtimeAppTeachHandledMessage =
+                    "Runtime 已進入 App 教學模式；不要呼叫工具，只要請使用者說出要記住的一條操作規則。";
+            NativeLiveService.notifyAppTeachFeedback(
+                    "正在學習目前 App",
+                    "說一句你要 Crew 記住的操作規則");
+            reportStage("等待 App 教學規則");
+            return true;
+        }
+
+        String packageName = currentForegroundPackageName();
+        clearAppTeachModeState();
+        if (packageName.isEmpty()) {
+            runtimeAppTeachHandledMessage =
+                    "Runtime 無法確認目前前景 App；不要呼叫其他工具，請簡短請使用者回到 App 後再教一次。";
+            NativeLiveService.notifyAppTeachFeedback(
+                    "無法記住 App 經驗",
+                    "目前無法確認前景 App");
+            reportStage("App 教學失敗：找不到前景 App");
+            return true;
+        }
+
+        JSONObject saved = appPlaybookStore.remember(
+                packageName,
+                AppRuntimeRegistry.displayName(appContext, packageName),
+                "",
+                intent.guidance,
+                AppPlaybookStore.SOURCE_VOICE);
+        if (saved.optBoolean("success", false)) {
+            synchronized (injectedAppPlaybooks) { injectedAppPlaybooks.remove(packageName); }
+            PerformanceMetrics.recordAppTeachSaved();
+            runtimeAppTeachHandledMessage =
+                    "App 經驗已由 Runtime 保存；不要再呼叫工具，只要簡短確認已記住。";
+            NativeLiveService.notifyAppTeachFeedback(
+                    "已記住 App 經驗",
+                    AppRuntimeRegistry.displayName(appContext, packageName));
+            reportStage("✓ 已記住 App 經驗");
+        } else {
+            runtimeAppTeachHandledMessage =
+                    "Runtime 無法保存這條 App 經驗；不要改用 Notebook 或其他工具，請簡短告知使用者。";
+            NativeLiveService.notifyAppTeachFeedback(
+                    "無法記住 App 經驗",
+                    saved.optString("error", "儲存失敗"));
+            reportStage("App 教學儲存失敗");
+        }
+        return true;
+    }
 
     private JSONObject rememberCurrentAppGuidance(JSONObject args) {
         if (!userActionScope.consumeAppLearningAuthorization()) {

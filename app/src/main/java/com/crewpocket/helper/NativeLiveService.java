@@ -926,6 +926,37 @@ public class NativeLiveService extends Service {
         return instance != null && instance.client != null && instance.client.isAgentMuted();
     }
 
+    static boolean isAppTeachModeArmed() {
+        return active && instance != null && instance.client != null
+                && instance.client.isAppTeachModeArmed();
+    }
+
+    static boolean toggleAppTeachMode() {
+        NativeLiveService service = instance;
+        NativeGeminiLiveClient live = service == null ? null : service.client;
+        if (!active || live == null) {
+            notifyAppTeachFeedback("請先開始語音對話", "再使用「教 Crew」");
+            return false;
+        }
+        if (live.isAppTeachModeArmed()) {
+            live.cancelAppTeachMode();
+            notifyAppTeachFeedback("已取消 App 教學", "");
+            return false;
+        }
+        if (!live.armAppTeachMode()) {
+            notifyAppTeachFeedback("無法開始 App 教學", "請重新開始語音對話");
+            return false;
+        }
+        notifyAppTeachFeedback("正在學習目前 App", "說一句你要 Crew 記住的操作規則");
+        return true;
+    }
+
+    static void notifyAppTeachFeedback(String title, String detail) {
+        FloatingBubbleManager manager = FloatingBubbleManager.getInstance();
+        if (manager != null) manager.onAppTeachStateChanged(title, detail);
+        notifyRuntimeStateChanged();
+    }
+
     static boolean stopAgentTask() {
         return instance != null && instance.client != null && instance.client.cancelAgentTask("使用者按下停止任務");
     }
