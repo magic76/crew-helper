@@ -2765,12 +2765,15 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                             "找不到指定點擊目標。這不是使用者消歧義事件；不要顯示選擇卡，請依最新畫面改用不同方法。");
         }
 
-        // 📐 2. Explicit coordinate conversion.  The visual frame sent to the
-        // model is normally max 1280px on its long edge, not the device size.
+        // 📐 2. Explicit coordinate conversion. Visual transport resolution may
+        // change independently from device resolution, so image-space fallback
+        // always uses the actual most-recent full-screen frame dimensions.
         if (!resolvedFromNode && "image".equals(coordinateSpace)) {
             if (visionController.lastScreenWidth() <= 1 || visionController.lastScreenHeight() <= 1) return new JSONObject().put("success", false).put("error", "尚未取得目前螢幕尺寸，請先要求查看螢幕後再依影像座標點擊");
-            targetX = (targetX / Math.max(1, visionController.lastVisionWidth())) * visionController.lastScreenWidth();
-            targetY = (targetY / Math.max(1, visionController.lastVisionHeight())) * visionController.lastScreenHeight();
+            targetX = VisionCoordinateMapper.imageToScreen(
+                    targetX, visionController.lastVisionWidth(), visionController.lastScreenWidth());
+            targetY = VisionCoordinateMapper.imageToScreen(
+                    targetY, visionController.lastVisionHeight(), visionController.lastScreenHeight());
         } else if (!resolvedFromNode && "normalized_1000".equals(coordinateSpace)) {
             if (visionController.lastScreenWidth() <= 1 || visionController.lastScreenHeight() <= 1) return new JSONObject().put("success", false).put("error", "尚未取得目前螢幕尺寸，請先 inspect_ui 或查看螢幕");
             targetX = (targetX / 1000.0) * visionController.lastScreenWidth();

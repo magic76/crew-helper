@@ -21,6 +21,10 @@ final class LiveVisionController {
         boolean send(String payload);
     }
 
+    // 0120: keep full-screen and selected-region text readable on tall phones.
+    // Selected-region crops use the same cap but never become a phone coordinate space.
+    private static final int MAX_VISION_EDGE = 1536;
+
     private final Sender sender;
     private volatile int lastVisionWidth = 1;
     private volatile int lastVisionHeight = 1;
@@ -49,7 +53,7 @@ final class LiveVisionController {
         if (bitmap == null) return false;
         int sourceWidth = bitmap.getWidth();
         int sourceHeight = bitmap.getHeight();
-        int maxEdge = 1024;
+        int maxEdge = MAX_VISION_EDGE;
         if (Math.max(bitmap.getWidth(), bitmap.getHeight()) > maxEdge) {
             float scale = maxEdge / (float) Math.max(bitmap.getWidth(), bitmap.getHeight());
             Bitmap scaled = Bitmap.createScaledBitmap(
@@ -123,7 +127,7 @@ final class LiveVisionController {
 
     private boolean sendContextBitmapWithoutCoordinates(Bitmap bitmap) throws Exception {
         if (bitmap == null) return false;
-        int maxEdge = 1024;
+        int maxEdge = MAX_VISION_EDGE;
         if (Math.max(bitmap.getWidth(), bitmap.getHeight()) > maxEdge) {
             float scale = maxEdge / (float) Math.max(bitmap.getWidth(), bitmap.getHeight());
             Bitmap scaled = Bitmap.createScaledBitmap(
