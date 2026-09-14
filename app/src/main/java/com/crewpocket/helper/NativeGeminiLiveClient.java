@@ -4394,27 +4394,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         String shadowFingerprint = result == null ? "" : result.optString("fingerprint", "");
         shadowAgentRuntime.onToolResult(
                 id, name, shadowSuccess, shadowCode, shadowFingerprint);
-        synchronized (agentLock) {
-            if (activeAgentTask != null) {
-                AgentTaskRecord task = activeAgentTask;
-                long remainingMs = Math.max(0, AGENT_TASK_TIMEOUT_MS - (System.currentTimeMillis() - task.startedAt));
-                result.put("agentState", new JSONObject().put("taskId", task.taskId)
-                        .put("remainingSteps", Math.max(0, agentMaxSteps - task.steps))
-                        .put("remainingTimeMs", remainingMs)
-                        .put("canContinue", !task.cancelled && !task.finished && task.blockedReason == null
-                                && task.steps < agentMaxSteps && remainingMs > 0));
-                // Gemini Live can generate an audible acknowledgement for every
-                // function response.  That turns a recoverable retry into a
-                // stream of "sorry" messages on weaker voice models.  Make the
-                // runtime contract explicit on every in-progress turn instead
-                // of asking the model to infer it from success/error wording.
-                if (!task.cancelled && !task.finished && task.blockedReason == null
-                        && task.steps < agentMaxSteps && remainingMs > 0) {
-                    result.put("speechPolicy",
-                            "CONTINUE_SILENT_OR_FINISH_SPOKEN: If another action is needed, stay silent and call exactly one next tool. If current evidence completes the user's request, call no more tools and give exactly one short spoken final result. Never end an active task silently.");
-                }
-            }
-        }
         if (DeckRepository.hasActiveDeck() && (name.contains("deck"))) {
             result.put("modeInstructions", LivePrompt.DECK);
         }
