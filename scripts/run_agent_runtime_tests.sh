@@ -1,11 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-
-if [[ -f "$ROOT/scripts/0122_apply_native_patch.sh" && -n "${GITHUB_HEAD_REF:-}" ]]; then
-  bash "$ROOT/scripts/0122_apply_native_patch.sh"
-fi
-
 SRC="$ROOT/app/src/main/java/com/crewpocket/helper"
 OUT="$ROOT/.agent-runtime-test-classes"
 mkdir -p "$OUT"
