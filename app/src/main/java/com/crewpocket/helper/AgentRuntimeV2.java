@@ -13,6 +13,7 @@ import java.util.Map;
  *  - stale generation rejection
  *  - short-window duplicate mutation rejection
  *  - "pending verification" retry barrier
+ *  - one bounded recovery retry for explicitly re-observed safe actions
  *  - transaction verification / commit state
  *
  * It does NOT choose phone actions and does not execute Accessibility calls.
@@ -53,6 +54,8 @@ final class AgentRuntimeV2 {
         String screenIdentity;
         ActionTransaction.Status status;
         long updatedAtMs;
+        int recoveryRetriesUsed;
+        boolean recoveryRetryReady;
 
         RecentAction(long generation,
                      String actionHash,
@@ -66,6 +69,8 @@ final class AgentRuntimeV2 {
             this.screenIdentity = screenIdentity == null ? "" : screenIdentity;
             this.status = status;
             this.updatedAtMs = updatedAtMs;
+            this.recoveryRetriesUsed = 0;
+            this.recoveryRetryReady = false;
         }
     }
 
@@ -154,6 +159,21 @@ final class AgentRuntimeV2 {
                 }
                 if (recent.status == ActionTransaction.Status.FAILED
                         && age <= FAILED_RETRY_BARRIER_MS) {
+                    if (recent.recoveryRetryReady
+                            && recent.recoveryRetriesUsed < 1
+                            && ActionRecoveryPolicy.isSafeRetry(runtimeName)) {
+                        recent.recoveryRetryReady = false;
+                        recent.recoveryRetriesUsed++;
+                        recent.updatedAtMs = System.currentTimeMillis();
+                        record(AgentEvent.builder(AgentEvent.Type.ACTION_PREFLIGHT_ALLOWED)
+                                .generation(callGeneration)
+                                .toolCallId(toolCallId)
+                                .attr("runtime", safeName(runtimeName))
+                                .attr("recovery", "RETRY_ONCE")
+                                .build());
+                        return new PreflightResult(PreflightDecision.ALLOW,
+                                "RECOVERY_RETRY_ALLOWED", actionHash);
+                    }
                     record(AgentEvent.builder(AgentEvent.Type.OBSERVATION_REQUIRED)
                             .generation(callGeneration)
                             .toolCallId(toolCallId)
@@ -197,9 +217,14 @@ final class AgentRuntimeV2 {
         tx.allowPreflight();
         tx.start();
         transactions.put(toolCallId, tx);
-        recentByHash.put(hash, new RecentAction(generation, hash, runtimeName,
+        RecentAction previous = recentByHash.get(hash);
+        RecentAction started = new RecentAction(generation, hash, runtimeName,
                 screenIdentity(before), ActionTransaction.Status.STARTED,
-                System.currentTimeMillis()));
+                System.currentTimeMillis());
+        if (previous != null && previous.generation == generation) {
+            started.recoveryRetriesUsed = previous.recoveryRetriesUsed;
+        }
+        recentByHash.put(hash, started);
         trimMaps();
 
         record(AgentEvent.builder(AgentEvent.Type.ACTION_STARTED)
@@ -246,7 +271,7 @@ final class AgentRuntimeV2 {
         ActionVerificationResult verification = ActionVerifierV2.verify(
                 tx.runtimeName, tx.expectedEffect, effective,
                 tx.beforeObservation(), after);
-        applyVerification(tx, verification, after);
+        applyVerification(tx, verification, after, false);
         return verification;
     }
 
@@ -285,7 +310,7 @@ final class AgentRuntimeV2 {
                     continue;
                 }
             }
-            applyVerification(tx, verification, observation);
+            applyVerification(tx, verification, observation, true);
             if (verification.committed()) committed++;
         }
         return committed;
@@ -395,7 +420,8 @@ final class AgentRuntimeV2 {
 
     private void applyVerification(ActionTransaction tx,
                                    ActionVerificationResult verification,
-                                   ActionObservation after) {
+                                   ActionObservation after,
+                                   boolean explicitObservation) {
         tx.applyVerification(verification);
         if (verification.committed()) {
             record(AgentEvent.builder(AgentEvent.Type.ACTION_VERIFIED)
@@ -408,7 +434,7 @@ final class AgentRuntimeV2 {
                     .attr("code", safeCode(verification.code))
                     .build());
             tx.commit();
-            updateRecent(tx, ActionTransaction.Status.COMMITTED, after);
+            updateRecent(tx, ActionTransaction.Status.COMMITTED, after, false);
             record(AgentEvent.builder(AgentEvent.Type.ACTION_COMMITTED)
                     .generation(tx.generation)
                     .goalId(tx.goalId)
@@ -419,7 +445,7 @@ final class AgentRuntimeV2 {
                     .attr("stableKey", compactFingerprint(after.stableScreenKey))
                     .build());
         } else if (verification.pending()) {
-            updateRecent(tx, ActionTransaction.Status.PENDING_VERIFICATION, after);
+            updateRecent(tx, ActionTransaction.Status.PENDING_VERIFICATION, after, false);
             record(AgentEvent.builder(AgentEvent.Type.ACTION_VERIFICATION_PENDING)
                     .generation(tx.generation)
                     .goalId(tx.goalId)
@@ -435,7 +461,12 @@ final class AgentRuntimeV2 {
                     : (verification.status == ActionVerificationResult.Status.CANCELLED
                         ? ActionTransaction.Status.CANCELLED
                         : ActionTransaction.Status.FAILED);
-            updateRecent(tx, status, after);
+            boolean retryReady = ActionRecoveryPolicy.decide(
+                    tx.runtimeName,
+                    verification,
+                    recoveryRetriesUsed(tx.actionHash),
+                    explicitObservation) == ActionRecoveryPolicy.Decision.RETRY_ONCE;
+            updateRecent(tx, status, after, retryReady);
             record(AgentEvent.builder(AgentEvent.Type.ACTION_FAILED)
                     .generation(tx.generation)
                     .goalId(tx.goalId)
@@ -444,13 +475,26 @@ final class AgentRuntimeV2 {
                     .toolCallId(tx.toolCallId)
                     .attr("status", verification.status.name())
                     .attr("code", safeCode(verification.code))
+                    .attr("recovery", retryReady ? "RETRY_ONCE_READY" : "STOP")
                     .build());
         }
+    }
+
+    private int recoveryRetriesUsed(String actionHash) {
+        RecentAction recent = recentByHash.get(actionHash);
+        return recent == null ? 0 : recent.recoveryRetriesUsed;
     }
 
     private void updateRecent(ActionTransaction tx,
                               ActionTransaction.Status status,
                               ActionObservation observation) {
+        updateRecent(tx, status, observation, false);
+    }
+
+    private void updateRecent(ActionTransaction tx,
+                              ActionTransaction.Status status,
+                              ActionObservation observation,
+                              boolean recoveryRetryReady) {
         if (tx == null || tx.actionHash.isEmpty()) return;
         RecentAction recent = recentByHash.get(tx.actionHash);
         if (recent == null) {
@@ -463,6 +507,7 @@ final class AgentRuntimeV2 {
             if (!identity.isEmpty()) recent.screenIdentity = identity;
             recent.updatedAtMs = System.currentTimeMillis();
         }
+        recent.recoveryRetryReady = recoveryRetryReady;
     }
 
     private void cancelOpenTransactions(String reason) {
@@ -505,7 +550,8 @@ final class AgentRuntimeV2 {
                 || "type_text".equals(n)
                 || "search_current_app".equals(n)
                 || "send_text".equals(n)
-                || "launch_app".equals(n);
+                || "launch_app".equals(n)
+                || "press_key".equals(n);
     }
 
     private static boolean sameKnownScreen(String a, String b) {
@@ -555,4 +601,3 @@ final class AgentRuntimeV2 {
         return clean.length() > 64 ? clean.substring(0, 64) : clean;
     }
 }
-

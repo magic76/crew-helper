@@ -72,6 +72,13 @@ final class ModelToolResponseAdapter {
 
         if (isVerifiedSend(result)) return DONE;
 
+        String error = upper(result.optString("error", ""));
+        String verificationStatus = upper(result.optString("verificationStatus", ""));
+        if (containsAny(error, "OBSERVE_REQUIRED", "PENDING_VERIFICATION")
+                || "PENDING".equals(verificationStatus)) {
+            return WAIT;
+        }
+
         String stepResult = upper(result.optString("stepResult", ""));
         if (!result.optBoolean("success", false)
                 || "STEP_FAILED".equals(stepResult)
@@ -116,6 +123,9 @@ final class ModelToolResponseAdapter {
         }
 
         if (WAIT.equals(status)) {
+            if (containsAny(error, "OBSERVE_REQUIRED", "PENDING_VERIFICATION")) {
+                return "Runtime 已阻止重複操作；先重新觀察目前畫面一次，再決定下一步。";
+            }
             if ("wait".equals(toolName)) {
                 return "等待逾時；請重新觀察目前畫面，不要直接重複原操作。";
             }
@@ -139,11 +149,6 @@ final class ModelToolResponseAdapter {
                     "CURRENT_SCREEN_SEND_NOT_AUTHORIZED",
                     "SEND_NOT_AUTHORIZED")) {
                 return "目前沒有明確送出授權；不要重試，等待使用者的新指令。";
-            }
-            if (containsAny(error,
-                    "OBSERVE_REQUIRED",
-                    "PENDING_VERIFICATION")) {
-                return "需要先重新觀察目前畫面，再決定下一步。";
             }
             if (containsAny(error,
                     "UI_TARGET_NOT_FOUND",
