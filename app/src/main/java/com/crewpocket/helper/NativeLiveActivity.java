@@ -166,7 +166,7 @@ public class NativeLiveActivity extends Activity {
                 ? I18n.get(this, "AI 建立新簡報", "Create AI Presentation")
                 : (DECK_ENTRY_PRESENT.equals(deckEntryMode)
                     ? I18n.get(this, "Gemini AI 主講", "Gemini AI Presenter")
-                    : I18n.get(this, "原生 Gemini Live", "Native Gemini Live")));
+                    : I18n.get(this, "Live 控制台", "Live Console")));
         title.setTextSize(18);
         title.setTextColor(CrewTheme.TEXT_PRIMARY);
         title.setTypeface(Typeface.DEFAULT_BOLD);
@@ -184,8 +184,8 @@ public class NativeLiveActivity extends Activity {
                         "連線完成後會自動顯示第一頁，由 Gemini 直接開始主講。",
                         "After connection the first slide opens automatically and Gemini starts presenting.")
                     : I18n.get(this,
-                        "端到端低延遲 Web Audio PCM 直連通話（無須開啟瀏覽器）",
-                        "End-to-end low-latency direct voice chat (No browser needed)")));
+                        "開始對話、查看連線狀態，並調整通話中的即時控制。",
+                        "Start a conversation, check connection status, and adjust live controls.")));
         note.setTextSize(11);
         note.setTextColor(CrewTheme.TEXT_SECONDARY);
         note.setPadding(0, dp(4), 0, dp(18));
@@ -214,80 +214,47 @@ public class NativeLiveActivity extends Activity {
 
         root.addView(statusBadge);
 
-        // ── 2b. Voice health check ──
-        LinearLayout diagnosticCard = new LinearLayout(this);
-        diagnosticCard.setOrientation(LinearLayout.VERTICAL);
-        diagnosticCard.setPadding(dp(14), dp(10), dp(14), dp(12));
-        diagnosticCard.setBackground(CrewTheme.createCard(this, CrewTheme.BG_SURFACE, CrewTheme.BORDER_SUBTLE, 12));
-        LinearLayout.LayoutParams diagnosticLp = new LinearLayout.LayoutParams(
+        // ── 2b. Compact connection readiness ──
+        LinearLayout connectionRow = new LinearLayout(this);
+        connectionRow.setOrientation(LinearLayout.HORIZONTAL);
+        connectionRow.setGravity(Gravity.CENTER_VERTICAL);
+        connectionRow.setPadding(dp(12), dp(8), dp(8), dp(8));
+        connectionRow.setBackground(CrewTheme.createCard(
+                this, CrewTheme.BG_SURFACE, CrewTheme.BORDER_SUBTLE, 12));
+        LinearLayout.LayoutParams connectionLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        diagnosticLp.setMargins(0, dp(10), 0, 0);
-        diagnosticCard.setLayoutParams(diagnosticLp);
-        diagnosticButton = new Button(this);
-        diagnosticButton.setText(I18n.get(this, "🧪 執行語音自檢", "🧪 Run voice check"));
-        diagnosticButton.setTextSize(12);
-        diagnosticButton.setTextColor(CrewTheme.TEXT_PRIMARY);
-        diagnosticButton.setBackground(CrewTheme.createCard(this, CrewTheme.BG_ELEVATED, CrewTheme.BORDER_INDIGO, 10));
-        diagnosticCard.addView(diagnosticButton, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(42)));
-        diagnosticText = new TextView(this);
-        diagnosticText.setText(I18n.get(this, "檢查麥克風、網路、Gemini 與音訊送出。", "Checks mic, network, Gemini, and audio sending."));
-        diagnosticText.setTextSize(10);
-        diagnosticText.setTextColor(CrewTheme.TEXT_MUTED);
-        diagnosticText.setPadding(dp(4), dp(7), dp(4), 0);
-        diagnosticCard.addView(diagnosticText);
-        root.addView(diagnosticCard);
-
-        // ── 3. Gemini connection configuration ──
-        // The API key is configured only in the main Settings tab.  Do not keep
-        // another editable secret field on the Live screen.
-        LinearLayout keyCard = new LinearLayout(this);
-        keyCard.setOrientation(LinearLayout.VERTICAL);
-        keyCard.setPadding(dp(14), dp(14), dp(14), dp(14));
-        LinearLayout.LayoutParams keyCardLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT);
-        keyCardLp.setMargins(0, dp(14), 0, 0);
-        keyCard.setLayoutParams(keyCardLp);
-        keyCard.setBackground(CrewTheme.createCard(
-                this, CrewTheme.BG_SURFACE, CrewTheme.BORDER_SUBTLE, 16));
-
-        TextView keyLabel = new TextView(this);
-        keyLabel.setText(I18n.get(
-                this, "Gemini 連線設定", "Gemini Connection"));
-        keyLabel.setTextSize(12);
-        keyLabel.setTextColor(CrewTheme.TEAL_300);
-        keyLabel.setTypeface(Typeface.DEFAULT_BOLD);
-        keyCard.addView(keyLabel);
+        connectionLp.setMargins(0, dp(10), 0, 0);
+        connectionRow.setLayoutParams(connectionLp);
 
         geminiKeyStatusText = new TextView(this);
         geminiKeyStatusText.setTextSize(11);
         geminiKeyStatusText.setTextColor(CrewTheme.TEXT_SECONDARY);
-        geminiKeyStatusText.setPadding(0, dp(6), 0, dp(10));
-        keyCard.addView(geminiKeyStatusText);
+        geminiKeyStatusText.setGravity(Gravity.CENTER_VERTICAL);
+        connectionRow.addView(geminiKeyStatusText, new LinearLayout.LayoutParams(
+                0, dp(38), 1f));
 
         geminiKeySettingsButton = new Button(this);
         geminiKeySettingsButton.setAllCaps(false);
-        geminiKeySettingsButton.setTextSize(12);
+        geminiKeySettingsButton.setTextSize(10.5f);
         geminiKeySettingsButton.setTextColor(CrewTheme.TEXT_PRIMARY);
+        geminiKeySettingsButton.setMinHeight(0);
+        geminiKeySettingsButton.setMinimumHeight(0);
         geminiKeySettingsButton.setBackground(CrewTheme.createCard(
-                this, CrewTheme.BG_ELEVATED, CrewTheme.BORDER_INDIGO, 10));
+                this, CrewTheme.BG_ELEVATED, CrewTheme.BORDER_INDIGO, 9));
         geminiKeySettingsButton.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 openGeminiKeySettings(false);
             }
         });
-        keyCard.addView(
-                geminiKeySettingsButton,
-                new LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT, dp(42)));
+        connectionRow.addView(geminiKeySettingsButton, new LinearLayout.LayoutParams(
+                dp(110), dp(36)));
 
-        root.addView(keyCard);
+        root.addView(connectionRow);
         refreshGeminiKeyUi();
 
         // ── 4. Main Call Action Button ──
         callButton = new Button(this);
-        callButton.setText(I18n.get(this, "🎙️ 開始原生 Live 通話", "🎙️ Start Native Live Call"));
+        callButton.setText(I18n.get(this, "開始對話", "Start conversation"));
         callButton.setTextSize(14);
         callButton.setTextColor(Color.WHITE);
         callButton.setTypeface(Typeface.DEFAULT_BOLD);
@@ -313,7 +280,7 @@ public class NativeLiveActivity extends Activity {
         controlHeader.setOrientation(LinearLayout.HORIZONTAL);
         controlHeader.setGravity(Gravity.CENTER_VERTICAL);
         TextView controlTitle = new TextView(this);
-        controlTitle.setText(I18n.get(this, "助理控制", "Assistant Controls"));
+        controlTitle.setText(I18n.get(this, "即時控制", "Live Controls"));
         controlTitle.setTextSize(12);
         controlTitle.setTypeface(Typeface.DEFAULT_BOLD);
         controlTitle.setTextColor(CrewTheme.TEAL_300);
@@ -343,33 +310,12 @@ public class NativeLiveActivity extends Activity {
         controlActionsLp.setMargins(0, dp(8), 0, dp(10));
         controlCard.addView(controlActions, controlActionsLp);
 
-        toneButton = makeControlButton();
-        toneButton.setTextSize(11);
-        LinearLayout.LayoutParams toneLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(42));
-        toneLp.setMargins(0, 0, 0, dp(8));
-        controlCard.addView(toneButton, toneLp);
-
-        rolePresetButton = makeControlButton();
-        rolePresetButton.setTextSize(11);
-        LinearLayout.LayoutParams roleLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(42));
-        roleLp.setMargins(0, 0, 0, dp(8));
-        controlCard.addView(rolePresetButton, roleLp);
-
         outputButton = makeControlButton();
         outputButton.setTextSize(11);
         LinearLayout.LayoutParams outputLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(42));
-        outputLp.setMargins(0, 0, 0, dp(8));
+        outputLp.setMargins(0, 0, 0, dp(10));
         controlCard.addView(outputButton, outputLp);
-
-        promptButton = makeControlButton();
-        promptButton.setTextSize(11);
-        LinearLayout.LayoutParams promptLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(42));
-        promptLp.setMargins(0, 0, 0, dp(10));
-        controlCard.addView(promptButton, promptLp);
 
         LinearLayout noiseRow = new LinearLayout(this);
         noiseRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -518,6 +464,31 @@ public class NativeLiveActivity extends Activity {
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         root.addView(transcript, transcriptLp);
 
+        LinearLayout diagnosticCard = new LinearLayout(this);
+        diagnosticCard.setOrientation(LinearLayout.VERTICAL);
+        diagnosticCard.setPadding(dp(12), dp(10), dp(12), dp(10));
+        diagnosticCard.setBackground(CrewTheme.createCard(
+                this, CrewTheme.BG_SURFACE, CrewTheme.BORDER_SUBTLE, 12));
+        LinearLayout.LayoutParams diagnosticLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        diagnosticLp.setMargins(0, dp(14), 0, 0);
+        diagnosticCard.setLayoutParams(diagnosticLp);
+        diagnosticButton = makeControlButton();
+        diagnosticButton.setText(I18n.get(this, "進階診斷 · 執行語音自檢", "Advanced diagnostics · Run voice check"));
+        diagnosticButton.setTextSize(11);
+        setButtonCard(diagnosticButton, CrewTheme.BG_ELEVATED, CrewTheme.BORDER_SUBTLE, 10);
+        diagnosticCard.addView(diagnosticButton, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(40)));
+        diagnosticText = new TextView(this);
+        diagnosticText.setText(I18n.get(this,
+                "需要時檢查麥克風、網路、Gemini 與音訊送出。",
+                "Checks mic, network, Gemini, and audio sending when needed."));
+        diagnosticText.setTextSize(10);
+        diagnosticText.setTextColor(CrewTheme.TEXT_MUTED);
+        diagnosticText.setPadding(dp(4), dp(6), dp(4), 0);
+        diagnosticCard.addView(diagnosticText);
+        root.addView(diagnosticCard);
+
         setContentView(scroll);
 
         // Event Listeners
@@ -560,17 +531,6 @@ public class NativeLiveActivity extends Activity {
                 refreshAssistantControls();
             }
         });
-        toneButton.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) {
-                AppConfig.setLiveTone(NativeLiveActivity.this, nextLiveTone(AppConfig.getLiveTone(NativeLiveActivity.this)));
-                refreshAssistantControls();
-                Toast.makeText(NativeLiveActivity.this,
-                        I18n.get(NativeLiveActivity.this, "語氣模式將於下次 Live 通話套用", "Tone will apply to the next Live call"), Toast.LENGTH_SHORT).show();
-            }
-        });
-        rolePresetButton.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { showVoicePresetDialog(); }
-        });
         outputButton.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 String next = "media".equals(AppConfig.getAudioOutput(NativeLiveActivity.this)) ? "call" : "media";
@@ -578,11 +538,6 @@ public class NativeLiveActivity extends Activity {
                 refreshAssistantControls();
                 Toast.makeText(NativeLiveActivity.this, I18n.get(NativeLiveActivity.this,
                         "輸出模式將於下次 Live 通話套用", "Output mode will apply to the next Live call"), Toast.LENGTH_SHORT).show();
-            }
-        });
-        promptButton.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) {
-                showCustomPromptDialog();
             }
         });
         noiseSlider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
@@ -685,18 +640,13 @@ public class NativeLiveActivity extends Activity {
         boolean configured = key != null && key.trim().length() >= 20;
 
         geminiKeyStatusText.setText(configured
-                ? I18n.get(this,
-                    "✓ Gemini API Key 已在設定頁配置",
-                    "✓ Gemini API Key is configured in Settings")
-                : I18n.get(this,
-                    "尚未設定 Gemini API Key，開始通話前請先完成設定。",
-                    "Gemini API Key is not configured yet. Set it before starting Live."));
+                ? I18n.get(this, "Gemini · Ready", "Gemini · Ready")
+                : I18n.get(this, "Gemini · 需要 API Key", "Gemini · API key required"));
         geminiKeyStatusText.setTextColor(
                 configured ? CrewTheme.EMERALD_400 : CrewTheme.AMBER_400);
 
-        geminiKeySettingsButton.setText(configured
-                ? I18n.get(this, "⚙ 管理 API Key", "⚙ Manage API Key")
-                : I18n.get(this, "⚙ 前往設定 API Key", "⚙ Set API Key"));
+        geminiKeySettingsButton.setVisibility(configured ? View.GONE : View.VISIBLE);
+        geminiKeySettingsButton.setText(I18n.get(this, "設定 API Key", "Set API Key"));
     }
 
     private void openGeminiKeySettings(boolean resumeCallAfterSave) {
@@ -748,38 +698,29 @@ public class NativeLiveActivity extends Activity {
         if (interruptionButton == null) return;
         boolean active = client != null && client.isRunning();
         boolean allowInterruption = active && client.isVoiceInterruptionAllowed();
-        interruptionButton.setText(allowInterruption ? I18n.get(this, "🎙️ 可插話", "🎙️ Interrupt") : I18n.get(this, "🛡️ 防插話", "🛡️ Protected"));
+        interruptionButton.setText(allowInterruption
+                ? I18n.get(this, "插話：允許", "Barge-in: On")
+                : I18n.get(this, "插話：關閉", "Barge-in: Off"));
         setButtonCard(interruptionButton, allowInterruption ? Color.parseColor("#064E3B") : Color.parseColor("#78350F"), allowInterruption ? CrewTheme.EMERALD_500 : CrewTheme.AMBER_500, 10);
         boolean awake = FloatingBubbleManager.isKeepAwakeActive();
-        awakeButton.setText(awake ? I18n.get(this, "☀️ 常亮", "☀️ Awake") : I18n.get(this, "☾ 休眠", "☾ Sleep"));
+        awakeButton.setText(awake
+                ? I18n.get(this, "螢幕：常亮", "Screen: Awake")
+                : I18n.get(this, "螢幕：跟隨", "Screen: System"));
         setButtonCard(awakeButton, awake ? Color.parseColor("#422006") : CrewTheme.BG_ELEVATED, awake ? CrewTheme.AMBER_500 : CrewTheme.BORDER_SUBTLE, 10);
         String noise = client != null ? client.getNoiseMode() : AppConfig.getNoiseMode(this);
-        noiseButton.setText("noisy".equals(noise) ? I18n.get(this, "🛡️ 嘈雜", "🛡️ Noisy") : ("quiet".equals(noise) ? I18n.get(this, "🌙 安靜", "🌙 Quiet") : I18n.get(this, "✦ 自動", "✦ Auto")));
+        noiseButton.setText("noisy".equals(noise)
+                ? I18n.get(this, "環境：嘈雜", "Environment: Noisy")
+                : ("quiet".equals(noise)
+                    ? I18n.get(this, "環境：安靜", "Environment: Quiet")
+                    : I18n.get(this, "環境：自動", "Environment: Auto")));
         setButtonCard(noiseButton, "noisy".equals(noise) ? Color.parseColor("#78350F") : CrewTheme.BG_ELEVATED, "noisy".equals(noise) ? CrewTheme.AMBER_500 : CrewTheme.BORDER_SUBTLE, 10);
-        if (toneButton != null) {
-            toneButton.setText(I18n.get(this, "✨ 語氣：", "✨ Tone: ") + liveToneLabel(AppConfig.getLiveTone(this)));
-            toneButton.setTextColor(CrewTheme.TEXT_PRIMARY);
-            setButtonCard(toneButton, Color.parseColor("#172554"), CrewTheme.INDIGO_500, 10);
-        }
-        if (rolePresetButton != null) {
-            rolePresetButton.setText("🎭 " + I18n.get(this, "角色預設：", "Voice preset: ") + voicePresetLabel(AppConfig.getVoicePreset(this)));
-            rolePresetButton.setTextColor(CrewTheme.TEXT_PRIMARY);
-            setButtonCard(rolePresetButton, Color.parseColor("#312E81"), CrewTheme.INDIGO_400, 10);
-        }
         if (outputButton != null) {
             boolean media = "media".equals(AppConfig.getAudioOutput(this));
-            outputButton.setText(media ? I18n.get(this, "🔊 輸出：媒體音訊", "🔊 Output: Media") : I18n.get(this, "📞 輸出：通話音訊", "📞 Output: Call"));
+            outputButton.setText(media
+                    ? I18n.get(this, "音訊：媒體輸出", "Audio: Media")
+                    : I18n.get(this, "音訊：通話輸出", "Audio: Call"));
             outputButton.setTextColor(CrewTheme.TEXT_PRIMARY);
             setButtonCard(outputButton, media ? Color.parseColor("#164E63") : Color.parseColor("#3F1D5B"), media ? CrewTheme.TEAL_400 : CrewTheme.INDIGO_400, 10);
-        }
-        if (promptButton != null) {
-            String p = AppConfig.getCustomSystemPrompt(this);
-            boolean hasPrompt = !p.isEmpty();
-            promptButton.setText(hasPrompt
-                    ? ("🧠 " + I18n.get(this, "自訂 Prompt（已啟用）", "Custom Prompt (Active)"))
-                    : ("🧠 " + I18n.get(this, "自訂 Prompt（點擊自訂人設）", "Custom Prompt (Default)")));
-            promptButton.setTextColor(hasPrompt ? CrewTheme.AMBER_400 : CrewTheme.TEXT_SECONDARY);
-            setButtonCard(promptButton, hasPrompt ? Color.parseColor("#451A03") : CrewTheme.BG_ELEVATED, hasPrompt ? CrewTheme.AMBER_500 : CrewTheme.BORDER_SUBTLE, 10);
         }
         int suppression = client != null ? client.getNoiseSuppression() : AppConfig.getNoiseSuppression(this);
         if (noiseSlider != null && noiseSlider.getProgress() != suppression) noiseSlider.setProgress(suppression);
@@ -952,17 +893,17 @@ public class NativeLiveActivity extends Activity {
             callButton.setText(
                     DECK_ENTRY_CREATE.equals(deckEntryMode)
                             || DECK_ENTRY_PRESENT.equals(deckEntryMode)
-                    ? I18n.get(this, "🛑 結束 AI 簡報", "🛑 End AI Presentation")
-                    : I18n.get(this, "🛑 結束 Live 通話", "🛑 End Live Call"));
+                    ? I18n.get(this, "結束 AI 簡報", "End AI Presentation")
+                    : I18n.get(this, "結束對話", "End conversation"));
             callButton.setBackground(CrewTheme.createGradientButton(
                     this, CrewTheme.ROSE_500, Color.parseColor("#9F1239"), 14));
         } else {
             callButton.setText(
                     DECK_ENTRY_CREATE.equals(deckEntryMode)
-                    ? I18n.get(this, "🎙️ 開始建立簡報", "🎙️ Start Creating")
+                    ? I18n.get(this, "開始建立簡報", "Start Creating")
                     : (DECK_ENTRY_PRESENT.equals(deckEntryMode)
-                        ? I18n.get(this, "🎙️ 開始 AI 主講", "🎙️ Start AI Presenter")
-                        : I18n.get(this, "🎙️ 開始原生 Live 通話", "🎙️ Start Native Live Call")));
+                        ? I18n.get(this, "開始 AI 主講", "Start AI Presenter")
+                        : I18n.get(this, "開始對話", "Start conversation")));
             callButton.setBackground(CrewTheme.createGradientButton(
                     this, CrewTheme.TEAL_500, CrewTheme.INDIGO_600, 14));
         }

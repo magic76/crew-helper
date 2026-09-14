@@ -28,7 +28,7 @@ final class LiveToolCatalog {
                 .put("target", new JSONObject().put("type", "STRING")
                         .put("description", "Human semantic target or App name. Examples: Google, Search, Wi-Fi, first result. Do not pass coordinates/resource IDs."))
                 .put("text", new JSONObject().put("type", "STRING")
-                        .put("description", "For TYPE exact text to enter; for SEARCH the query. TYPE never submits a message."))
+                        .put("description", "For TYPE: exact text to put into the current visible editable field (settings, system prompt, form, note field, search box, or chat composer). TYPE never submits. For SEARCH: the query."))
                 .put("direction", new JSONObject().put("type", "STRING")
                         .put("enum", new JSONArray().put("forward").put("backward").put("left").put("right"))
                         .put("description", "Only for SCROLL. This is CONTENT/NAVIGATION direction, never finger gesture direction. forward = reveal later/below content or next page; backward = reveal earlier/above content or previous page. Use left/right only for explicitly horizontal content. Runtime converts this semantic direction into Android scrolling/swiping."))
@@ -37,7 +37,7 @@ final class LiveToolCatalog {
                         .put("description", "Optional SCROLL distance."));
         tools.put(new JSONObject().put("name", "phone_action")
                 .put("description",
-                        "Perform exactly ONE semantic phone step. Available actions: OPEN_APP, SEARCH, COMMIT_SEARCH, TAP, TYPE, SCROLL, BACK, HOME. COMMIT_SEARCH presses the current keyboard search/IME button only. Runtime owns selectors, focus, Android implementation and verification. For vertical SCROLL, use direction=forward to continue to later/below content or the next page, and direction=backward to return to earlier/above content or the previous page; never reason about the physical finger swipe direction. SEARCH is one Runtime transaction; do not manually TAP search then TYPE. TYPE never submits a real message. Real message sending is current-screen only through send_text.")
+                        "Perform exactly ONE semantic phone step. Available actions: OPEN_APP, SEARCH, COMMIT_SEARCH, TAP, TYPE, SCROLL, BACK, HOME. TYPE is generic text entry into the current visible editable field, including settings/system prompts/forms/search/chat composers, and never submits. COMMIT_SEARCH presses the current keyboard search/IME button only. Runtime owns selectors, focus, Android implementation and verification. For vertical SCROLL, use direction=forward to continue to later/below content or the next page, and direction=backward to return to earlier/above content or the previous page; never reason about physical finger direction. SEARCH is one Runtime transaction; do not manually TAP search then TYPE. Message submission is separate and current-screen only through send_text.")
                 .put("parameters", new JSONObject().put("type", "OBJECT")
                         .put("properties", phoneActionProperties)
                         .put("required", new JSONArray().put("action"))));
@@ -52,7 +52,7 @@ final class LiveToolCatalog {
                                         .put("description", "Public http/https URL to read")))
                         .put("required", new JSONArray().put("url"))));
         tools.put(new JSONObject().put("name", "create_note").put("description",
-                "Create a persistent Crew Notebook note ONLY when the user explicitly asks to save, note, remember in the notebook, or add to notes. In normal Crew use, an unqualified request such as 記一下/記下來/存到記事本/用記事本記下來 means Crew Notebook unless the user explicitly names another notes app. If the user selected a URL and asks you to parse and save it: get_selected_region -> read_web_page -> create_note.")
+                "PERSISTENT CREW NOTEBOOK ONLY. Use when the user explicitly asks to save/note/remember content; unqualified 記一下/記下來/remember this means Crew Notebook unless another notes app is named. Do NOT use create_note to put text into a visible UI field such as settings, a system prompt editor, a form, search box, or chat composer; use phone_action(TYPE) for those. If a selected URL must be parsed and saved: get_selected_region -> read_web_page -> create_note.")
                 .put("parameters", new JSONObject().put("type", "OBJECT")
                         .put("properties", new JSONObject()
                                 .put("title", new JSONObject().put("type", "STRING"))
@@ -112,7 +112,7 @@ final class LiveToolCatalog {
                         .put("timeout_ms", new JSONObject().put("type", "INTEGER")
                                 .put("description", "Maximum wait milliseconds (default 5000, max 15000)")))));
         tools.put(new JSONObject().put("name", "send_text").put("description",
-                "CURRENT SCREEN ONLY: use only when THIS turn contains new message text plus an explicit send verb. Pass the exact text once. Runtime performs TYPE then SEND_CURRENT and verifies one submit attempt. Standalone commands such as 送出/發送/send are intercepted directly by Runtime before model tool selection. Never search for or navigate to a recipient.")
+                "MESSAGE SUBMISSION ONLY, CURRENT SCREEN ONLY. Use only when THIS turn contains new message text plus an explicit send/submit request for the already-visible chat composer. If the user only asks to type/fill/paste into the current visible editable field, use phone_action(TYPE), even in settings, a system prompt editor, a form, or a chat composer. Pass exact message text once; Runtime performs TYPE then SEND_CURRENT and verifies one submit attempt. Standalone 送出/發送/send is Runtime-owned. Never search for or navigate to a recipient.")
                 .put("parameters", new JSONObject().put("type", "OBJECT")
                         .put("properties", new JSONObject()
                                 .put("text", new JSONObject().put("type", "STRING")

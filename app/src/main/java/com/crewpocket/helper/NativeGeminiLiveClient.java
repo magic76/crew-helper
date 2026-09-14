@@ -1679,6 +1679,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             }
             else if ("read_web_page".equals(name)) result = readWebPage(args);
             else if (NotebookToolHandler.handles(name)) {
+                if ("create_note".equals(name) || "update_note".equals(name)) {
+                    PerformanceMetrics.recordTextRouteNotebook();
+                }
                 result = notebookToolHandler.execute(name, args);
             }
             else if ("take_screenshot".equals(name)) result = captureAndSendScreen();
@@ -3763,7 +3766,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         // Weak Live models occasionally choose TYPE even though the latest
         // utterance clearly asks to send.  Upgrade that call to the one safe
         // Runtime-owned transaction instead of permitting TYPE -> TAP guessing.
-        if (userActionScope.canSend()) return sendTextToPhone(args);
+        if (userActionScope.canSend()) {
+            PerformanceMetrics.recordTextRouteTypeRemappedToSend();
+            return sendTextToPhone(args);
+        }
         if (userActionScope.shouldBlockAdditionalTextEntry()) {
             return runtimeBlocked("SEARCH_SCOPE_ADDITIONAL_TEXT_NOT_AUTHORIZED",
                     "搜尋查詢已輸入；最新任務沒有授權進入聊天室或再輸入訊息。");
@@ -3792,6 +3798,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
         // 2. Send text to Accessibility Service.
         // Preserve the bridge result; Runtime reconciliation below decides the final outcome.
+        PerformanceMetrics.recordTextRouteType();
         JSONObject reply = helperPost("/type", new JSONObject().put("text", text));
         if (reply.optBoolean("success", false)) {
             reply.put("message", "已在輸入框輸入文字");
@@ -3996,9 +4003,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         }
         if (!userActionScope.canSend()) {
             return runtimeBlocked("CURRENT_SCREEN_SEND_NOT_AUTHORIZED",
-                    "最新一句必須明確要求送出；TYPE 本身不代表送出。");
+                    "send_text 只用於最新一句明確要求送出目前聊天室訊息。若使用者只是要在目前可見欄位打字、填入或貼上內容（包含設定、system prompt、表單或聊天輸入框），請改用 phone_action(TYPE)；不要宣稱 Crew 無法一般打字。");
         }
 
+        PerformanceMetrics.recordTextRouteSend();
         userActionScope.markMessageTransactionHandled();
         userActionScope.consumeSendAuthorization();
 

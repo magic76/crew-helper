@@ -54,6 +54,11 @@ final class PerformanceMetrics {
     private static long selectedRegionCropContexts;
     private static long selectedRegionMetadataFallbacks;
     private static long selectedRegionFullScreenInspects;
+    // 0114: text-destination routing counts only; never stores entered text.
+    private static long textRouteType;
+    private static long textRouteSend;
+    private static long textRouteNotebook;
+    private static long textRouteTypeRemappedToSend;
 
     private PerformanceMetrics() {}
 
@@ -215,6 +220,22 @@ final class PerformanceMetrics {
         selectedRegionFullScreenInspects++;
     }
 
+    static synchronized void recordTextRouteType() {
+        textRouteType++;
+    }
+
+    static synchronized void recordTextRouteSend() {
+        textRouteSend++;
+    }
+
+    static synchronized void recordTextRouteNotebook() {
+        textRouteNotebook++;
+    }
+
+    static synchronized void recordTextRouteTypeRemappedToSend() {
+        textRouteTypeRemappedToSend++;
+    }
+
     static synchronized String buildReport() {
         StringBuilder out = new StringBuilder();
         out.append("Performance (rolling up to ").append(MAX_SAMPLES).append(" samples)\n");
@@ -242,6 +263,11 @@ final class PerformanceMetrics {
                 .append(selectedRegionCropContexts)
                 .append(" metadata-fallback=").append(selectedRegionMetadataFallbacks)
                 .append(" full-screen-inspect=").append(selectedRegionFullScreenInspects)
+                .append("\n");
+        out.append("Text routing: type=").append(textRouteType)
+                .append(" send=").append(textRouteSend)
+                .append(" notebook=").append(textRouteNotebook)
+                .append(" type-remapped-to-send=").append(textRouteTypeRemappedToSend)
                 .append("\n");
 
         appendAgentTrace(out, lastFinishedTrace);
@@ -316,6 +342,10 @@ final class PerformanceMetrics {
         selectedRegionCropContexts = 0L;
         selectedRegionMetadataFallbacks = 0L;
         selectedRegionFullScreenInspects = 0L;
+        textRouteType = 0L;
+        textRouteSend = 0L;
+        textRouteNotebook = 0L;
+        textRouteTypeRemappedToSend = 0L;
     }
 
     private static AgentTrace ensureTrace(String taskId, long generation) {

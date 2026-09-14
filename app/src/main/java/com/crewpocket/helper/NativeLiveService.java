@@ -178,10 +178,10 @@ public class NativeLiveService extends Service {
         @Override public void run() {
             if (!active || stopRequested) return;
 
-            int minutes = AppConfig.getLiveIdleTimeoutMinutes(NativeLiveService.this);
-            if (minutes <= 0) return;
+            int timeoutSeconds = AppConfig.getLiveIdleTimeoutSeconds(NativeLiveService.this);
+            if (timeoutSeconds <= 0) return;
 
-            long timeoutMs = minutes * 60_000L;
+            long timeoutMs = timeoutSeconds * 1000L;
             long now = System.currentTimeMillis();
             if (lastUserInstructionAtMs <= 0L) lastUserInstructionAtMs = now;
             long ageMs = Math.max(0L, now - lastUserInstructionAtMs);
@@ -193,13 +193,20 @@ public class NativeLiveService extends Service {
 
             NativeGeminiLiveClient live = client;
             if (live != null && (live.hasActiveAgentTask() || live.isAiSpeaking())) {
-                visualHandler.postDelayed(this, 15_000L);
+                // Never cut an active Agent task or Gemini speech. Short timeout
+                // choices should still end promptly once the busy state clears.
+                visualHandler.postDelayed(this, 2_000L);
                 return;
             }
 
-            returnToIdle("閒置 " + minutes + " 分鐘，自動結束語音");
+            returnToIdle("閒置 " + liveIdleTimeoutLabel(timeoutSeconds) + "，自動結束語音");
         }
     };
+
+    private String liveIdleTimeoutLabel(int seconds) {
+        if (seconds < 60) return seconds + " 秒";
+        return (seconds / 60) + " 分鐘";
+    }
 
     private void noteLiveUserInstruction() {
         if (!active) return;
@@ -210,12 +217,12 @@ public class NativeLiveService extends Service {
     private void armLiveIdleTimeout() {
         visualHandler.removeCallbacks(liveIdleTimeoutRunnable);
         if (!active || stopRequested) return;
-        int minutes = AppConfig.getLiveIdleTimeoutMinutes(this);
-        if (minutes <= 0) return;
+        int timeoutSeconds = AppConfig.getLiveIdleTimeoutSeconds(this);
+        if (timeoutSeconds <= 0) return;
         if (lastUserInstructionAtMs <= 0L) {
             lastUserInstructionAtMs = System.currentTimeMillis();
         }
-        long timeoutMs = minutes * 60_000L;
+        long timeoutMs = timeoutSeconds * 1000L;
         long ageMs = Math.max(0L, System.currentTimeMillis() - lastUserInstructionAtMs);
         visualHandler.postDelayed(liveIdleTimeoutRunnable, Math.max(1000L, timeoutMs - ageMs));
     }

@@ -901,15 +901,12 @@ public class MainActivity extends Activity
                     }
                 }));
 
-        final int liveIdleMinutes =
-                AppConfig.getLiveIdleTimeoutMinutes(this);
+        final int liveIdleSeconds =
+                AppConfig.getLiveIdleTimeoutSeconds(this);
         pageContent.addView(makeSettingsRow(
                 CrewIcons.CLOCK,
                 I18n.get(this, "閒置自動結束", "Live Idle Auto-End"),
-                liveIdleMinutes <= 0
-                        ? I18n.get(this, "關閉", "Off")
-                        : liveIdleMinutes + " "
-                                + I18n.get(this, "分鐘", "min"),
+                liveIdleTimeoutSummary(liveIdleSeconds),
                 CrewTheme.CYAN_400,
                 new View.OnClickListener() {
                     @Override public void onClick(View v) {
@@ -1327,9 +1324,11 @@ public class MainActivity extends Activity
     }
 
     private void showLiveIdleTimeoutDialog() {
-        final int[] values = new int[]{0, 1, 2, 3, 5, 10, 15, 30};
+        final int[] values = new int[]{0, 15, 30, 60, 120, 180, 300, 600, 900, 1800};
         final String[] labels = new String[]{
             I18n.get(this, "關閉自動結束", "Disable auto-end"),
+            I18n.get(this, "15 秒", "15 seconds"),
+            I18n.get(this, "30 秒", "30 seconds"),
             I18n.get(this, "1 分鐘", "1 minute"),
             I18n.get(this, "2 分鐘（預設）", "2 minutes (default)"),
             I18n.get(this, "3 分鐘", "3 minutes"),
@@ -1338,7 +1337,7 @@ public class MainActivity extends Activity
             I18n.get(this, "15 分鐘", "15 minutes"),
             I18n.get(this, "30 分鐘", "30 minutes")
         };
-        int current = AppConfig.getLiveIdleTimeoutMinutes(this);
+        int current = AppConfig.getLiveIdleTimeoutSeconds(this);
         int checked = 0;
         for (int i = 0; i < values.length; i++) {
             if (values[i] == current) { checked = i; break; }
@@ -1348,7 +1347,7 @@ public class MainActivity extends Activity
             .setTitle(I18n.get(this, "語音閒置自動結束", "Live Idle Auto-End"))
             .setSingleChoiceItems(labels, checked, new android.content.DialogInterface.OnClickListener() {
                 @Override public void onClick(android.content.DialogInterface dialog, int which) {
-                    AppConfig.setLiveIdleTimeoutMinutes(MainActivity.this, values[which]);
+                    AppConfig.setLiveIdleTimeoutSeconds(MainActivity.this, values[which]);
                     NativeLiveService.refreshLiveIdleTimeout();
                     dialog.dismiss();
                     renderSettingsPage();
@@ -1960,6 +1959,12 @@ public class MainActivity extends Activity
         return "media".equals(AppConfig.getAudioOutput(this))
                 ? I18n.get(this, "媒體模式", "Media")
                 : I18n.get(this, "通話模式", "Call");
+    }
+
+    private String liveIdleTimeoutSummary(int seconds) {
+        if (seconds <= 0) return I18n.get(this, "關閉", "Off");
+        if (seconds < 60) return seconds + " " + I18n.get(this, "秒", "sec");
+        return (seconds / 60) + " " + I18n.get(this, "分鐘", "min");
     }
 
     private String appVersionSummary() {

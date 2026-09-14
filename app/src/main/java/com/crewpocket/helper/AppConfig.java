@@ -29,8 +29,10 @@ public class AppConfig {
 
     /** Maximum automatic Gemini tool-result cycles in one Live agent task. */
     public static final String KEY_AGENT_MAX_STEPS = "agent_max_steps";
-    /** 0031: minutes without a new user instruction before Live returns to IDLE. 0 disables. */
+    /** 0031 legacy storage; migrated lazily to seconds by 0115. */
     public static final String KEY_LIVE_IDLE_TIMEOUT_MINUTES = "live_idle_timeout_minutes";
+    /** 0115: seconds without a new user instruction before Live returns to IDLE. 0 disables. */
+    public static final String KEY_LIVE_IDLE_TIMEOUT_SECONDS = "live_idle_timeout_seconds";
 
     // 0025: Always-On infra. These are runtime/infra preferences, not LLM state.
     public static final String KEY_ALWAYS_ON_ENABLED = "always_on_enabled";
@@ -470,18 +472,43 @@ public class AppConfig {
         getPrefs(context).edit().putInt(KEY_AGENT_MAX_STEPS, Math.max(1, Math.min(100, steps))).apply();
     }
 
-    // 0031. Live idle timeout
+    // 0031 / 0115. Live idle timeout. Seconds are authoritative so short
+    // 15s / 30s choices are representable; existing minute preferences migrate once.
+    public static int getLiveIdleTimeoutSeconds(Context context) {
+        if (context == null) return 120;
+        SharedPreferences prefs = getPrefs(context);
+        if (prefs.contains(KEY_LIVE_IDLE_TIMEOUT_SECONDS)) {
+            return Math.max(0, Math.min(1800,
+                    prefs.getInt(KEY_LIVE_IDLE_TIMEOUT_SECONDS, 120)));
+        }
+        int legacyMinutes = Math.max(0, Math.min(30,
+                prefs.getInt(KEY_LIVE_IDLE_TIMEOUT_MINUTES, 2)));
+        int migratedSeconds = legacyMinutes * 60;
+        prefs.edit().putInt(KEY_LIVE_IDLE_TIMEOUT_SECONDS, migratedSeconds).apply();
+        return migratedSeconds;
+    }
+
+    public static void setLiveIdleTimeoutSeconds(Context context, int seconds) {
+        if (context == null) return;
+        getPrefs(context).edit().putInt(
+                KEY_LIVE_IDLE_TIMEOUT_SECONDS,
+                Math.max(0, Math.min(1800, seconds))).apply();
+    }
+
+    /** Backward-compatible wrappers for older callers. */
     public static int getLiveIdleTimeoutMinutes(Context context) {
-        if (context == null) return 2;
-        return Math.max(0, Math.min(30,
-                getPrefs(context).getInt(KEY_LIVE_IDLE_TIMEOUT_MINUTES, 2)));
+        int seconds = getLiveIdleTimeoutSeconds(context);
+        if (seconds <= 0) return 0;
+        return Math.max(1, (seconds + 59) / 60);
     }
 
     public static void setLiveIdleTimeoutMinutes(Context context, int minutes) {
         if (context == null) return;
-        getPrefs(context).edit().putInt(
-                KEY_LIVE_IDLE_TIMEOUT_MINUTES,
-                Math.max(0, Math.min(30, minutes))).apply();
+        int cleanMinutes = Math.max(0, Math.min(30, minutes));
+        getPrefs(context).edit()
+                .putInt(KEY_LIVE_IDLE_TIMEOUT_MINUTES, cleanMinutes)
+                .putInt(KEY_LIVE_IDLE_TIMEOUT_SECONDS, cleanMinutes * 60)
+                .apply();
     }
 
     // ── 0025. Always-On Runtime ──
