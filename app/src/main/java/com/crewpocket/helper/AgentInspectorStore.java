@@ -203,6 +203,14 @@ final class AgentInspectorStore {
             editor.putString(KEY_TASK, task.toString());
         }
         editor.apply();
+
+        // 0130 reflection learning: only the already-sanitized Inspector task
+        // is eligible for asynchronous review. This never blocks Live or phone
+        // execution, and the coordinator de-duplicates completed tasks.
+        if (task != null) {
+            TaskReflectionCoordinator.maybeReflect(
+                    context, rawStatus, task, activeTask);
+        }
     }
 
     static synchronized String buildReport(Context context) {
