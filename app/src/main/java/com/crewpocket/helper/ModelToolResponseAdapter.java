@@ -23,7 +23,7 @@ final class ModelToolResponseAdapter {
     static final String NEED_USER = "NEED_USER";
     static final String FAILED = "FAILED";
 
-    private static final int MAX_SCREEN_ITEMS = 10;
+    private static final int MAX_SCREEN_ITEMS = 14;
     private static final int MAX_CHOICES = 6;
     private static final int MAX_MESSAGE = 180;
     private static final int MAX_LABEL = 96;
