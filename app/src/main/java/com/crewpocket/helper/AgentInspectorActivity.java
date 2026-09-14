@@ -136,14 +136,20 @@ public class AgentInspectorActivity extends Activity {
         refreshReport();
     }
 
+    private String buildFullReport() {
+        return AgentInspectorStore.buildReport(this)
+                + "\n\n"
+                + ReflectionLearningStats.buildReport(this);
+    }
+
     private void refreshReport() {
         if (reportView != null) {
-            reportView.setText(AgentInspectorStore.buildReport(this));
+            reportView.setText(buildFullReport());
         }
     }
 
     private void copyReport() {
-        String report = AgentInspectorStore.buildReport(this);
+        String report = buildFullReport();
         ClipboardManager clipboard =
                 (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
         if (clipboard != null) {
