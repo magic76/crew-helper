@@ -18,7 +18,7 @@ import java.nio.charset.StandardCharsets;
  * quota error, or model error simply drops the reflection attempt.
  */
 final class GeminiTaskReflector {
-    static final String MODEL = "gemini-3.7-flash";
+    static final String MODEL = "gemini-3.6-flash";
     private static final String ENDPOINT =
             "https://generativelanguage.googleapis.com/v1beta/models/"
                     + MODEL + ":generateContent";
