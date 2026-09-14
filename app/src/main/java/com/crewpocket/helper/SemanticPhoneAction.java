@@ -52,6 +52,19 @@ final class SemanticPhoneAction {
         if ("TYPE".equals(action)) {
             if (text.isEmpty()) return error(action, "TYPE_NEEDS_TEXT",
                     "TYPE 需要 text；TYPE 只輸入文字，不會送出訊息。");
+
+            // 0132 Goal Outcome Evidence: action success is not enough when the
+            // latest user turn explicitly requested a text length. Reject the
+            // model-supplied payload before any phone mutation if it materially
+            // misses that numeric constraint. Only counts are exposed; text is not.
+            TextEntryGoalGuard.Validation length = TextEntryGoalGuard.validate(text);
+            if (!length.allowed) {
+                return error(action, length.errorCode(),
+                        "文字長度未符合使用者這一輪的要求。請重新產生符合長度的內容後再 TYPE；"
+                                + "不要宣稱已完成。expected=" + length.expected
+                                + ", actual=" + length.actual + ".");
+            }
+
             JSONObject out = new JSONObject().put("text", text);
             if (!target.isEmpty()) out.put("target", target);
             return mapped(action, "type_text", out);
