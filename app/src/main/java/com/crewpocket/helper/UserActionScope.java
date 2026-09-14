@@ -51,6 +51,7 @@ final class UserActionScope {
     }
 
     synchronized void updateFromUserText(String text) {
+        TextEntryGoalGuard.updateFromUserText(text);
         update(text);
     }
 
@@ -80,7 +81,10 @@ final class UserActionScope {
 
         boolean navigation = hasNavigationIntent(value);
         boolean search = hasSearchIntent(value) || navigation;
-        boolean resultSelection = search;
+        // Runtime's deterministic result-selection adapter is currently Maps-only.
+        // Reserve it for navigation flows. Generic "search then open/select" stays
+        // authorized but returns the fresh result screen to Live for a semantic TAP.
+        boolean resultSelection = navigation;
         boolean openResult = navigation || hasPostSearchOpenIntent(value);
 
         namedRecipientMessagingUnsupported = isNamedRecipientMessagingRequest(text);
@@ -337,7 +341,7 @@ final class UserActionScope {
                 "記住", "记住", "記起來", "记起来", "學起來", "学起来",
                 "學會", "学会", "記得這個", "记得这个",
                 "教你一個規則", "教你一个规则")
-                || folded.matches(".*\b(remember|learn|teach)\b.*");
+                || folded.matches(".*\\b(remember|learn|teach)\\b.*");
         if (!remember) return false;
         return containsAny(value,
                 "這個app", "这个app", "這個應用", "这个应用",
@@ -347,7 +351,7 @@ final class UserActionScope {
                 "頁面", "页面", "畫面", "画面", "搜尋", "搜索",
                 "導航", "导航", "欄位", "栏位",
                 "規則", "规则", "操作經驗", "操作经验", "app經驗", "app经验")
-                || folded.matches(".*\b(app|application|workflow|flow|operation|screen|button|search|navigation|rule|guidance|tip)\b.*");
+                || folded.matches(".*\\b(app|application|workflow|flow|operation|screen|button|search|navigation|rule|guidance|tip)\\b.*");
     }
 
     static boolean looksLikeSendTarget(String metadata) {
@@ -486,6 +490,7 @@ final class UserActionScope {
         return containsAny(value,
                 "打開", "打开", "開啟", "开启", "點開", "点开",
                 "進入", "进入", "點進", "点进", "選擇", "选择",
+                "選第", "选第", "點第", "点第",
                 "open", "enter", "select", "click", "tap");
     }
 

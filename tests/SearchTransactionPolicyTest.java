@@ -44,6 +44,29 @@ public final class SearchTransactionPolicyTest {
                 "typed query without commit/result is query-entered");
         check(!typedOnly.resultsObserved, "query-entered is not results");
 
+        // 0132: generic search + open/select must not enter the Maps-only
+        // deterministic result picker. Live receives the fresh screen and may
+        // perform a normal semantic TAP on the visible first result.
+        UserActionScope contacts = new UserActionScope();
+        contacts.updateFromUserText("搜尋聯絡人後選第一個");
+        check(contacts.shouldAutoCommitSearch(),
+                "contact search should still use Runtime search transaction");
+        contacts.markSearchQueryEntered();
+        contacts.markSearchCommitted();
+        check(!contacts.shouldSelectSearchResult(),
+                "generic contact search must not use Maps-only result picker");
+        check("OPEN_RESULT".equals(contacts.searchContinuation()),
+                "generic contact search should preserve open-result intent");
+        check(!contacts.shouldBlockTapForSearch("first result", false),
+                "semantic TAP after generic search must remain authorized");
+
+        UserActionScope maps = new UserActionScope();
+        maps.updateFromUserText("導航到台北101");
+        maps.markSearchQueryEntered();
+        maps.markSearchCommitted();
+        check(maps.shouldSelectSearchResult(),
+                "navigation flow should retain deterministic result selection");
+
         System.out.println("PASS SearchTransactionPolicyTest: "
                 + assertions + " checks");
     }

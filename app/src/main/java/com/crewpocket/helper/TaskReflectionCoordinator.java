@@ -16,10 +16,9 @@ import java.util.concurrent.Executors;
 /**
  * Bridges sanitized Agent Inspector metadata to the post-task reviewer.
  *
- * Important: AgentInspectorStore already strips transcript text, tool args,
- * model replies, screenshots, API keys and raw result details. Reflection sees
- * only that bounded metadata plus the current app identity and existing
- * operational App Playbook context.
+ * Important: AgentInspectorStore strips transcript text, tool args, model
+ * replies, screenshots, API keys and raw result details. Reflection sees only
+ * bounded categories/counts plus current app identity and existing App Playbook.
  */
 final class TaskReflectionCoordinator {
     private static final String TAG = "CrewReflection";
@@ -70,9 +69,18 @@ final class TaskReflectionCoordinator {
             boolean cancelled = ReflectionLearningPolicy.looksCancelled(rawStatus);
             int mutations = task.optInt("mutationActions", 0);
 
+            // 0132: action-level success is not sufficient evidence of goal
+            // success. Coarse, privacy-safe outcome signals may trigger review
+            // even for a one-step task (e.g. 100 requested chars vs 5 supplied,
+            // model refusal, or a Runtime safety/stability block).
+            int outcomeSignals = failedSteps;
+            if (task.optBoolean("partialOutcome", false)) outcomeSignals++;
+            if (task.optBoolean("modelRefusal", false)) outcomeSignals++;
+            if (!task.optString("blockCategory", "").isEmpty()) outcomeSignals++;
+
             if (!ReflectionLearningPolicy.shouldReflect(
                     mutations,
-                    failedSteps,
+                    outcomeSignals,
                     false,
                     cancelled,
                     usedSendText,
@@ -93,12 +101,18 @@ final class TaskReflectionCoordinator {
 
             AppPlaybookStore playbooks = new AppPlaybookStore(context);
             String appLabel = AppRuntimeRegistry.displayName(context, packageName);
+            String outcome = AgentInspectorStore.isSuccessfulTaskEnd(rawStatus)
+                    ? "SUCCESS" : "FAILED";
+            if (task.optBoolean("partialOutcome", false)
+                    || task.optBoolean("modelRefusal", false)) {
+                outcome = "PARTIAL";
+            }
+
             JSONObject episode = new JSONObject()
                     .put("app", new JSONObject()
                             .put("package", packageName)
                             .put("label", appLabel))
-                    .put("outcome", AgentInspectorStore.isSuccessfulTaskEnd(rawStatus)
-                            ? "SUCCESS" : "FAILED")
+                    .put("outcome", outcome)
                     .put("task", task)
                     .put("existing_app_playbook", playbooks.modelContext(packageName));
 
