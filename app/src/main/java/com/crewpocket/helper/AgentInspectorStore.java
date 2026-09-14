@@ -30,6 +30,8 @@ final class AgentInspectorStore {
             Pattern.compile("正在執行「([A-Za-z0-9_]{1,48})」");
     private static final Pattern SAFE_TOOL =
             Pattern.compile("[A-Za-z0-9_]{1,48}");
+    private static final Pattern TYPE_LENGTH_MISMATCH = Pattern.compile(
+            "TYPE_LENGTH_MISMATCH_EXPECTED_(\\d{1,5})_ACTUAL_(\\d{1,5})");
 
     private AgentInspectorStore() {}
 
@@ -204,9 +206,8 @@ final class AgentInspectorStore {
         }
         editor.apply();
 
-        // 0130 reflection learning: only the already-sanitized Inspector task
-        // is eligible for asynchronous review. This never blocks Live or phone
-        // execution, and the coordinator de-duplicates completed tasks.
+        // Reflection sees only the sanitized task categories below. Raw user/model
+        // text, raw blocked reasons and tool arguments never leave this method.
         if (task != null) {
             TaskReflectionCoordinator.maybeReflect(
                     context, rawStatus, task, activeTask);
@@ -242,6 +243,17 @@ final class AgentInspectorStore {
             out.append("Visual observations: ")
                     .append(task.optInt("visualObservations", 0)).append("\n");
 
+            if (task.optBoolean("partialOutcome", false)
+                    || task.optBoolean("modelRefusal", false)
+                    || !task.optString("blockCategory", "").isEmpty()) {
+                out.append("Outcome evidence:");
+                if (task.optBoolean("partialOutcome", false)) out.append(" PARTIAL");
+                if (task.optBoolean("modelRefusal", false)) out.append(" MODEL_REFUSAL");
+                String block = task.optString("blockCategory", "");
+                if (!block.isEmpty()) out.append(" ").append(block);
+                out.append("\n");
+            }
+
             JSONArray steps = task.optJSONArray("steps");
             if (steps != null && steps.length() > 0) {
                 out.append("\nTool outcomes:\n");
@@ -251,8 +263,15 @@ final class AgentInspectorStore {
                     out.append(i + 1).append(". ")
                             .append(step.optString("tool", "tool"))
                             .append(" · ")
-                            .append(step.optString("outcome", "UNKNOWN"))
-                            .append("\n");
+                            .append(step.optString("outcome", "UNKNOWN"));
+                    if ("TYPE_LENGTH_MISMATCH".equals(
+                            step.optString("failureCode", ""))) {
+                        out.append(" · TYPE_LENGTH_MISMATCH expected=")
+                                .append(step.optInt("expectedTextLength", 0))
+                                .append(" actual=")
+                                .append(step.optInt("actualTextLength", 0));
+                    }
+                    out.append("\n");
                 }
             }
         } else {
@@ -327,6 +346,21 @@ final class AgentInspectorStore {
             safe.put("stepCount", raw.optInt("stepCount", 0));
             safe.put("mutationActions", raw.optInt("mutationActions", 0));
 
+            String blockCategory = classifyBlock(raw.optString("blockedReason", ""));
+            if (!blockCategory.isEmpty()) safe.put("blockCategory", blockCategory);
+
+            if (looksPartial(raw.optString("endReason", ""),
+                    raw.optString("status", ""))) {
+                safe.put("partialOutcome", true);
+            }
+
+            // Raw finalReply is inspected only in memory and never persisted.
+            // Store one coarse boolean so post-task review can distinguish a
+            // model-side refusal from a successful/failed phone mutation.
+            if (looksLikeModelRefusal(raw.optString("finalReply", ""))) {
+                safe.put("modelRefusal", true);
+            }
+
             JSONArray rawSteps = raw.optJSONArray("steps");
             JSONArray safeSteps = new JSONArray();
             int visualObservations = 0;
@@ -347,6 +381,16 @@ final class AgentInspectorStore {
                     JSONObject step = new JSONObject();
                     step.put("tool", tool);
                     step.put("outcome", outcome);
+
+                    Matcher lengthMismatch = TYPE_LENGTH_MISMATCH.matcher(line);
+                    if (lengthMismatch.find()) {
+                        int expected = safeBoundedInt(lengthMismatch.group(1));
+                        int actual = safeBoundedInt(lengthMismatch.group(2));
+                        step.put("failureCode", "TYPE_LENGTH_MISMATCH")
+                                .put("expectedTextLength", expected)
+                                .put("actualTextLength", actual);
+                        safe.put("partialOutcome", true);
+                    }
                     safeSteps.put(step);
 
                     String lower = tool.toLowerCase(Locale.ROOT);
@@ -361,6 +405,57 @@ final class AgentInspectorStore {
             safe.put("visualObservations", visualObservations);
         } catch (Exception ignored) {}
         return safe;
+    }
+
+    private static String classifyBlock(String raw) {
+        String value = raw == null ? "" : raw.toLowerCase(Locale.ROOT).trim();
+        if (value.isEmpty()) return "";
+        if (containsAny(value,
+                "sensitive", "credential", "manual operation", "payment",
+                "password", "otp", "安全", "敏感", "憑證", "凭证",
+                "密碼", "密码", "驗證碼", "验证码")) {
+            return "SAFETY_BLOCK";
+        }
+        if (containsAny(value,
+                "limit", "maximum", "budget", "上限", "最多", "逾時", "timeout")) {
+            return "BUDGET_BLOCK";
+        }
+        if (containsAny(value,
+                "repeat", "observe", "stability", "重複", "重复", "觀察", "观察")) {
+            return "STABILITY_BLOCK";
+        }
+        return "RUNTIME_BLOCK";
+    }
+
+    private static boolean looksPartial(String endReason, String status) {
+        String value = ((endReason == null ? "" : endReason) + " "
+                + (status == null ? "" : status)).toLowerCase(Locale.ROOT);
+        return containsAny(value,
+                "partial", "incomplete", "not complete", "need_user",
+                "未完成", "部分完成", "需要使用者", "等待使用者");
+    }
+
+    private static boolean looksLikeModelRefusal(String reply) {
+        String value = reply == null ? "" : reply.toLowerCase(Locale.ROOT).trim();
+        if (value.isEmpty()) return false;
+        return containsAny(value,
+                "基於安全", "基于安全", "安全限制", "無法協助", "无法协助",
+                "我不能", "不能幫", "不能帮", "我無法", "我无法",
+                "can't help", "cannot help", "can't do", "cannot do",
+                "not allowed", "safety restriction", "safety reasons");
+    }
+
+    private static int safeBoundedInt(String value) {
+        try { return Math.max(0, Math.min(5000, Integer.parseInt(value))); }
+        catch (Exception ignored) { return 0; }
+    }
+
+    private static boolean containsAny(String value, String... markers) {
+        if (value == null || value.isEmpty()) return false;
+        for (String marker : markers) {
+            if (marker != null && !marker.isEmpty() && value.contains(marker)) return true;
+        }
+        return false;
     }
 
     private static boolean duplicatesLast(JSONArray events,
