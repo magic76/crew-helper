@@ -66,6 +66,7 @@ final class AgentTaskRecord {
                     .put("steps", new JSONArray(stepsSummary))
                     .put("stepCount", steps)
                     .put("mutationActions", mutationActions)
+                    .put("blockedReason", blockedReason == null ? "" : blockedReason)
                     .put("endReason", endReason)
                     .put("finalReply", finalReply)
                     .put("status", status)
