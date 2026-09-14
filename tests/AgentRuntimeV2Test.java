@@ -58,10 +58,41 @@ public final class AgentRuntimeV2Test {
                 "pending repeat requires observation");
 
         runtime.reverifyPending(s3);
-        AgentRuntimeV2.PreflightResult failedRetry = runtime.preflight(
+        AgentRuntimeV2.PreflightResult recoveryRetry = runtime.preflight(
                 7L, 7L, "p3", "tap_screen", "tap:next", s3);
-        check(failedRetry.decision == AgentRuntimeV2.PreflightDecision.REQUIRE_OBSERVE,
-                "explicit unchanged observation resolves pending to failure barrier");
+        check(recoveryRetry.allowed(),
+                "explicit unchanged observation admits one recovery retry");
+        check("RECOVERY_RETRY_ALLOWED".equals(recoveryRetry.code),
+                "recovery retry is explicit in preflight result");
+
+        runtime.onActionStarted("p3", 7L, "goal", "task", "phone_action", "tap_screen",
+                recoveryRetry.actionHash,
+                ActionTransaction.ExpectedEffect.ANY_OBSERVABLE_CHANGE, s3);
+        runtime.onActionExecuted("p3", ExecutionEvidence.accepted(false));
+        ActionVerificationResult recoveryPending = runtime.verifyAndRecord("p3", null, s3);
+        check(recoveryPending != null && recoveryPending.pending(),
+                "recovery retry still requires verification");
+        runtime.reverifyPending(s3);
+        AgentRuntimeV2.PreflightResult secondRecovery = runtime.preflight(
+                7L, 7L, "p4", "tap_screen", "tap:next", s3);
+        check(secondRecovery.decision == AgentRuntimeV2.PreflightDecision.REQUIRE_OBSERVE,
+                "second recovery retry is blocked");
+
+        // SEND remains safety-owned and never receives an automatic recovery retry.
+        AgentRuntimeV2.PreflightResult sendAllow = runtime.preflight(
+                7L, 7L, "send1", "send_text", "send:current", s3);
+        check(sendAllow.allowed(), "first send transaction allowed by generic runtime");
+        runtime.onActionStarted("send1", 7L, "goal", "task", "send_text", "send_text",
+                sendAllow.actionHash,
+                ActionTransaction.ExpectedEffect.ANY_OBSERVABLE_CHANGE, s3);
+        runtime.onActionExecuted("send1", ExecutionEvidence.accepted(false));
+        ActionVerificationResult sendPending = runtime.verifyAndRecord("send1", null, s3);
+        check(sendPending != null && sendPending.pending(), "unchanged send becomes pending");
+        runtime.reverifyPending(s3);
+        AgentRuntimeV2.PreflightResult sendRetry = runtime.preflight(
+                7L, 7L, "send2", "send_text", "send:current", s3);
+        check(sendRetry.decision == AgentRuntimeV2.PreflightDecision.REQUIRE_OBSERVE,
+                "send never receives automatic recovery retry");
 
         // A separate pending action can still commit when a later observation changes.
         AgentRuntimeV2.PreflightResult pendingAllow2 = runtime.preflight(
