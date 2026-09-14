@@ -311,6 +311,11 @@ public class FloatingBubbleManager {
                     compactStatusView = null;
                 }
 
+                int screenW = windowManager.getDefaultDisplay().getWidth();
+                int screenH = windowManager.getDefaultDisplay().getHeight();
+                int maxCardWidth = Math.min(dp(236), screenW - dp(24));
+                int maxCardContentWidth = Math.max(dp(48), maxCardWidth - dp(24));
+
                 final LinearLayout card = new LinearLayout(context);
                 card.setOrientation(LinearLayout.VERTICAL);
                 card.setGravity(Gravity.CENTER_VERTICAL);
@@ -326,10 +331,11 @@ public class FloatingBubbleManager {
                 headingView.setTypeface(
                         android.graphics.Typeface.DEFAULT,
                         android.graphics.Typeface.BOLD);
+                headingView.setMaxWidth(maxCardContentWidth);
                 card.addView(
                         headingView,
                         new LinearLayout.LayoutParams(
-                                LinearLayout.LayoutParams.MATCH_PARENT,
+                                LinearLayout.LayoutParams.WRAP_CONTENT,
                                 android.view.ViewGroup.LayoutParams.WRAP_CONTENT));
 
                 if (!secondary.isEmpty()) {
@@ -339,8 +345,9 @@ public class FloatingBubbleManager {
                     detailView.setEllipsize(android.text.TextUtils.TruncateAt.END);
                     detailView.setTextSize(11f);
                     detailView.setTextColor(Color.parseColor("#CBD5E1"));
+                    detailView.setMaxWidth(maxCardContentWidth);
                     LinearLayout.LayoutParams detailLp = new LinearLayout.LayoutParams(
-                            LinearLayout.LayoutParams.MATCH_PARENT,
+                            LinearLayout.LayoutParams.WRAP_CONTENT,
                             android.view.ViewGroup.LayoutParams.WRAP_CONTENT);
                     detailLp.topMargin = dp(1);
                     card.addView(detailView, detailLp);
@@ -358,10 +365,19 @@ public class FloatingBubbleManager {
                 card.setBackground(bg);
                 card.setElevation(dp(10));
 
-                int screenW = windowManager.getDefaultDisplay().getWidth();
-                int screenH = windowManager.getDefaultDisplay().getHeight();
-                int cardWidth = Math.min(dp(236), screenW - dp(24));
-                int cardHeight = secondary.isEmpty() ? dp(40) : dp(58);
+                // Measure the content first so short status messages stay compact,
+                // while long messages remain bounded and ellipsized near the edge.
+                card.measure(
+                        View.MeasureSpec.makeMeasureSpec(
+                                maxCardWidth, View.MeasureSpec.AT_MOST),
+                        View.MeasureSpec.makeMeasureSpec(
+                                screenH, View.MeasureSpec.AT_MOST));
+                int cardWidth = Math.max(
+                        dp(48),
+                        Math.min(maxCardWidth, card.getMeasuredWidth()));
+                int cardHeight = Math.max(
+                        secondary.isEmpty() ? dp(40) : dp(58),
+                        card.getMeasuredHeight());
 
                 final WindowManager.LayoutParams lp =
                         new WindowManager.LayoutParams(
