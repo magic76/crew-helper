@@ -15,6 +15,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/ActionVerifierV2.java" \
   "$SRC/ActionRecoveryPolicy.java" \
   "$SRC/AgentTaskLifecyclePolicy.java" \
+  "$SRC/SmartPlannerPolicy.java" \
   "$SRC/AgentRuntimeRollout.java" \
   "$SRC/AgentEvent.java" \
   "$SRC/AgentState.java" \
@@ -30,6 +31,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/ActionVerifierV2Test.java" \
   "$ROOT/tests/ActionRecoveryPolicyTest.java" \
   "$ROOT/tests/AgentTaskLifecyclePolicyTest.java" \
+  "$ROOT/tests/SmartPlannerPolicyTest.java" \
   "$ROOT/tests/AgentRuntimeV2Test.java" \
   "$ROOT/tests/AgentRuntimeRolloutTest.java" \
   "$ROOT/tests/VisionCoordinateMapperTest.java" \
@@ -40,6 +42,7 @@ java -cp "$OUT" com.crewpocket.helper.SearchTransactionPolicyTest
 java -cp "$OUT" com.crewpocket.helper.ActionVerifierV2Test
 java -cp "$OUT" com.crewpocket.helper.ActionRecoveryPolicyTest
 java -cp "$OUT" com.crewpocket.helper.AgentTaskLifecyclePolicyTest
+java -cp "$OUT" com.crewpocket.helper.SmartPlannerPolicyTest
 java -cp "$OUT" com.crewpocket.helper.AgentRuntimeV2Test
 java -cp "$OUT" com.crewpocket.helper.AgentRuntimeRolloutTest
 java -cp "$OUT" com.crewpocket.helper.VisionCoordinateMapperTest
