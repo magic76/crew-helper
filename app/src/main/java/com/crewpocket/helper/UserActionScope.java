@@ -490,6 +490,7 @@ final class UserActionScope {
         return containsAny(value,
                 "打開", "打开", "開啟", "开启", "點開", "点开",
                 "進入", "进入", "點進", "点进", "選擇", "选择",
+                "選第", "选第", "點第", "点第",
                 "open", "enter", "select", "click", "tap");
     }
 
