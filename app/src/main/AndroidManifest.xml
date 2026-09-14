@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.crewpocket.helper"
-    android:versionCode="129"
-    android:versionName="1.8.92">
+    android:versionCode="128"
+    android:versionName="1.8.91">
 
     <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34" />
 
@@ -51,14 +51,6 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <!-- 0130 validation surface. Exported only so the developer can open it
-             from Termux/adb; no intent extra can auto-start a planner task. -->
-        <activity
-            android:name=".SmartPlannerActivity"
-            android:label="Crew Smart Planner"
-            android:screenOrientation="portrait"
-            android:exported="true" />
 
         <activity
             android:name=".NativeLiveActivity"
