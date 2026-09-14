@@ -22,6 +22,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/AgentLedger.java" \
   "$SRC/AgentRuntimeV2.java" \
   "$SRC/TextMatch.java" \
+  "$SRC/TextEntryGoalGuard.java" \
   "$SRC/UserActionScope.java" \
   "$SRC/SearchTransactionPolicy.java" \
   "$SRC/VisionCoordinateMapper.java" \
@@ -35,6 +36,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/AgentRuntimeRolloutTest.java" \
   "$ROOT/tests/VisionCoordinateMapperTest.java" \
   "$ROOT/tests/ReflectionLearningPolicyTest.java" \
+  "$ROOT/tests/TextEntryGoalGuardTest.java" \
   "$ROOT/tests/AgentReplayRunner.java"
 
 java -cp "$OUT" com.crewpocket.helper.SendOnlyPolicyTest
@@ -46,4 +48,5 @@ java -cp "$OUT" com.crewpocket.helper.AgentRuntimeV2Test
 java -cp "$OUT" com.crewpocket.helper.AgentRuntimeRolloutTest
 java -cp "$OUT" com.crewpocket.helper.VisionCoordinateMapperTest
 java -cp "$OUT" com.crewpocket.helper.ReflectionLearningPolicyTest
+java -cp "$OUT" com.crewpocket.helper.TextEntryGoalGuardTest
 java -cp "$OUT" com.crewpocket.helper.AgentReplayRunner "$ROOT/tests/replay"
