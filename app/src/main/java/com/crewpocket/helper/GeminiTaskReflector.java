@@ -1,5 +1,7 @@
 package com.crewpocket.helper;
 
+import android.util.Log;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -12,52 +14,70 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 
 /**
- * One-shot post-task reviewer using Gemini Flash.
+ * One-shot post-task reviewer using Gemini Flash with model fallback.
  *
- * This client is never used inside the phone action loop. A failure, timeout,
- * quota error, or model error simply drops the reflection attempt.
+ * This client is never used inside the phone action loop. Reflection is
+ * best-effort: each candidate model is tried in order and a total failure
+ * simply drops the reflection attempt.
  */
 final class GeminiTaskReflector {
-    static final String MODEL = "gemini-3.6-flash";
-    private static final String ENDPOINT =
-            "https://generativelanguage.googleapis.com/v1beta/models/"
-                    + MODEL + ":generateContent";
+    private static final String TAG = "CrewReflection";
+
+    static final String[] CANDIDATE_MODELS = {
+            "gemini-3.6-flash",
+            "gemini-3.5-flash-lite",
+            "gemini-3.5-flash",
+            "gemini-3.0-flash",
+            "gemini-3-flash",
+            "gemini-2.5-flash",
+            "gemini-2.0-flash",
+            "gemini-1.5-flash"
+    };
+
+    // Kept for compatibility with reflection history/default reporting.
+    static final String MODEL = CANDIDATE_MODELS[0];
 
     private final String apiKey;
+    private String lastModel = MODEL;
 
     GeminiTaskReflector(String apiKey) {
         this.apiKey = apiKey == null ? "" : apiKey.trim();
     }
 
+    String lastModel() {
+        return lastModel;
+    }
+
     JSONObject reflect(JSONObject episode) throws Exception {
         if (apiKey.length() < 20) throw new IllegalStateException("GEMINI_API_KEY_MISSING");
 
-        JSONObject body = new JSONObject();
-        body.put("contents", new JSONArray().put(
-                new JSONObject().put("role", "user")
-                        .put("parts", new JSONArray().put(
-                                new JSONObject().put("text", buildPrompt(episode))))));
+        Exception lastFailure = null;
+        for (int i = 0; i < CANDIDATE_MODELS.length; i++) {
+            String model = CANDIDATE_MODELS[i];
+            lastModel = model;
+            try {
+                // Preserve the existing MEDIUM thinking behavior for the primary
+                // reviewer. Fallback models use a simpler generationConfig so older
+                // endpoints do not fail only because they reject thinkingConfig.
+                return reflectWithModel(model, episode, i == 0);
+            } catch (Exception error) {
+                lastFailure = error;
+                Log.w(TAG, "reflection model failed: " + model
+                        + " code=" + safeFailureCode(error));
+            }
+        }
 
-        JSONObject schema = new JSONObject()
-                .put("type", "object")
-                .put("properties", new JSONObject()
-                        .put("should_remember", new JSONObject().put("type", "boolean"))
-                        .put("goal_pattern", new JSONObject().put("type", "string"))
-                        .put("lesson", new JSONObject().put("type", "string"))
-                        .put("confidence", new JSONObject().put("type", "number")))
-                .put("required", new JSONArray()
-                        .put("should_remember")
-                        .put("goal_pattern")
-                        .put("lesson")
-                        .put("confidence"));
+        throw new IllegalStateException("REFLECTION_ALL_MODELS_FAILED", lastFailure);
+    }
 
-        body.put("generationConfig", new JSONObject()
-                .put("responseMimeType", "application/json")
-                .put("responseSchema", schema)
-                .put("maxOutputTokens", 1200)
-                .put("thinkingConfig", new JSONObject().put("thinkingLevel", "MEDIUM")));
+    private JSONObject reflectWithModel(String model,
+                                        JSONObject episode,
+                                        boolean includeThinking) throws Exception {
+        JSONObject body = buildRequestBody(episode, includeThinking);
+        String endpoint = "https://generativelanguage.googleapis.com/v1beta/models/"
+                + model + ":generateContent";
 
-        HttpURLConnection connection = (HttpURLConnection) new URL(ENDPOINT).openConnection();
+        HttpURLConnection connection = (HttpURLConnection) new URL(endpoint).openConnection();
         connection.setRequestMethod("POST");
         connection.setConnectTimeout(6000);
         connection.setReadTimeout(45_000);
@@ -107,6 +127,39 @@ final class GeminiTaskReflector {
         return new JSONObject(text.toString());
     }
 
+    private static JSONObject buildRequestBody(JSONObject episode,
+                                               boolean includeThinking) throws Exception {
+        JSONObject body = new JSONObject();
+        body.put("contents", new JSONArray().put(
+                new JSONObject().put("role", "user")
+                        .put("parts", new JSONArray().put(
+                                new JSONObject().put("text", buildPrompt(episode))))));
+
+        JSONObject schema = new JSONObject()
+                .put("type", "object")
+                .put("properties", new JSONObject()
+                        .put("should_remember", new JSONObject().put("type", "boolean"))
+                        .put("goal_pattern", new JSONObject().put("type", "string"))
+                        .put("lesson", new JSONObject().put("type", "string"))
+                        .put("confidence", new JSONObject().put("type", "number")))
+                .put("required", new JSONArray()
+                        .put("should_remember")
+                        .put("goal_pattern")
+                        .put("lesson")
+                        .put("confidence"));
+
+        JSONObject generationConfig = new JSONObject()
+                .put("responseMimeType", "application/json")
+                .put("responseSchema", schema)
+                .put("maxOutputTokens", 1200);
+        if (includeThinking) {
+            generationConfig.put("thinkingConfig",
+                    new JSONObject().put("thinkingLevel", "MEDIUM"));
+        }
+        body.put("generationConfig", generationConfig);
+        return body;
+    }
+
     private static String buildPrompt(JSONObject episode) {
         return "You are Crew Helper's post-task reflection reviewer. "
                 + "You do NOT control the phone and you do NOT authorize actions. "
@@ -120,6 +173,15 @@ final class GeminiTaskReflector {
                 + "- A failed attempt can teach an avoidance/recovery rule only when the trace clearly supports it.\n"
                 + "- Existing app playbook guidance may be used as context, but do not merely repeat it unless this task provides new confirmation.\n\n"
                 + "Sanitized episode:\n" + (episode == null ? "{}" : episode.toString());
+    }
+
+    private static String safeFailureCode(Exception error) {
+        if (error == null) return "UNKNOWN_ERROR";
+        String message = error.getMessage() == null ? "" : error.getMessage().trim();
+        if (message.startsWith("REFLECTION_")) {
+            return message.replaceAll("[^A-Za-z0-9_]", "_");
+        }
+        return error.getClass().getSimpleName();
     }
 
     private static String readAll(InputStream stream) throws Exception {
