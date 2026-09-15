@@ -28,6 +28,11 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # The action's default is `tools platform-tools`. The legacy
+          # `tools` package was removed from the current SDK repository and
+          # now makes sdkmanager fail before Gradle can even start.
+          packages: ''
 
       - name: Run Agent Runtime Replay Tests
         run: |
