@@ -2,6 +2,9 @@ package com.crewpocket.helper;
 
 import android.content.Context;
 
+import java.util.Collections;
+import java.util.List;
+
 /**
  * App-local deterministic Runtime capability descriptor.
  *
@@ -14,4 +17,9 @@ interface AppRuntimeAdapter {
     String displayName(Context context, String packageName);
     String builtInGuidance();
     String displayGuidance(Context context);
+
+    /** Stable model-facing concepts exposed by this app adapter. */
+    default List<AppSemanticConcept> semanticConcepts() {
+        return Collections.emptyList();
+    }
 }

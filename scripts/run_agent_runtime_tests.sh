@@ -28,6 +28,8 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/ScrollDirectionPolicy.java" \
   "$SRC/VisionCoordinateMapper.java" \
   "$SRC/ReflectionLearningPolicy.java" \
+  "$SRC/AppSemanticConcept.java" \
+  "$SRC/GoogleMapsSemanticContract.java" \
   "$ROOT/tests/SendOnlyPolicyTest.java" \
   "$ROOT/tests/SearchTransactionPolicyTest.java" \
   "$ROOT/tests/ScrollDirectionPolicyTest.java" \
@@ -39,6 +41,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/VisionCoordinateMapperTest.java" \
   "$ROOT/tests/ReflectionLearningPolicyTest.java" \
   "$ROOT/tests/TextEntryGoalGuardTest.java" \
+  "$ROOT/tests/GoogleMapsSemanticContractTest.java" \
   "$ROOT/tests/AgentReplayRunner.java"
 
 java -cp "$OUT" com.crewpocket.helper.SendOnlyPolicyTest
@@ -52,4 +55,5 @@ java -cp "$OUT" com.crewpocket.helper.AgentRuntimeRolloutTest
 java -cp "$OUT" com.crewpocket.helper.VisionCoordinateMapperTest
 java -cp "$OUT" com.crewpocket.helper.ReflectionLearningPolicyTest
 java -cp "$OUT" com.crewpocket.helper.TextEntryGoalGuardTest
+java -cp "$OUT" com.crewpocket.helper.GoogleMapsSemanticContractTest
 java -cp "$OUT" com.crewpocket.helper.AgentReplayRunner "$ROOT/tests/replay"
