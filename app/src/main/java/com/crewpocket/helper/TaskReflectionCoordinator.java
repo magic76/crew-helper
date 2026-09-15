@@ -62,6 +62,7 @@ final class TaskReflectionCoordinator {
                                       String rawStatus,
                                       JSONObject task) {
         final long startedAt = System.currentTimeMillis();
+        GeminiTaskReflector reflector = null;
         try {
             String packageName = currentPackage();
             int failedSteps = failedStepCount(task.optJSONArray("steps"));
@@ -116,7 +117,8 @@ final class TaskReflectionCoordinator {
                     .put("task", task)
                     .put("existing_app_playbook", playbooks.modelContext(packageName));
 
-            JSONObject reflection = new GeminiTaskReflector(apiKey).reflect(episode);
+            reflector = new GeminiTaskReflector(apiKey);
+            JSONObject reflection = reflector.reflect(episode);
             JSONObject stored = new ReflectionLessonStore(context)
                     .record(packageName, appLabel, reflection);
 
@@ -127,10 +129,15 @@ final class TaskReflectionCoordinator {
                 historyStatus = stored.optString("reason", "NOT_REMEMBERED");
             }
             ReflectionHistoryStore.record(
-                    context, "SUCCESS", historyStatus, elapsed(startedAt));
+                    context,
+                    "SUCCESS",
+                    historyStatus,
+                    elapsed(startedAt),
+                    reflector.lastModel());
 
-            Log.i(TAG, "post-task reflection complete: stored="
-                    + stored.optBoolean("stored", false)
+            Log.i(TAG, "post-task reflection complete: model="
+                    + reflector.lastModel()
+                    + " stored=" + stored.optBoolean("stored", false)
                     + " state=" + stored.optString("state", "SKIPPED")
                     + " confirmations=" + stored.optInt("confirmations", 0));
         } catch (Exception error) {
@@ -138,7 +145,11 @@ final class TaskReflectionCoordinator {
             // execution, user-visible status, or task completion.
             String code = safeErrorCode(error);
             ReflectionHistoryStore.record(
-                    context, "ERROR", code, elapsed(startedAt));
+                    context,
+                    "ERROR",
+                    code,
+                    elapsed(startedAt),
+                    reflector == null ? GeminiTaskReflector.MODEL : reflector.lastModel());
             Log.d(TAG, "post-task reflection skipped: " + code);
         }
     }
