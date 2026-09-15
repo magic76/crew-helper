@@ -7,9 +7,9 @@ import java.util.Set;
 /**
  * Pure policy for post-task reflection learning.
  *
- * Reflection is deliberately outside the live action loop. This class only
- * decides whether a sanitized task is worth reviewing and whether a proposed
- * lesson is safe/reusable enough to retain. It never grants authorization.
+ * Rule identity comes from deterministic Runtime evidence. This class only
+ * decides whether a task is worth reviewing and whether Gemini's human-readable
+ * lesson is safe/reusable enough to retain.
  */
 final class ReflectionLearningPolicy {
     static final int MIN_MUTATIONS_FOR_SUCCESS = 3;
@@ -36,14 +36,17 @@ final class ReflectionLearningPolicy {
     private ReflectionLearningPolicy() {}
 
     static boolean shouldReflect(int mutationActions,
-                                 int failedSteps,
+                                 int outcomeSignals,
+                                 boolean hasRuleEvidence,
                                  boolean activeTask,
                                  boolean cancelled,
                                  boolean usedSendText,
                                  String packageName) {
         if (activeTask || cancelled || usedSendText) return false;
         if (isSensitivePackage(packageName)) return false;
-        return failedSteps > 0 || mutationActions >= MIN_MUTATIONS_FOR_SUCCESS;
+        return hasRuleEvidence
+                || outcomeSignals > 0
+                || mutationActions >= MIN_MUTATIONS_FOR_SUCCESS;
     }
 
     static boolean isSensitivePackage(String packageName) {
@@ -55,16 +58,14 @@ final class ReflectionLearningPolicy {
         return false;
     }
 
-    static boolean isSafeCandidate(String goalPattern, String lesson, double confidence) {
+    static boolean isSafeRuleLesson(String lesson, double confidence) {
         if (confidence < MIN_CANDIDATE_CONFIDENCE) return false;
-        String goal = collapse(goalPattern);
         String text = collapse(lesson);
-        if (goal.length() < 3 || goal.length() > 96) return false;
         if (text.length() < 8 || text.length() > 220) return false;
-        if (containsSensitiveValue(goal) || containsSensitiveValue(text)) return false;
-        String combined = normalize(goal + " " + text);
+        if (containsSensitiveValue(text)) return false;
+        String normalized = normalize(text);
         for (String token : PROHIBITED_LESSON_TOKENS) {
-            if (combined.contains(normalize(token))) return false;
+            if (normalized.contains(normalize(token))) return false;
         }
         return true;
     }
@@ -82,14 +83,6 @@ final class ReflectionLearningPolicy {
         for (String token : left) if (right.contains(token)) overlap++;
         int union = left.size() + right.size() - overlap;
         return union > 0 && ((double) overlap / (double) union) >= 0.45d;
-    }
-
-    static String normalizeGoalPattern(String value) {
-        String clean = collapse(value).toLowerCase(Locale.ROOT);
-        clean = clean.replaceAll("[^a-z0-9 _-]", " ")
-                .replaceAll("\\s+", " ").trim();
-        if (clean.length() > 96) clean = clean.substring(0, 96).trim();
-        return clean;
     }
 
     static boolean looksCancelled(String rawStatus) {

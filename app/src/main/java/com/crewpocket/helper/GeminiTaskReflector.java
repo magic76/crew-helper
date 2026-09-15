@@ -16,9 +16,8 @@ import java.nio.charset.StandardCharsets;
 /**
  * One-shot post-task reviewer using Gemini Flash with model fallback.
  *
- * This client is never used inside the phone action loop. Reflection is
- * best-effort: each candidate model is tried in order and a total failure
- * simply drops the reflection attempt.
+ * Runtime supplies deterministic evidence-rule identities. Gemini can only
+ * select from those candidates and write the human-readable lesson.
  */
 final class GeminiTaskReflector {
     private static final String TAG = "CrewReflection";
@@ -130,23 +129,30 @@ final class GeminiTaskReflector {
                         .put("parts", new JSONArray().put(
                                 new JSONObject().put("text", buildPrompt(episode))))));
 
-        JSONObject schema = new JSONObject()
+        JSONObject selectedRule = new JSONObject()
                 .put("type", "object")
                 .put("properties", new JSONObject()
-                        .put("should_remember", new JSONObject().put("type", "boolean"))
-                        .put("goal_pattern", new JSONObject().put("type", "string"))
+                        .put("candidate_id", new JSONObject().put("type", "string"))
                         .put("lesson", new JSONObject().put("type", "string"))
                         .put("confidence", new JSONObject().put("type", "number")))
                 .put("required", new JSONArray()
-                        .put("should_remember")
-                        .put("goal_pattern")
+                        .put("candidate_id")
                         .put("lesson")
                         .put("confidence"));
+
+        JSONObject schema = new JSONObject()
+                .put("type", "object")
+                .put("properties", new JSONObject()
+                        .put("rules", new JSONObject()
+                                .put("type", "array")
+                                .put("maxItems", 2)
+                                .put("items", selectedRule)))
+                .put("required", new JSONArray().put("rules"));
 
         JSONObject generationConfig = new JSONObject()
                 .put("responseMimeType", "application/json")
                 .put("responseSchema", schema)
-                .put("maxOutputTokens", 1200);
+                .put("maxOutputTokens", 800);
         if (includeThinking) {
             generationConfig.put("thinkingConfig",
                     new JSONObject().put("thinkingLevel", "MEDIUM"));
@@ -157,21 +163,19 @@ final class GeminiTaskReflector {
 
     private static String buildPrompt(JSONObject episode) {
         return "You are Crew Helper's post-task reflection reviewer. "
-                + "You do NOT control the phone and you do NOT authorize actions. "
-                + "Review only the sanitized runtime metadata below and decide whether it reveals one reusable operational lesson for this app.\n\n"
+                + "You do NOT control the phone and you do NOT define rule identity. "
+                + "Runtime has already derived deterministic evidence-rule candidates. "
+                + "Choose zero, one, or at most two candidates that are clearly supported and reusable.\n\n"
                 + "Hard rules:\n"
-                + "- Learn only reusable UI/navigation/runtime behavior.\n"
+                + "- You may ONLY return candidate_id values present in evidence_rules. Never invent an id, scope, condition, response, category, or rule key.\n"
+                + "- If no candidate is worth remembering, return {\"rules\":[]}.\n"
+                + "- Learn only reusable UI/navigation/runtime behavior directly supported by the evidence.\n"
                 + "- Never learn user identity, names, message text, search values, URLs, numbers, credentials, OTPs, passwords, payment/account actions, deletion, or SEND authorization.\n"
-                + "- Never infer missing UI details. If the sanitized trace does not support a concrete reusable lesson, set should_remember=false.\n"
-                + "- task.previousGoalTask, when present, is the immediately preceding sanitized task from the SAME conversation goal. Compare it with the current task to recognize failure -> recovery -> success across task boundaries.\n"
-                + "- previousGoalTask is context only: do not invent the original conversation goal or any missing user value. Learn only behavior directly supported by the two sanitized traces.\n"
-                + "- Sanitized step.failureCode values are authoritative Runtime evidence. A deterministic contract failure such as SEARCH_NEEDS_QUERY may justify a reusable recovery lesson without any UI inference.\n"
-                + "- For a clear deterministic failureCode, prefer a generic recovery rule about the action contract; never reconstruct the missing user value.\n"
-                + "- If a previous same-goal task failed and the current task succeeds using a different observable sequence, you may learn the generic recovery difference when the evidence is clear.\n"
-                + "- goal_pattern must be a generic 2-6 word English task category, without personal values.\n"
+                + "- Never infer missing UI details or claim that an observation caused recovery when the evidence does not show it.\n"
+                + "- A lesson must explain the selected candidate's operational rule, not the user's specific task.\n"
                 + "- lesson must be one concise English operational sentence, <= 180 characters, with no personal values and no authorization language.\n"
-                + "- A failed attempt can teach an avoidance/recovery rule only when the trace clearly supports it.\n"
-                + "- Existing app playbook guidance may be used as context, but do not merely repeat it unless this task provides new confirmation.\n\n"
+                + "- confidence must reflect only how strongly the sanitized evidence supports that rule.\n"
+                + "- Existing app playbook guidance is context only; do not repeat it unless this episode adds genuine confirmation.\n\n"
                 + "Sanitized episode:\n" + (episode == null ? "{}" : episode.toString());
     }
 
