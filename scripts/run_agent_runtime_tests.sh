@@ -25,10 +25,12 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/TextEntryGoalGuard.java" \
   "$SRC/UserActionScope.java" \
   "$SRC/SearchTransactionPolicy.java" \
+  "$SRC/ScrollDirectionPolicy.java" \
   "$SRC/VisionCoordinateMapper.java" \
   "$SRC/ReflectionLearningPolicy.java" \
   "$ROOT/tests/SendOnlyPolicyTest.java" \
   "$ROOT/tests/SearchTransactionPolicyTest.java" \
+  "$ROOT/tests/ScrollDirectionPolicyTest.java" \
   "$ROOT/tests/ActionVerifierV2Test.java" \
   "$ROOT/tests/ActionRecoveryPolicyTest.java" \
   "$ROOT/tests/AgentTaskLifecyclePolicyTest.java" \
@@ -41,6 +43,7 @@ javac -encoding UTF-8 -d "$OUT" \
 
 java -cp "$OUT" com.crewpocket.helper.SendOnlyPolicyTest
 java -cp "$OUT" com.crewpocket.helper.SearchTransactionPolicyTest
+java -cp "$OUT" com.crewpocket.helper.ScrollDirectionPolicyTest
 java -cp "$OUT" com.crewpocket.helper.ActionVerifierV2Test
 java -cp "$OUT" com.crewpocket.helper.ActionRecoveryPolicyTest
 java -cp "$OUT" com.crewpocket.helper.AgentTaskLifecyclePolicyTest
