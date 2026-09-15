@@ -34,7 +34,6 @@ final class GeminiTaskReflector {
             "gemini-1.5-flash"
     };
 
-    // Kept for compatibility with reflection history/default reporting.
     static final String MODEL = CANDIDATE_MODELS[0];
 
     private final String apiKey;
@@ -56,9 +55,6 @@ final class GeminiTaskReflector {
             String model = CANDIDATE_MODELS[i];
             lastModel = model;
             try {
-                // Preserve the existing MEDIUM thinking behavior for the primary
-                // reviewer. Fallback models use a simpler generationConfig so older
-                // endpoints do not fail only because they reject thinkingConfig.
                 return reflectWithModel(model, episode, i == 0);
             } catch (Exception error) {
                 lastFailure = error;
@@ -66,7 +62,6 @@ final class GeminiTaskReflector {
                         + " code=" + safeFailureCode(error));
             }
         }
-
         throw new IllegalStateException("REFLECTION_ALL_MODELS_FAILED", lastFailure);
     }
 
@@ -168,8 +163,11 @@ final class GeminiTaskReflector {
                 + "- Learn only reusable UI/navigation/runtime behavior.\n"
                 + "- Never learn user identity, names, message text, search values, URLs, numbers, credentials, OTPs, passwords, payment/account actions, deletion, or SEND authorization.\n"
                 + "- Never infer missing UI details. If the sanitized trace does not support a concrete reusable lesson, set should_remember=false.\n"
+                + "- task.previousGoalTask, when present, is the immediately preceding sanitized task from the SAME conversation goal. Compare it with the current task to recognize failure -> recovery -> success across task boundaries.\n"
+                + "- previousGoalTask is context only: do not invent the original conversation goal or any missing user value. Learn only behavior directly supported by the two sanitized traces.\n"
                 + "- Sanitized step.failureCode values are authoritative Runtime evidence. A deterministic contract failure such as SEARCH_NEEDS_QUERY may justify a reusable recovery lesson without any UI inference.\n"
                 + "- For a clear deterministic failureCode, prefer a generic recovery rule about the action contract; never reconstruct the missing user value.\n"
+                + "- If a previous same-goal task failed and the current task succeeds using a different observable sequence, you may learn the generic recovery difference when the evidence is clear.\n"
                 + "- goal_pattern must be a generic 2-6 word English task category, without personal values.\n"
                 + "- lesson must be one concise English operational sentence, <= 180 characters, with no personal values and no authorization language.\n"
                 + "- A failed attempt can teach an avoidance/recovery rule only when the trace clearly supports it.\n"
