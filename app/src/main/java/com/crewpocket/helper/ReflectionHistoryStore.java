@@ -29,6 +29,14 @@ final class ReflectionHistoryStore {
                        String result,
                        String status,
                        long latencyMs) {
+        record(context, result, status, latencyMs, GeminiTaskReflector.MODEL);
+    }
+
+    static void record(Context context,
+                       String result,
+                       String status,
+                       long latencyMs,
+                       String model) {
         if (context == null) return;
         synchronized (LOCK) {
             try {
@@ -37,7 +45,7 @@ final class ReflectionHistoryStore {
                 JSONArray events = readArray(prefs.getString(KEY_EVENTS, "[]"));
                 JSONObject event = new JSONObject()
                         .put("at", System.currentTimeMillis())
-                        .put("model", GeminiTaskReflector.MODEL)
+                        .put("model", safeModel(model))
                         .put("result", safeCode(result, "UNKNOWN"))
                         .put("status", safeCode(status, "UNKNOWN"));
                 if (latencyMs >= 0L) event.put("latencyMs", latencyMs);
@@ -78,7 +86,9 @@ final class ReflectionHistoryStore {
                     .append("  ")
                     .append(event.optString("result", "UNKNOWN"))
                     .append(" · ")
-                    .append(event.optString("status", "UNKNOWN"));
+                    .append(event.optString("status", "UNKNOWN"))
+                    .append(" · ")
+                    .append(event.optString("model", GeminiTaskReflector.MODEL));
             if (event.has("latencyMs")) {
                 out.append(" · ").append(event.optLong("latencyMs", 0L)).append("ms");
             }
@@ -101,6 +111,12 @@ final class ReflectionHistoryStore {
     private static JSONArray readArray(String raw) {
         try { return new JSONArray(raw == null ? "[]" : raw); }
         catch (Exception ignored) { return new JSONArray(); }
+    }
+
+    private static String safeModel(String value) {
+        String text = value == null ? "" : value.trim();
+        text = text.replaceAll("[^A-Za-z0-9._-]", "_");
+        return text.isEmpty() ? GeminiTaskReflector.MODEL : text;
     }
 
     private static String safeCode(String value, String fallback) {
