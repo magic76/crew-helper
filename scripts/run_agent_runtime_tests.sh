@@ -28,7 +28,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/ScrollDirectionPolicy.java" \
   "$SRC/VisionCoordinateMapper.java" \
   "$SRC/ReflectionLearningPolicy.java" \
-  "$SRC/ReflectionGoalCategory.java" \
+  "$SRC/ReflectionRuleEvidence.java" \
   "$SRC/AppSemanticConcept.java" \
   "$SRC/GoogleMapsSemanticContract.java" \
   "$SRC/AgentTapDiagnostic.java" \
@@ -42,7 +42,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/AgentRuntimeRolloutTest.java" \
   "$ROOT/tests/VisionCoordinateMapperTest.java" \
   "$ROOT/tests/ReflectionLearningPolicyTest.java" \
-  "$ROOT/tests/ReflectionGoalCategoryTest.java" \
+  "$ROOT/tests/ReflectionRuleEvidenceTest.java" \
   "$ROOT/tests/TextEntryGoalGuardTest.java" \
   "$ROOT/tests/GoogleMapsSemanticContractTest.java" \
   "$ROOT/tests/AgentTapDiagnosticTest.java" \
@@ -58,7 +58,7 @@ java -cp "$OUT" com.crewpocket.helper.AgentRuntimeV2Test
 java -cp "$OUT" com.crewpocket.helper.AgentRuntimeRolloutTest
 java -cp "$OUT" com.crewpocket.helper.VisionCoordinateMapperTest
 java -cp "$OUT" com.crewpocket.helper.ReflectionLearningPolicyTest
-java -cp "$OUT" com.crewpocket.helper.ReflectionGoalCategoryTest
+java -cp "$OUT" com.crewpocket.helper.ReflectionRuleEvidenceTest
 java -cp "$OUT" com.crewpocket.helper.TextEntryGoalGuardTest
 java -cp "$OUT" com.crewpocket.helper.GoogleMapsSemanticContractTest
 java -cp "$OUT" com.crewpocket.helper.AgentTapDiagnosticTest
