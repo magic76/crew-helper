@@ -81,9 +81,14 @@ final class TaskReflectionCoordinator {
                 outcomeSignals++;
             }
 
+            List<ReflectionRuleEvidence.Candidate> candidates =
+                    deriveRuleCandidates(task);
+            boolean hasRuleEvidence = !candidates.isEmpty();
+
             if (!ReflectionLearningPolicy.shouldReflect(
                     mutations,
                     outcomeSignals,
+                    hasRuleEvidence,
                     false,
                     cancelled,
                     usedSendText,
@@ -94,9 +99,7 @@ final class TaskReflectionCoordinator {
                 return;
             }
 
-            List<ReflectionRuleEvidence.Candidate> candidates =
-                    deriveRuleCandidates(task);
-            if (candidates.isEmpty()) {
+            if (!hasRuleEvidence) {
                 ReflectionHistoryStore.record(
                         context, "SKIPPED", "NO_RULE_EVIDENCE", elapsed(startedAt));
                 Log.d(TAG, "skip task reflection: no deterministic rule evidence");
@@ -120,13 +123,15 @@ final class TaskReflectionCoordinator {
                 outcome = "PARTIAL";
             }
 
+            // Reviewer sees only deterministic evidence candidates plus current
+            // App Playbook context. The full task trace is no longer needed once
+            // Runtime has derived the candidate rules.
             JSONObject episode = new JSONObject()
                     .put("app", new JSONObject()
                             .put("package", packageName)
                             .put("label", appLabel))
                     .put("outcome", outcome)
                     .put("evidence_rules", candidateJson(candidates))
-                    .put("task", task)
                     .put("existing_app_playbook", playbooks.modelContext(packageName));
 
             reflector = new GeminiTaskReflector(apiKey);
