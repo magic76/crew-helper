@@ -38,20 +38,20 @@ final class SemanticPhoneAction {
 
         if ("OPEN_APP".equals(action)) {
             if (target.isEmpty()) return error(action, "OPEN_APP_NEEDS_TARGET",
-                    "OPEN_APP 需要 target=App 名稱，例如 Google、Settings 或第一個。");
+                    "OPEN_APP 需要 target=App 名稱。這是可重試的參數錯誤；補上 target 後立刻重試，不要結束任務。");
             return mapped(action, "launch_app", new JSONObject().put("app", target));
         }
 
         if ("TAP".equals(action)) {
             if (target.isEmpty()) return error(action, "TARGET_REQUIRED",
-                    "TAP 需要目前畫面上的語意 target。");
+                    "TAP 需要目前畫面上的語意 target。這是可重試的參數錯誤；補上 target 後立刻重試，不要結束任務。");
             return mapped(action, "tap_screen",
                     new JSONObject().put("label", target).put("semantic_action", action));
         }
 
         if ("TYPE".equals(action)) {
             if (text.isEmpty()) return error(action, "TYPE_NEEDS_TEXT",
-                    "TYPE 需要 text；TYPE 只輸入文字，不會送出訊息。");
+                    "TYPE 需要 text；TYPE 只輸入文字，不會送出訊息。這是可重試的參數錯誤；補上 text 後立刻重試，不要結束任務。");
 
             // 0132 Goal Outcome Evidence: action success is not enough when the
             // latest user turn explicitly requested a text length. Reject the
@@ -73,7 +73,7 @@ final class SemanticPhoneAction {
         if ("SEARCH".equals(action)) {
             String query = !text.isEmpty() ? text : target;
             if (query.isEmpty()) return error(action, "SEARCH_NEEDS_QUERY",
-                    "SEARCH 需要 text=要搜尋的文字。");
+                    "SEARCH 需要在同一次 phone_action 呼叫帶上非空的 text（搜尋字串）。這是可重試的參數錯誤；補上 text 後立刻重試 SEARCH，不要結束任務。");
             return mapped(action, "search_current_app", new JSONObject().put("text", query));
         }
 
@@ -97,7 +97,7 @@ final class SemanticPhoneAction {
                     || "left".equals(direction) || "right".equals(direction))) {
                 return error(action, "BAD_SCROLL_DIRECTION",
                         "SCROLL direction 只能是 forward/backward/left/right；"
-                        + "forward=看後面/下方/下一頁，backward=看前面/上方/上一頁。");
+                        + "forward=看後面/下方/下一頁，backward=看前面/上方/上一頁。請修正 direction 後立刻重試。");
             }
 
             // Existing trusted Runtime uses physical swipe vocabulary internally:
@@ -117,7 +117,7 @@ final class SemanticPhoneAction {
         }
 
         return error(action, "UNKNOWN_SEMANTIC_ACTION",
-                "只支援 OPEN_APP/SEARCH/COMMIT_SEARCH/TAP/TYPE/SCROLL/BACK/HOME。");
+                "只支援 OPEN_APP/SEARCH/COMMIT_SEARCH/TAP/TYPE/SCROLL/BACK/HOME。請改用支援的 action 後重試。");
     }
 
     private static Resolution mapped(String action, String runtimeName, JSONObject args) {
@@ -125,10 +125,28 @@ final class SemanticPhoneAction {
     }
 
     private static Resolution error(String action, String code, String message) throws Exception {
-        return new Resolution(true, action, ERROR_TOOL,
-                new JSONObject().put("success", false)
-                        .put("stepResult", "STEP_FAILED")
-                        .put("error", code).put("instruction", message));
+        JSONObject failure = new JSONObject()
+                .put("success", false)
+                .put("stepResult", "STEP_FAILED")
+                .put("error", code)
+                .put("instruction", message)
+                .put("semanticAction", action == null ? "" : action)
+                .put("contractError", true)
+                .put("retryable", true);
+        String requiredField = requiredFieldFor(code);
+        if (!requiredField.isEmpty()) failure.put("requiredField", requiredField);
+        return new Resolution(true, action, ERROR_TOOL, failure);
+    }
+
+    private static String requiredFieldFor(String code) {
+        if ("OPEN_APP_NEEDS_TARGET".equals(code) || "TARGET_REQUIRED".equals(code)) {
+            return "target";
+        }
+        if ("TYPE_NEEDS_TEXT".equals(code) || "SEARCH_NEEDS_QUERY".equals(code)) {
+            return "text";
+        }
+        if ("BAD_SCROLL_DIRECTION".equals(code)) return "direction";
+        return "";
     }
 
     private static JSONObject copy(JSONObject input) {
