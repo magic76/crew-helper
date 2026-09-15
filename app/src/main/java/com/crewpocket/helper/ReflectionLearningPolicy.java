@@ -36,14 +36,17 @@ final class ReflectionLearningPolicy {
     private ReflectionLearningPolicy() {}
 
     static boolean shouldReflect(int mutationActions,
-                                 int failedSteps,
+                                 int outcomeSignals,
+                                 boolean hasRuleEvidence,
                                  boolean activeTask,
                                  boolean cancelled,
                                  boolean usedSendText,
                                  String packageName) {
         if (activeTask || cancelled || usedSendText) return false;
         if (isSensitivePackage(packageName)) return false;
-        return failedSteps > 0 || mutationActions >= MIN_MUTATIONS_FOR_SUCCESS;
+        return hasRuleEvidence
+                || outcomeSignals > 0
+                || mutationActions >= MIN_MUTATIONS_FOR_SUCCESS;
     }
 
     static boolean isSensitivePackage(String packageName) {
