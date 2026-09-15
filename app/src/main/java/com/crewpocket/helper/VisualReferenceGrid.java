@@ -144,18 +144,18 @@ final class VisualReferenceGrid {
             catch (Exception ignored) {}
         }
 
-        if (containsAny(folded, "第一", "一號", "一号", "first", "one")) return 1;
-        if (containsAny(folded, "第二", "二號", "二号", "second", "two")) return 2;
-        if (containsAny(folded, "第三", "三號", "三号", "third", "three")) return 3;
-        if (containsAny(folded, "第四", "四號", "四号", "fourth", "four")) return 4;
-        if (containsAny(folded, "第五", "五號", "五号", "fifth", "five")) return 5;
-        if (containsAny(folded, "第六", "六號", "六号", "sixth", "six")) return 6;
-        if (containsAny(folded, "第七", "七號", "七号", "seventh", "seven")) return 7;
-        if (containsAny(folded, "第八", "八號", "八号", "eighth", "eight")) return 8;
-        if (containsAny(folded, "第九", "九號", "九号", "ninth", "nine")) return 9;
+        if (containsAny(folded, "第十二", "十二號", "十二号", "twelfth", "twelve")) return 12;
+        if (containsAny(folded, "第十一", "十一號", "十一号", "eleventh", "eleven")) return 11;
         if (containsAny(folded, "第十", "十號", "十号", "tenth", "ten")) return 10;
-        if (containsAny(folded, "十一", "eleventh", "eleven")) return 11;
-        if (containsAny(folded, "十二", "twelfth", "twelve")) return 12;
+        if (containsAny(folded, "第九", "九號", "九号", "ninth", "nine")) return 9;
+        if (containsAny(folded, "第八", "八號", "八号", "eighth", "eight")) return 8;
+        if (containsAny(folded, "第七", "七號", "七号", "seventh", "seven")) return 7;
+        if (containsAny(folded, "第六", "六號", "六号", "sixth", "six")) return 6;
+        if (containsAny(folded, "第五", "五號", "五号", "fifth", "five")) return 5;
+        if (containsAny(folded, "第四", "四號", "四号", "fourth", "four")) return 4;
+        if (containsAny(folded, "第三", "三號", "三号", "third", "three")) return 3;
+        if (containsAny(folded, "第二", "二號", "二号", "second", "two")) return 2;
+        if (containsAny(folded, "第一", "一號", "一号", "first", "one")) return 1;
         return -1;
     }
 
