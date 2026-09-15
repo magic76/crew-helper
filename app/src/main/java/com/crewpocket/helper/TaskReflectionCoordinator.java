@@ -65,19 +65,24 @@ final class TaskReflectionCoordinator {
         GeminiTaskReflector reflector = null;
         try {
             String packageName = currentPackage();
-            int failedSteps = failedStepCount(task.optJSONArray("steps"));
-            boolean usedSendText = usedTool(task.optJSONArray("steps"), "send_text");
+            JSONArray currentSteps = task.optJSONArray("steps");
+            int failedSteps = failedStepCount(currentSteps);
+            boolean usedSendText = usedTool(currentSteps, "send_text");
             boolean cancelled = ReflectionLearningPolicy.looksCancelled(rawStatus);
             int mutations = task.optInt("mutationActions", 0);
 
-            // 0132: action-level success is not sufficient evidence of goal
-            // success. Coarse, privacy-safe outcome signals may trigger review
-            // even for a one-step task (e.g. 100 requested chars vs 5 supplied,
-            // model refusal, or a Runtime safety/stability block).
+            // Action-level success is not sufficient evidence of goal success.
+            // Coarse, privacy-safe outcome signals may trigger review even for
+            // a short task. A previous task from the SAME conversation goal can
+            // also trigger review so a failed task followed by a short recovery
+            // task is evaluated as one learning episode without sharing dialogue.
             int outcomeSignals = failedSteps;
             if (task.optBoolean("partialOutcome", false)) outcomeSignals++;
             if (task.optBoolean("modelRefusal", false)) outcomeSignals++;
             if (!task.optString("blockCategory", "").isEmpty()) outcomeSignals++;
+            if (hasPreviousGoalFailureEvidence(task.optJSONObject("previousGoalTask"))) {
+                outcomeSignals++;
+            }
 
             if (!ReflectionLearningPolicy.shouldReflect(
                     mutations,
@@ -152,6 +157,14 @@ final class TaskReflectionCoordinator {
                     reflector == null ? GeminiTaskReflector.MODEL : reflector.lastModel());
             Log.d(TAG, "post-task reflection skipped: " + code);
         }
+    }
+
+    private static boolean hasPreviousGoalFailureEvidence(JSONObject previous) {
+        if (previous == null || previous.length() == 0) return false;
+        if (failedStepCount(previous.optJSONArray("steps")) > 0) return true;
+        if (previous.optBoolean("partialOutcome", false)) return true;
+        if (previous.optBoolean("modelRefusal", false)) return true;
+        return !previous.optString("blockCategory", "").isEmpty();
     }
 
     private static long elapsed(long startedAt) {
