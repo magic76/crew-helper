@@ -16,7 +16,8 @@ import java.util.UUID;
  *
  * A model reflection never becomes executable knowledge immediately. Two
  * compatible high-confidence observations are required before promotion into
- * AppPlaybookStore. Later contradictory reflections can demote/remove it.
+ * AppPlaybookStore. Known Runtime patterns are keyed by canonical goalCategory
+ * instead of Gemini's free-text goal wording.
  */
 final class ReflectionLessonStore {
     private static final String PREFS = "crew_reflection_learning";
@@ -52,6 +53,10 @@ final class ReflectionLessonStore {
                 String pkg = cleanPackage(packageName);
                 String goal = ReflectionLearningPolicy.normalizeGoalPattern(
                         reflection.optString("goal_pattern", ""));
+                String requestedCategory = reflection.optString("runtime_goal_category", "").trim();
+                String goalCategory = ReflectionGoalCategory.isCanonical(requestedCategory)
+                        ? requestedCategory
+                        : ReflectionGoalCategory.fromLegacyGoal(goal);
                 String lesson = collapse(reflection.optString("lesson", ""));
                 double confidence = Math.max(0d,
                         Math.min(1d, reflection.optDouble("confidence", 0d)));
@@ -62,7 +67,7 @@ final class ReflectionLessonStore {
                 }
 
                 JSONArray items = load();
-                JSONObject existing = find(items, pkg, goal);
+                JSONObject existing = find(items, pkg, goalCategory, goal);
                 long now = System.currentTimeMillis();
                 String state;
                 int confirmations;
@@ -84,6 +89,7 @@ final class ReflectionLessonStore {
                             .put("state", STATE_CANDIDATE)
                             .put("createdAt", now)
                             .put("updatedAt", now);
+                    if (!goalCategory.isEmpty()) existing.put("goalCategory", goalCategory);
                     items.put(existing);
                 } else {
                     state = existing.optString("state", STATE_CANDIDATE);
@@ -93,6 +99,11 @@ final class ReflectionLessonStore {
                     effectiveLesson = existing.optString("lesson", "");
                     ruleId = existing.optString("playbookRuleId", "");
 
+                    // Opportunistic migration: old 1/2 candidates that used a
+                    // free-text goal can join the new canonical bucket without
+                    // losing their first confirmation.
+                    if (!goalCategory.isEmpty()) existing.put("goalCategory", goalCategory);
+
                     boolean compatible = ReflectionLearningPolicy.lessonsCompatible(
                             effectiveLesson, lesson);
                     if (STATE_VERIFIED.equals(state) || STATE_SUSPECT.equals(state)) {
@@ -101,7 +112,8 @@ final class ReflectionLessonStore {
                             average = rollingAverage(average, confirmations - 1, confidence);
                             contradictions = 0;
                             state = STATE_VERIFIED;
-                            existing.put("lesson", lesson);
+                            existing.put("lesson", lesson)
+                                    .put("goalPattern", goal);
                         } else {
                             contradictions++;
                             state = STATE_SUSPECT;
@@ -112,18 +124,24 @@ final class ReflectionLessonStore {
                                 average = confidence;
                                 state = STATE_CANDIDATE;
                                 ruleId = "";
-                                existing.put("lesson", lesson);
+                                existing.put("lesson", lesson)
+                                        .put("goalPattern", goal);
                             }
                         }
                     } else {
                         if (compatible) {
                             confirmations++;
                             average = rollingAverage(average, confirmations - 1, confidence);
-                            existing.put("lesson", lesson);
+                            existing.put("lesson", lesson)
+                                    .put("goalPattern", goal);
                         } else {
+                            // Same canonical Runtime category but a materially
+                            // different lesson is not a confirmation. Restart the
+                            // candidate rather than promoting mixed evidence.
                             confirmations = 1;
                             average = confidence;
-                            existing.put("lesson", lesson);
+                            existing.put("lesson", lesson)
+                                    .put("goalPattern", goal);
                         }
                     }
 
@@ -142,10 +160,11 @@ final class ReflectionLessonStore {
                 if (!STATE_VERIFIED.equals(state)
                         && confirmations >= ReflectionLearningPolicy.CONFIRMATIONS_TO_VERIFY
                         && average >= ReflectionLearningPolicy.MIN_VERIFIED_CONFIDENCE) {
+                    String identity = goalCategory.isEmpty() ? goal : goalCategory;
                     JSONObject promoted = playbookStore.remember(
                             pkg,
                             collapse(appLabel),
-                            "Auto learned · " + goal,
+                            "Auto learned · " + identity,
                             existing.optString("lesson", lesson),
                             AppPlaybookStore.SOURCE_MANUAL);
                     if (promoted.optBoolean("success", false)) {
@@ -158,11 +177,13 @@ final class ReflectionLessonStore {
                 }
 
                 save(trim(items));
-                return out.put("stored", true)
+                out.put("stored", true)
                         .put("state", state)
                         .put("goalPattern", goal)
                         .put("confirmations", existing.optInt("confirmations", 1))
                         .put("avgConfidence", existing.optDouble("avgConfidence", confidence));
+                if (!goalCategory.isEmpty()) out.put("goalCategory", goalCategory);
+                return out;
             } catch (Exception error) {
                 try {
                     return out.put("stored", false)
@@ -177,7 +198,7 @@ final class ReflectionLessonStore {
     /**
      * Human-readable local-only view of sanitized lessons generated by the
      * self-improvement reviewer. This intentionally exposes lesson text to the
-     * owner for debugging, but never includes raw user input or tool arguments.
+     * owner for debugging, but never includes raw user input or arbitrary args.
      */
     static String buildReport(Context context) {
         JSONArray items = new JSONArray();
@@ -207,6 +228,11 @@ final class ReflectionLessonStore {
             int contradictions = Math.max(0, item.optInt("contradictions", 0));
             double confidence = Math.max(0d,
                     Math.min(1d, item.optDouble("avgConfidence", 0d)));
+            String goal = collapse(item.optString("goalPattern", ""));
+            String category = item.optString("goalCategory", "").trim();
+            if (!ReflectionGoalCategory.isCanonical(category)) {
+                category = ReflectionGoalCategory.fromLegacyGoal(goal);
+            }
 
             if (out.length() > 0) out.append("\n\n");
             out.append(app.isEmpty() ? pkg : app);
@@ -222,8 +248,9 @@ final class ReflectionLessonStore {
             if (contradictions > 0) {
                 out.append(" · contradictions ").append(contradictions);
             }
+            if (!category.isEmpty()) out.append("\nCategory: ").append(category);
             out.append("\nGoal: ")
-                    .append(collapse(item.optString("goalPattern", "")))
+                    .append(goal)
                     .append("\nLesson: ")
                     .append(collapse(item.optString("lesson", "")));
 
@@ -255,13 +282,24 @@ final class ReflectionLessonStore {
         prefs.edit().putString(KEY_ITEMS, items.toString()).apply();
     }
 
-    private static JSONObject find(JSONArray items, String pkg, String goal) {
+    private static JSONObject find(JSONArray items,
+                                   String pkg,
+                                   String goalCategory,
+                                   String goalPattern) {
         if (items == null) return null;
+        boolean canonical = ReflectionGoalCategory.isCanonical(goalCategory);
         for (int i = items.length() - 1; i >= 0; i--) {
             JSONObject item = items.optJSONObject(i);
-            if (item == null) continue;
-            if (pkg.equals(item.optString("package", ""))
-                    && goal.equals(item.optString("goalPattern", ""))) {
+            if (item == null || !pkg.equals(item.optString("package", ""))) continue;
+
+            if (canonical) {
+                String existingCategory = item.optString("goalCategory", "").trim();
+                if (!ReflectionGoalCategory.isCanonical(existingCategory)) {
+                    existingCategory = ReflectionGoalCategory.fromLegacyGoal(
+                            item.optString("goalPattern", ""));
+                }
+                if (goalCategory.equals(existingCategory)) return item;
+            } else if (goalPattern.equals(item.optString("goalPattern", ""))) {
                 return item;
             }
         }

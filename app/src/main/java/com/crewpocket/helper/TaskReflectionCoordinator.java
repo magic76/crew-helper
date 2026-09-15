@@ -16,9 +16,10 @@ import java.util.concurrent.Executors;
 /**
  * Bridges sanitized Agent Inspector metadata to the post-task reviewer.
  *
- * Important: AgentInspectorStore strips transcript text, tool args, model
- * replies, screenshots, API keys and raw result details. Reflection sees only
- * bounded categories/counts plus current app identity and existing App Playbook.
+ * Important: AgentInspectorStore strips transcript text, TYPE/SEARCH content,
+ * model replies, screenshots, API keys and raw result details. Reflection sees
+ * only bounded categories/counts, safe TAP labels, current app identity and the
+ * existing App Playbook.
  */
 final class TaskReflectionCoordinator {
     private static final String TAG = "CrewReflection";
@@ -114,16 +115,23 @@ final class TaskReflectionCoordinator {
                 outcome = "PARTIAL";
             }
 
+            String goalCategory = runtimeGoalCategory(task, outcomeSignals > 0);
             JSONObject episode = new JSONObject()
                     .put("app", new JSONObject()
                             .put("package", packageName)
                             .put("label", appLabel))
                     .put("outcome", outcome)
+                    .put("runtime_goal_category", goalCategory)
                     .put("task", task)
                     .put("existing_app_playbook", playbooks.modelContext(packageName));
 
             reflector = new GeminiTaskReflector(apiKey);
             JSONObject reflection = reflector.reflect(episode);
+            if (!goalCategory.isEmpty()) {
+                // Runtime owns lesson identity. Gemini's free-text goal_pattern
+                // remains useful for human-readable description only.
+                reflection.put("runtime_goal_category", goalCategory);
+            }
             JSONObject stored = new ReflectionLessonStore(context)
                     .record(packageName, appLabel, reflection);
 
@@ -142,6 +150,7 @@ final class TaskReflectionCoordinator {
 
             Log.i(TAG, "post-task reflection complete: model="
                     + reflector.lastModel()
+                    + " category=" + goalCategory
                     + " stored=" + stored.optBoolean("stored", false)
                     + " state=" + stored.optString("state", "SKIPPED")
                     + " confirmations=" + stored.optInt("confirmations", 0));
@@ -159,12 +168,125 @@ final class TaskReflectionCoordinator {
         }
     }
 
+    static String runtimeGoalCategory(JSONObject task, boolean hasFailureOrPartial) {
+        if (task == null) return "";
+        JSONArray current = task.optJSONArray("steps");
+        JSONObject previousTask = task.optJSONObject("previousGoalTask");
+        JSONArray previous = previousTask == null ? null : previousTask.optJSONArray("steps");
+
+        boolean hasRouteModeAction = hasSemanticTargetPrefix(current, "route_mode:")
+                || hasSemanticTargetPrefix(previous, "route_mode:");
+        boolean hasUiTargetFailure = hasFailureCode(current, "UI_TARGET_NOT_FOUND")
+                || hasFailureCode(previous, "UI_TARGET_NOT_FOUND");
+        boolean hasSearchEvidence = usedTool(current, "search_current_app")
+                || usedTool(previous, "search_current_app");
+        boolean hasScreenRecovery = hasFailureThenVisualThenSuccess(current)
+                || (hasPreviousGoalFailureEvidence(previousTask)
+                    && hasVisualObservation(current)
+                    && hasSuccessfulMutation(current));
+        boolean hasVerificationFailure = hasVerificationFailure(current)
+                || hasVerificationFailure(previous);
+
+        return ReflectionGoalCategory.classify(
+                hasRouteModeAction,
+                hasUiTargetFailure,
+                hasSearchEvidence,
+                hasScreenRecovery,
+                hasVerificationFailure,
+                hasFailureOrPartial);
+    }
+
     private static boolean hasPreviousGoalFailureEvidence(JSONObject previous) {
         if (previous == null || previous.length() == 0) return false;
         if (failedStepCount(previous.optJSONArray("steps")) > 0) return true;
         if (previous.optBoolean("partialOutcome", false)) return true;
         if (previous.optBoolean("modelRefusal", false)) return true;
         return !previous.optString("blockCategory", "").isEmpty();
+    }
+
+    private static boolean hasSemanticTargetPrefix(JSONArray steps, String prefix) {
+        if (steps == null || prefix == null || prefix.isEmpty()) return false;
+        for (int i = 0; i < steps.length(); i++) {
+            JSONObject step = steps.optJSONObject(i);
+            if (step == null) continue;
+            String target = step.optString("semanticTarget", "");
+            if (target.startsWith(prefix)) return true;
+        }
+        return false;
+    }
+
+    private static boolean hasFailureCode(JSONArray steps, String code) {
+        if (steps == null || code == null || code.isEmpty()) return false;
+        for (int i = 0; i < steps.length(); i++) {
+            JSONObject step = steps.optJSONObject(i);
+            if (step == null || !"FAILED".equals(step.optString("outcome", ""))) continue;
+            if (code.equals(step.optString("failureCode", ""))) return true;
+        }
+        return false;
+    }
+
+    private static boolean hasVerificationFailure(JSONArray steps) {
+        if (steps == null) return false;
+        for (int i = 0; i < steps.length(); i++) {
+            JSONObject step = steps.optJSONObject(i);
+            if (step == null || !"FAILED".equals(step.optString("outcome", ""))) continue;
+            String code = step.optString("failureCode", "").toUpperCase(Locale.ROOT);
+            if (code.contains("VERIFY") || code.contains("VERIFICATION")
+                    || code.contains("NO_EFFECT") || code.contains("NOT_CONFIRMED")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean hasFailureThenVisualThenSuccess(JSONArray steps) {
+        if (steps == null) return false;
+        boolean sawFailure = false;
+        boolean sawVisualAfterFailure = false;
+        for (int i = 0; i < steps.length(); i++) {
+            JSONObject step = steps.optJSONObject(i);
+            if (step == null) continue;
+            if ("FAILED".equals(step.optString("outcome", ""))) sawFailure = true;
+            String tool = step.optString("tool", "");
+            if (sawFailure && isVisualTool(tool)) sawVisualAfterFailure = true;
+            if (sawVisualAfterFailure && "SUCCESS".equals(step.optString("outcome", ""))
+                    && isMutationTool(tool)) return true;
+        }
+        return false;
+    }
+
+    private static boolean hasVisualObservation(JSONArray steps) {
+        if (steps == null) return false;
+        for (int i = 0; i < steps.length(); i++) {
+            JSONObject step = steps.optJSONObject(i);
+            if (step != null && isVisualTool(step.optString("tool", ""))) return true;
+        }
+        return false;
+    }
+
+    private static boolean hasSuccessfulMutation(JSONArray steps) {
+        if (steps == null) return false;
+        for (int i = 0; i < steps.length(); i++) {
+            JSONObject step = steps.optJSONObject(i);
+            if (step != null
+                    && "SUCCESS".equals(step.optString("outcome", ""))
+                    && isMutationTool(step.optString("tool", ""))) return true;
+        }
+        return false;
+    }
+
+    private static boolean isVisualTool(String tool) {
+        return "inspect_ui".equals(tool) || "take_screenshot".equals(tool);
+    }
+
+    private static boolean isMutationTool(String tool) {
+        if (tool == null || tool.isEmpty()) return false;
+        return !isVisualTool(tool)
+                && !"wait".equals(tool)
+                && !"list_notes".equals(tool)
+                && !"get_note".equals(tool)
+                && !"search_notes".equals(tool)
+                && !"list_app_guidance".equals(tool);
     }
 
     private static long elapsed(long startedAt) {
