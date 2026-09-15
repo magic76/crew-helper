@@ -24,8 +24,8 @@ final class ModelToolResponseAdapter {
     static final String FAILED = "FAILED";
 
     private static final int MAX_SCREEN_ITEMS = 14;
-    private static final int MAX_CHOICES = 6;
-    private static final int MAX_MESSAGE = 180;
+    private static final int MAX_CHOICES = 12;
+    private static final int MAX_MESSAGE = 220;
     private static final int MAX_LABEL = 96;
 
     private ModelToolResponseAdapter() {}
@@ -36,6 +36,15 @@ final class ModelToolResponseAdapter {
         }
 
         JSONObject source = internal == null ? new JSONObject() : internal;
+
+        // Shared Visual Reference is an execution fallback, not model-generated
+        // coordinates. Only arm it after the normal semantic TAP path has proved
+        // that Accessibility cannot resolve the target.
+        if ("phone_action".equals(toolName)
+                && "TAP".equals(upper(source.optString("semanticAction", "")))) {
+            SharedVisualReferenceRuntime.maybeStart(source);
+        }
+
         JSONObject out = new JSONObject();
         try {
             String status = status(source);
@@ -116,6 +125,13 @@ final class ModelToolResponseAdapter {
         String error = upper(result.optString("error", ""));
 
         if (NEED_USER.equals(status)) {
+            String visualReference = upper(result.optString("visualReference", ""));
+            if (!visualReference.isEmpty()) {
+                if ("REFINED".equals(visualReference)) {
+                    return "畫面已放大成 1–9。只問使用者第二次位置；回答後立刻用 phone_action(TAP,target=回答原文)，不要猜座標。";
+                }
+                return "Runtime 已在手機畫面標示 1–12。只問使用者是哪一格或哪個位置；回答後立刻用 phone_action(TAP,target=回答原文)，不要猜座標。";
+            }
             if ("MULTIPLE_MATCHES".equals(upper(result.optString("status", "")))) {
                 return "找到多個選項；用一句話讀出 screen.choices 並問使用者要哪個，然後等待回答。";
             }
