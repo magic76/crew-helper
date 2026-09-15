@@ -36,6 +36,12 @@ final class SemanticPhoneAction {
         String direction = args.optString("direction", "").trim().toLowerCase(Locale.ROOT);
         String distance = args.optString("distance", "").trim().toLowerCase(Locale.ROOT);
 
+        // A non-TAP action means the user moved on from an unresolved visual
+        // reference. Never leave a stale numbered overlay over the next task.
+        if (!"TAP".equals(action) && SharedVisualReferenceRuntime.isActive()) {
+            SharedVisualReferenceRuntime.cancel();
+        }
+
         if ("OPEN_APP".equals(action)) {
             if (target.isEmpty()) return error(action, "OPEN_APP_NEEDS_TARGET",
                     "OPEN_APP 需要 target=App 名稱。這是可重試的參數錯誤；補上 target 後立刻重試，不要結束任務。");
@@ -45,6 +51,36 @@ final class SemanticPhoneAction {
         if ("TAP".equals(action)) {
             if (target.isEmpty()) return error(action, "TARGET_REQUIRED",
                     "TAP 需要目前畫面上的語意 target。這是可重試的參數錯誤；補上 target 後立刻重試，不要結束任務。");
+
+            // Shared Visual Reference: while a numbered overlay is active, the
+            // model forwards the user's number/relative-position phrase only.
+            // Runtime owns both refinement and the final coordinate conversion.
+            SharedVisualReferenceRuntime.Decision visual =
+                    SharedVisualReferenceRuntime.resolveChoice(target);
+            if (visual.kind == SharedVisualReferenceRuntime.Kind.REFINE) {
+                return new Resolution(true, action, ERROR_TOOL, visual.response);
+            }
+            if (visual.kind == SharedVisualReferenceRuntime.Kind.TAP) {
+                JSONObject coordinate = new JSONObject()
+                        .put("x", visual.x)
+                        .put("y", visual.y)
+                        .put("coordinate_space", "screen")
+                        .put("visual_reference", true)
+                        .put("semantic_action", action);
+                return mapped(action, "tap_screen", coordinate);
+            }
+            if (SharedVisualReferenceRuntime.isActive()) {
+                JSONObject waiting = new JSONObject()
+                        .put("success", false)
+                        .put("stepResult", "STEP_FAILED")
+                        .put("blockedByRuntime", true)
+                        .put("error", "VISUAL_REFERENCE_CHOICE_REQUIRED")
+                        .put("taskState", "WAITING_USER")
+                        .put("instruction",
+                                "Shared Visual Reference 仍在等待位置。只請使用者回答畫面上的編號或相對位置，例如「5」或「右下角」；"
+                                        + "不要猜座標，也不要重做原本找不到的 TAP。");
+                return new Resolution(true, action, ERROR_TOOL, waiting);
+            }
 
             String mapsConcept = GoogleMapsSemanticContract.canonicalTarget(target);
             JSONObject out = new JSONObject()
@@ -59,6 +95,10 @@ final class SemanticPhoneAction {
                 }
                 out.put("semantic_target", mapsConcept);
             }
+
+            // Keep only a short-lived, sanitized target note. It is consumed only
+            // if the normal Accessibility TAP later returns UI_TARGET_NOT_FOUND.
+            SharedVisualReferenceRuntime.noteTapTarget(target, mapsConcept);
             return mapped(action, "tap_screen", out);
         }
 
