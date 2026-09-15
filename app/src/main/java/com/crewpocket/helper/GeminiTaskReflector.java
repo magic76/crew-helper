@@ -168,6 +168,8 @@ final class GeminiTaskReflector {
                 + "- Learn only reusable UI/navigation/runtime behavior.\n"
                 + "- Never learn user identity, names, message text, search values, URLs, numbers, credentials, OTPs, passwords, payment/account actions, deletion, or SEND authorization.\n"
                 + "- Never infer missing UI details. If the sanitized trace does not support a concrete reusable lesson, set should_remember=false.\n"
+                + "- Sanitized step.failureCode values are authoritative Runtime evidence. A deterministic contract failure such as SEARCH_NEEDS_QUERY may justify a reusable recovery lesson without any UI inference.\n"
+                + "- For a clear deterministic failureCode, prefer a generic recovery rule about the action contract; never reconstruct the missing user value.\n"
                 + "- goal_pattern must be a generic 2-6 word English task category, without personal values.\n"
                 + "- lesson must be one concise English operational sentence, <= 180 characters, with no personal values and no authorization language.\n"
                 + "- A failed attempt can teach an avoidance/recovery rule only when the trace clearly supports it.\n"
