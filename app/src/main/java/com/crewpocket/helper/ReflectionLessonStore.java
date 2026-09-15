@@ -8,20 +8,21 @@ import org.json.JSONObject;
 
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 
 /**
- * Stores post-task reflection candidates separately from active App Playbooks.
+ * Stores post-task reflection rules separately from active App Playbooks.
  *
- * A model reflection never becomes executable knowledge immediately. Two
- * compatible high-confidence observations are required before promotion into
- * AppPlaybookStore. Known Runtime patterns are keyed by canonical goalCategory
- * instead of Gemini's free-text goal wording.
+ * Runtime owns rule identity: package + deterministic ruleKey. Gemini only
+ * selects an evidence rule and writes its human-readable lesson. Two compatible
+ * high-confidence confirmations are still required before App Playbook promotion.
  */
 final class ReflectionLessonStore {
     private static final String PREFS = "crew_reflection_learning";
-    private static final String KEY_ITEMS = "lessons_v1";
+    private static final String KEY_ITEMS = "rules_v2";
     private static final int MAX_ITEMS = 80;
     private static final Object LOCK = new Object();
 
@@ -41,153 +42,82 @@ final class ReflectionLessonStore {
         this.playbookStore = new AppPlaybookStore(this.context);
     }
 
-    JSONObject record(String packageName, String appLabel, JSONObject reflection) {
+    JSONObject recordRules(String packageName,
+                           String appLabel,
+                           List<ReflectionRuleEvidence.Candidate> candidates,
+                           JSONObject reflection) {
         synchronized (LOCK) {
             JSONObject out = new JSONObject();
             try {
-                if (prefs == null || reflection == null
-                        || !reflection.optBoolean("should_remember", false)) {
-                    return out.put("stored", false).put("reason", "NOT_REMEMBERED");
+                if (prefs == null || reflection == null || candidates == null
+                        || candidates.isEmpty()) {
+                    return out.put("storedCount", 0).put("reason", "NOT_REMEMBERED");
+                }
+
+                JSONArray selected = reflection.optJSONArray("rules");
+                if (selected == null || selected.length() == 0) {
+                    return out.put("storedCount", 0).put("reason", "NOT_REMEMBERED");
                 }
 
                 String pkg = cleanPackage(packageName);
-                String goal = ReflectionLearningPolicy.normalizeGoalPattern(
-                        reflection.optString("goal_pattern", ""));
-                String requestedCategory = reflection.optString("runtime_goal_category", "").trim();
-                String goalCategory = ReflectionGoalCategory.isCanonical(requestedCategory)
-                        ? requestedCategory
-                        : ReflectionGoalCategory.fromLegacyGoal(goal);
-                String lesson = collapse(reflection.optString("lesson", ""));
-                double confidence = Math.max(0d,
-                        Math.min(1d, reflection.optDouble("confidence", 0d)));
-
-                if (pkg.isEmpty() || !ReflectionLearningPolicy.isSafeCandidate(
-                        goal, lesson, confidence)) {
-                    return out.put("stored", false).put("reason", "POLICY_REJECTED");
+                if (pkg.isEmpty()) {
+                    return out.put("storedCount", 0).put("reason", "POLICY_REJECTED");
                 }
 
                 JSONArray items = load();
-                JSONObject existing = find(items, pkg, goalCategory, goal);
-                long now = System.currentTimeMillis();
-                String state;
-                int confirmations;
-                int contradictions;
-                double average;
-                String effectiveLesson;
-                String ruleId = "";
+                HashSet<String> processed = new HashSet<String>();
+                int storedCount = 0;
+                boolean policyRejected = false;
+                String aggregateState = "";
 
-                if (existing == null) {
-                    existing = new JSONObject()
-                            .put("id", UUID.randomUUID().toString())
-                            .put("package", pkg)
-                            .put("app", collapse(appLabel))
-                            .put("goalPattern", goal)
-                            .put("lesson", lesson)
-                            .put("confirmations", 1)
-                            .put("contradictions", 0)
-                            .put("avgConfidence", confidence)
-                            .put("state", STATE_CANDIDATE)
-                            .put("createdAt", now)
-                            .put("updatedAt", now);
-                    if (!goalCategory.isEmpty()) existing.put("goalCategory", goalCategory);
-                    items.put(existing);
-                } else {
-                    state = existing.optString("state", STATE_CANDIDATE);
-                    confirmations = Math.max(1, existing.optInt("confirmations", 1));
-                    contradictions = Math.max(0, existing.optInt("contradictions", 0));
-                    average = existing.optDouble("avgConfidence", confidence);
-                    effectiveLesson = existing.optString("lesson", "");
-                    ruleId = existing.optString("playbookRuleId", "");
+                for (int i = 0; i < selected.length() && storedCount < 2; i++) {
+                    JSONObject choice = selected.optJSONObject(i);
+                    if (choice == null) continue;
 
-                    // Opportunistic migration: old 1/2 candidates that used a
-                    // free-text goal can join the new canonical bucket without
-                    // losing their first confirmation.
-                    if (!goalCategory.isEmpty()) existing.put("goalCategory", goalCategory);
+                    String candidateId = collapse(choice.optString("candidate_id", ""));
+                    if (candidateId.isEmpty() || processed.contains(candidateId)) continue;
+                    processed.add(candidateId);
 
-                    boolean compatible = ReflectionLearningPolicy.lessonsCompatible(
-                            effectiveLesson, lesson);
-                    if (STATE_VERIFIED.equals(state) || STATE_SUSPECT.equals(state)) {
-                        if (compatible) {
-                            confirmations++;
-                            average = rollingAverage(average, confirmations - 1, confidence);
-                            contradictions = 0;
-                            state = STATE_VERIFIED;
-                            existing.put("lesson", lesson)
-                                    .put("goalPattern", goal);
-                        } else {
-                            contradictions++;
-                            state = STATE_SUSPECT;
-                            if (contradictions >= 2) {
-                                if (!ruleId.isEmpty()) playbookStore.delete(pkg, ruleId);
-                                confirmations = 1;
-                                contradictions = 0;
-                                average = confidence;
-                                state = STATE_CANDIDATE;
-                                ruleId = "";
-                                existing.put("lesson", lesson)
-                                        .put("goalPattern", goal);
-                            }
-                        }
-                    } else {
-                        if (compatible) {
-                            confirmations++;
-                            average = rollingAverage(average, confirmations - 1, confidence);
-                            existing.put("lesson", lesson)
-                                    .put("goalPattern", goal);
-                        } else {
-                            // Same canonical Runtime category but a materially
-                            // different lesson is not a confirmation. Restart the
-                            // candidate rather than promoting mixed evidence.
-                            confirmations = 1;
-                            average = confidence;
-                            existing.put("lesson", lesson)
-                                    .put("goalPattern", goal);
-                        }
+                    ReflectionRuleEvidence.Candidate candidate =
+                            ReflectionRuleEvidence.findById(candidates, candidateId);
+                    if (candidate == null) continue;
+
+                    String lesson = collapse(choice.optString("lesson", ""));
+                    double confidence = Math.max(0d,
+                            Math.min(1d, choice.optDouble("confidence", 0d)));
+                    if (!ReflectionLearningPolicy.isSafeRuleLesson(lesson, confidence)) {
+                        policyRejected = true;
+                        continue;
                     }
 
-                    existing.put("confirmations", confirmations)
-                            .put("contradictions", contradictions)
-                            .put("avgConfidence", average)
-                            .put("state", state)
-                            .put("updatedAt", now);
-                    if (ruleId.isEmpty()) existing.remove("playbookRuleId");
-                }
-
-                state = existing.optString("state", STATE_CANDIDATE);
-                confirmations = existing.optInt("confirmations", 1);
-                average = existing.optDouble("avgConfidence", confidence);
-
-                if (!STATE_VERIFIED.equals(state)
-                        && confirmations >= ReflectionLearningPolicy.CONFIRMATIONS_TO_VERIFY
-                        && average >= ReflectionLearningPolicy.MIN_VERIFIED_CONFIDENCE) {
-                    String identity = goalCategory.isEmpty() ? goal : goalCategory;
-                    JSONObject promoted = playbookStore.remember(
+                    JSONObject item = recordOne(
+                            items,
                             pkg,
                             collapse(appLabel),
-                            "Auto learned · " + identity,
-                            existing.optString("lesson", lesson),
-                            AppPlaybookStore.SOURCE_MANUAL);
-                    if (promoted.optBoolean("success", false)) {
-                        existing.put("state", STATE_VERIFIED)
-                                .put("playbookRuleId", promoted.optString("ruleId", ""))
-                                .put("verifiedAt", now)
-                                .put("contradictions", 0);
-                        state = STATE_VERIFIED;
-                    }
+                            candidate,
+                            lesson,
+                            confidence);
+                    if (item == null) continue;
+
+                    storedCount++;
+                    aggregateState = aggregateState(
+                            aggregateState,
+                            item.optString("state", STATE_CANDIDATE));
+                }
+
+                if (storedCount == 0) {
+                    return out.put("storedCount", 0)
+                            .put("reason", policyRejected
+                                    ? "POLICY_REJECTED" : "NOT_REMEMBERED");
                 }
 
                 save(trim(items));
-                out.put("stored", true)
-                        .put("state", state)
-                        .put("goalPattern", goal)
-                        .put("confirmations", existing.optInt("confirmations", 1))
-                        .put("avgConfidence", existing.optDouble("avgConfidence", confidence));
-                if (!goalCategory.isEmpty()) out.put("goalCategory", goalCategory);
-                return out;
+                return out.put("storedCount", storedCount)
+                        .put("state", aggregateState.isEmpty()
+                                ? STATE_CANDIDATE : aggregateState);
             } catch (Exception error) {
                 try {
-                    return out.put("stored", false)
-                            .put("reason", "STORE_ERROR");
+                    return out.put("storedCount", 0).put("reason", "STORE_ERROR");
                 } catch (Exception ignored) {
                     return new JSONObject();
                 }
@@ -195,11 +125,112 @@ final class ReflectionLessonStore {
         }
     }
 
-    /**
-     * Human-readable local-only view of sanitized lessons generated by the
-     * self-improvement reviewer. This intentionally exposes lesson text to the
-     * owner for debugging, but never includes raw user input or arbitrary args.
-     */
+    private JSONObject recordOne(JSONArray items,
+                                 String pkg,
+                                 String appLabel,
+                                 ReflectionRuleEvidence.Candidate candidate,
+                                 String lesson,
+                                 double confidence) throws Exception {
+        JSONObject existing = find(items, pkg, candidate.ruleKey);
+        long now = System.currentTimeMillis();
+
+        if (existing == null) {
+            existing = new JSONObject()
+                    .put("id", UUID.randomUUID().toString())
+                    .put("package", pkg)
+                    .put("app", appLabel)
+                    .put("ruleKey", candidate.ruleKey)
+                    .put("scope", candidate.scope)
+                    .put("condition", candidate.condition)
+                    .put("response", candidate.response)
+                    .put("lesson", lesson)
+                    .put("confirmations", 1)
+                    .put("contradictions", 0)
+                    .put("avgConfidence", confidence)
+                    .put("state", STATE_CANDIDATE)
+                    .put("createdAt", now)
+                    .put("updatedAt", now);
+            items.put(existing);
+        } else {
+            String state = existing.optString("state", STATE_CANDIDATE);
+            int confirmations = Math.max(1, existing.optInt("confirmations", 1));
+            int contradictions = Math.max(0, existing.optInt("contradictions", 0));
+            double average = existing.optDouble("avgConfidence", confidence);
+            String effectiveLesson = existing.optString("lesson", "");
+            String ruleId = existing.optString("playbookRuleId", "");
+            boolean compatible = ReflectionLearningPolicy.lessonsCompatible(
+                    effectiveLesson, lesson);
+
+            if (STATE_VERIFIED.equals(state) || STATE_SUSPECT.equals(state)) {
+                if (compatible) {
+                    confirmations++;
+                    average = rollingAverage(average, confirmations - 1, confidence);
+                    contradictions = 0;
+                    state = STATE_VERIFIED;
+                    existing.put("lesson", lesson);
+                } else {
+                    contradictions++;
+                    state = STATE_SUSPECT;
+                    if (contradictions >= 2) {
+                        if (!ruleId.isEmpty()) playbookStore.delete(pkg, ruleId);
+                        confirmations = 1;
+                        contradictions = 0;
+                        average = confidence;
+                        state = STATE_CANDIDATE;
+                        ruleId = "";
+                        existing.put("lesson", lesson);
+                    }
+                }
+            } else {
+                if (compatible) {
+                    confirmations++;
+                    average = rollingAverage(average, confirmations - 1, confidence);
+                    existing.put("lesson", lesson);
+                } else {
+                    // Same deterministic rule, but Gemini described a materially
+                    // different behavior. Do not mix evidence; restart validation.
+                    confirmations = 1;
+                    average = confidence;
+                    existing.put("lesson", lesson);
+                }
+            }
+
+            existing.put("scope", candidate.scope)
+                    .put("condition", candidate.condition)
+                    .put("response", candidate.response)
+                    .put("confirmations", confirmations)
+                    .put("contradictions", contradictions)
+                    .put("avgConfidence", average)
+                    .put("state", state)
+                    .put("updatedAt", now);
+            if (ruleId.isEmpty()) existing.remove("playbookRuleId");
+        }
+
+        String state = existing.optString("state", STATE_CANDIDATE);
+        int confirmations = existing.optInt("confirmations", 1);
+        double average = existing.optDouble("avgConfidence", confidence);
+        if (!STATE_VERIFIED.equals(state)
+                && confirmations >= ReflectionLearningPolicy.CONFIRMATIONS_TO_VERIFY
+                && average >= ReflectionLearningPolicy.MIN_VERIFIED_CONFIDENCE) {
+            String title = "Auto learned · " + candidate.scope
+                    + " · " + candidate.condition + " -> " + candidate.response;
+            JSONObject promoted = playbookStore.remember(
+                    pkg,
+                    appLabel,
+                    title,
+                    existing.optString("lesson", lesson),
+                    AppPlaybookStore.SOURCE_MANUAL);
+            if (promoted.optBoolean("success", false)) {
+                existing.put("state", STATE_VERIFIED)
+                        .put("playbookRuleId", promoted.optString("ruleId", ""))
+                        .put("verifiedAt", now)
+                        .put("contradictions", 0);
+            }
+        }
+        return existing;
+    }
+
+    /** Human-readable local-only view of sanitized evidence rules. */
     static String buildReport(Context context) {
         JSONArray items = new JSONArray();
         if (context != null) {
@@ -213,7 +244,7 @@ final class ReflectionLessonStore {
         StringBuilder out = new StringBuilder();
         out.append("Self-reflection lessons\n");
         if (items.length() == 0) {
-            out.append("No reusable reflection lessons recorded yet.");
+            out.append("No evidence-based reflection rules recorded yet.");
             return out.toString();
         }
 
@@ -228,11 +259,6 @@ final class ReflectionLessonStore {
             int contradictions = Math.max(0, item.optInt("contradictions", 0));
             double confidence = Math.max(0d,
                     Math.min(1d, item.optDouble("avgConfidence", 0d)));
-            String goal = collapse(item.optString("goalPattern", ""));
-            String category = item.optString("goalCategory", "").trim();
-            if (!ReflectionGoalCategory.isCanonical(category)) {
-                category = ReflectionGoalCategory.fromLegacyGoal(goal);
-            }
 
             if (out.length() > 0) out.append("\n\n");
             out.append(app.isEmpty() ? pkg : app);
@@ -248,9 +274,9 @@ final class ReflectionLessonStore {
             if (contradictions > 0) {
                 out.append(" · contradictions ").append(contradictions);
             }
-            if (!category.isEmpty()) out.append("\nCategory: ").append(category);
-            out.append("\nGoal: ")
-                    .append(goal)
+            out.append("\nRule: ").append(collapse(item.optString("scope", "")))
+                    .append("\nWhen: ").append(collapse(item.optString("condition", "")))
+                    .append("\nDo: ").append(collapse(item.optString("response", "")))
                     .append("\nLesson: ")
                     .append(collapse(item.optString("lesson", "")));
 
@@ -282,28 +308,27 @@ final class ReflectionLessonStore {
         prefs.edit().putString(KEY_ITEMS, items.toString()).apply();
     }
 
-    private static JSONObject find(JSONArray items,
-                                   String pkg,
-                                   String goalCategory,
-                                   String goalPattern) {
-        if (items == null) return null;
-        boolean canonical = ReflectionGoalCategory.isCanonical(goalCategory);
+    private static JSONObject find(JSONArray items, String pkg, String ruleKey) {
+        if (items == null || ruleKey == null || ruleKey.isEmpty()) return null;
         for (int i = items.length() - 1; i >= 0; i--) {
             JSONObject item = items.optJSONObject(i);
-            if (item == null || !pkg.equals(item.optString("package", ""))) continue;
-
-            if (canonical) {
-                String existingCategory = item.optString("goalCategory", "").trim();
-                if (!ReflectionGoalCategory.isCanonical(existingCategory)) {
-                    existingCategory = ReflectionGoalCategory.fromLegacyGoal(
-                            item.optString("goalPattern", ""));
-                }
-                if (goalCategory.equals(existingCategory)) return item;
-            } else if (goalPattern.equals(item.optString("goalPattern", ""))) {
+            if (item == null) continue;
+            if (pkg.equals(item.optString("package", ""))
+                    && ruleKey.equals(item.optString("ruleKey", ""))) {
                 return item;
             }
         }
         return null;
+    }
+
+    private static String aggregateState(String current, String next) {
+        if (STATE_VERIFIED.equals(current) || STATE_VERIFIED.equals(next)) {
+            return STATE_VERIFIED;
+        }
+        if (STATE_SUSPECT.equals(current) || STATE_SUSPECT.equals(next)) {
+            return STATE_SUSPECT;
+        }
+        return STATE_CANDIDATE;
     }
 
     private static JSONArray trim(JSONArray source) {
