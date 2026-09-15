@@ -7,7 +7,9 @@ import android.view.accessibility.AccessibilityNodeInfo;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
@@ -16,10 +18,9 @@ import java.util.concurrent.Executors;
 /**
  * Bridges sanitized Agent Inspector metadata to the post-task reviewer.
  *
- * Important: AgentInspectorStore strips transcript text, TYPE/SEARCH content,
- * model replies, screenshots, API keys and raw result details. Reflection sees
- * only bounded categories/counts, safe TAP labels, current app identity and the
- * existing App Playbook.
+ * Reflection identity is Runtime-owned. The coordinator derives bounded,
+ * deterministic evidence rules first; Gemini may only select among those rules
+ * and phrase a concise human-readable lesson.
  */
 final class TaskReflectionCoordinator {
     private static final String TAG = "CrewReflection";
@@ -72,11 +73,6 @@ final class TaskReflectionCoordinator {
             boolean cancelled = ReflectionLearningPolicy.looksCancelled(rawStatus);
             int mutations = task.optInt("mutationActions", 0);
 
-            // Action-level success is not sufficient evidence of goal success.
-            // Coarse, privacy-safe outcome signals may trigger review even for
-            // a short task. A previous task from the SAME conversation goal can
-            // also trigger review so a failed task followed by a short recovery
-            // task is evaluated as one learning episode without sharing dialogue.
             int outcomeSignals = failedSteps;
             if (task.optBoolean("partialOutcome", false)) outcomeSignals++;
             if (task.optBoolean("modelRefusal", false)) outcomeSignals++;
@@ -98,6 +94,15 @@ final class TaskReflectionCoordinator {
                 return;
             }
 
+            List<ReflectionRuleEvidence.Candidate> candidates =
+                    deriveRuleCandidates(task);
+            if (candidates.isEmpty()) {
+                ReflectionHistoryStore.record(
+                        context, "SKIPPED", "NO_RULE_EVIDENCE", elapsed(startedAt));
+                Log.d(TAG, "skip task reflection: no deterministic rule evidence");
+                return;
+            }
+
             String apiKey = AppConfig.getGeminiApiKey(context);
             if (apiKey == null || apiKey.trim().length() < 20) {
                 ReflectionHistoryStore.record(
@@ -115,28 +120,22 @@ final class TaskReflectionCoordinator {
                 outcome = "PARTIAL";
             }
 
-            String goalCategory = runtimeGoalCategory(task, outcomeSignals > 0);
             JSONObject episode = new JSONObject()
                     .put("app", new JSONObject()
                             .put("package", packageName)
                             .put("label", appLabel))
                     .put("outcome", outcome)
-                    .put("runtime_goal_category", goalCategory)
+                    .put("evidence_rules", candidateJson(candidates))
                     .put("task", task)
                     .put("existing_app_playbook", playbooks.modelContext(packageName));
 
             reflector = new GeminiTaskReflector(apiKey);
             JSONObject reflection = reflector.reflect(episode);
-            if (!goalCategory.isEmpty()) {
-                // Runtime owns lesson identity. Gemini's free-text goal_pattern
-                // remains useful for human-readable description only.
-                reflection.put("runtime_goal_category", goalCategory);
-            }
             JSONObject stored = new ReflectionLessonStore(context)
-                    .record(packageName, appLabel, reflection);
+                    .recordRules(packageName, appLabel, candidates, reflection);
 
             String historyStatus;
-            if (stored.optBoolean("stored", false)) {
+            if (stored.optInt("storedCount", 0) > 0) {
                 historyStatus = stored.optString("state", "STORED");
             } else {
                 historyStatus = stored.optString("reason", "NOT_REMEMBERED");
@@ -150,10 +149,9 @@ final class TaskReflectionCoordinator {
 
             Log.i(TAG, "post-task reflection complete: model="
                     + reflector.lastModel()
-                    + " category=" + goalCategory
-                    + " stored=" + stored.optBoolean("stored", false)
-                    + " state=" + stored.optString("state", "SKIPPED")
-                    + " confirmations=" + stored.optInt("confirmations", 0));
+                    + " candidates=" + candidates.size()
+                    + " stored=" + stored.optInt("storedCount", 0)
+                    + " state=" + stored.optString("state", "SKIPPED"));
         } catch (Exception error) {
             // Reflection is best-effort and never allowed to affect Live latency,
             // execution, user-visible status, or task completion.
@@ -168,32 +166,49 @@ final class TaskReflectionCoordinator {
         }
     }
 
-    static String runtimeGoalCategory(JSONObject task, boolean hasFailureOrPartial) {
-        if (task == null) return "";
-        JSONArray current = task.optJSONArray("steps");
+    static List<ReflectionRuleEvidence.Candidate> deriveRuleCandidates(JSONObject task) {
+        if (task == null) return new ArrayList<ReflectionRuleEvidence.Candidate>();
         JSONObject previousTask = task.optJSONObject("previousGoalTask");
-        JSONArray previous = previousTask == null ? null : previousTask.optJSONArray("steps");
+        List<ReflectionRuleEvidence.Step> previous = previousTask == null
+                ? new ArrayList<ReflectionRuleEvidence.Step>()
+                : steps(previousTask.optJSONArray("steps"));
+        List<ReflectionRuleEvidence.Step> current = steps(task.optJSONArray("steps"));
+        return ReflectionRuleEvidence.derive(previous, current);
+    }
 
-        boolean hasRouteModeAction = hasSemanticTargetPrefix(current, "route_mode:")
-                || hasSemanticTargetPrefix(previous, "route_mode:");
-        boolean hasUiTargetFailure = hasFailureCode(current, "UI_TARGET_NOT_FOUND")
-                || hasFailureCode(previous, "UI_TARGET_NOT_FOUND");
-        boolean hasSearchEvidence = usedTool(current, "search_current_app")
-                || usedTool(previous, "search_current_app");
-        boolean hasScreenRecovery = hasFailureThenVisualThenSuccess(current)
-                || (hasPreviousGoalFailureEvidence(previousTask)
-                    && hasVisualObservation(current)
-                    && hasSuccessfulMutation(current));
-        boolean hasVerificationFailure = hasVerificationFailure(current)
-                || hasVerificationFailure(previous);
+    private static List<ReflectionRuleEvidence.Step> steps(JSONArray raw) {
+        ArrayList<ReflectionRuleEvidence.Step> out =
+                new ArrayList<ReflectionRuleEvidence.Step>();
+        if (raw == null) return out;
+        for (int i = 0; i < raw.length(); i++) {
+            JSONObject step = raw.optJSONObject(i);
+            if (step == null) continue;
+            out.add(new ReflectionRuleEvidence.Step(
+                    step.optString("tool", ""),
+                    step.optString("outcome", ""),
+                    step.optString("failureCode", ""),
+                    step.optString("semanticTarget", ""),
+                    step.optString("semanticAction", "")));
+        }
+        return out;
+    }
 
-        return ReflectionGoalCategory.classify(
-                hasRouteModeAction,
-                hasUiTargetFailure,
-                hasSearchEvidence,
-                hasScreenRecovery,
-                hasVerificationFailure,
-                hasFailureOrPartial);
+    private static JSONArray candidateJson(
+            List<ReflectionRuleEvidence.Candidate> candidates) {
+        JSONArray out = new JSONArray();
+        if (candidates == null) return out;
+        for (ReflectionRuleEvidence.Candidate candidate : candidates) {
+            if (candidate == null) continue;
+            try {
+                out.put(new JSONObject()
+                        .put("id", candidate.id)
+                        .put("scope", candidate.scope)
+                        .put("condition", candidate.condition)
+                        .put("response", candidate.response)
+                        .put("evidence", candidate.evidence));
+            } catch (Exception ignored) {}
+        }
+        return out;
     }
 
     private static boolean hasPreviousGoalFailureEvidence(JSONObject previous) {
@@ -202,91 +217,6 @@ final class TaskReflectionCoordinator {
         if (previous.optBoolean("partialOutcome", false)) return true;
         if (previous.optBoolean("modelRefusal", false)) return true;
         return !previous.optString("blockCategory", "").isEmpty();
-    }
-
-    private static boolean hasSemanticTargetPrefix(JSONArray steps, String prefix) {
-        if (steps == null || prefix == null || prefix.isEmpty()) return false;
-        for (int i = 0; i < steps.length(); i++) {
-            JSONObject step = steps.optJSONObject(i);
-            if (step == null) continue;
-            String target = step.optString("semanticTarget", "");
-            if (target.startsWith(prefix)) return true;
-        }
-        return false;
-    }
-
-    private static boolean hasFailureCode(JSONArray steps, String code) {
-        if (steps == null || code == null || code.isEmpty()) return false;
-        for (int i = 0; i < steps.length(); i++) {
-            JSONObject step = steps.optJSONObject(i);
-            if (step == null || !"FAILED".equals(step.optString("outcome", ""))) continue;
-            if (code.equals(step.optString("failureCode", ""))) return true;
-        }
-        return false;
-    }
-
-    private static boolean hasVerificationFailure(JSONArray steps) {
-        if (steps == null) return false;
-        for (int i = 0; i < steps.length(); i++) {
-            JSONObject step = steps.optJSONObject(i);
-            if (step == null || !"FAILED".equals(step.optString("outcome", ""))) continue;
-            String code = step.optString("failureCode", "").toUpperCase(Locale.ROOT);
-            if (code.contains("VERIFY") || code.contains("VERIFICATION")
-                    || code.contains("NO_EFFECT") || code.contains("NOT_CONFIRMED")) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static boolean hasFailureThenVisualThenSuccess(JSONArray steps) {
-        if (steps == null) return false;
-        boolean sawFailure = false;
-        boolean sawVisualAfterFailure = false;
-        for (int i = 0; i < steps.length(); i++) {
-            JSONObject step = steps.optJSONObject(i);
-            if (step == null) continue;
-            if ("FAILED".equals(step.optString("outcome", ""))) sawFailure = true;
-            String tool = step.optString("tool", "");
-            if (sawFailure && isVisualTool(tool)) sawVisualAfterFailure = true;
-            if (sawVisualAfterFailure && "SUCCESS".equals(step.optString("outcome", ""))
-                    && isMutationTool(tool)) return true;
-        }
-        return false;
-    }
-
-    private static boolean hasVisualObservation(JSONArray steps) {
-        if (steps == null) return false;
-        for (int i = 0; i < steps.length(); i++) {
-            JSONObject step = steps.optJSONObject(i);
-            if (step != null && isVisualTool(step.optString("tool", ""))) return true;
-        }
-        return false;
-    }
-
-    private static boolean hasSuccessfulMutation(JSONArray steps) {
-        if (steps == null) return false;
-        for (int i = 0; i < steps.length(); i++) {
-            JSONObject step = steps.optJSONObject(i);
-            if (step != null
-                    && "SUCCESS".equals(step.optString("outcome", ""))
-                    && isMutationTool(step.optString("tool", ""))) return true;
-        }
-        return false;
-    }
-
-    private static boolean isVisualTool(String tool) {
-        return "inspect_ui".equals(tool) || "take_screenshot".equals(tool);
-    }
-
-    private static boolean isMutationTool(String tool) {
-        if (tool == null || tool.isEmpty()) return false;
-        return !isVisualTool(tool)
-                && !"wait".equals(tool)
-                && !"list_notes".equals(tool)
-                && !"get_note".equals(tool)
-                && !"search_notes".equals(tool)
-                && !"list_app_guidance".equals(tool);
     }
 
     private static long elapsed(long startedAt) {
