@@ -12,7 +12,7 @@ public final class ReflectionRuleEvidenceTest {
         recovery.add(step("inspect_ui", "SUCCESS", "", "", ""));
         recovery.add(step("tap_screen", "SUCCESS", "", "navigation:DIRECTIONS", "TAP"));
         List<ReflectionRuleEvidence.Candidate> rules = ReflectionRuleEvidence.derive(null, recovery);
-        check(rules.size() == 2, "recovery + semantic transition should yield two rules");
+        check(rules.size() == 1, "clean recovery sequence should yield one evidence rule");
         check(hasRule(rules, "UI_TARGET", "UI_TARGET_NOT_FOUND", "INSPECT_UI"),
                 "successful observation recovery should yield UI target rule");
 
