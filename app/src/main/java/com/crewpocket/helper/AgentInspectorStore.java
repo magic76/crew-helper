@@ -15,9 +15,11 @@ import java.util.regex.Pattern;
 /**
  * Privacy-bounded developer trace for the latest phone Agent task.
  *
- * Stores only fixed runtime categories, tool names, counts and outcomes.
- * It deliberately never stores screenshots, transcript/user text, tool args,
- * model replies, API keys, bridge tokens or raw result details.
+ * Stores fixed runtime categories, tool names, counts and outcomes. For semantic
+ * TAP diagnostics only, it may also keep a bounded non-sensitive UI target label
+ * such as "開車" or "結束". It deliberately never stores screenshots,
+ * transcript/user text, TYPE/SEARCH content, arbitrary tool args, model replies,
+ * API keys, bridge tokens or raw result details.
  */
 final class AgentInspectorStore {
     private static final String PREFS = "crew_agent_inspector";
@@ -34,6 +36,8 @@ final class AgentInspectorStore {
             Pattern.compile("（([A-Z][A-Z0-9_]{2,63})）");
     private static final Pattern TYPE_LENGTH_MISMATCH = Pattern.compile(
             "TYPE_LENGTH_MISMATCH_EXPECTED_(\\d{1,5})_ACTUAL_(\\d{1,5})");
+    private static final Pattern SAFE_SEMANTIC_TARGET =
+            Pattern.compile("[A-Za-z0-9:_-]{1,80}");
 
     private AgentInspectorStore() {}
 
@@ -181,8 +185,9 @@ final class AgentInspectorStore {
         if (task != null) editor.putString(KEY_TASK, task.toString());
         editor.apply();
 
-        // Reflection sees only sanitized task categories. Raw user/model text,
-        // raw blocked reasons and tool arguments never leave this method.
+        // Reflection sees only sanitized task categories plus bounded TAP UI labels.
+        // Raw user/model text, TYPE/SEARCH content, blocked reasons and arbitrary
+        // tool arguments never leave this method.
         if (task != null) {
             TaskReflectionCoordinator.maybeReflect(context, rawStatus, task, activeTask);
         }
@@ -200,7 +205,7 @@ final class AgentInspectorStore {
         StringBuilder out = new StringBuilder();
         out.append("Crew Helper Agent Inspector\n");
         out.append("Privacy: sanitized runtime metadata only\n");
-        out.append("No screenshots, transcript text, tool args, replies, API keys or bridge tokens.\n\n");
+        out.append("No screenshots, transcript text, TYPE/SEARCH content, replies, API keys or bridge tokens. Safe TAP target labels may appear for diagnostics.\n\n");
 
         if (updatedAt > 0L) out.append("Updated: ").append(formatTime(updatedAt)).append("\n");
 
@@ -265,9 +270,28 @@ final class AgentInspectorStore {
         for (int i = 0; i < steps.length(); i++) {
             JSONObject step = steps.optJSONObject(i);
             if (step == null) continue;
-            out.append(i + 1).append(". ")
-                    .append(step.optString("tool", "tool"))
-                    .append(" · ")
+            out.append(i + 1).append(". ");
+
+            String requestedTool = step.optString("requestedTool", "");
+            String semanticAction = step.optString("semanticAction", "");
+            String target = step.optString("target", "");
+            String runtimeTool = step.optString("tool", "tool");
+            if ("phone_action".equals(requestedTool)
+                    && "TAP".equals(semanticAction)
+                    && !target.isEmpty()) {
+                out.append("phone_action(TAP, target=\"")
+                        .append(reportQuote(target))
+                        .append("\") → ")
+                        .append(runtimeTool);
+                String semanticTarget = step.optString("semanticTarget", "");
+                if (!semanticTarget.isEmpty()) {
+                    out.append(" [").append(semanticTarget).append("]");
+                }
+            } else {
+                out.append(runtimeTool);
+            }
+
+            out.append(" · ")
                     .append(step.optString("outcome", "UNKNOWN"));
             String failureCode = step.optString("failureCode", "");
             if ("TYPE_LENGTH_MISMATCH".equals(failureCode)) {
@@ -403,6 +427,7 @@ final class AgentInspectorStore {
             }
 
             JSONArray rawSteps = raw.optJSONArray("steps");
+            JSONArray rawDiagnostics = raw.optJSONArray("stepDiagnostics");
             JSONArray safeSteps = new JSONArray();
             int visualObservations = 0;
             if (rawSteps != null) {
@@ -422,6 +447,25 @@ final class AgentInspectorStore {
                     JSONObject step = new JSONObject();
                     step.put("tool", tool);
                     step.put("outcome", outcome);
+
+                    JSONObject diagnostic = rawDiagnostics == null
+                            ? null : rawDiagnostics.optJSONObject(i);
+                    if (diagnostic != null
+                            && "phone_action".equals(diagnostic.optString("requestedTool", ""))
+                            && "TAP".equals(diagnostic.optString("semanticAction", ""))
+                            && tool.equals(diagnostic.optString("resolvedTool", ""))) {
+                        String target = AgentTapDiagnostic.sanitizeTarget(
+                                diagnostic.optString("target", ""));
+                        if (!target.isEmpty()) {
+                            step.put("requestedTool", "phone_action")
+                                    .put("semanticAction", "TAP")
+                                    .put("target", target);
+                            String semanticTarget = diagnostic.optString("semanticTarget", "").trim();
+                            if (SAFE_SEMANTIC_TARGET.matcher(semanticTarget).matches()) {
+                                step.put("semanticTarget", semanticTarget);
+                            }
+                        }
+                    }
 
                     // Preserve only deterministic uppercase Runtime error codes;
                     // arbitrary message/detail text remains discarded.
@@ -519,6 +563,11 @@ final class AgentInspectorStore {
     private static JSONObject readObject(String raw) {
         try { return new JSONObject(raw == null ? "{}" : raw); }
         catch (Exception ignored) { return new JSONObject(); }
+    }
+
+    private static String reportQuote(String value) {
+        String clean = AgentTapDiagnostic.sanitizeTarget(value);
+        return clean.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
     private static String formatTime(long at) {
