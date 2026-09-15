@@ -14,6 +14,7 @@ final class AgentTaskRecord {
     long intentGeneration = -1L;
     final long startedAt = System.currentTimeMillis();
     final ArrayList<String> stepsSummary = new ArrayList<String>();
+    final ArrayList<JSONObject> stepDiagnostics = new ArrayList<JSONObject>();
     final HashMap<String, Integer> toolCounts = new HashMap<String, Integer>();
     int steps;
     int mutationActions;
@@ -54,6 +55,25 @@ final class AgentTaskRecord {
         String detail = result.optString("message", result.optString("error", ""));
         stepsSummary.add(name + "：" + outcome
                 + (detail.isEmpty() ? "" : "（" + detail + "）"));
+
+        JSONObject diagnostic = new JSONObject();
+        try {
+            String semanticAction = result.optString("semanticAction", "").trim();
+            String target = AgentTapDiagnostic.targetFromRuntimeSignature(
+                    name, semanticAction, lastSignature);
+            if (!target.isEmpty()) {
+                diagnostic.put("requestedTool", "phone_action")
+                        .put("semanticAction", "TAP")
+                        .put("target", target)
+                        .put("resolvedTool", name);
+                String semanticTarget = AgentTapDiagnostic.semanticTargetFromRuntimeSignature(
+                        name, semanticAction, lastSignature);
+                if (!semanticTarget.isEmpty()) {
+                    diagnostic.put("semanticTarget", semanticTarget);
+                }
+            }
+        } catch (Exception ignored) {}
+        stepDiagnostics.add(diagnostic);
     }
 
     JSONObject toJson() {
@@ -64,6 +84,7 @@ final class AgentTaskRecord {
                     .put("goalTaskIndex", goalTaskIndex)
                     .put("startedAt", startedAt)
                     .put("steps", new JSONArray(stepsSummary))
+                    .put("stepDiagnostics", new JSONArray(stepDiagnostics))
                     .put("stepCount", steps)
                     .put("mutationActions", mutationActions)
                     .put("blockedReason", blockedReason == null ? "" : blockedReason)
