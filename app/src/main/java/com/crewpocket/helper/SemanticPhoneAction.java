@@ -45,8 +45,21 @@ final class SemanticPhoneAction {
         if ("TAP".equals(action)) {
             if (target.isEmpty()) return error(action, "TARGET_REQUIRED",
                     "TAP 需要目前畫面上的語意 target。這是可重試的參數錯誤；補上 target 後立刻重試，不要結束任務。");
-            return mapped(action, "tap_screen",
-                    new JSONObject().put("label", target).put("semantic_action", action));
+
+            String mapsConcept = GoogleMapsSemanticContract.canonicalTarget(target);
+            JSONObject out = new JSONObject()
+                    .put("label", target)
+                    .put("semantic_action", action);
+            if (!mapsConcept.isEmpty()) {
+                // The canonical concept is the stable WHAT shared with Live.
+                // The physical selector remains Runtime-owned. Until a learned
+                // selector exists, use a conservative Accessibility label fallback.
+                if (GoogleMapsSemanticContract.isCanonicalId(target)) {
+                    out.put("label", GoogleMapsSemanticContract.runtimeLabel(mapsConcept));
+                }
+                out.put("semantic_target", mapsConcept);
+            }
+            return mapped(action, "tap_screen", out);
         }
 
         if ("TYPE".equals(action)) {
