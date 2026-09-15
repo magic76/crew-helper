@@ -17,7 +17,7 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-/** Developer-only, sanitized view of the most recent Agent runtime trace. */
+/** Developer-facing, sanitized view of self-improvement and runtime traces. */
 public class AgentInspectorActivity extends Activity {
     private TextView reportView;
 
@@ -47,14 +47,17 @@ public class AgentInspectorActivity extends Activity {
         titleCol.setOrientation(LinearLayout.VERTICAL);
 
         TextView title = new TextView(this);
-        title.setText("Agent Inspector");
+        title.setText(I18n.get(this, "自省紀錄", "Reflection Insights"));
         title.setTextSize(22);
         title.setTextColor(CrewTheme.TEXT_PRIMARY);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         titleCol.addView(title);
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("開發者工具 · 已脫敏 Runtime Trace");
+        subtitle.setText(I18n.get(
+                this,
+                "Self-Improvement · 候選經驗、模型與 Runtime 診斷",
+                "Self-improvement · lessons, models, and runtime diagnostics"));
         subtitle.setTextSize(11);
         subtitle.setTextColor(CrewTheme.TEXT_SECONDARY);
         subtitle.setPadding(0, dp(2), 0, 0);
@@ -63,15 +66,18 @@ public class AgentInspectorActivity extends Activity {
         header.addView(titleCol, new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        Button close = smallButton("關閉");
+        Button close = smallButton(I18n.get(this, "關閉", "Close"));
         close.setOnClickListener(v -> finish());
         header.addView(close, new LinearLayout.LayoutParams(dp(68), dp(42)));
         root.addView(header);
 
         TextView privacy = new TextView(this);
-        privacy.setText(
-                "只保存工具名稱、成功/失敗、步數、狀態分類與 Reflection 時間/結果/延遲；"
-                + "不保存螢幕截圖、對話內容、Lesson 文字、工具參數、模型回答、API Key 或 Bridge Token。");
+        privacy.setText(I18n.get(
+                this,
+                "這裡顯示的是已脫敏的自省結果：App、任務類型、Lesson、信心與確認次數。"
+                        + "不保存或顯示對話內容、訊息文字、搜尋值、密碼、OTP、付款資料、工具參數、API Key 或模型原始回答。",
+                "This page shows sanitized reflection results: app, task category, lesson, confidence, and confirmations. "
+                        + "It does not store or show conversations, message text, search values, passwords, OTPs, payment data, tool arguments, API keys, or raw model replies."));
         privacy.setTextSize(11);
         privacy.setTextColor(CrewTheme.TEXT_SECONDARY);
         privacy.setPadding(0, dp(14), 0, dp(10));
@@ -104,13 +110,13 @@ public class AgentInspectorActivity extends Activity {
         actions.setOrientation(LinearLayout.HORIZONTAL);
         actions.setPadding(0, dp(12), 0, 0);
 
-        Button refresh = smallButton("重新整理");
+        Button refresh = smallButton(I18n.get(this, "重新整理", "Refresh"));
         refresh.setOnClickListener(v -> refreshReport());
 
-        Button copy = smallButton("複製 Debug Report");
+        Button copy = smallButton(I18n.get(this, "複製報告", "Copy report"));
         copy.setOnClickListener(v -> copyReport());
 
-        Button clear = smallButton("清除");
+        Button clear = smallButton(I18n.get(this, "清除診斷", "Clear diagnostics"));
         clear.setTextColor(Color.parseColor("#FDA4AF"));
         clear.setOnClickListener(v -> {
             AgentInspectorStore.clear(AgentInspectorActivity.this);
@@ -118,7 +124,10 @@ public class AgentInspectorActivity extends Activity {
             refreshReport();
             Toast.makeText(
                     AgentInspectorActivity.this,
-                    "Inspector 與 Reflection History 已清除",
+                    I18n.get(
+                            AgentInspectorActivity.this,
+                            "Runtime 與 Reflection History 已清除；已學習的 Lesson 不會刪除",
+                            "Runtime and reflection history cleared; learned lessons were kept"),
                     Toast.LENGTH_SHORT).show();
         });
 
@@ -138,11 +147,13 @@ public class AgentInspectorActivity extends Activity {
     }
 
     private String buildFullReport() {
-        return AgentInspectorStore.buildReport(this)
-                + "\n\n"
+        return ReflectionLessonStore.buildReport(this)
+                + "\n\n────────────────────\n\n"
+                + ReflectionHistoryStore.buildReport(this)
+                + "\n\n────────────────────\n\n"
                 + ReflectionLearningStats.buildReport(this)
-                + "\n\n"
-                + ReflectionHistoryStore.buildReport(this);
+                + "\n\n────────────────────\n\n"
+                + AgentInspectorStore.buildReport(this);
     }
 
     private void refreshReport() {
@@ -157,8 +168,11 @@ public class AgentInspectorActivity extends Activity {
                 (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
         if (clipboard != null) {
             clipboard.setPrimaryClip(
-                    ClipData.newPlainText("Crew Helper Debug Report", report));
-            Toast.makeText(this, "Debug Report 已複製", Toast.LENGTH_SHORT).show();
+                    ClipData.newPlainText("Crew Helper Reflection Report", report));
+            Toast.makeText(
+                    this,
+                    I18n.get(this, "自省報告已複製", "Reflection report copied"),
+                    Toast.LENGTH_SHORT).show();
         }
     }
 
