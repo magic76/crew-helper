@@ -13,7 +13,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 0088: privacy-bounded developer trace for the latest phone Agent task.
+ * Privacy-bounded developer trace for the latest phone Agent task.
  *
  * Stores only fixed runtime categories, tool names, counts and outcomes.
  * It deliberately never stores screenshots, transcript/user text, tool args,
@@ -30,7 +30,7 @@ final class AgentInspectorStore {
             Pattern.compile("正在執行「([A-Za-z0-9_]{1,48})」");
     private static final Pattern SAFE_TOOL =
             Pattern.compile("[A-Za-z0-9_]{1,48}");
-    private static final Pattern SAFE_SEMANTIC_FAILURE =
+    private static final Pattern SAFE_FAILURE_CODE =
             Pattern.compile("（([A-Z][A-Z0-9_]{2,63})）");
     private static final Pattern TYPE_LENGTH_MISMATCH = Pattern.compile(
             "TYPE_LENGTH_MISMATCH_EXPECTED_(\\d{1,5})_ACTUAL_(\\d{1,5})");
@@ -42,8 +42,7 @@ final class AgentInspectorStore {
         if (raw.isEmpty()) return activeTask ? "正在執行任務…" : "";
 
         if (raw.contains("等待使用者選擇")) return "等你選擇";
-        if (raw.contains("正在驗證上一個操作")
-                || raw.contains("正在確認")) {
+        if (raw.contains("正在驗證上一個操作") || raw.contains("正在確認")) {
             return "正在確認結果…";
         }
         if (raw.contains("等待最終語音")
@@ -51,8 +50,7 @@ final class AgentInspectorStore {
                 || raw.contains("未收到模型下一步")) {
             return "等待 Gemini…";
         }
-        if (raw.contains("任務已停止")
-                || raw.contains("使用者取消")) {
+        if (raw.contains("任務已停止") || raw.contains("使用者取消")) {
             return "任務已停止";
         }
         if (raw.contains("Agent 任務結束")) {
@@ -68,9 +66,7 @@ final class AgentInspectorStore {
         }
 
         Matcher matcher = TOOL_FROM_STATUS.matcher(raw);
-        if (matcher.find()) {
-            return friendlyTool(matcher.group(1));
-        }
+        if (matcher.find()) return friendlyTool(matcher.group(1));
 
         String lower = raw.toLowerCase(Locale.ROOT);
         if (lower.contains("失敗")
@@ -80,14 +76,12 @@ final class AgentInspectorStore {
                 || lower.contains("逾時")) {
             return activeTask ? "正在處理問題…" : "操作未完成";
         }
-
         return activeTask ? "正在執行任務…" : "";
     }
 
     static boolean isSuccessfulTaskEnd(String rawStatus) {
         String raw = rawStatus == null ? "" : rawStatus.trim();
         if (!raw.contains("Agent 任務結束")) return false;
-
         String lower = raw.toLowerCase(Locale.ROOT);
         return !lower.contains("失敗")
                 && !lower.contains("錯誤")
@@ -97,60 +91,37 @@ final class AgentInspectorStore {
                 && !raw.contains("使用者取消");
     }
 
-    /**
-     * Minimal labels allowed beside the bubble.
-     * Normal progress and successful completion intentionally return empty.
-     */
+    /** Minimal labels allowed beside the bubble. */
     static String quietFeedbackLabel(String rawStatus, boolean activeTask) {
         String raw = rawStatus == null ? "" : rawStatus.trim();
         if (raw.isEmpty()) return "";
-
-        if (raw.contains("等待使用者選擇")
-                || raw.contains("NEED_USER")) {
+        if (raw.contains("等待使用者選擇") || raw.contains("NEED_USER")) {
             return "需要你選擇";
         }
 
         String lower = raw.toLowerCase(Locale.ROOT);
-        boolean permission =
-                lower.contains("permission")
+        boolean permission = lower.contains("permission")
                 || raw.contains("權限不足")
                 || raw.contains("未取得權限");
-        if (permission && activeTask) {
-            return "需要權限";
-        }
+        if (permission && activeTask) return "需要權限";
 
         if (!activeTask && raw.contains("Agent 任務結束")) {
-            boolean failed =
-                    lower.contains("失敗")
+            boolean failed = lower.contains("失敗")
                     || lower.contains("錯誤")
                     || lower.contains("未完成")
                     || lower.contains("逾時");
             if (failed) return "操作失敗";
         }
-
-        // User cancellation and normal successful completion stay silent.
         return "";
     }
 
     private static String friendlyTool(String tool) {
         String t = tool == null ? "" : tool.toLowerCase(Locale.ROOT);
-        if (t.contains("open_app") || t.equals("launch_app")) {
-            return "正在開啟 App…";
-        }
-        if (t.contains("search")) {
-            return "正在搜尋…";
-        }
-        if (t.contains("inspect")
-                || t.contains("screenshot")
-                || t.contains("screen")) {
-            return "正在看畫面…";
-        }
-        if (t.contains("send")) {
-            return "正在送出…";
-        }
-        if (t.contains("deck")) {
-            return "正在操作簡報…";
-        }
+        if (t.contains("open_app") || t.equals("launch_app")) return "正在開啟 App…";
+        if (t.contains("search")) return "正在搜尋…";
+        if (isVisualObservationTool(t)) return "正在看畫面…";
+        if (t.contains("send")) return "正在送出…";
+        if (t.contains("deck")) return "正在操作簡報…";
         if (t.contains("tap")
                 || t.contains("click")
                 || t.contains("scroll")
@@ -160,6 +131,12 @@ final class AgentInspectorStore {
             return "正在操作…";
         }
         return "正在執行任務…";
+    }
+
+    private static boolean isVisualObservationTool(String tool) {
+        String t = tool == null ? "" : tool.toLowerCase(Locale.ROOT).trim();
+        // tap_screen mutates the phone; it must never count as an observation.
+        return "inspect_ui".equals(t) || "take_screenshot".equals(t);
     }
 
     static synchronized void record(Context context,
@@ -174,8 +151,8 @@ final class AgentInspectorStore {
 
         SharedPreferences prefs = context.getApplicationContext()
                 .getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-
         JSONArray events = readArray(prefs.getString(KEY_EVENTS, "[]"));
+
         if (agentStatus) {
             String stage = friendlyStage(rawStatus, activeTask);
             String tool = safeToolFromStatus(rawStatus);
@@ -192,9 +169,7 @@ final class AgentInspectorStore {
 
         if (events.length() > MAX_EVENTS) {
             JSONArray trimmed = new JSONArray();
-            for (int i = Math.max(0, events.length() - MAX_EVENTS);
-                 i < events.length();
-                 i++) {
+            for (int i = Math.max(0, events.length() - MAX_EVENTS); i < events.length(); i++) {
                 trimmed.put(events.opt(i));
             }
             events = trimmed;
@@ -203,16 +178,13 @@ final class AgentInspectorStore {
         SharedPreferences.Editor editor = prefs.edit()
                 .putString(KEY_EVENTS, events.toString())
                 .putLong(KEY_UPDATED_AT, System.currentTimeMillis());
-        if (task != null) {
-            editor.putString(KEY_TASK, task.toString());
-        }
+        if (task != null) editor.putString(KEY_TASK, task.toString());
         editor.apply();
 
-        // Reflection sees only the sanitized task categories below. Raw user/model
-        // text, raw blocked reasons and tool arguments never leave this method.
+        // Reflection sees only sanitized task categories. Raw user/model text,
+        // raw blocked reasons and tool arguments never leave this method.
         if (task != null) {
-            TaskReflectionCoordinator.maybeReflect(
-                    context, rawStatus, task, activeTask);
+            TaskReflectionCoordinator.maybeReflect(context, rawStatus, task, activeTask);
         }
     }
 
@@ -230,9 +202,7 @@ final class AgentInspectorStore {
         out.append("Privacy: sanitized runtime metadata only\n");
         out.append("No screenshots, transcript text, tool args, replies, API keys or bridge tokens.\n\n");
 
-        if (updatedAt > 0L) {
-            out.append("Updated: ").append(formatTime(updatedAt)).append("\n");
-        }
+        if (updatedAt > 0L) out.append("Updated: ").append(formatTime(updatedAt)).append("\n");
 
         if (task.length() > 0) {
             out.append("State: ")
@@ -240,6 +210,8 @@ final class AgentInspectorStore {
                     .append("\n");
             String taskId = task.optString("taskId", "");
             if (!taskId.isEmpty()) out.append("Task: ").append(taskId).append("\n");
+            int goalTaskIndex = task.optInt("goalTaskIndex", 0);
+            if (goalTaskIndex > 0) out.append("Goal task index: ").append(goalTaskIndex).append("\n");
             out.append("Steps: ").append(task.optInt("stepCount", 0)).append("\n");
             out.append("Mutations: ").append(task.optInt("mutationActions", 0)).append("\n");
             out.append("Visual observations: ")
@@ -256,36 +228,23 @@ final class AgentInspectorStore {
                 out.append("\n");
             }
 
-            JSONArray steps = task.optJSONArray("steps");
-            if (steps != null && steps.length() > 0) {
-                out.append("\nTool outcomes:\n");
-                for (int i = 0; i < steps.length(); i++) {
-                    JSONObject step = steps.optJSONObject(i);
-                    if (step == null) continue;
-                    out.append(i + 1).append(". ")
-                            .append(step.optString("tool", "tool"))
-                            .append(" · ")
-                            .append(step.optString("outcome", "UNKNOWN"));
-                    String failureCode = step.optString("failureCode", "");
-                    if ("TYPE_LENGTH_MISMATCH".equals(failureCode)) {
-                        out.append(" · TYPE_LENGTH_MISMATCH expected=")
-                                .append(step.optInt("expectedTextLength", 0))
-                                .append(" actual=")
-                                .append(step.optInt("actualTextLength", 0));
-                    } else if (!failureCode.isEmpty()) {
-                        out.append(" · ").append(failureCode);
-                    }
-                    out.append("\n");
-                }
+            appendSteps(out, task.optJSONArray("steps"), "\nTool outcomes:\n");
+
+            JSONObject previous = task.optJSONObject("previousGoalTask");
+            if (previous != null && previous.length() > 0) {
+                out.append("\nPrevious same-goal task:\n");
+                out.append("Goal task index: ").append(previous.optInt("goalTaskIndex", 0)).append("\n");
+                out.append("Steps: ").append(previous.optInt("stepCount", 0))
+                        .append(" · mutations: ").append(previous.optInt("mutationActions", 0))
+                        .append(" · visual: ").append(previous.optInt("visualObservations", 0))
+                        .append("\n");
+                appendSteps(out, previous.optJSONArray("steps"), "Outcomes:\n");
             }
         } else {
             out.append("Task: none captured yet\n");
         }
 
-        out.append("\n\n")
-                .append(PerformanceMetrics.buildReport())
-                .append("\n");
-
+        out.append("\n\n").append(PerformanceMetrics.buildReport()).append("\n");
         if (events.length() > 0) {
             out.append("\nRecent runtime stages:\n");
             for (int i = 0; i < events.length(); i++) {
@@ -297,17 +256,37 @@ final class AgentInspectorStore {
                         .append("\n");
             }
         }
-
         return out.toString().trim();
+    }
+
+    private static void appendSteps(StringBuilder out, JSONArray steps, String heading) {
+        if (steps == null || steps.length() == 0) return;
+        out.append(heading);
+        for (int i = 0; i < steps.length(); i++) {
+            JSONObject step = steps.optJSONObject(i);
+            if (step == null) continue;
+            out.append(i + 1).append(". ")
+                    .append(step.optString("tool", "tool"))
+                    .append(" · ")
+                    .append(step.optString("outcome", "UNKNOWN"));
+            String failureCode = step.optString("failureCode", "");
+            if ("TYPE_LENGTH_MISMATCH".equals(failureCode)) {
+                out.append(" · TYPE_LENGTH_MISMATCH expected=")
+                        .append(step.optInt("expectedTextLength", 0))
+                        .append(" actual=")
+                        .append(step.optInt("actualTextLength", 0));
+            } else if (!failureCode.isEmpty()) {
+                out.append(" · ").append(failureCode);
+            }
+            out.append("\n");
+        }
     }
 
     static synchronized void clear(Context context) {
         if (context == null) return;
         context.getApplicationContext()
                 .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .edit()
-                .clear()
-                .apply();
+                .edit().clear().apply();
         PerformanceMetrics.reset();
     }
 
@@ -330,19 +309,82 @@ final class AgentInspectorStore {
         return SAFE_TOOL.matcher(tool).matches() ? tool : "";
     }
 
-    private static JSONObject sanitizeLatestTask(JSONArray history,
-                                                 boolean activeTask) {
+    /**
+     * Sanitizes the latest task and attaches at most ONE immediately preceding
+     * task from the same conversation goal. The link is made from opaque goalId
+     * in memory; goalId itself is never persisted or sent to reflection.
+     */
+    private static JSONObject sanitizeLatestTask(JSONArray history, boolean activeTask) {
         if (history == null || history.length() == 0) return null;
-        JSONObject raw = history.optJSONObject(history.length() - 1);
+        int currentPosition = history.length() - 1;
+        JSONObject raw = history.optJSONObject(currentPosition);
         if (raw == null) return null;
 
+        JSONObject safe = sanitizeTask(raw, activeTask);
+        if (safe == null) return null;
+
+        String goalId = raw.optString("goalId", "").trim();
+        int goalTaskIndex = Math.max(0, raw.optInt("goalTaskIndex", 0));
+        if (goalTaskIndex > 0) {
+            try { safe.put("goalTaskIndex", goalTaskIndex); } catch (Exception ignored) {}
+        }
+
+        if (!goalId.isEmpty() && goalTaskIndex > 1) {
+            JSONObject previousRaw = findPreviousGoalTask(
+                    history, currentPosition, goalId, goalTaskIndex);
+            JSONObject previousSafe = sanitizeTask(previousRaw, false);
+            if (previousSafe != null) {
+                int previousIndex = Math.max(0, previousRaw.optInt("goalTaskIndex", 0));
+                try {
+                    previousSafe.put("goalTaskIndex", previousIndex);
+                    safe.put("previousGoalTask", compactPreviousTask(previousSafe));
+                } catch (Exception ignored) {}
+            }
+        }
+        return safe;
+    }
+
+    private static JSONObject findPreviousGoalTask(JSONArray history,
+                                                   int currentPosition,
+                                                   String goalId,
+                                                   int currentGoalTaskIndex) {
+        if (history == null || goalId == null || goalId.isEmpty()) return null;
+        for (int i = currentPosition - 1; i >= 0; i--) {
+            JSONObject candidate = history.optJSONObject(i);
+            if (candidate == null) continue;
+            if (!goalId.equals(candidate.optString("goalId", ""))) continue;
+            int candidateIndex = candidate.optInt("goalTaskIndex", 0);
+            if (candidateIndex > 0 && candidateIndex < currentGoalTaskIndex) return candidate;
+        }
+        return null;
+    }
+
+    private static JSONObject compactPreviousTask(JSONObject task) {
+        if (task == null) return null;
+        JSONObject out = new JSONObject();
+        try {
+            out.put("goalTaskIndex", task.optInt("goalTaskIndex", 0));
+            out.put("stepCount", task.optInt("stepCount", 0));
+            out.put("mutationActions", task.optInt("mutationActions", 0));
+            out.put("visualObservations", task.optInt("visualObservations", 0));
+            out.put("steps", task.optJSONArray("steps") == null
+                    ? new JSONArray() : new JSONArray(task.optJSONArray("steps").toString()));
+            if (task.optBoolean("partialOutcome", false)) out.put("partialOutcome", true);
+            if (task.optBoolean("modelRefusal", false)) out.put("modelRefusal", true);
+            String block = task.optString("blockCategory", "");
+            if (!block.isEmpty()) out.put("blockCategory", block);
+        } catch (Exception ignored) {}
+        return out;
+    }
+
+    private static JSONObject sanitizeTask(JSONObject raw, boolean activeTask) {
+        if (raw == null) return null;
         JSONObject safe = new JSONObject();
         try {
             String taskId = raw.optString("taskId", "");
             if (!taskId.isEmpty()) {
                 String suffix = taskId.length() <= 8
-                        ? taskId
-                        : taskId.substring(taskId.length() - 8);
+                        ? taskId : taskId.substring(taskId.length() - 8);
                 safe.put("taskId", "…" + suffix);
             }
             safe.put("active", activeTask);
@@ -353,14 +395,9 @@ final class AgentInspectorStore {
             String blockCategory = classifyBlock(raw.optString("blockedReason", ""));
             if (!blockCategory.isEmpty()) safe.put("blockCategory", blockCategory);
 
-            if (looksPartial(raw.optString("endReason", ""),
-                    raw.optString("status", ""))) {
+            if (looksPartial(raw.optString("endReason", ""), raw.optString("status", ""))) {
                 safe.put("partialOutcome", true);
             }
-
-            // Raw finalReply is inspected only in memory and never persisted.
-            // Store one coarse boolean so post-task review can distinguish a
-            // model-side refusal from a successful/failed phone mutation.
             if (looksLikeModelRefusal(raw.optString("finalReply", ""))) {
                 safe.put("modelRefusal", true);
             }
@@ -386,12 +423,12 @@ final class AgentInspectorStore {
                     step.put("tool", tool);
                     step.put("outcome", outcome);
 
-                    if ("semantic_action_error".equals(tool)) {
-                        Matcher semanticFailure = SAFE_SEMANTIC_FAILURE.matcher(line);
-                        if (semanticFailure.find()) {
-                            step.put("failureCode", semanticFailure.group(1));
-                            // A deterministic semantic contract error is useful
-                            // outcome evidence and contains no user payload.
+                    // Preserve only deterministic uppercase Runtime error codes;
+                    // arbitrary message/detail text remains discarded.
+                    if ("FAILED".equals(outcome)) {
+                        Matcher failure = SAFE_FAILURE_CODE.matcher(line);
+                        if (failure.find()) {
+                            step.put("failureCode", failure.group(1));
                             safe.put("partialOutcome", true);
                         }
                     }
@@ -406,13 +443,7 @@ final class AgentInspectorStore {
                         safe.put("partialOutcome", true);
                     }
                     safeSteps.put(step);
-
-                    String lower = tool.toLowerCase(Locale.ROOT);
-                    if (lower.contains("inspect")
-                            || lower.contains("screenshot")
-                            || lower.contains("screen")) {
-                        visualObservations++;
-                    }
+                    if (isVisualObservationTool(tool)) visualObservations++;
                 }
             }
             safe.put("steps", safeSteps);
@@ -472,9 +503,7 @@ final class AgentInspectorStore {
         return false;
     }
 
-    private static boolean duplicatesLast(JSONArray events,
-                                          String stage,
-                                          String tool) {
+    private static boolean duplicatesLast(JSONArray events, String stage, String tool) {
         if (events == null || events.length() == 0) return false;
         JSONObject last = events.optJSONObject(events.length() - 1);
         if (last == null) return false;
@@ -495,8 +524,7 @@ final class AgentInspectorStore {
     private static String formatTime(long at) {
         if (at <= 0L) return "--:--:--";
         try {
-            return new SimpleDateFormat("HH:mm:ss", Locale.getDefault())
-                    .format(new Date(at));
+            return new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date(at));
         } catch (Exception ignored) {
             return String.valueOf(at);
         }
