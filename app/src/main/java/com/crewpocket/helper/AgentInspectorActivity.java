@@ -56,8 +56,8 @@ public class AgentInspectorActivity extends Activity {
         TextView subtitle = new TextView(this);
         subtitle.setText(I18n.get(
                 this,
-                "Self-Improvement · 候選經驗、模型與 Runtime 診斷",
-                "Self-improvement · lessons, models, and runtime diagnostics"));
+                "Self-Improvement · Evidence Rules、模型與 Runtime 診斷",
+                "Self-improvement · evidence rules, models, and runtime diagnostics"));
         subtitle.setTextSize(11);
         subtitle.setTextColor(CrewTheme.TEXT_SECONDARY);
         subtitle.setPadding(0, dp(2), 0, 0);
@@ -74,10 +74,12 @@ public class AgentInspectorActivity extends Activity {
         TextView privacy = new TextView(this);
         privacy.setText(I18n.get(
                 this,
-                "這裡顯示的是已脫敏的自省結果：App、任務類型、Lesson、信心與確認次數。"
-                        + "不保存或顯示對話內容、訊息文字、搜尋值、密碼、OTP、付款資料、工具參數、API Key 或模型原始回答。",
-                "This page shows sanitized reflection results: app, task category, lesson, confidence, and confirmations. "
-                        + "It does not store or show conversations, message text, search values, passwords, OTPs, payment data, tool arguments, API keys, or raw model replies."));
+                "這裡顯示的是已脫敏的自省結果：App、Runtime Evidence Rule、Lesson、信心與確認次數。"
+                        + "Rule identity 由 Runtime evidence 決定，不由模型自由命名。"
+                        + "不保存或顯示對話內容、訊息文字、搜尋值、密碼、OTP、付款資料、任意工具參數、API Key 或模型原始回答。",
+                "This page shows sanitized reflection results: app, Runtime evidence rule, lesson, confidence, and confirmations. "
+                        + "Rule identity comes from Runtime evidence, not model-authored categories. "
+                        + "It does not store or show conversations, message text, search values, passwords, OTPs, payment data, arbitrary tool arguments, API keys, or raw model replies."));
         privacy.setTextSize(11);
         privacy.setTextColor(CrewTheme.TEXT_SECONDARY);
         privacy.setPadding(0, dp(14), 0, dp(10));
