@@ -30,6 +30,8 @@ final class AgentInspectorStore {
             Pattern.compile("正在執行「([A-Za-z0-9_]{1,48})」");
     private static final Pattern SAFE_TOOL =
             Pattern.compile("[A-Za-z0-9_]{1,48}");
+    private static final Pattern SAFE_SEMANTIC_FAILURE =
+            Pattern.compile("（([A-Z][A-Z0-9_]{2,63})）");
     private static final Pattern TYPE_LENGTH_MISMATCH = Pattern.compile(
             "TYPE_LENGTH_MISMATCH_EXPECTED_(\\d{1,5})_ACTUAL_(\\d{1,5})");
 
@@ -264,12 +266,14 @@ final class AgentInspectorStore {
                             .append(step.optString("tool", "tool"))
                             .append(" · ")
                             .append(step.optString("outcome", "UNKNOWN"));
-                    if ("TYPE_LENGTH_MISMATCH".equals(
-                            step.optString("failureCode", ""))) {
+                    String failureCode = step.optString("failureCode", "");
+                    if ("TYPE_LENGTH_MISMATCH".equals(failureCode)) {
                         out.append(" · TYPE_LENGTH_MISMATCH expected=")
                                 .append(step.optInt("expectedTextLength", 0))
                                 .append(" actual=")
                                 .append(step.optInt("actualTextLength", 0));
+                    } else if (!failureCode.isEmpty()) {
+                        out.append(" · ").append(failureCode);
                     }
                     out.append("\n");
                 }
@@ -381,6 +385,16 @@ final class AgentInspectorStore {
                     JSONObject step = new JSONObject();
                     step.put("tool", tool);
                     step.put("outcome", outcome);
+
+                    if ("semantic_action_error".equals(tool)) {
+                        Matcher semanticFailure = SAFE_SEMANTIC_FAILURE.matcher(line);
+                        if (semanticFailure.find()) {
+                            step.put("failureCode", semanticFailure.group(1));
+                            // A deterministic semantic contract error is useful
+                            // outcome evidence and contains no user payload.
+                            safe.put("partialOutcome", true);
+                        }
+                    }
 
                     Matcher lengthMismatch = TYPE_LENGTH_MISMATCH.matcher(line);
                     if (lengthMismatch.find()) {
