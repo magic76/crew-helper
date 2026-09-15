@@ -2,6 +2,7 @@ package com.crewpocket.helper;
 
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.Settings;
 import android.view.accessibility.AccessibilityNodeInfo;
 
 import org.json.JSONArray;
@@ -117,7 +118,7 @@ final class SharedVisualReferenceRuntime {
         }
 
         final CrewAccessibilityService service = CrewAccessibilityService.getInstance();
-        if (service == null) return false;
+        if (service == null || !Settings.canDrawOverlays(service)) return false;
 
         TargetNote note;
         synchronized (LOCK) {
@@ -187,6 +188,11 @@ final class SharedVisualReferenceRuntime {
             }
         }
 
+        if (!sameScreenContext(session)) {
+            cancel();
+            return Decision.none();
+        }
+
         VisualReferenceGrid.Cell chosen = VisualReferenceGrid.resolve(session.cells, raw);
         if (chosen == null) return Decision.none();
 
@@ -247,6 +253,28 @@ final class SharedVisualReferenceRuntime {
     static void cancel() {
         synchronized (LOCK) { clearLocked(); }
         SharedVisualReferenceOverlay.dismiss();
+    }
+
+    private static boolean sameScreenContext(Session session) {
+        CrewAccessibilityService service = CrewAccessibilityService.getInstance();
+        if (service == null) return false;
+        if (service.getResources().getDisplayMetrics().widthPixels != session.width
+                || service.getResources().getDisplayMetrics().heightPixels != session.height) {
+            return false;
+        }
+        AccessibilityNodeInfo root = null;
+        try {
+            root = service.getRootInActiveWindow();
+            if (root == null || root.getPackageName() == null) return false;
+            if (!session.packageName.equals(root.getPackageName().toString())) return false;
+            return !containsSensitiveNode(root);
+        } catch (Exception ignored) {
+            return false;
+        } finally {
+            if (root != null) {
+                try { root.recycle(); } catch (Exception ignored) {}
+            }
+        }
     }
 
     private static void scheduleExpiry(final long sessionId) {
