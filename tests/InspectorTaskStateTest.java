@@ -12,8 +12,11 @@ public final class InspectorTaskStateTest {
                 InspectorTaskState.classify(false, false, "Agent 任務結束：失敗", "未完成", ""),
                 "failed state");
         expect(InspectorTaskState.FAILED,
-                InspectorTaskState.classify(false, false, "", "", "blocked by runtime"),
-                "blocked state");
+                InspectorTaskState.classify(false, false, "Agent 任務結束", "blocked by runtime", ""),
+                "terminal blocked state");
+        expect(InspectorTaskState.COMPLETED,
+                InspectorTaskState.classify(false, false, "Agent 任務結束", "", "stability blocked earlier"),
+                "historical block alone must not make final task failed");
         expect(InspectorTaskState.COMPLETED,
                 InspectorTaskState.classify(false, false, "Agent 任務結束", "", ""),
                 "completed state");
