@@ -249,6 +249,10 @@ final class PerformanceMetrics {
     static synchronized void recordAppTeachToolSuppressed() { appTeachToolSuppressed++; }
 
     static synchronized String buildReport() {
+        return buildReportForTask("");
+    }
+
+    static synchronized String buildReportForTask(String inspectorTaskId) {
         StringBuilder out = new StringBuilder();
         out.append("Performance (rolling up to ").append(MAX_SAMPLES).append(" samples)\n");
         appendSeries(out, "Live connect", liveConnectMs, lastLiveConnectMs);
@@ -288,17 +292,22 @@ final class PerformanceMetrics {
                 .append(" tool-suppressed=").append(appTeachToolSuppressed)
                 .append("\n");
 
-        appendAgentTrace(out, lastFinishedTrace);
+        appendAgentTrace(out, lastFinishedTrace, inspectorTaskId);
         out.append("Post-finish stale tools: blocked=").append(stalePostFinishToolsBlocked)
                 .append(" completion-suppressed=").append(staleCompletionsSuppressed);
         if (!lastStaleTool.isEmpty()) out.append(" last=").append(lastStaleTool);
         return out.toString();
     }
 
-    private static void appendAgentTrace(StringBuilder out, AgentTrace trace) {
-        out.append("\nAgent latency breakdown (last finished task)\n");
+    private static void appendAgentTrace(
+            StringBuilder out, AgentTrace trace, String inspectorTaskId) {
+        out.append("\nAgent latency breakdown (current Inspector task)\n");
         if (trace == null || trace.finishedAt <= 0L) {
-            out.append("no finished task trace\n");
+            out.append("unavailable for current task\n");
+            return;
+        }
+        if (!InspectorTraceScope.matches(inspectorTaskId, trace.taskId)) {
+            out.append("unavailable for current task · latest trace belongs to another task\n");
             return;
         }
         out.append("Outcome: ").append(trace.outcome).append("\n");
