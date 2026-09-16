@@ -87,13 +87,18 @@ final class ElementReferenceLayout {
             distinct = new ArrayList<Item>(distinct.subList(0, maxItems));
         }
 
+        // Final numbering follows the screen, top-to-bottom then left-to-right.
+        // Keep this comparator transitive/deterministic so dense screens never
+        // reshuffle numbers unpredictably between identical captures.
         Collections.sort(distinct, new Comparator<Item>() {
             @Override public int compare(Item a, Item b) {
-                int row = Integer.compare(a.centerY(), b.centerY());
-                if (Math.abs(a.centerY() - b.centerY()) > 28 && row != 0) return row;
-                int col = Integer.compare(a.centerX(), b.centerX());
-                if (col != 0) return col;
-                return Long.compare(a.area(), b.area());
+                int top = Integer.compare(a.top, b.top);
+                if (top != 0) return top;
+                int left = Integer.compare(a.left, b.left);
+                if (left != 0) return left;
+                int bottom = Integer.compare(a.bottom, b.bottom);
+                if (bottom != 0) return bottom;
+                return Integer.compare(a.right, b.right);
             }
         });
         return distinct;
