@@ -8,9 +8,23 @@ import org.json.JSONObject;
 /** 0104: Crew Notebook persistence/tool execution extracted from Live transport. */
 final class NotebookToolHandler {
     private final Context appContext;
+    private final ReadOnlyNotebookHarness readOnlyHarness;
 
     NotebookToolHandler(Context context) {
         this.appContext = context == null ? null : context.getApplicationContext();
+        this.readOnlyHarness = new ReadOnlyNotebookHarness(new ReadOnlyNotebookHarness.Backend() {
+            @Override public JSONObject getNote(JSONObject args) {
+                return NotebookToolHandler.this.getNotebookNote(args);
+            }
+
+            @Override public JSONObject searchNotes(JSONObject args) {
+                return NotebookToolHandler.this.searchNotebookNotes(args);
+            }
+
+            @Override public JSONObject listNotes(JSONObject args) {
+                return NotebookToolHandler.this.listNotebookNotes(args);
+            }
+        });
     }
 
     static boolean handles(String name) {
@@ -26,9 +40,11 @@ final class NotebookToolHandler {
         JSONObject safeArgs = args == null ? new JSONObject() : args;
         if ("create_note".equals(name)) return createNotebookNote(safeArgs);
         if ("update_note".equals(name)) return updateNotebookNote(safeArgs);
-        if ("get_note".equals(name)) return getNotebookNote(safeArgs);
-        if ("search_notes".equals(name)) return searchNotebookNotes(safeArgs);
-        if ("list_notes".equals(name)) return listNotebookNotes(safeArgs);
+        if ("get_note".equals(name)
+                || "search_notes".equals(name)
+                || "list_notes".equals(name)) {
+            return readOnlyHarness.execute(name, safeArgs);
+        }
         if ("delete_note".equals(name)) return deleteNotebookNote(safeArgs);
         return notebookError("UNSUPPORTED_NOTEBOOK_TOOL");
     }

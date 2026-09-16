@@ -38,6 +38,9 @@ android {
 }
 
 dependencies {
+    // Pin the published Harness release commit while JitPack's tag index catches up.
+    // This commit is the v0.1.2 release commit from crew-agent-harness.
+    implementation 'com.github.magic76:crew-agent-harness:ba4f03a408'
     implementation fileTree(dir: 'libs', include: ['*.jar'], exclude: ['sherpa-onnx-*.jar', 'kotlin-*.jar', 'annotations-*.jar'])
     implementation files('libs/sherpa-onnx-1.13.7.aar')
     implementation files('libs/kotlin-stdlib-1.7.20.jar')
