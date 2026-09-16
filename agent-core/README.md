@@ -16,6 +16,8 @@ The pilot path is:
 
 `Gemini Live function call -> NotebookToolHandler -> GeminiLiveToolSessionAdapter -> AgentHarness -> ToolRegistry -> NoteStore -> ToolResult -> existing Gemini tool response`
 
+The pilot code passes the existing Agent Runtime replay tests and the full Android Gradle APK/AAB build.
+
 ## Reuse plan
 
 During extraction this module lives inside `crew-helper` so behavior can stabilize without breaking the other Crew apps. Once the API is stable, move the module unchanged to a standalone `crew-agent-harness` repository and publish it as `com.magic76.crew:agent-core`.
