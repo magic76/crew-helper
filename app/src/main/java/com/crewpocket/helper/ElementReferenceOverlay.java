@@ -94,6 +94,7 @@ final class ElementReferenceOverlay {
         private final Paint leader = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint banner = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final ArrayList<RectF> placedBadges = new ArrayList<RectF>();
+        private final int[] screenOrigin = new int[2];
 
         ReferenceView(Context context,
                       List<ElementReferenceRuntime.Option> options,
@@ -126,14 +127,35 @@ final class ElementReferenceOverlay {
             placedBadges.clear();
             if (options == null || options.isEmpty()) return;
 
+            updateScreenOrigin();
             for (ElementReferenceRuntime.Option option : options) {
                 if (option == null) continue;
-                RectF bounds = new RectF(
+                RectF bounds = screenToLocal(
                         option.left, option.top, option.right, option.bottom);
                 canvas.drawRoundRect(bounds, dp(6), dp(6), outline);
                 drawAdaptiveBadge(canvas, option, bounds);
             }
             drawBanner(canvas);
+        }
+
+        /** Accessibility bounds are screen coordinates; Canvas coordinates are local to this overlay. */
+        private void updateScreenOrigin() {
+            screenOrigin[0] = 0;
+            screenOrigin[1] = 0;
+            try {
+                getLocationOnScreen(screenOrigin);
+            } catch (Exception ignored) {
+                screenOrigin[0] = 0;
+                screenOrigin[1] = 0;
+            }
+        }
+
+        private RectF screenToLocal(float left, float top, float right, float bottom) {
+            return new RectF(
+                    left - screenOrigin[0],
+                    top - screenOrigin[1],
+                    right - screenOrigin[0],
+                    bottom - screenOrigin[1]);
         }
 
         private void drawAdaptiveBadge(
