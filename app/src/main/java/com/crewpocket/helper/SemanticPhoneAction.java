@@ -36,10 +36,12 @@ final class SemanticPhoneAction {
         String direction = args.optString("direction", "").trim().toLowerCase(Locale.ROOT);
         String distance = args.optString("distance", "").trim().toLowerCase(Locale.ROOT);
 
-        // A non-TAP action means the user moved on from an active visual
-        // reference. Never leave a stale numbered overlay over the next task.
-        if (!"TAP".equals(action) && SharedVisualReferenceRuntime.isActive()) {
-            SharedVisualReferenceRuntime.cancel();
+        // Any non-TAP action leaves the manual visual-assist modes. Both modes
+        // are user-driven and mutually exclusive; never let a stale overlay leak
+        // into a new task.
+        if (!"TAP".equals(action)) {
+            if (SharedVisualReferenceRuntime.isActive()) SharedVisualReferenceRuntime.cancel();
+            if (ElementReferenceRuntime.isActive()) ElementReferenceRuntime.cancel();
         }
 
         if ("OPEN_APP".equals(action)) {
@@ -52,17 +54,52 @@ final class SemanticPhoneAction {
             if (target.isEmpty()) return error(action, "TARGET_REQUIRED",
                     "TAP 需要目前畫面上的語意 target。這是可重試的參數錯誤；補上 target 後立刻重試，不要結束任務。");
 
-            // Shared Visual Reference is USER-INITIATED ONLY. Runtime accepts a
-            // deliberately small explicit vocabulary plus one model marker.
-            // Ordinary labels and UI_TARGET_NOT_FOUND never arm the grid.
+            // Manual visual assist mode 1: label real Accessibility clickables.
+            // This command wins over an already-open grid so the user can switch
+            // modes by voice instead of being trapped in VISUAL_REFERENCE_WAITING.
+            if (ElementReferenceCommand.isOpenRequest(target)) {
+                SharedVisualReferenceRuntime.cancel();
+                JSONObject start = ElementReferenceRuntime.startExplicit();
+                return new Resolution(true, action, ERROR_TOOL, start);
+            }
+
+            // Manual visual assist mode 2: geometry grid fallback. Switching to
+            // it always closes the element overlay first.
             if (VisualReferenceCommand.isOpenRequest(target)) {
+                ElementReferenceRuntime.cancel();
                 JSONObject start = SharedVisualReferenceRuntime.startExplicit();
                 return new Resolution(true, action, ERROR_TOOL, start);
             }
 
-            // While a numbered overlay is active, the model forwards the user's
-            // number/relative-position phrase only. Runtime owns refinement and
-            // final coordinate conversion.
+            // While the element overlay is active, a numbered answer resolves to
+            // a stable semantic element id and reuses the existing tap_element
+            // execution + verification path. No coordinate conversion occurs.
+            ElementReferenceRuntime.Decision element =
+                    ElementReferenceRuntime.resolveChoice(target);
+            if (element.selected) {
+                JSONObject selected = new JSONObject()
+                        .put("element_id", element.elementId)
+                        .put("element_reference", true)
+                        .put("semantic_action", action);
+                return mapped(action, "tap_element", selected);
+            }
+            if (ElementReferenceRuntime.isActive()) {
+                JSONObject waiting = new JSONObject()
+                        .put("success", false)
+                        .put("stepResult", "STEP_FAILED")
+                        .put("blockedByRuntime", true)
+                        .put("error", "ELEMENT_REFERENCE_CHOICE_REQUIRED")
+                        .put("taskState", "WAITING_USER")
+                        .put("visualReference", "ELEMENTS")
+                        .put("instruction",
+                                "可點擊元素標記仍在等待編號。只請使用者回答畫面上的元素編號，例如「5」或「第五個」；"
+                                        + "不要猜座標，也不要重做原本 TAP。");
+                return new Resolution(true, action, ERROR_TOOL, waiting);
+            }
+
+            // Shared Visual Reference: while a numbered grid is active, the
+            // model forwards the user's number/relative-position phrase only.
+            // Runtime owns refinement and final coordinate conversion.
             SharedVisualReferenceRuntime.Decision visual =
                     SharedVisualReferenceRuntime.resolveChoice(target);
             if (visual.kind == SharedVisualReferenceRuntime.Kind.REFINE) {
