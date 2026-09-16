@@ -17,9 +17,13 @@ final class InspectorTaskState {
                            String endReason,
                            String blockedReason) {
         if (active) return ACTIVE;
+
+        // blockedReason is intentionally not part of terminal-state identity.
+        // A task can hit a temporary stability/policy block, recover, and still
+        // complete successfully. Historical block evidence remains reported
+        // separately by AgentInspectorStore.
         String text = ((status == null ? "" : status) + " "
-                + (endReason == null ? "" : endReason) + " "
-                + (blockedReason == null ? "" : blockedReason))
+                + (endReason == null ? "" : endReason))
                 .toLowerCase(Locale.ROOT);
 
         if (cancelled || containsAny(text,
