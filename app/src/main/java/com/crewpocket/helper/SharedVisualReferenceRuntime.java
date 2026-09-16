@@ -14,14 +14,15 @@ import java.util.Locale;
 /**
  * Runtime-owned Shared Visual Reference session.
  *
- * The model never receives coordinates. A failed semantic TAP may arm a short
- * visual session, the user identifies a numbered/relative region, and only the
- * Runtime converts the final confirmed region into a screen coordinate.
+ * The grid is explicitly user initiated. Runtime may remember the latest failed
+ * semantic TAP briefly so an explicit "open grid" request can keep useful
+ * context, but UI_TARGET_NOT_FOUND never opens the grid by itself.
+ * Coordinates remain Runtime-only.
  */
 final class SharedVisualReferenceRuntime {
     private static final Object LOCK = new Object();
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
-    private static final long TARGET_NOTE_TTL_MS = 8_000L;
+    private static final long TARGET_NOTE_TTL_MS = 30_000L;
     private static final long SESSION_TTL_MS = 30_000L;
 
     enum Kind { NONE, REFINE, TAP }
@@ -99,80 +100,105 @@ final class SharedVisualReferenceRuntime {
 
     private SharedVisualReferenceRuntime() {}
 
+    /** Remember only sanitized semantic context; this does not open the grid. */
     static void noteTapTarget(String target, String semanticTarget) {
         synchronized (LOCK) {
             lastTarget = new TargetNote(target, semanticTarget);
         }
     }
 
-    /**
-     * Called only when the normal Accessibility TAP path returned
-     * UI_TARGET_NOT_FOUND. Mutates the full Runtime result so the agent pauses
-     * instead of blindly retrying, and renders the primary 12-cell overlay.
-     */
-    static boolean maybeStart(JSONObject result) {
-        if (result == null) return false;
-        String error = result.optString("error", "").trim().toUpperCase(Locale.ROOT);
-        if (!(error.contains("UI_TARGET_NOT_FOUND") || error.contains("TARGET_NOT_FOUND"))) {
-            return false;
-        }
-
-        final CrewAccessibilityService service = CrewAccessibilityService.getInstance();
-        if (service == null || !Settings.canDrawOverlays(service)) return false;
-
-        TargetNote note;
+    /** A successful normal TAP means the remembered unresolved target is stale. */
+    static void clearRememberedTarget() {
         synchronized (LOCK) {
-            if (active != null && !active.expired()) return false;
-            if (active != null) clearLocked();
-            note = lastTarget;
-            if (note == null || !note.fresh() || note.target.isEmpty()) return false;
+            if (active == null) lastTarget = null;
         }
+    }
 
-        AccessibilityNodeInfo root = null;
+    /**
+     * Explicit entry point. Called only after the user asks to choose/point the
+     * position. It can use a recent failed TAP label for the banner, but the
+     * grid also works without any previous failure.
+     */
+    static JSONObject startExplicit() {
+        JSONObject result = new JSONObject();
+        final CrewAccessibilityService service = CrewAccessibilityService.getInstance();
         try {
-            root = service.getRootInActiveWindow();
-            if (root == null || root.getPackageName() == null) return false;
-            String packageName = root.getPackageName().toString();
-            if (unsafePackage(packageName) || containsSensitiveNode(root)) return false;
-
-            int width = service.getResources().getDisplayMetrics().widthPixels;
-            int height = service.getResources().getDisplayMetrics().heightPixels;
-            if (width <= 1 || height <= 1) return false;
-
-            List<VisualReferenceGrid.Cell> cells = VisualReferenceGrid.primary(width, height);
-            if (cells.isEmpty()) return false;
-
-            final Session session = new Session(
-                    System.nanoTime(), packageName, note.target, note.semanticTarget,
-                    width, height, cells);
-            synchronized (LOCK) {
-                active = session;
+            if (service == null) {
+                return failure("VISUAL_REFERENCE_UNAVAILABLE",
+                        "螢幕操作服務尚未啟用，無法開啟位置方格。");
+            }
+            if (!Settings.canDrawOverlays(service)) {
+                return failure("VISUAL_REFERENCE_OVERLAY_PERMISSION_REQUIRED",
+                        "需要懸浮視窗權限才能顯示位置方格。");
             }
 
-            SharedVisualReferenceOverlay.show(
-                    service,
-                    cells,
-                    "找不到「" + displayTarget(note) + "」— 說 1–12 或位置",
-                    false);
-            scheduleExpiry(session.id);
+            TargetNote note;
+            synchronized (LOCK) {
+                if (active != null) active = null;
+                note = lastTarget;
+                if (note == null || !note.fresh()) note = new TargetNote("", "");
+            }
 
-            JSONArray choices = choices(cells);
-            result.put("blockedByRuntime", true)
-                    .put("taskState", "WAITING_USER")
-                    .put("visualReference", "PRIMARY")
-                    .put("visualReferenceStage", 1)
-                    .put("choices", choices)
-                    .put("instruction",
-                            "Runtime 已在手機畫面疊上 1–12 的位置編號。只請使用者說編號或位置，例如「12」或「右下角」；"
-                                    + "收到回答後，用 phone_action(TAP,target=使用者原樣回答) 交還 Runtime。不要猜座標、不要重複原 TAP。");
-            return true;
+            AccessibilityNodeInfo root = null;
+            try {
+                root = service.getRootInActiveWindow();
+                if (root == null || root.getPackageName() == null) {
+                    return failure("VISUAL_REFERENCE_NO_ACTIVE_WINDOW",
+                            "目前沒有可選位置的 App 畫面。");
+                }
+                String packageName = root.getPackageName().toString();
+                if (unsafePackage(packageName) || containsSensitiveNode(root)) {
+                    return failure("VISUAL_REFERENCE_SENSITIVE_SCREEN",
+                            "目前畫面不允許使用位置方格，請手動操作。");
+                }
+
+                int width = service.getResources().getDisplayMetrics().widthPixels;
+                int height = service.getResources().getDisplayMetrics().heightPixels;
+                if (width <= 1 || height <= 1) {
+                    return failure("VISUAL_REFERENCE_BAD_DISPLAY",
+                            "目前螢幕尺寸不可用，無法開啟位置方格。");
+                }
+
+                List<VisualReferenceGrid.Cell> cells = VisualReferenceGrid.primary(width, height);
+                if (cells.isEmpty()) {
+                    return failure("VISUAL_REFERENCE_GRID_UNAVAILABLE",
+                            "無法建立位置方格。");
+                }
+
+                final Session session = new Session(
+                        System.nanoTime(), packageName, note.target, note.semanticTarget,
+                        width, height, cells);
+                synchronized (LOCK) {
+                    active = session;
+                }
+
+                String target = displayTarget(note);
+                String title = target.isEmpty()
+                        ? "位置選擇 — 說 1–12 或位置"
+                        : "指定「" + target + "」— 說 1–12 或位置";
+                SharedVisualReferenceOverlay.show(service, cells, title, false);
+                scheduleExpiry(session.id);
+
+                result.put("success", false)
+                        .put("stepResult", "STEP_FAILED")
+                        .put("blockedByRuntime", true)
+                        .put("error", "VISUAL_REFERENCE_WAITING")
+                        .put("taskState", "WAITING_USER")
+                        .put("visualReference", "PRIMARY")
+                        .put("visualReferenceStage", 1)
+                        .put("choices", choices(cells))
+                        .put("instruction",
+                                "Runtime 已依使用者明確要求開啟 1–12 位置方格。只請使用者說編號或位置，例如「12」或「右下角」；"
+                                        + "收到回答後，用 phone_action(TAP,target=使用者原樣回答) 交還 Runtime。不要猜座標。");
+                return result;
+            } finally {
+                if (root != null) {
+                    try { root.recycle(); } catch (Exception ignored) {}
+                }
+            }
         } catch (Exception ignored) {
             cancel();
-            return false;
-        } finally {
-            if (root != null) {
-                try { root.recycle(); } catch (Exception ignored) {}
-            }
+            return failure("VISUAL_REFERENCE_FAILED", "位置方格開啟失敗。");
         }
     }
 
@@ -298,11 +324,23 @@ final class SharedVisualReferenceRuntime {
         return out;
     }
 
+    private static JSONObject failure(String error, String instruction) {
+        JSONObject out = new JSONObject();
+        try {
+            out.put("success", false)
+                    .put("stepResult", "STEP_FAILED")
+                    .put("error", error)
+                    .put("instruction", instruction)
+                    .put("retryable", false);
+        } catch (Exception ignored) {}
+        return out;
+    }
+
     private static String displayTarget(TargetNote note) {
-        if (note == null) return "目標";
+        if (note == null) return "";
         String value = note.semanticTarget.isEmpty() ? note.target : note.semanticTarget;
         if (value.length() > 32) value = value.substring(0, 32);
-        return value.isEmpty() ? "目標" : value;
+        return value;
     }
 
     private static boolean unsafePackage(String packageName) {
