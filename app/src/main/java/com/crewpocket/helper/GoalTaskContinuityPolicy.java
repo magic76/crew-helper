@@ -1,17 +1,14 @@
 package com.crewpocket.helper;
 
-import org.json.JSONArray;
-import org.json.JSONObject;
-
+import java.util.List;
 import java.util.Locale;
 
 /**
  * Prevents the 45-second conversation capsule from being treated as sufficient
  * proof that two finished Agent tasks share one operational goal.
  *
- * Identity stays privacy-bounded: only sanitized tool names and semantic target
- * families are inspected. Raw user text, search queries and model replies are
- * never used here.
+ * Identity stays privacy-bounded: only sanitized tool names are inspected.
+ * Raw user text, search queries and model replies are never used here.
  */
 final class GoalTaskContinuityPolicy {
     private enum Domain {
@@ -25,10 +22,9 @@ final class GoalTaskContinuityPolicy {
 
     private GoalTaskContinuityPolicy() {}
 
-    static boolean compatible(JSONObject previous, JSONObject current) {
-        if (previous == null || current == null) return false;
-        Domain a = domain(previous.optJSONArray("steps"));
-        Domain b = domain(current.optJSONArray("steps"));
+    static boolean compatible(List<String> previousTools, List<String> currentTools) {
+        Domain a = domain(previousTools);
+        Domain b = domain(currentTools);
 
         // An opaque goalId plus the idle window is not enough. Require runtime
         // evidence that both tasks operate in the same coarse capability domain.
@@ -36,17 +32,15 @@ final class GoalTaskContinuityPolicy {
         return a == b;
     }
 
-    static String domainName(JSONArray steps) {
-        return domain(steps).name();
+    static String domainName(List<String> tools) {
+        return domain(tools).name();
     }
 
-    private static Domain domain(JSONArray steps) {
-        if (steps == null || steps.length() == 0) return Domain.UNKNOWN;
+    private static Domain domain(List<String> tools) {
+        if (tools == null || tools.isEmpty()) return Domain.UNKNOWN;
         Domain seen = Domain.UNKNOWN;
-        for (int i = 0; i < steps.length(); i++) {
-            JSONObject step = steps.optJSONObject(i);
-            if (step == null) continue;
-            Domain next = domainForTool(step.optString("tool", ""));
+        for (String tool : tools) {
+            Domain next = domainForTool(tool);
             if (next == Domain.UNKNOWN) continue;
             if (seen == Domain.UNKNOWN) {
                 seen = next;
