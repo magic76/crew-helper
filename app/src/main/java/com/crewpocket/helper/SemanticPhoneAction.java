@@ -36,7 +36,7 @@ final class SemanticPhoneAction {
         String direction = args.optString("direction", "").trim().toLowerCase(Locale.ROOT);
         String distance = args.optString("distance", "").trim().toLowerCase(Locale.ROOT);
 
-        // A non-TAP action means the user moved on from an unresolved visual
+        // A non-TAP action means the user moved on from an active visual
         // reference. Never leave a stale numbered overlay over the next task.
         if (!"TAP".equals(action) && SharedVisualReferenceRuntime.isActive()) {
             SharedVisualReferenceRuntime.cancel();
@@ -52,9 +52,17 @@ final class SemanticPhoneAction {
             if (target.isEmpty()) return error(action, "TARGET_REQUIRED",
                     "TAP 需要目前畫面上的語意 target。這是可重試的參數錯誤；補上 target 後立刻重試，不要結束任務。");
 
-            // Shared Visual Reference: while a numbered overlay is active, the
-            // model forwards the user's number/relative-position phrase only.
-            // Runtime owns both refinement and the final coordinate conversion.
+            // Shared Visual Reference is USER-INITIATED ONLY. Runtime accepts a
+            // deliberately small explicit vocabulary plus one model marker.
+            // Ordinary labels and UI_TARGET_NOT_FOUND never arm the grid.
+            if (VisualReferenceCommand.isOpenRequest(target)) {
+                JSONObject start = SharedVisualReferenceRuntime.startExplicit();
+                return new Resolution(true, action, ERROR_TOOL, start);
+            }
+
+            // While a numbered overlay is active, the model forwards the user's
+            // number/relative-position phrase only. Runtime owns refinement and
+            // final coordinate conversion.
             SharedVisualReferenceRuntime.Decision visual =
                     SharedVisualReferenceRuntime.resolveChoice(target);
             if (visual.kind == SharedVisualReferenceRuntime.Kind.REFINE) {
@@ -96,8 +104,8 @@ final class SemanticPhoneAction {
                 out.put("semantic_target", mapsConcept);
             }
 
-            // Keep only a short-lived, sanitized target note. It is consumed only
-            // if the normal Accessibility TAP later returns UI_TARGET_NOT_FOUND.
+            // Remember sanitized context only. A later explicit user request may
+            // use it as the grid banner; this call itself never opens the grid.
             SharedVisualReferenceRuntime.noteTapTarget(target, mapsConcept);
             return mapped(action, "tap_screen", out);
         }

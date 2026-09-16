@@ -37,12 +37,14 @@ final class ModelToolResponseAdapter {
 
         JSONObject source = internal == null ? new JSONObject() : internal;
 
-        // Shared Visual Reference is an execution fallback, not model-generated
-        // coordinates. Only arm it after the normal semantic TAP path has proved
-        // that Accessibility cannot resolve the target.
+        // Shared Visual Reference is user initiated only. A successful normal
+        // TAP invalidates the short-lived remembered target; failures merely
+        // remain available as context if the user later says "開方格".
         if ("phone_action".equals(toolName)
-                && "TAP".equals(upper(source.optString("semanticAction", "")))) {
-            SharedVisualReferenceRuntime.maybeStart(source);
+                && "TAP".equals(upper(source.optString("semanticAction", "")))
+                && source.optBoolean("success", false)
+                && !"WAITING_USER".equals(upper(source.optString("taskState", "")))) {
+            SharedVisualReferenceRuntime.clearRememberedTarget();
         }
 
         JSONObject out = new JSONObject();
@@ -130,7 +132,7 @@ final class ModelToolResponseAdapter {
                 if ("REFINED".equals(visualReference)) {
                     return "畫面已放大成 1–9。只問使用者第二次位置；回答後立刻用 phone_action(TAP,target=回答原文)，不要猜座標。";
                 }
-                return "Runtime 已在手機畫面標示 1–12。只問使用者是哪一格或哪個位置；回答後立刻用 phone_action(TAP,target=回答原文)，不要猜座標。";
+                return "Runtime 已依使用者要求在手機畫面標示 1–12。只問是哪一格或哪個位置；回答後立刻用 phone_action(TAP,target=回答原文)，不要猜座標。";
             }
             if ("MULTIPLE_MATCHES".equals(upper(result.optString("status", "")))) {
                 return "找到多個選項；用一句話讀出 screen.choices 並問使用者要哪個，然後等待回答。";
@@ -170,7 +172,12 @@ final class ModelToolResponseAdapter {
                     "UI_TARGET_NOT_FOUND",
                     "TARGET_NOT_FOUND",
                     "SEARCH_CONTROL_NOT_FOUND")) {
-                return "找不到目標；請依目前畫面改用其他可見控制。";
+                return "找不到目標；不要自動開位置方格。可依目前畫面改用其他控制；若使用者想自己指定位置，可提醒他說「開方格」。";
+            }
+            if (containsAny(error,
+                    "VISUAL_REFERENCE_OVERLAY_PERMISSION_REQUIRED",
+                    "VISUAL_REFERENCE_UNAVAILABLE")) {
+                return result.optString("instruction", "目前無法開啟位置方格。");
             }
             if (containsAny(error,
                     "STALE", "CANCELLED", "使用者已有新指令")) {
