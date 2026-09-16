@@ -15,9 +15,11 @@ final class VisualReferenceCommand {
     private VisualReferenceCommand() {}
 
     static boolean isOpenRequest(String value) {
-        String normalized = normalize(value);
+        String raw = value == null ? "" : value.trim();
+        if (MODEL_MARKER.equalsIgnoreCase(raw)) return true;
+
+        String normalized = normalize(raw);
         if (normalized.isEmpty()) return false;
-        if (MODEL_MARKER.equals(normalized)) return true;
 
         return normalized.equals("開方格")
                 || normalized.equals("打开方格")
