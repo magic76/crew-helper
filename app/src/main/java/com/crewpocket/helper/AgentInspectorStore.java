@@ -210,13 +210,18 @@ final class AgentInspectorStore {
         if (updatedAt > 0L) out.append("Updated: ").append(formatTime(updatedAt)).append("\n");
 
         if (task.length() > 0) {
-            out.append("State: ")
-                    .append(task.optBoolean("active", false) ? "ACTIVE" : "FINISHED")
-                    .append("\n");
+            String taskState = task.optString("state",
+                    task.optBoolean("active", false)
+                            ? InspectorTaskState.ACTIVE : InspectorTaskState.COMPLETED);
+            out.append("State: ").append(taskState).append("\n");
             String taskId = task.optString("taskId", "");
             if (!taskId.isEmpty()) out.append("Task: ").append(taskId).append("\n");
             int goalTaskIndex = task.optInt("goalTaskIndex", 0);
             if (goalTaskIndex > 0) out.append("Goal task index: ").append(goalTaskIndex).append("\n");
+            String goalBoundary = task.optString("goalBoundary", "");
+            if (!goalBoundary.isEmpty()) {
+                out.append("Goal continuity: NEW · ").append(goalBoundary).append("\n");
+            }
             out.append("Steps: ").append(task.optInt("stepCount", 0)).append("\n");
             out.append("Mutations: ").append(task.optInt("mutationActions", 0)).append("\n");
             out.append("Visual observations: ")
@@ -249,7 +254,9 @@ final class AgentInspectorStore {
             out.append("Task: none captured yet\n");
         }
 
-        out.append("\n\n").append(PerformanceMetrics.buildReport()).append("\n");
+        out.append("\n\n")
+                .append(PerformanceMetrics.buildReportForTask(task.optString("taskId", "")))
+                .append("\n");
         if (events.length() > 0) {
             out.append("\nRecent runtime stages:\n");
             for (int i = 0; i < events.length(); i++) {
@@ -335,8 +342,8 @@ final class AgentInspectorStore {
 
     /**
      * Sanitizes the latest task and attaches at most ONE immediately preceding
-     * task from the same conversation goal. The link is made from opaque goalId
-     * in memory; goalId itself is never persisted or sent to reflection.
+     * task from the same conversation capsule only when Runtime evidence says
+     * the two tasks operate in the same coarse capability domain.
      */
     private static JSONObject sanitizeLatestTask(JSONArray history, boolean activeTask) {
         if (history == null || history.length() == 0) return null;
@@ -358,11 +365,16 @@ final class AgentInspectorStore {
                     history, currentPosition, goalId, goalTaskIndex);
             JSONObject previousSafe = sanitizeTask(previousRaw, false);
             if (previousSafe != null) {
-                int previousIndex = Math.max(0, previousRaw.optInt("goalTaskIndex", 0));
-                try {
-                    previousSafe.put("goalTaskIndex", previousIndex);
-                    safe.put("previousGoalTask", compactPreviousTask(previousSafe));
-                } catch (Exception ignored) {}
+                if (GoalTaskContinuityPolicy.compatible(previousSafe, safe)) {
+                    int previousIndex = Math.max(0, previousRaw.optInt("goalTaskIndex", 0));
+                    try {
+                        previousSafe.put("goalTaskIndex", previousIndex);
+                        safe.put("previousGoalTask", compactPreviousTask(previousSafe));
+                    } catch (Exception ignored) {}
+                } else {
+                    try { safe.put("goalBoundary", "CAPABILITY_DOMAIN_CHANGED"); }
+                    catch (Exception ignored) {}
+                }
             }
         }
         return safe;
@@ -412,6 +424,12 @@ final class AgentInspectorStore {
                 safe.put("taskId", "…" + suffix);
             }
             safe.put("active", activeTask);
+            safe.put("state", InspectorTaskState.classify(
+                    activeTask,
+                    raw.optBoolean("cancelled", false),
+                    raw.optString("status", ""),
+                    raw.optString("endReason", ""),
+                    raw.optString("blockedReason", "")));
             safe.put("startedAt", raw.optLong("startedAt", 0L));
             safe.put("stepCount", raw.optInt("stepCount", 0));
             safe.put("mutationActions", raw.optInt("mutationActions", 0));
