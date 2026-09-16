@@ -7,6 +7,8 @@ import java.util.List;
 
 /** Pure layout policy for choosing distinct actionable element bounds. */
 final class ElementReferenceLayout {
+    private static final int ROW_BUCKET_PX = 64;
+
     static final class Item {
         final String id;
         final String label;
@@ -87,18 +89,20 @@ final class ElementReferenceLayout {
             distinct = new ArrayList<Item>(distinct.subList(0, maxItems));
         }
 
-        // Final numbering follows the screen, top-to-bottom then left-to-right.
-        // Keep this comparator transitive/deterministic so dense screens never
-        // reshuffle numbers unpredictably between identical captures.
+        // Final numbering follows visual rows, then left-to-right. Bucketing makes
+        // elements that are only a few pixels vertically misaligned still behave
+        // like one row, while keeping the comparator transitive and deterministic.
         Collections.sort(distinct, new Comparator<Item>() {
             @Override public int compare(Item a, Item b) {
+                int aRow = Math.max(0, a.centerY()) / ROW_BUCKET_PX;
+                int bRow = Math.max(0, b.centerY()) / ROW_BUCKET_PX;
+                int row = Integer.compare(aRow, bRow);
+                if (row != 0) return row;
+                int left = Integer.compare(a.centerX(), b.centerX());
+                if (left != 0) return left;
                 int top = Integer.compare(a.top, b.top);
                 if (top != 0) return top;
-                int left = Integer.compare(a.left, b.left);
-                if (left != 0) return left;
-                int bottom = Integer.compare(a.bottom, b.bottom);
-                if (bottom != 0) return bottom;
-                return Integer.compare(a.right, b.right);
+                return Long.compare(a.area(), b.area());
             }
         });
         return distinct;
