@@ -39,8 +39,8 @@ jobs:
           # now makes sdkmanager fail before Gradle can even start.
           packages: ''
 
-      - name: Run Shared Agent Harness Tests
-        run: gradle :agent-core:test
+      - name: Resolve Shared Agent Harness
+        run: gradle :app:dependencies --configuration releaseCompileClasspath
 
       - name: Run Agent Runtime Replay Tests
         run: |
