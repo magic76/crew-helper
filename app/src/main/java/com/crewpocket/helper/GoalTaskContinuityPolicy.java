@@ -1,5 +1,7 @@
 package com.crewpocket.helper;
 
+import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
@@ -32,8 +34,37 @@ final class GoalTaskContinuityPolicy {
         return a == b;
     }
 
+    /**
+     * Android adapter kept reflection-only so this policy remains pure Java and
+     * can run in the standalone replay test suite without org.json on classpath.
+     */
+    static boolean compatible(Object previousTask, Object currentTask) {
+        return compatible(extractTools(previousTask), extractTools(currentTask));
+    }
+
     static String domainName(List<String> tools) {
         return domain(tools).name();
+    }
+
+    private static List<String> extractTools(Object task) {
+        ArrayList<String> out = new ArrayList<String>();
+        if (task == null) return out;
+        try {
+            Method optJSONArray = task.getClass().getMethod("optJSONArray", String.class);
+            Object steps = optJSONArray.invoke(task, "steps");
+            if (steps == null) return out;
+            Method length = steps.getClass().getMethod("length");
+            Method optJSONObject = steps.getClass().getMethod("optJSONObject", int.class);
+            int count = ((Integer) length.invoke(steps)).intValue();
+            for (int i = 0; i < count; i++) {
+                Object step = optJSONObject.invoke(steps, i);
+                if (step == null) continue;
+                Method optString = step.getClass().getMethod("optString", String.class, String.class);
+                Object value = optString.invoke(step, "tool", "");
+                if (value != null) out.add(String.valueOf(value));
+            }
+        } catch (Exception ignored) {}
+        return out;
     }
 
     private static Domain domain(List<String> tools) {
