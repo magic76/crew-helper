@@ -38,7 +38,7 @@ android {
 }
 
 dependencies {
-    implementation 'com.github.magic76.crew-agent-harness:agent-core:v0.1.0'
+    implementation 'com.github.magic76:crew-agent-harness:v0.1.2'
     implementation fileTree(dir: 'libs', include: ['*.jar'], exclude: ['sherpa-onnx-*.jar', 'kotlin-*.jar', 'annotations-*.jar'])
     implementation files('libs/sherpa-onnx-1.13.7.aar')
     implementation files('libs/kotlin-stdlib-1.7.20.jar')
