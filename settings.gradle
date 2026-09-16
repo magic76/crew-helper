@@ -10,8 +10,16 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        maven {
+            url 'https://jitpack.io'
+            content {
+                includeGroup 'com.github.magic76.crew-agent-harness'
+            }
+        }
     }
 }
 rootProject.name = "CrewHelper"
 include ':app'
+// Keep the in-repo module temporarily for rollback/tests while the app consumes
+// the released shared artifact from crew-agent-harness through JitPack.
 include ':agent-core'
