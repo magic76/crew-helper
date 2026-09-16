@@ -13,7 +13,7 @@ dependencyResolutionManagement {
         maven {
             url 'https://jitpack.io'
             content {
-                includeGroup 'com.github.magic76.crew-agent-harness'
+                includeGroup 'com.github.magic76'
             }
         }
     }
