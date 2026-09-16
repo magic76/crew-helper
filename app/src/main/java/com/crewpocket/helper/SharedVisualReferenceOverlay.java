@@ -101,6 +101,7 @@ final class SharedVisualReferenceOverlay {
         private final Paint text = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint shade = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint banner = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final int[] screenOrigin = new int[2];
 
         ReferenceView(Context context,
                       List<VisualReferenceGrid.Cell> cells,
@@ -133,26 +134,49 @@ final class SharedVisualReferenceOverlay {
             super.onDraw(canvas);
             if (cells == null || cells.isEmpty()) return;
 
+            updateScreenOrigin();
             if (refined) drawOutsideShade(canvas);
 
             for (VisualReferenceGrid.Cell cell : cells) {
-                RectF r = new RectF(cell.left, cell.top, cell.right, cell.bottom);
-                canvas.drawRect(r, line);
-                drawChip(canvas, cell);
+                RectF local = screenToLocal(cell.left, cell.top, cell.right, cell.bottom);
+                canvas.drawRect(local, line);
+                drawChip(canvas, cell, local);
             }
             drawBanner(canvas);
         }
 
+        /** Grid cells are screen coordinates because their centers are later used for the actual tap. */
+        private void updateScreenOrigin() {
+            screenOrigin[0] = 0;
+            screenOrigin[1] = 0;
+            try {
+                getLocationOnScreen(screenOrigin);
+            } catch (Exception ignored) {
+                screenOrigin[0] = 0;
+                screenOrigin[1] = 0;
+            }
+        }
+
+        private RectF screenToLocal(float left, float top, float right, float bottom) {
+            return new RectF(
+                    left - screenOrigin[0],
+                    top - screenOrigin[1],
+                    right - screenOrigin[0],
+                    bottom - screenOrigin[1]);
+        }
+
         private void drawOutsideShade(Canvas canvas) {
-            int left = Integer.MAX_VALUE;
-            int top = Integer.MAX_VALUE;
-            int right = Integer.MIN_VALUE;
-            int bottom = Integer.MIN_VALUE;
+            float left = Float.MAX_VALUE;
+            float top = Float.MAX_VALUE;
+            float right = -Float.MAX_VALUE;
+            float bottom = -Float.MAX_VALUE;
             for (VisualReferenceGrid.Cell cell : cells) {
-                left = Math.min(left, cell.left);
-                top = Math.min(top, cell.top);
-                right = Math.max(right, cell.right);
-                bottom = Math.max(bottom, cell.bottom);
+                if (cell == null) continue;
+                RectF local = screenToLocal(cell.left, cell.top, cell.right, cell.bottom);
+                left = Math.min(left, local.left);
+                top = Math.min(top, local.top);
+                right = Math.max(right, local.right);
+                bottom = Math.max(bottom, local.bottom);
             }
             if (left > right || top > bottom) return;
             canvas.drawRect(0, 0, getWidth(), Math.max(0, top), shade);
@@ -161,15 +185,15 @@ final class SharedVisualReferenceOverlay {
             canvas.drawRect(Math.max(0, right), Math.max(0, top), getWidth(), Math.max(0, bottom), shade);
         }
 
-        private void drawChip(Canvas canvas, VisualReferenceGrid.Cell cell) {
+        private void drawChip(Canvas canvas, VisualReferenceGrid.Cell cell, RectF localCell) {
             String label = cell.displayLabel();
             float padX = dp(7);
             float padY = dp(5);
             float textWidth = text.measureText(label);
             float h = text.getTextSize() + padY * 2;
-            float left = cell.left + dp(6);
-            float top = cell.top + dp(6);
-            float maxWidth = Math.max(dp(42), cell.width() - dp(12));
+            float left = localCell.left + dp(6);
+            float top = localCell.top + dp(6);
+            float maxWidth = Math.max(dp(42), localCell.width() - dp(12));
             float w = Math.min(textWidth + padX * 2, maxWidth);
             RectF box = new RectF(left, top, left + w, top + h);
             canvas.drawRoundRect(box, dp(9), dp(9), chip);
