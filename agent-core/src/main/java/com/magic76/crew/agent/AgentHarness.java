@@ -39,7 +39,7 @@ public final class AgentHarness {
                     handleModelEvent(event);
                 }
             });
-        } catch (Throwable error) {
+        } catch (RuntimeException error) {
             started = false;
             emit(AgentEvent.error(error));
             throw error;
@@ -122,13 +122,14 @@ public final class AgentHarness {
         tools.execute(call, new ToolExecutor.Completion() {
             @Override public void complete(ToolResult result) {
                 if (isClosed()) return;
-                AgentEvent.Type type = result != null && result.success()
+                ToolResult safeResult = result == null
+                        ? ToolResult.failure(call.id(), "NULL_TOOL_RESULT", "Tool returned no result")
+                        : result;
+                AgentEvent.Type type = safeResult.success()
                         ? AgentEvent.Type.TOOL_COMPLETED
                         : AgentEvent.Type.TOOL_FAILED;
-                emit(AgentEvent.tool(type, call, result));
-                session.sendToolResult(result == null
-                        ? ToolResult.failure(call.id(), "NULL_TOOL_RESULT", "Tool returned no result")
-                        : result);
+                emit(AgentEvent.tool(type, call, safeResult));
+                session.sendToolResult(safeResult);
             }
         });
     }
