@@ -8,9 +8,15 @@ import org.json.JSONObject;
 /** 0104: Crew Notebook persistence/tool execution extracted from Live transport. */
 final class NotebookToolHandler {
     private final Context appContext;
+    private final ReadOnlyNotebookHarness readOnlyHarness;
 
     NotebookToolHandler(Context context) {
         this.appContext = context == null ? null : context.getApplicationContext();
+        this.readOnlyHarness = new ReadOnlyNotebookHarness(new ReadOnlyNotebookHarness.Backend() {
+            @Override public JSONObject listNotes(JSONObject args) {
+                return NotebookToolHandler.this.listNotebookNotes(args);
+            }
+        });
     }
 
     static boolean handles(String name) {
@@ -28,7 +34,9 @@ final class NotebookToolHandler {
         if ("update_note".equals(name)) return updateNotebookNote(safeArgs);
         if ("get_note".equals(name)) return getNotebookNote(safeArgs);
         if ("search_notes".equals(name)) return searchNotebookNotes(safeArgs);
-        if ("list_notes".equals(name)) return listNotebookNotes(safeArgs);
+        // First production pilot: Gemini's existing list_notes tool call enters
+        // the common AgentHarness, then returns to the legacy Live transport.
+        if ("list_notes".equals(name)) return readOnlyHarness.execute(safeArgs);
         if ("delete_note".equals(name)) return deleteNotebookNote(safeArgs);
         return notebookError("UNSUPPORTED_NOTEBOOK_TOOL");
     }
