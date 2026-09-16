@@ -34,6 +34,11 @@ jobs:
           # now makes sdkmanager fail before Gradle can even start.
           packages: ''
 
+      - name: Run Shared Agent Harness Tests
+        run: |
+          chmod +x gradlew || gradle wrapper
+          ./gradlew :agent-core:test
+
       - name: Run Agent Runtime Replay Tests
         run: |
           chmod +x scripts/run_agent_runtime_tests.sh
