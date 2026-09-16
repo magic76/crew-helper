@@ -22,6 +22,10 @@ final class VisualReferenceCommand {
         if (normalized.isEmpty()) return false;
 
         return normalized.equals("開方格")
+                || normalized.equals("显示方格")
+                || normalized.equals("顯示方格")
+                || normalized.equals("把方格顯示出來")
+                || normalized.equals("把方格显示出来")
                 || normalized.equals("打开方格")
                 || normalized.equals("打開方格")
                 || normalized.equals("開啟方格")
@@ -40,6 +44,7 @@ final class VisualReferenceCommand {
                 || normalized.equals("选位置")
                 || normalized.equals("open grid")
                 || normalized.equals("show grid")
+                || normalized.equals("show the grid")
                 || normalized.equals("let me choose the position")
                 || normalized.equals("let me point it out");
     }

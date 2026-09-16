@@ -29,6 +29,9 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/VisionCoordinateMapper.java" \
   "$SRC/VisualReferenceGrid.java" \
   "$SRC/VisualReferenceCommand.java" \
+  "$SRC/ElementReferenceCommand.java" \
+  "$SRC/ElementReferenceChoice.java" \
+  "$SRC/ElementReferenceLayout.java" \
   "$SRC/ReflectionLearningPolicy.java" \
   "$SRC/ReflectionRuleEvidence.java" \
   "$SRC/AppSemanticConcept.java" \
@@ -45,6 +48,9 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/VisionCoordinateMapperTest.java" \
   "$ROOT/tests/VisualReferenceGridTest.java" \
   "$ROOT/tests/VisualReferenceCommandTest.java" \
+  "$ROOT/tests/ElementReferenceCommandTest.java" \
+  "$ROOT/tests/ElementReferenceChoiceTest.java" \
+  "$ROOT/tests/ElementReferenceLayoutTest.java" \
   "$ROOT/tests/ReflectionLearningPolicyTest.java" \
   "$ROOT/tests/ReflectionRuleEvidenceTest.java" \
   "$ROOT/tests/TextEntryGoalGuardTest.java" \
@@ -63,6 +69,9 @@ java -cp "$OUT" com.crewpocket.helper.AgentRuntimeRolloutTest
 java -cp "$OUT" com.crewpocket.helper.VisionCoordinateMapperTest
 java -cp "$OUT" com.crewpocket.helper.VisualReferenceGridTest
 java -cp "$OUT" com.crewpocket.helper.VisualReferenceCommandTest
+java -cp "$OUT" com.crewpocket.helper.ElementReferenceCommandTest
+java -cp "$OUT" com.crewpocket.helper.ElementReferenceChoiceTest
+java -cp "$OUT" com.crewpocket.helper.ElementReferenceLayoutTest
 java -cp "$OUT" com.crewpocket.helper.ReflectionLearningPolicyTest
 java -cp "$OUT" com.crewpocket.helper.ReflectionRuleEvidenceTest
 java -cp "$OUT" com.crewpocket.helper.TextEntryGoalGuardTest

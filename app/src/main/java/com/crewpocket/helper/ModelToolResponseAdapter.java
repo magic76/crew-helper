@@ -24,7 +24,7 @@ final class ModelToolResponseAdapter {
     static final String FAILED = "FAILED";
 
     private static final int MAX_SCREEN_ITEMS = 14;
-    private static final int MAX_CHOICES = 12;
+    private static final int MAX_CHOICES = 24;
     private static final int MAX_MESSAGE = 220;
     private static final int MAX_LABEL = 96;
 
@@ -39,7 +39,7 @@ final class ModelToolResponseAdapter {
 
         // Shared Visual Reference is user initiated only. A successful normal
         // TAP invalidates the short-lived remembered target; failures merely
-        // remain available as context if the user later says "開方格".
+        // remain available as context if the user later says "顯示方格".
         if ("phone_action".equals(toolName)
                 && "TAP".equals(upper(source.optString("semanticAction", "")))
                 && source.optBoolean("success", false)
@@ -129,6 +129,9 @@ final class ModelToolResponseAdapter {
         if (NEED_USER.equals(status)) {
             String visualReference = upper(result.optString("visualReference", ""));
             if (!visualReference.isEmpty()) {
+                if ("ELEMENTS".equals(visualReference)) {
+                    return "Runtime 已依真實可點擊元素標號。只問使用者要哪個元素編號；回答後立刻用 phone_action(TAP,target=回答原文)，不要猜座標。";
+                }
                 if ("REFINED".equals(visualReference)) {
                     return "畫面已放大成 1–9。只問使用者第二次位置；回答後立刻用 phone_action(TAP,target=回答原文)，不要猜座標。";
                 }
@@ -172,7 +175,14 @@ final class ModelToolResponseAdapter {
                     "UI_TARGET_NOT_FOUND",
                     "TARGET_NOT_FOUND",
                     "SEARCH_CONTROL_NOT_FOUND")) {
-                return "找不到目標；不要自動開位置方格。可依目前畫面改用其他控制；若使用者想自己指定位置，可提醒他說「開方格」。";
+                return "找不到目標；不要自動開元素或方格。可依目前畫面改用其他控制；使用者也可以主動說「顯示元素」或「顯示方格」。";
+            }
+            if (containsAny(error,
+                    "ELEMENT_REFERENCE_OVERLAY_PERMISSION_REQUIRED",
+                    "ELEMENT_REFERENCE_UNAVAILABLE",
+                    "ELEMENT_REFERENCE_SENSITIVE_SCREEN",
+                    "NO_CLICKABLE_ELEMENTS")) {
+                return result.optString("instruction", "目前無法顯示可點擊元素。");
             }
             if (containsAny(error,
                     "VISUAL_REFERENCE_OVERLAY_PERMISSION_REQUIRED",
