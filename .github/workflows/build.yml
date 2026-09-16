@@ -26,6 +26,11 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      - name: Set up Gradle 8.2.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.2.1'
+
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
@@ -35,9 +40,7 @@ jobs:
           packages: ''
 
       - name: Run Shared Agent Harness Tests
-        run: |
-          chmod +x gradlew || gradle wrapper
-          ./gradlew :agent-core:test
+        run: gradle :agent-core:test
 
       - name: Run Agent Runtime Replay Tests
         run: |
@@ -45,9 +48,7 @@ jobs:
           ./scripts/run_agent_runtime_tests.sh
 
       - name: Build with Gradle
-        run: |
-          chmod +x gradlew || gradle wrapper
-          ./gradlew assembleRelease bundleRelease || gradle assembleRelease
+        run: gradle assembleRelease bundleRelease
 
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
