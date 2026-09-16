@@ -91,6 +91,8 @@ final class AgentTaskRecord {
                     .put("endReason", endReason)
                     .put("finalReply", finalReply)
                     .put("status", status)
+                    .put("cancelled", cancelled)
+                    .put("finished", finished)
                     .put("userVisibleReplyProduced", userVisibleReplyProducedSinceLastAction)
                     .put("finalSpeechRetryCount", finalSpeechRetryCount);
         } catch (Exception ignored) {}
