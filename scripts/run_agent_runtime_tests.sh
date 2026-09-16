@@ -32,6 +32,8 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/ElementReferenceCommand.java" \
   "$SRC/ElementReferenceChoice.java" \
   "$SRC/ElementReferenceLayout.java" \
+  "$SRC/GoalTaskContinuityPolicy.java" \
+  "$SRC/InspectorTaskState.java" \
   "$SRC/ReflectionLearningPolicy.java" \
   "$SRC/ReflectionRuleEvidence.java" \
   "$SRC/AppSemanticConcept.java" \
@@ -51,6 +53,8 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/ElementReferenceCommandTest.java" \
   "$ROOT/tests/ElementReferenceChoiceTest.java" \
   "$ROOT/tests/ElementReferenceLayoutTest.java" \
+  "$ROOT/tests/GoalTaskContinuityPolicyTest.java" \
+  "$ROOT/tests/InspectorTaskStateTest.java" \
   "$ROOT/tests/ReflectionLearningPolicyTest.java" \
   "$ROOT/tests/ReflectionRuleEvidenceTest.java" \
   "$ROOT/tests/TextEntryGoalGuardTest.java" \
@@ -72,6 +76,8 @@ java -cp "$OUT" com.crewpocket.helper.VisualReferenceCommandTest
 java -cp "$OUT" com.crewpocket.helper.ElementReferenceCommandTest
 java -cp "$OUT" com.crewpocket.helper.ElementReferenceChoiceTest
 java -cp "$OUT" com.crewpocket.helper.ElementReferenceLayoutTest
+java -cp "$OUT" com.crewpocket.helper.GoalTaskContinuityPolicyTest
+java -cp "$OUT" com.crewpocket.helper.InspectorTaskStateTest
 java -cp "$OUT" com.crewpocket.helper.ReflectionLearningPolicyTest
 java -cp "$OUT" com.crewpocket.helper.ReflectionRuleEvidenceTest
 java -cp "$OUT" com.crewpocket.helper.TextEntryGoalGuardTest
