@@ -35,6 +35,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/InspectorTraceScope.java" \
   "$SRC/ReflectionLearningPolicy.java" \
   "$SRC/ReflectionRuleEvidence.java" \
+  "$SRC/ExperienceTriggerPolicy.java" \
   "$SRC/AppSemanticConcept.java" \
   "$SRC/GoogleMapsSemanticContract.java" \
   "$SRC/AgentTapDiagnostic.java" \
@@ -55,6 +56,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/InspectorTraceScopeTest.java" \
   "$ROOT/tests/ReflectionLearningPolicyTest.java" \
   "$ROOT/tests/ReflectionRuleEvidenceTest.java" \
+  "$ROOT/tests/ExperienceTriggerPolicyTest.java" \
   "$ROOT/tests/TextEntryGoalGuardTest.java" \
   "$ROOT/tests/GoogleMapsSemanticContractTest.java" \
   "$ROOT/tests/AgentTapDiagnosticTest.java" \
@@ -77,6 +79,7 @@ java -cp "$OUT" com.crewpocket.helper.InspectorTaskStateTest
 java -cp "$OUT" com.crewpocket.helper.InspectorTraceScopeTest
 java -cp "$OUT" com.crewpocket.helper.ReflectionLearningPolicyTest
 java -cp "$OUT" com.crewpocket.helper.ReflectionRuleEvidenceTest
+java -cp "$OUT" com.crewpocket.helper.ExperienceTriggerPolicyTest
 java -cp "$OUT" com.crewpocket.helper.TextEntryGoalGuardTest
 java -cp "$OUT" com.crewpocket.helper.GoogleMapsSemanticContractTest
 java -cp "$OUT" com.crewpocket.helper.AgentTapDiagnosticTest
