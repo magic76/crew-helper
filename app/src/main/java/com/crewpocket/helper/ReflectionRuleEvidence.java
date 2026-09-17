@@ -69,6 +69,7 @@ final class ReflectionRuleEvidence {
 
         LinkedHashMap<String, Candidate> unique = new LinkedHashMap<String, Candidate>();
         deriveFailureRecovery(all, unique);
+        deriveDirectRetryRecovery(all, unique);
         deriveSemanticTransitions(all, unique);
 
         ArrayList<Candidate> out = new ArrayList<Candidate>();
@@ -120,6 +121,75 @@ final class ReflectionRuleEvidence {
             add(out, scope, condition, response,
                     condition + " -> INSPECT_UI -> SUCCESS");
         }
+    }
+
+    /**
+     * Bootstrap learning from a direct retry/correction that is already proven
+     * by Runtime evidence. This intentionally does not require an existing rule
+     * or a screenshot: a failed mutation immediately followed by a compatible
+     * successful mutation is enough evidence to let the reviewer consider it.
+     *
+     * If a visual observation happened between the two mutations, the stronger
+     * INSPECT_UI recovery rule above owns that sequence instead.
+     */
+    private static void deriveDirectRetryRecovery(
+            List<Step> steps,
+            LinkedHashMap<String, Candidate> out) {
+        if (steps == null) return;
+        for (int i = 0; i < steps.size(); i++) {
+            Step failed = steps.get(i);
+            if (failed == null || !failed.failed() || !isMutationTool(failed.tool)) continue;
+
+            boolean sawVisualObservation = false;
+            Step recovered = null;
+            for (int j = i + 1; j < steps.size(); j++) {
+                Step candidate = steps.get(j);
+                if (candidate == null) continue;
+                if (isVisualTool(candidate.tool) && candidate.succeeded()) {
+                    sawVisualObservation = true;
+                    continue;
+                }
+                if (!isMutationTool(candidate.tool)) continue;
+                recovered = candidate;
+                break;
+            }
+
+            if (sawVisualObservation
+                    || recovered == null
+                    || !recovered.succeeded()
+                    || !compatibleRetry(failed, recovered)) {
+                continue;
+            }
+
+            String scope = !recovered.semanticTarget.isEmpty()
+                    ? recovered.semanticTarget : failureScope(failed);
+            String condition = failed.failureCode.isEmpty()
+                    ? "PREVIOUS_ATTEMPT_FAILED" : failed.failureCode;
+            String response = actionToken(recovered);
+            if (response.isEmpty()) continue;
+
+            add(out, scope, condition, response,
+                    failureEvidence(failed) + " -> " + response + " SUCCESS");
+        }
+    }
+
+    private static boolean compatibleRetry(Step failed, Step recovered) {
+        if (failed == null || recovered == null) return false;
+        if (!failed.semanticTarget.isEmpty() && !recovered.semanticTarget.isEmpty()) {
+            if (semanticFamily(failed.semanticTarget)
+                    .equals(semanticFamily(recovered.semanticTarget))) {
+                return true;
+            }
+        }
+        return !failed.tool.isEmpty() && failed.tool.equals(recovered.tool);
+    }
+
+    private static String failureEvidence(Step failed) {
+        String tool = failed == null
+                ? "ACTION" : safeRulePart(failed.tool.toUpperCase(Locale.ROOT), 48);
+        if (tool.isEmpty()) tool = "ACTION";
+        String code = failed == null ? "" : failed.failureCode;
+        return code.isEmpty() ? tool + " FAILED" : tool + " FAILED:" + code;
     }
 
     private static void deriveSemanticTransitions(List<Step> steps,
