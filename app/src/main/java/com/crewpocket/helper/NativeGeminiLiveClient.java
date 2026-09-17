@@ -4678,24 +4678,41 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 // active only during assistant playback to catch residual self-echo.
                 boolean outputAudible = System.currentTimeMillis() < lastPlaybackActiveAt;
                 double sensitivity = interruptionSensitivity / 100.0;
+                // 0119 noisy barge-in speech discriminator: auto mode becomes
+                // deliberately more conservative once the calibrated ambient floor
+                // is clearly outdoors/noisy. This affects assistant-playback barge-in
+                // only; normal listening keeps the existing ActiveNoiseAdmissionGate.
+                boolean adaptiveNoisy = "noisy".equals(mode)
+                        || ("auto".equals(mode) && noiseFloor >= 0.035);
                 int requiredFrames = 4
                         + (int) Math.round((1.0 - sensitivity) * 3.0)
-                        + (outputAudible ? 1 : 0);
+                        + (outputAudible ? 1 : 0)
+                        + (adaptiveNoisy ? 1 : 0);
                 requiredFrames = Math.max(4,
                         Math.min(BARGE_IN_MAX_CANDIDATE_FRAMES, requiredFrames));
 
-                double baseInterrupt = ("noisy".equals(mode) ? 0.060 : 0.042)
+                double baseInterrupt = (adaptiveNoisy ? 0.060 : 0.042)
                         + suppression * 0.00016
                         + (outputAudible ? 0.010 : 0.0)
                         + (1.0 - sensitivity) * 0.018
                         - sensitivity * 0.006;
-                double floorMultiplier = ("noisy".equals(mode) ? 2.15 : 1.70)
+                double floorMultiplier = (adaptiveNoisy ? 2.15 : 1.70)
                         + suppression * 0.006
                         + (1.0 - sensitivity) * 0.40;
                 double interruptThreshold = Math.max(
                         baseInterrupt, noiseFloor * floorMultiplier);
 
-                if (rms >= interruptThreshold) {
+                double bargeInZcr = calculateZeroCrossingRate(pcm, count);
+                boolean speechLikeBargeIn = rms >= interruptThreshold
+                        // Strong high-frequency hiss / sharp street texture is
+                        // unlikely to be a nearby human interruption.
+                        && bargeInZcr <= 0.42
+                        // Very low-frequency wind/engine rumble needs substantially
+                        // more energy than ordinary speech before it is admitted.
+                        && !(bargeInZcr < 0.008
+                            && rms < interruptThreshold * 1.35);
+
+                if (speechLikeBargeIn) {
                     consecutiveBargeInFrames++;
                     if (bargeInCandidateCount < BARGE_IN_MAX_CANDIDATE_FRAMES) {
                         System.arraycopy(pcm, 0,
