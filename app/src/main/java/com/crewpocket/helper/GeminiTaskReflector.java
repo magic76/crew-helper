@@ -37,6 +37,7 @@ final class GeminiTaskReflector {
 
     private final String apiKey;
     private String lastModel = MODEL;
+    private int lastModelIndex = -1;
 
     GeminiTaskReflector(String apiKey) {
         this.apiKey = apiKey == null ? "" : apiKey.trim();
@@ -46,6 +47,14 @@ final class GeminiTaskReflector {
         return lastModel;
     }
 
+    boolean hasAttemptedModel() {
+        return lastModelIndex >= 0;
+    }
+
+    boolean usedFallback() {
+        return lastModelIndex > 0;
+    }
+
     JSONObject reflect(JSONObject episode) throws Exception {
         if (apiKey.length() < 20) throw new IllegalStateException("GEMINI_API_KEY_MISSING");
 
@@ -53,6 +62,7 @@ final class GeminiTaskReflector {
         for (int i = 0; i < CANDIDATE_MODELS.length; i++) {
             String model = CANDIDATE_MODELS[i];
             lastModel = model;
+            lastModelIndex = i;
             try {
                 return reflectWithModel(model, episode, i == 0);
             } catch (Exception error) {
