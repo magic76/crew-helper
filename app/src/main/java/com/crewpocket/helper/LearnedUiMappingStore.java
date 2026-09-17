@@ -18,11 +18,20 @@ import java.util.Locale;
  * Key space:
  *   packageName + screenSignature + role
  *
+ * User teaching is authoritative for a reusable action slot: re-teaching the
+ * same app/role/composer-state replaces the previous selector. A learned action
+ * that fails verified execution is disabled immediately until the user teaches
+ * it again.
+ *
  * Never stores text typed by the user. Selectors contain only structural metadata.
  */
 final class LearnedUiMappingStore {
     private static final String PREFS = "crew_learned_ui_mappings";
     private static final String KEY_RULES = "rules_v1";
+    private static final String KEY_ACTION_MEMORY_LEARNS = "action_memory_learns";
+    private static final String KEY_ACTION_MEMORY_RELEARNS = "action_memory_relearns";
+    private static final String KEY_ACTION_MEMORY_HITS = "action_memory_hits";
+    private static final String KEY_ACTION_MEMORY_INVALIDATIONS = "action_memory_invalidations";
     private static final int MAX_RULES = 300;
 
     static final class Rule {
@@ -49,6 +58,7 @@ final class LearnedUiMappingStore {
         int targetOffsetX = 0;
         int targetOffsetY = 0;
         boolean anchored = false;
+        boolean enabled = true;
         long learnedAt = 0L;
         long lastVerifiedAt = 0L;
         int successCount = 0;
@@ -88,6 +98,7 @@ final class LearnedUiMappingStore {
                 o.put("targetOffsetX", targetOffsetX);
                 o.put("targetOffsetY", targetOffsetY);
                 o.put("anchored", anchored);
+                o.put("enabled", enabled);
                 o.put("learnedAt", learnedAt);
                 o.put("lastVerifiedAt", lastVerifiedAt);
                 o.put("successCount", successCount);
@@ -120,6 +131,9 @@ final class LearnedUiMappingStore {
             r.targetOffsetX = o.optInt("targetOffsetX", 0);
             r.targetOffsetY = o.optInt("targetOffsetY", 0);
             r.anchored = o.optBoolean("anchored", false);
+            // Backward compatible: mappings created before App Action Memory
+            // existed remain active until they fail or are re-taught.
+            r.enabled = o.has("enabled") ? o.optBoolean("enabled", true) : true;
             r.learnedAt = o.optLong("learnedAt", 0L);
             r.lastVerifiedAt = o.optLong("lastVerifiedAt", 0L);
             r.successCount = o.optInt("successCount", 0);
@@ -135,7 +149,13 @@ final class LearnedUiMappingStore {
     }
 
     synchronized void clearAll() {
-        prefs.edit().putString(KEY_RULES, "[]").apply();
+        prefs.edit()
+                .putString(KEY_RULES, "[]")
+                .putLong(KEY_ACTION_MEMORY_LEARNS, 0L)
+                .putLong(KEY_ACTION_MEMORY_RELEARNS, 0L)
+                .putLong(KEY_ACTION_MEMORY_HITS, 0L)
+                .putLong(KEY_ACTION_MEMORY_INVALIDATIONS, 0L)
+                .apply();
     }
 
     synchronized Rule learn(String packageName,
@@ -164,25 +184,31 @@ final class LearnedUiMappingStore {
             rule.composerViewId = safe(referenceNode.getViewIdResourceName());
         }
         // Always persist the screen center of the tapped node.
-        // This is the coordinate fallback for apps where the send button has
-        // no stable viewId or contentDescription (e.g. Wea's ↑ icon button).
+        // This is supporting evidence for apps where the send button has
+        // no stable viewId or contentDescription.
         android.graphics.Rect bounds = new android.graphics.Rect();
         node.getBoundsInScreen(bounds);
         if (!bounds.isEmpty()) {
             rule.centerX = bounds.centerX();
             rule.centerY = bounds.centerY();
         }
+        rule.enabled = true;
         rule.learnedAt = System.currentTimeMillis();
         rule.lastVerifiedAt = rule.learnedAt;
 
         List<Rule> rules = loadRules();
+        boolean replaced = false;
         for (int i = rules.size() - 1; i >= 0; i--) {
             Rule old = rules.get(i);
-            if (sameIdentity(old, rule)) rules.remove(i);
+            if (sameActionSlot(old, rule)) {
+                rules.remove(i);
+                replaced = true;
+            }
         }
         rules.add(0, rule);
         while (rules.size() > MAX_RULES) rules.remove(rules.size() - 1);
         saveRules(rules);
+        incrementCounter(replaced ? KEY_ACTION_MEMORY_RELEARNS : KEY_ACTION_MEMORY_LEARNS);
         return rule;
     }
 
@@ -211,7 +237,7 @@ final class LearnedUiMappingStore {
         List<Rule> rules = loadRules();
         for (int i = rules.size() - 1; i >= 0; i--) {
             Rule old = rules.get(i);
-            if (sameIdentity(old, rule)) rules.remove(i);
+            if (sameActionSlot(old, rule)) rules.remove(i);
         }
         rules.add(0, rule);
         while (rules.size() > MAX_RULES) rules.remove(rules.size() - 1);
@@ -221,19 +247,16 @@ final class LearnedUiMappingStore {
 
     synchronized List<Rule> findRules(String packageName, String screenSignature, String role) {
         String pkg = safe(packageName);
-        String sig = safe(screenSignature);
         String normalizedRole = normalizeRole(role);
         List<Rule> result = new ArrayList<>();
         for (Rule r : loadRules()) {
             if (!pkg.equals(r.packageName)) continue;
             if (!normalizedRole.equals(r.role)) continue;
-            // Exact screen signature first, but allow package-level fallback when
-            // a rule was intentionally learned with an empty signature.
-            // 0020: bad Send memories should retire quickly. A rule that has
-            // never succeeded is disabled after 2 observed failures.
-            if (r.failureCount >= 2 && r.successCount == 0) continue;
-            // Also suppress repeatedly unreliable rules even if they once worked.
-            if (r.failureCount >= 4 && r.failureCount > r.successCount) continue;
+            if (!r.enabled) continue;
+            // Exact screen signatures are intentionally not required here.
+            // Conversation contents frequently change the fingerprint while the
+            // app-level action control stays the same. Re-teaching replaces the
+            // slot explicitly when the UI changes.
             result.add(r);
         }
         return result;
@@ -246,17 +269,26 @@ final class LearnedUiMappingStore {
     synchronized void recordResult(Rule target, boolean success) {
         if (target == null) return;
         List<Rule> rules = loadRules();
+        boolean hit = false;
+        boolean invalidated = false;
         for (Rule r : rules) {
             if (!sameIdentity(r, target)) continue;
             if (success) {
                 r.successCount++;
                 r.lastVerifiedAt = System.currentTimeMillis();
+                hit = true;
             } else {
                 r.failureCount++;
+                if (r.enabled) {
+                    r.enabled = false;
+                    invalidated = true;
+                }
             }
             break;
         }
         saveRules(rules);
+        if (hit) incrementCounter(KEY_ACTION_MEMORY_HITS);
+        if (invalidated) incrementCounter(KEY_ACTION_MEMORY_INVALIDATIONS);
     }
 
     synchronized JSONArray dumpForDebug(String packageName) {
@@ -267,6 +299,33 @@ final class LearnedUiMappingStore {
             }
         }
         return arr;
+    }
+
+    static synchronized String buildActionMemoryReport(Context context) {
+        if (context == null) return "App Action Memory\nNo context.";
+        LearnedUiMappingStore store = new LearnedUiMappingStore(context);
+        List<Rule> rules = store.loadRules();
+        int active = 0;
+        int invalidated = 0;
+        for (Rule rule : rules) {
+            if (rule.enabled) active++;
+            else invalidated++;
+        }
+
+        StringBuilder out = new StringBuilder();
+        out.append("App Action Memory\n");
+        out.append("User-taught UI mappings; separate from Crew Experience.\n");
+        out.append("Active mappings: ").append(active).append("\n");
+        out.append("Invalidated mappings: ").append(invalidated).append("\n");
+        out.append("Learned: ").append(store.prefs.getLong(KEY_ACTION_MEMORY_LEARNS, 0L))
+                .append(" · relearned: ")
+                .append(store.prefs.getLong(KEY_ACTION_MEMORY_RELEARNS, 0L)).append("\n");
+        out.append("Verified hits: ").append(store.prefs.getLong(KEY_ACTION_MEMORY_HITS, 0L))
+                .append(" · invalidations: ")
+                .append(store.prefs.getLong(KEY_ACTION_MEMORY_INVALIDATIONS, 0L)).append("\n");
+        out.append("Policy: first failed verified execution disables the mapping until re-taught.\n");
+        out.append("Privacy: structural selector metadata and counters only; no typed or message text.");
+        return out.toString();
     }
 
     private List<Rule> loadRules() {
@@ -286,6 +345,23 @@ final class LearnedUiMappingStore {
         JSONArray a = new JSONArray();
         for (Rule r : rules) a.put(r.toJson());
         prefs.edit().putString(KEY_RULES, a.toString()).apply();
+    }
+
+    private void incrementCounter(String key) {
+        prefs.edit().putLong(key, prefs.getLong(key, 0L) + 1L).apply();
+    }
+
+    private static boolean sameActionSlot(Rule a, Rule b) {
+        if (a == null || b == null) return false;
+        if (!a.packageName.equals(b.packageName)) return false;
+        if (!a.role.equals(b.role)) return false;
+        String aState = safe(a.composerState).trim();
+        String bState = safe(b.composerState).trim();
+        if (aState.isEmpty() || "UNKNOWN".equals(aState)
+                || bState.isEmpty() || "UNKNOWN".equals(bState)) {
+            return true;
+        }
+        return aState.equals(bState);
     }
 
     private static boolean sameIdentity(Rule a, Rule b) {
