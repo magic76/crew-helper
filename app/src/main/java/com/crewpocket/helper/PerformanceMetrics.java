@@ -310,19 +310,26 @@ final class PerformanceMetrics {
             out.append("unavailable for current task · latest trace belongs to another task\n");
             return;
         }
+        long intentToFirstTool = duration(trace.intentAt, trace.firstToolAt);
+        long resultToSpeech = duration(trace.lastToolResultAt, trace.finalSpeechAt);
+        long speechTail = duration(trace.finalSpeechAt, trace.finishedAt);
+
         out.append("Outcome: ").append(trace.outcome).append("\n");
         out.append("User intent -> first tool: ")
-                .append(duration(trace.intentAt, trace.firstToolAt)).append(" ms\n");
+                .append(intentToFirstTool).append(" ms\n");
         out.append("Runtime tool execution total: ")
                 .append(trace.toolRuntimeTotalMs).append(" ms\n");
         out.append("Gemini wait between tools: ")
                 .append(trace.geminiBetweenToolsMs).append(" ms\n");
         out.append("Last tool result -> final speech: ")
-                .append(duration(trace.lastToolResultAt, trace.finalSpeechAt)).append(" ms\n");
-        out.append("Final speech -> task finish: ")
-                .append(duration(trace.finalSpeechAt, trace.finishedAt)).append(" ms\n");
+                .append(resultToSpeech).append(" ms\n");
+        out.append("Final speech start -> task finish: ")
+                .append(speechTail)
+                .append(" ms (includes remaining speech / turn completion)\n");
         out.append("User intent -> task finish: ")
                 .append(duration(trace.intentAt, trace.finishedAt)).append(" ms\n");
+        appendSlowestPhase(out, intentToFirstTool, trace.toolRuntimeTotalMs,
+                trace.geminiBetweenToolsMs, resultToSpeech);
         if (!trace.steps.isEmpty()) {
             out.append("Tool timeline (safe names only):\n");
             for (int i = 0; i < trace.steps.size(); i++) {
@@ -334,6 +341,34 @@ final class PerformanceMetrics {
                 }
                 out.append("\n");
             }
+        }
+    }
+
+    private static void appendSlowestPhase(
+            StringBuilder out,
+            long intentToFirstTool,
+            long toolRuntime,
+            long geminiBetweenTools,
+            long resultToSpeech) {
+        String label = "User intent -> first tool";
+        long slowest = intentToFirstTool;
+
+        if (toolRuntime > slowest) {
+            slowest = toolRuntime;
+            label = "Runtime tool execution total";
+        }
+        if (geminiBetweenTools > slowest) {
+            slowest = geminiBetweenTools;
+            label = "Gemini wait between tools";
+        }
+        if (resultToSpeech > slowest) {
+            slowest = resultToSpeech;
+            label = "Last tool result -> final speech";
+        }
+
+        if (slowest >= 0L) {
+            out.append("Slowest phase (excluding audible speech tail): ")
+                    .append(label).append(" · ").append(slowest).append(" ms\n");
         }
     }
 
