@@ -76,9 +76,11 @@ public class AgentInspectorActivity extends Activity {
                 this,
                 "Crew 只會在 Runtime 有足夠證據時學習：失敗後修正成功會立即進入 Experience Review；一般成功路徑需重複出現才會進入模型。"
                         + "Rule identity 由 Runtime evidence 決定，模型只負責把已驗證的 evidence 壓成 Lesson。"
+                        + "App Action Memory 則保存使用者明確教過的 UI 結構映射，與 Experience 分開。"
                         + "不保存或顯示對話內容、訊息文字、搜尋值、密碼、OTP、付款資料、任意工具參數、API Key 或模型原始回答。",
                 "Crew learns only when Runtime has sufficient evidence: proven recovery is reviewed immediately, while normal successful paths must repeat before model review. "
                         + "Rule identity comes from Runtime evidence; the model only compresses qualified evidence into a lesson. "
+                        + "App Action Memory separately stores structural UI mappings explicitly taught by the user. "
                         + "No conversations, message text, search values, passwords, OTPs, payment data, arbitrary tool arguments, API keys, or raw model replies are stored here."));
         privacy.setTextSize(11);
         privacy.setTextColor(CrewTheme.TEXT_SECONDARY);
@@ -139,8 +141,8 @@ public class AgentInspectorActivity extends Activity {
                     AgentInspectorActivity.this,
                     I18n.get(
                             AgentInspectorActivity.this,
-                            "Runtime 與 Experience Model 診斷已清除；學習中的 Experience 與已學 Lesson 不會刪除",
-                            "Runtime and Experience model diagnostics cleared; accumulated experience and learned lessons were kept"),
+                            "Runtime 與 Experience Model 診斷已清除；學習中的 Experience、App Action Memory 與已學 Lesson 不會刪除",
+                            "Runtime and Experience model diagnostics cleared; accumulated experience, App Action Memory, and learned lessons were kept"),
                     Toast.LENGTH_SHORT).show();
         });
 
@@ -167,6 +169,8 @@ public class AgentInspectorActivity extends Activity {
                 + ReflectionHistoryStore.buildReport(this)
                 + "\n\n────────────────────\n\n"
                 + ReflectionLearningStats.buildReport(this)
+                + "\n\n────────────────────\n\n"
+                + LearnedUiMappingStore.buildActionMemoryReport(this)
                 + "\n\n────────────────────\n\n"
                 + AgentInspectorStore.buildReport(this);
     }
