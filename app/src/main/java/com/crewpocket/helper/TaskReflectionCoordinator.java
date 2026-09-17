@@ -93,14 +93,14 @@ final class TaskReflectionCoordinator {
                     cancelled,
                     usedSendText,
                     packageName)) {
-                ReflectionHistoryStore.record(
+                ReflectionHistoryStore.recordNoModelCall(
                         context, "SKIPPED", "POLICY", elapsed(startedAt));
                 Log.d(TAG, "skip task reflection by policy");
                 return;
             }
 
             if (!hasRuleEvidence) {
-                ReflectionHistoryStore.record(
+                ReflectionHistoryStore.recordNoModelCall(
                         context, "SKIPPED", "NO_RULE_EVIDENCE", elapsed(startedAt));
                 Log.d(TAG, "skip task reflection: no deterministic rule evidence");
                 return;
@@ -108,7 +108,7 @@ final class TaskReflectionCoordinator {
 
             String apiKey = AppConfig.getGeminiApiKey(context);
             if (apiKey == null || apiKey.trim().length() < 20) {
-                ReflectionHistoryStore.record(
+                ReflectionHistoryStore.recordNoModelCall(
                         context, "SKIPPED", "NO_API_KEY", elapsed(startedAt));
                 Log.d(TAG, "skip task reflection: api key unavailable");
                 return;
@@ -145,15 +145,17 @@ final class TaskReflectionCoordinator {
             } else {
                 historyStatus = stored.optString("reason", "NOT_REMEMBERED");
             }
-            ReflectionHistoryStore.record(
+            ReflectionHistoryStore.recordModelCall(
                     context,
                     "SUCCESS",
                     historyStatus,
                     elapsed(startedAt),
-                    reflector.lastModel());
+                    reflector.lastModel(),
+                    reflector.usedFallback());
 
             Log.i(TAG, "post-task reflection complete: model="
                     + reflector.lastModel()
+                    + " fallback=" + reflector.usedFallback()
                     + " candidates=" + candidates.size()
                     + " stored=" + stored.optInt("storedCount", 0)
                     + " state=" + stored.optString("state", "SKIPPED"));
@@ -161,12 +163,21 @@ final class TaskReflectionCoordinator {
             // Reflection is best-effort and never allowed to affect Live latency,
             // execution, user-visible status, or task completion.
             String code = safeErrorCode(error);
-            ReflectionHistoryStore.record(
-                    context,
-                    "ERROR",
-                    code,
-                    elapsed(startedAt),
-                    reflector == null ? GeminiTaskReflector.MODEL : reflector.lastModel());
+            if (reflector != null && reflector.hasAttemptedModel()) {
+                ReflectionHistoryStore.recordModelCall(
+                        context,
+                        "ERROR",
+                        code,
+                        elapsed(startedAt),
+                        reflector.lastModel(),
+                        reflector.usedFallback());
+            } else {
+                ReflectionHistoryStore.recordNoModelCall(
+                        context,
+                        "ERROR",
+                        code,
+                        elapsed(startedAt));
+            }
             Log.d(TAG, "post-task reflection skipped: " + code);
         }
     }
