@@ -13,14 +13,16 @@ public final class ReflectionRuleEvidenceTest {
         recovery.add(step("tap_screen", "SUCCESS", "", "navigation:DIRECTIONS", "TAP"));
         List<ReflectionRuleEvidence.Candidate> rules = ReflectionRuleEvidence.derive(null, recovery);
         check(rules.size() == 1, "clean recovery sequence should yield one evidence rule");
-        check(hasRule(rules, "UI_TARGET", "UI_TARGET_NOT_FOUND", "INSPECT_UI"),
-                "successful observation recovery should yield UI target rule");
+        check(hasRule(rules, ReflectionRuleEvidence.KIND_RECOVERY,
+                        "UI_TARGET", "UI_TARGET_NOT_FOUND", "INSPECT_UI"),
+                "successful observation recovery should be immediate recovery evidence");
 
         List<ReflectionRuleEvidence.Step> failedRecovery = new ArrayList<ReflectionRuleEvidence.Step>();
         failedRecovery.add(step("tap_screen", "FAILED", "UI_TARGET_NOT_FOUND", "", "TAP"));
         failedRecovery.add(step("inspect_ui", "SUCCESS", "", "", ""));
         failedRecovery.add(step("tap_screen", "FAILED", "UI_TARGET_NOT_FOUND", "", "TAP"));
         check(!hasRule(ReflectionRuleEvidence.derive(null, failedRecovery),
+                        ReflectionRuleEvidence.KIND_RECOVERY,
                         "UI_TARGET", "UI_TARGET_NOT_FOUND", "INSPECT_UI"),
                 "observation followed by another failed mutation must not be learned as recovery");
 
@@ -29,28 +31,32 @@ public final class ReflectionRuleEvidenceTest {
         directRetry.add(step("tap_screen", "SUCCESS", "", "navigation:START", "TAP"));
         List<ReflectionRuleEvidence.Candidate> directRules =
                 ReflectionRuleEvidence.derive(null, directRetry);
-        check(hasRule(directRules, "navigation:START", "UI_TARGET_NOT_FOUND", "TAP"),
-                "direct successful retry should bootstrap a deterministic reflection rule");
+        check(hasRule(directRules, ReflectionRuleEvidence.KIND_RECOVERY,
+                        "navigation:START", "UI_TARGET_NOT_FOUND", "TAP"),
+                "direct successful retry should be recovery evidence");
 
         List<ReflectionRuleEvidence.Step> genericRetry = new ArrayList<ReflectionRuleEvidence.Step>();
         genericRetry.add(step("tap_screen", "FAILED", "", "", "TAP"));
         genericRetry.add(step("tap_screen", "SUCCESS", "", "navigation:START", "TAP"));
         check(hasRule(ReflectionRuleEvidence.derive(null, genericRetry),
+                        ReflectionRuleEvidence.KIND_RECOVERY,
                         "navigation:START", "PREVIOUS_ATTEMPT_FAILED", "TAP"),
-                "retry without a failure code should still have bounded bootstrap evidence");
+                "retry without a failure code should still have bounded recovery evidence");
 
         List<ReflectionRuleEvidence.Step> previousFailure = new ArrayList<ReflectionRuleEvidence.Step>();
         previousFailure.add(step("launch_app", "FAILED", "APP_NOT_FOUND", "", "OPEN_APP"));
         List<ReflectionRuleEvidence.Step> recoveredGoal = new ArrayList<ReflectionRuleEvidence.Step>();
         recoveredGoal.add(step("launch_app", "SUCCESS", "", "app:MAPS", "OPEN_APP"));
         check(hasRule(ReflectionRuleEvidence.derive(previousFailure, recoveredGoal),
+                        ReflectionRuleEvidence.KIND_RECOVERY,
                         "app:MAPS", "APP_NOT_FOUND", "OPEN_APP"),
-                "same-goal next-task recovery should bootstrap reflection");
+                "same-goal next-task recovery should be immediate recovery evidence");
 
         List<ReflectionRuleEvidence.Step> unrelatedRecovery = new ArrayList<ReflectionRuleEvidence.Step>();
         unrelatedRecovery.add(step("tap_screen", "FAILED", "UI_TARGET_NOT_FOUND", "", "TAP"));
         unrelatedRecovery.add(step("launch_app", "SUCCESS", "", "app:MAPS", "OPEN_APP"));
         check(!hasRule(ReflectionRuleEvidence.derive(null, unrelatedRecovery),
+                        ReflectionRuleEvidence.KIND_RECOVERY,
                         "app:MAPS", "UI_TARGET_NOT_FOUND", "OPEN_APP"),
                 "unrelated successful mutation must not be treated as retry evidence");
 
@@ -60,18 +66,20 @@ public final class ReflectionRuleEvidenceTest {
         current.add(step("tap_screen", "SUCCESS", "", "route_mode:WALKING", "TAP"));
         current.add(step("tap_screen", "SUCCESS", "", "navigation:START", "TAP"));
         List<ReflectionRuleEvidence.Candidate> navigation = ReflectionRuleEvidence.derive(previous, current);
-        check(hasRule(navigation, "navigation:START", "AFTER:route_mode:*", "TAP"),
-                "semantic transition should derive start-navigation rule");
+        check(hasRule(navigation, ReflectionRuleEvidence.KIND_ROUTINE,
+                        "navigation:START", "AFTER:route_mode:*", "TAP"),
+                "normal semantic transition should be routine evidence only");
         check(!hasScope(navigation, "route_mode:WALKING"),
-                "same semantic family changes should not create reflection rules");
+                "same semantic family changes should not create experience rules");
 
         List<ReflectionRuleEvidence.Step> interrupted = new ArrayList<ReflectionRuleEvidence.Step>();
         interrupted.add(step("tap_screen", "SUCCESS", "", "route_mode:WALKING", "TAP"));
         interrupted.add(step("tap_screen", "FAILED", "UI_TARGET_NOT_FOUND", "", "TAP"));
         interrupted.add(step("tap_screen", "SUCCESS", "", "navigation:START", "TAP"));
         check(!hasRule(ReflectionRuleEvidence.derive(null, interrupted),
+                        ReflectionRuleEvidence.KIND_ROUTINE,
                         "navigation:START", "AFTER:route_mode:*", "TAP"),
-                "failed mutation must break semantic transition evidence");
+                "failed mutation must break routine semantic transition evidence");
 
         check("route_mode:*".equals(
                 ReflectionRuleEvidence.semanticFamily("route_mode:WALKING")),
@@ -90,12 +98,14 @@ public final class ReflectionRuleEvidenceTest {
     }
 
     private static boolean hasRule(List<ReflectionRuleEvidence.Candidate> rules,
+                                   String kind,
                                    String scope,
                                    String condition,
                                    String response) {
         if (rules == null) return false;
         for (ReflectionRuleEvidence.Candidate rule : rules) {
             if (rule != null
+                    && kind.equals(rule.kind)
                     && scope.equals(rule.scope)
                     && condition.equals(rule.condition)
                     && response.equals(rule.response)) return true;
