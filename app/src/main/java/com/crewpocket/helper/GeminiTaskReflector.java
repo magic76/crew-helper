@@ -35,6 +35,29 @@ final class GeminiTaskReflector {
 
     static final String MODEL = CANDIDATE_MODELS[0];
 
+    static final class DiagnosticResult {
+        final boolean success;
+        final String primaryStatus;
+        final String selectedModel;
+        final String selectedStatus;
+        final boolean fallbackUsed;
+        final long latencyMs;
+
+        DiagnosticResult(boolean success,
+                         String primaryStatus,
+                         String selectedModel,
+                         String selectedStatus,
+                         boolean fallbackUsed,
+                         long latencyMs) {
+            this.success = success;
+            this.primaryStatus = primaryStatus == null ? "UNKNOWN_ERROR" : primaryStatus;
+            this.selectedModel = selectedModel == null ? MODEL : selectedModel;
+            this.selectedStatus = selectedStatus == null ? "UNKNOWN_ERROR" : selectedStatus;
+            this.fallbackUsed = fallbackUsed;
+            this.latencyMs = Math.max(0L, latencyMs);
+        }
+    }
+
     private final String apiKey;
     private String lastModel = MODEL;
     private int lastModelIndex = -1;
@@ -74,10 +97,134 @@ final class GeminiTaskReflector {
         throw new IllegalStateException("REFLECTION_ALL_MODELS_FAILED", lastFailure);
     }
 
+    /**
+     * Performs a tiny structured-output request to verify model/API availability.
+     * This never stores a lesson and never includes task or user content.
+     */
+    DiagnosticResult diagnose() {
+        final long startedAt = System.currentTimeMillis();
+        if (apiKey.length() < 20) {
+            return new DiagnosticResult(
+                    false,
+                    "NO_API_KEY",
+                    MODEL,
+                    "NO_API_KEY",
+                    false,
+                    System.currentTimeMillis() - startedAt);
+        }
+
+        String primaryStatus = "NOT_TESTED";
+        String lastStatus = "UNKNOWN_ERROR";
+        String selectedModel = MODEL;
+        boolean fallbackUsed = false;
+
+        for (int i = 0; i < CANDIDATE_MODELS.length; i++) {
+            String model = CANDIDATE_MODELS[i];
+            selectedModel = model;
+            fallbackUsed = i > 0;
+            lastModel = model;
+            lastModelIndex = i;
+            try {
+                diagnoseWithModel(model);
+                if (i == 0) primaryStatus = "SUCCESS";
+                return new DiagnosticResult(
+                        true,
+                        primaryStatus,
+                        model,
+                        "SUCCESS",
+                        fallbackUsed,
+                        System.currentTimeMillis() - startedAt);
+            } catch (Exception error) {
+                lastStatus = safeFailureCode(error);
+                if (i == 0) primaryStatus = lastStatus;
+                Log.w(TAG, "reflection diagnostic model failed: " + model
+                        + " code=" + lastStatus);
+            }
+        }
+
+        return new DiagnosticResult(
+                false,
+                primaryStatus,
+                selectedModel,
+                lastStatus,
+                fallbackUsed,
+                System.currentTimeMillis() - startedAt);
+    }
+
     private JSONObject reflectWithModel(String model,
                                         JSONObject episode,
                                         boolean includeThinking) throws Exception {
         JSONObject body = buildRequestBody(episode, includeThinking);
+        String raw = postGenerateContent(model, body);
+
+        JSONObject response = new JSONObject(raw);
+        JSONArray candidates = response.optJSONArray("candidates");
+        if (candidates == null || candidates.length() == 0) {
+            throw new IllegalStateException("REFLECTION_EMPTY_CANDIDATES");
+        }
+        JSONObject content = candidates.optJSONObject(0) == null
+                ? null : candidates.optJSONObject(0).optJSONObject("content");
+        JSONArray parts = content == null ? null : content.optJSONArray("parts");
+        if (parts == null || parts.length() == 0) {
+            throw new IllegalStateException("REFLECTION_EMPTY_CONTENT");
+        }
+
+        StringBuilder text = new StringBuilder();
+        for (int i = 0; i < parts.length(); i++) {
+            JSONObject part = parts.optJSONObject(i);
+            if (part == null) continue;
+            String value = part.optString("text", "");
+            if (!value.isEmpty()) text.append(value);
+        }
+        if (text.length() == 0) throw new IllegalStateException("REFLECTION_EMPTY_TEXT");
+        return new JSONObject(text.toString());
+    }
+
+    private void diagnoseWithModel(String model) throws Exception {
+        JSONObject schema = new JSONObject()
+                .put("type", "object")
+                .put("properties", new JSONObject()
+                        .put("ok", new JSONObject().put("type", "boolean")))
+                .put("required", new JSONArray().put("ok"));
+
+        JSONObject body = new JSONObject()
+                .put("contents", new JSONArray().put(
+                        new JSONObject().put("role", "user")
+                                .put("parts", new JSONArray().put(
+                                        new JSONObject().put(
+                                                "text",
+                                                "Connectivity diagnostic only. Return JSON with ok=true.")))))
+                .put("generationConfig", new JSONObject()
+                        .put("responseMimeType", "application/json")
+                        .put("responseSchema", schema)
+                        .put("maxOutputTokens", 32));
+
+        String raw = postGenerateContent(model, body);
+        JSONObject response = new JSONObject(raw);
+        JSONArray candidates = response.optJSONArray("candidates");
+        if (candidates == null || candidates.length() == 0) {
+            throw new IllegalStateException("REFLECTION_DIAGNOSTIC_EMPTY_CANDIDATES");
+        }
+        JSONObject content = candidates.optJSONObject(0) == null
+                ? null : candidates.optJSONObject(0).optJSONObject("content");
+        JSONArray parts = content == null ? null : content.optJSONArray("parts");
+        String text = "";
+        if (parts != null) {
+            for (int i = 0; i < parts.length(); i++) {
+                JSONObject part = parts.optJSONObject(i);
+                if (part != null) text += part.optString("text", "");
+            }
+        }
+        if (text.trim().isEmpty()) {
+            throw new IllegalStateException("REFLECTION_DIAGNOSTIC_EMPTY_TEXT");
+        }
+        JSONObject diagnostic = new JSONObject(text);
+        if (!diagnostic.optBoolean("ok", false)) {
+            throw new IllegalStateException("REFLECTION_DIAGNOSTIC_BAD_RESPONSE");
+        }
+    }
+
+    private String postGenerateContent(String model, JSONObject body) throws Exception {
         String endpoint = "https://generativelanguage.googleapis.com/v1beta/models/"
                 + model + ":generateContent";
 
@@ -107,28 +254,7 @@ final class GeminiTaskReflector {
         if (status < 200 || status >= 300) {
             throw new IllegalStateException("REFLECTION_HTTP_" + status);
         }
-
-        JSONObject response = new JSONObject(raw);
-        JSONArray candidates = response.optJSONArray("candidates");
-        if (candidates == null || candidates.length() == 0) {
-            throw new IllegalStateException("REFLECTION_EMPTY_CANDIDATES");
-        }
-        JSONObject content = candidates.optJSONObject(0) == null
-                ? null : candidates.optJSONObject(0).optJSONObject("content");
-        JSONArray parts = content == null ? null : content.optJSONArray("parts");
-        if (parts == null || parts.length() == 0) {
-            throw new IllegalStateException("REFLECTION_EMPTY_CONTENT");
-        }
-
-        StringBuilder text = new StringBuilder();
-        for (int i = 0; i < parts.length(); i++) {
-            JSONObject part = parts.optJSONObject(i);
-            if (part == null) continue;
-            String value = part.optString("text", "");
-            if (!value.isEmpty()) text.append(value);
-        }
-        if (text.length() == 0) throw new IllegalStateException("REFLECTION_EMPTY_TEXT");
-        return new JSONObject(text.toString());
+        return raw;
     }
 
     private static JSONObject buildRequestBody(JSONObject episode,
@@ -189,7 +315,7 @@ final class GeminiTaskReflector {
                 + "Sanitized episode:\n" + (episode == null ? "{}" : episode.toString());
     }
 
-    private static String safeFailureCode(Exception error) {
+    static String safeFailureCode(Exception error) {
         if (error == null) return "UNKNOWN_ERROR";
         String message = error.getMessage() == null ? "" : error.getMessage().trim();
         if (message.startsWith("REFLECTION_")) {
