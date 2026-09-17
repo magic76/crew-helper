@@ -16,9 +16,9 @@ import java.util.UUID;
 /**
  * Stores qualified Crew Experience rules separately from active App Playbooks.
  *
- * Runtime owns rule identity: package + deterministic ruleKey. Gemini only
- * compresses qualified evidence into a human-readable lesson. Two compatible
- * high-confidence confirmations are still required before App Playbook promotion.
+ * Runtime owns rule identity, trigger eligibility, and evidence confidence.
+ * Gemini only compresses qualified evidence into a human-readable lesson. Two
+ * compatible confirmations are required before App Playbook promotion.
  */
 final class ReflectionLessonStore {
     private static final String PREFS = "crew_reflection_learning";
@@ -83,8 +83,7 @@ final class ReflectionLessonStore {
                     if (candidate == null) continue;
 
                     String lesson = collapse(choice.optString("lesson", ""));
-                    double confidence = Math.max(0d,
-                            Math.min(1d, choice.optDouble("confidence", 0d)));
+                    double confidence = experienceConfidence(candidate);
                     if (!ReflectionLearningPolicy.isSafeRuleLesson(lesson, confidence)) {
                         policyRejected = true;
                         continue;
@@ -341,6 +340,12 @@ final class ReflectionLessonStore {
             if (value != null) out.put(value);
         }
         return out;
+    }
+
+    private static double experienceConfidence(ReflectionRuleEvidence.Candidate candidate) {
+        return candidate != null
+                && ReflectionRuleEvidence.KIND_RECOVERY.equals(candidate.kind)
+                ? 0.86d : 0.80d;
     }
 
     private static double rollingAverage(double previous, int previousCount, double next) {
