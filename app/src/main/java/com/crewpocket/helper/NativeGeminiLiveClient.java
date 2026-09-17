@@ -667,6 +667,12 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
     private android.media.audiofx.AcousticEchoCanceler aecEffect = null;
     private android.media.audiofx.NoiseSuppressor nsEffect = null;
+    private volatile long serverInterruptedCount = 0L;
+    private volatile long bargeInAdmissionCount = 0L;
+    private volatile long lastBargeInAdmissionAt = 0L;
+    private volatile long audioTrackWriteFailureCount = 0L;
+    private volatile long audioTrackShortWriteCount = 0L;
+    private volatile long oboeWriteFailureCount = 0L;
     private volatile boolean agentMuted = false;
     private volatile boolean aiSpeaking = false;
     private volatile boolean interruptedCurrentTurn = false;
@@ -1019,6 +1025,15 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         }
         if (server == null) return;
         if (server.optBoolean("interrupted", false)) {
+            long interruptedIndex = ++serverInterruptedCount;
+            long sinceBargeInMs = lastBargeInAdmissionAt <= 0L
+                    ? -1L : Math.max(0L,
+                        System.currentTimeMillis() - lastBargeInAdmissionAt);
+            Log.w(TAG, "0120 serverContent.interrupted #" + interruptedIndex
+                    + " aiSpeaking=" + aiSpeaking
+                    + " allowVoiceInterruption=" + allowVoiceInterruption
+                    + " sinceBargeInAdmitMs=" + sinceBargeInMs
+                    + " outputState=" + lastAudioOutputState);
             stopPlayback();
             if (aiSpeaking) {
                 aiSpeaking = false;
@@ -4410,35 +4425,97 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     }
 
     private void startAudio() {
-        if (!running || recorder != null) return;
-        int min = AudioRecord.getMinBufferSize(16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
-        int bufferBytes = Math.max(min * 4, 8192);
-        try {
-            // 🎙️ VOICE_COMMUNICATION engages Android's hardware DSP full-duplex AEC (Acoustic Echo Cancellation) & AGC
-            recorder = new AudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION, 16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufferBytes);
-        } catch (Exception e) {
-            recorder = new AudioRecord(MediaRecorder.AudioSource.MIC, 16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufferBytes);
+    if (!running || recorder != null) return;
+    int min = AudioRecord.getMinBufferSize(16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
+    int bufferBytes = Math.max(min * 4, 8192);
+    int selectedAudioSource = MediaRecorder.AudioSource.VOICE_COMMUNICATION;
+    try {
+        recorder = new AudioRecord(selectedAudioSource, 16000,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT, bufferBytes);
+        if (recorder.getState() != AudioRecord.STATE_INITIALIZED) {
+            throw new IllegalStateException("VOICE_COMMUNICATION_NOT_INITIALIZED");
         }
-
-        // Attach hardware audio effects if supported by Samsung/Android
-        try {
-            // 🛡️ AcousticEchoCanceler (AEC): Essential to prevent AI hearing its own voice from loudspeaker!
-            if (android.media.audiofx.AcousticEchoCanceler.isAvailable()) {
-                aecEffect = android.media.audiofx.AcousticEchoCanceler.create(recorder.getAudioSessionId());
-                if (aecEffect != null) aecEffect.setEnabled(true);
-            }
-            // Keep NoiseSuppressor to clean air conditioner / ambient hiss
-            if (android.media.audiofx.NoiseSuppressor.isAvailable()) {
-                nsEffect = android.media.audiofx.NoiseSuppressor.create(recorder.getAudioSessionId());
-                if (nsEffect != null) nsEffect.setEnabled(true);
-            }
-        } catch (Exception ignored) {}
-
-        createAudioPlayer();
-        startPlaybackWorker();
-        recorder.startRecording();
-        new Thread(new Runnable() { @Override public void run() { sendMic(); } }, "crew-native-live-mic").start();
+    } catch (Exception voiceError) {
+        Log.w(TAG, "0120 AudioRecord VOICE_COMMUNICATION unavailable: "
+                + voiceError.getClass().getSimpleName() + "; fallback=MIC");
+        try { if (recorder != null) recorder.release(); } catch (Exception ignored) {}
+        recorder = null;
+        selectedAudioSource = MediaRecorder.AudioSource.MIC;
+        recorder = new AudioRecord(selectedAudioSource, 16000,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT, bufferBytes);
     }
+
+    if (recorder == null || recorder.getState() != AudioRecord.STATE_INITIALIZED) {
+        fail("麥克風初始化失敗", null);
+        return;
+    }
+    Log.i(TAG, "0120 AudioRecord source="
+            + (selectedAudioSource == MediaRecorder.AudioSource.VOICE_COMMUNICATION
+                ? "VOICE_COMMUNICATION" : "MIC")
+            + " state=" + recorder.getState()
+            + " session=" + recorder.getAudioSessionId()
+            + " bufferBytes=" + bufferBytes);
+
+    boolean aecAvailable = android.media.audiofx.AcousticEchoCanceler.isAvailable();
+    boolean aecCreated = false;
+    int aecEnableStatus = Integer.MIN_VALUE;
+    boolean aecEnabled = false;
+    try {
+        if (aecAvailable) {
+            aecEffect = android.media.audiofx.AcousticEchoCanceler.create(
+                    recorder.getAudioSessionId());
+            aecCreated = aecEffect != null;
+            if (aecEffect != null) {
+                aecEnableStatus = aecEffect.setEnabled(true);
+                aecEnabled = aecEffect.getEnabled();
+            }
+        }
+    } catch (Exception effectError) {
+        Log.w(TAG, "0120 AEC setup exception="
+                + effectError.getClass().getSimpleName());
+    }
+    Log.i(TAG, "0120 AEC available=" + aecAvailable
+            + " created=" + aecCreated
+            + " enableStatus=" + aecEnableStatus
+            + " enabled=" + aecEnabled);
+
+    boolean nsAvailable = android.media.audiofx.NoiseSuppressor.isAvailable();
+    boolean nsCreated = false;
+    int nsEnableStatus = Integer.MIN_VALUE;
+    boolean nsEnabled = false;
+    try {
+        if (nsAvailable) {
+            nsEffect = android.media.audiofx.NoiseSuppressor.create(
+                    recorder.getAudioSessionId());
+            nsCreated = nsEffect != null;
+            if (nsEffect != null) {
+                nsEnableStatus = nsEffect.setEnabled(true);
+                nsEnabled = nsEffect.getEnabled();
+            }
+        }
+    } catch (Exception effectError) {
+        Log.w(TAG, "0120 NoiseSuppressor setup exception="
+                + effectError.getClass().getSimpleName());
+    }
+    Log.i(TAG, "0120 NoiseSuppressor available=" + nsAvailable
+            + " created=" + nsCreated
+            + " enableStatus=" + nsEnableStatus
+            + " enabled=" + nsEnabled);
+
+    createAudioPlayer();
+    startPlaybackWorker();
+    try {
+        recorder.startRecording();
+        Log.i(TAG, "0120 AudioRecord recordingState="
+                + recorder.getRecordingState());
+    } catch (Exception startError) {
+        fail("麥克風啟動失敗：" + startError.getClass().getSimpleName(), startError);
+        return;
+    }
+    new Thread(new Runnable() { @Override public void run() { sendMic(); } }, "crew-native-live-mic").start();
+}
 
     private void createAudioPlayer() {
         usingOboeOutput = NativeOboeOutput.start(audioOutput);
@@ -4509,25 +4586,56 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     }
 
     private void writeAudioChunk(byte[] pcm) {
-        if (pcm == null || pcm.length == 0 || interruptedCurrentTurn || agentMuted) return;
-        int written;
-        synchronized (playerLock) {
-            // 🛡️ Ensure AudioTrack is in PLAYING state (e.g. after interruption flush/pause)
-            if (player != null && player.getPlayState() != AudioTrack.PLAYSTATE_PLAYING) {
-                try {
-                    player.play();
-                } catch (Exception ignored) {}
+    if (pcm == null || pcm.length == 0 || interruptedCurrentTurn || agentMuted) return;
+    int totalWritten = 0;
+    int writeError = 0;
+    synchronized (playerLock) {
+        if (player != null && player.getPlayState() != AudioTrack.PLAYSTATE_PLAYING) {
+            try {
+                player.play();
+            } catch (Exception playError) {
+                audioTrackWriteFailureCount++;
+                lastAudioOutputState = "AUDIOTRACK_PLAY_FAILED";
+                Log.w(TAG, "0120 AudioTrack play failed #"
+                        + audioTrackWriteFailureCount + " exception="
+                        + playError.getClass().getSimpleName());
             }
-            written = player == null ? AudioTrack.ERROR_INVALID_OPERATION : player.write(pcm, 0, pcm.length);
         }
-        if (written < 0) {
-            lastAudioOutputState = "AUDIOTRACK_WRITE_FAILED:" + written;
-            Log.w(TAG, "AudioTrack 寫入失敗（" + written + "），重建播放軌");
-            recoverAudioPlayer();
-        } else if (written > 0) {
-            lastAudioOutputState = "AUDIOTRACK_PLAYING";
+        if (player == null) {
+            writeError = AudioTrack.ERROR_INVALID_OPERATION;
+        } else {
+            while (totalWritten < pcm.length) {
+                int remaining = pcm.length - totalWritten;
+                int written = player.write(pcm, totalWritten, remaining);
+                if (written < 0) {
+                    writeError = written;
+                    break;
+                }
+                if (written == 0) break;
+                if (written < remaining) audioTrackShortWriteCount++;
+                totalWritten += written;
+            }
         }
     }
+    if (writeError < 0) {
+        audioTrackWriteFailureCount++;
+        lastAudioOutputState = "AUDIOTRACK_WRITE_FAILED:" + writeError;
+        Log.w(TAG, "0120 AudioTrack write failed #"
+                + audioTrackWriteFailureCount + " code=" + writeError
+                + " shortWrites=" + audioTrackShortWriteCount
+                + "; rebuilding track");
+        recoverAudioPlayer();
+    } else if (totalWritten < pcm.length) {
+        audioTrackShortWriteCount++;
+        lastAudioOutputState = "AUDIOTRACK_SHORT_WRITE:"
+                + totalWritten + "/" + pcm.length;
+        Log.w(TAG, "0120 AudioTrack short write #"
+                + audioTrackShortWriteCount + " bytes="
+                + totalWritten + "/" + pcm.length);
+    } else if (totalWritten > 0) {
+        lastAudioOutputState = "AUDIOTRACK_PLAYING";
+    }
+}
 
     private void recoverAudioPlayer() {
         if (!audioPlaybackRunning || !running) return;
@@ -4578,6 +4686,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         // It bypasses quiet environments and never owns AudioRecord.
         ActiveNoiseAdmissionGate activeNoiseGate =
                 new ActiveNoiseAdmissionGate(pcm.length);
+        long lastNoiseGateDiagnosticAt = 0L;
 
         while (running && recorder != null && webSocket != null) {
             int count = recorder.read(pcm, 0, pcm.length); if (count <= 0) continue;
@@ -4587,9 +4696,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             String mode = noiseMode;
             int suppression = noiseSuppression;
 
-            // Keep the first 0.8 s as a passive acoustic baseline for diagnostics.
-            // 0097 intentionally still sends these frames upstream: server VAD owns
-            // speech-start detection, so Runtime must not eat the user's first word.
+            // Keep the first 0.8 s as an acoustic baseline. The local
+            // ActiveNoiseAdmissionGate now protects these uncalibrated frames too;
+            // its 240 ms pre-roll preserves the first word once speech is confirmed.
             if (calibrationFrames < CALIBRATION_FRAMES) {
                 calibrationSamples[calibrationFrames] = rms;
                 calibrationFrames++;
@@ -4627,6 +4736,14 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                         calibrationFrames >= CALIBRATION_FRAMES);
                 double activeGateThreshold = Math.max(
                         gateThreshold, activeNoiseGate.lastThreshold());
+                long gateNow = System.currentTimeMillis();
+                if (gateNow - lastNoiseGateDiagnosticAt >= 1000L) {
+                    lastNoiseGateDiagnosticAt = gateNow;
+                    Log.d(TAG, "0120 normal gate calibrated="
+                            + (calibrationFrames >= CALIBRATION_FRAMES)
+                            + " mode=" + mode + " "
+                            + activeNoiseGate.diagnosticSummary());
+                }
 
                 if (noiseAction == ActiveNoiseAdmissionGate.Action.SUPPRESS) {
                     PerformanceMetrics.recordActiveNoiseFrameSuppressed();
@@ -4686,17 +4803,17 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                         || ("auto".equals(mode) && noiseFloor >= 0.035);
                 int requiredFrames = 4
                         + (int) Math.round((1.0 - sensitivity) * 3.0)
-                        + (outputAudible ? 1 : 0)
+                        + (outputAudible ? 2 : 0)
                         + (adaptiveNoisy ? 1 : 0);
                 requiredFrames = Math.max(4,
                         Math.min(BARGE_IN_MAX_CANDIDATE_FRAMES, requiredFrames));
 
-                double baseInterrupt = (adaptiveNoisy ? 0.060 : 0.042)
+                double baseInterrupt = (adaptiveNoisy ? 0.068 : 0.050)
                         + suppression * 0.00016
-                        + (outputAudible ? 0.010 : 0.0)
+                        + (outputAudible ? 0.018 : 0.0)
                         + (1.0 - sensitivity) * 0.018
                         - sensitivity * 0.006;
-                double floorMultiplier = (adaptiveNoisy ? 2.15 : 1.70)
+                double floorMultiplier = (adaptiveNoisy ? 2.35 : 1.90)
                         + suppression * 0.006
                         + (1.0 - sensitivity) * 0.40;
                 double interruptThreshold = Math.max(
@@ -4706,11 +4823,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 boolean speechLikeBargeIn = rms >= interruptThreshold
                         // Strong high-frequency hiss / sharp street texture is
                         // unlikely to be a nearby human interruption.
-                        && bargeInZcr <= 0.42
-                        // Very low-frequency wind/engine rumble needs substantially
-                        // more energy than ordinary speech before it is admitted.
-                        && !(bargeInZcr < 0.008
-                            && rms < interruptThreshold * 1.35);
+                        && bargeInZcr <= 0.36
+                        // Very low-frequency wind/engine rumble must look clearly
+                        // near-field before it can interrupt audible assistant speech.
+                        && !(bargeInZcr < 0.010
+                            && rms < interruptThreshold * 1.50);
 
                 if (speechLikeBargeIn) {
                     consecutiveBargeInFrames++;
@@ -4723,9 +4840,17 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
                     if (consecutiveBargeInFrames >= requiredFrames) {
                         bargeInGateOpen = true;
-                        Log.i(TAG, "0101 barge-in gate opened after "
-                                + consecutiveBargeInFrames + " frames; threshold="
-                                + interruptThreshold + " rms=" + rms);
+                        long admissionIndex = ++bargeInAdmissionCount;
+                        lastBargeInAdmissionAt = System.currentTimeMillis();
+                        Log.i(TAG, "0120 barge-in ADMIT #" + admissionIndex
+                                + " reason=PERSISTENT_SPEECH frames=" + consecutiveBargeInFrames
+                                + " required=" + requiredFrames
+                                + " rms=" + rms
+                                + " floor=" + noiseFloor
+                                + " zcr=" + bargeInZcr
+                                + " threshold=" + interruptThreshold
+                                + " outputAudible=" + outputAudible
+                                + " adaptiveNoisy=" + adaptiveNoisy);
 
                         // Flush only the candidate speech frames. We intentionally do
                         // not prepend arbitrary pre-candidate audio because that is
@@ -4819,10 +4944,18 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         long durationMs = pcm.length * 1000L / (24000 * 2);
         lastPlaybackActiveAt = Math.max(System.currentTimeMillis(), lastPlaybackActiveAt) + durationMs;
         if (usingOboeOutput) {
-            NativeOboeOutput.write(pcm);
-            audioPcmBytesAccepted += pcm.length;
-            lastAudioOutputState = "OBOE_ACCEPTED";
-            return true;
+            try {
+                NativeOboeOutput.write(pcm);
+                audioPcmBytesAccepted += pcm.length;
+                lastAudioOutputState = "OBOE_ACCEPTED";
+                return true;
+            } catch (Throwable writeError) {
+                oboeWriteFailureCount++;
+                lastAudioOutputState = "OBOE_WRITE_FAILED";
+                Log.w(TAG, "0120 Oboe write failed #" + oboeWriteFailureCount
+                        + " exception=" + writeError.getClass().getSimpleName());
+                return false;
+            }
         }
         boolean accepted = audioQueue.offer(pcm);
         if (!accepted) {
