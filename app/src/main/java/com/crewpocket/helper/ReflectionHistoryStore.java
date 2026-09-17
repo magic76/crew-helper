@@ -20,6 +20,7 @@ import java.util.Locale;
 final class ReflectionHistoryStore {
     private static final String PREFS = "crew_reflection_history";
     private static final String KEY_EVENTS = "events_v1";
+    private static final String KEY_DIAGNOSTIC = "diagnostic_v1";
     private static final int MAX_EVENTS = 20;
     private static final String NOT_CALLED = "NOT_CALLED";
     private static final Object LOCK = new Object();
@@ -40,6 +41,29 @@ final class ReflectionHistoryStore {
                                 String model,
                                 boolean fallbackUsed) {
         record(context, result, status, latencyMs, model, true, fallbackUsed);
+    }
+
+    static void recordDiagnostic(Context context,
+                                 GeminiTaskReflector.DiagnosticResult result) {
+        if (context == null || result == null) return;
+        synchronized (LOCK) {
+            try {
+                JSONObject diagnostic = new JSONObject()
+                        .put("at", System.currentTimeMillis())
+                        .put("success", result.success)
+                        .put("primary", GeminiTaskReflector.MODEL)
+                        .put("primaryStatus", safeCode(result.primaryStatus, "UNKNOWN"))
+                        .put("selectedModel", safeModel(result.selectedModel, true))
+                        .put("selectedStatus", safeCode(result.selectedStatus, "UNKNOWN"))
+                        .put("fallback", result.fallbackUsed)
+                        .put("latencyMs", Math.max(0L, result.latencyMs));
+                context.getApplicationContext()
+                        .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                        .edit()
+                        .putString(KEY_DIAGNOSTIC, diagnostic.toString())
+                        .apply();
+            } catch (Exception ignored) {}
+        }
     }
 
     private static void record(Context context,
@@ -78,16 +102,18 @@ final class ReflectionHistoryStore {
 
     static String buildReport(Context context) {
         JSONArray events = new JSONArray();
+        JSONObject diagnostic = null;
         if (context != null) {
             try {
                 SharedPreferences prefs = context.getApplicationContext()
                         .getSharedPreferences(PREFS, Context.MODE_PRIVATE);
                 events = readArray(prefs.getString(KEY_EVENTS, "[]"));
+                diagnostic = readObject(prefs.getString(KEY_DIAGNOSTIC, ""));
             } catch (Exception ignored) {}
         }
 
         StringBuilder out = new StringBuilder();
-        appendHealth(out, events);
+        appendHealth(out, events, diagnostic);
         out.append("\n\nReflection history (latest 20)\n");
         if (events.length() == 0) {
             out.append("No reflection attempts recorded yet.");
@@ -129,9 +155,36 @@ final class ReflectionHistoryStore {
         } catch (Exception ignored) {}
     }
 
-    private static void appendHealth(StringBuilder out, JSONArray events) {
+    private static void appendHealth(StringBuilder out,
+                                     JSONArray events,
+                                     JSONObject diagnostic) {
         out.append("Reflection model health\n")
                 .append("Primary: ").append(GeminiTaskReflector.MODEL).append("\n");
+
+        if (diagnostic == null || diagnostic.length() == 0) {
+            out.append("Last diagnostic: NEVER\n");
+        } else {
+            out.append("Last diagnostic: ")
+                    .append(diagnostic.optBoolean("success", false) ? "SUCCESS" : "ERROR")
+                    .append(" · ")
+                    .append(formatTime(diagnostic.optLong("at", 0L)))
+                    .append("\n")
+                    .append("Primary test: ")
+                    .append(diagnostic.optString("primaryStatus", "UNKNOWN"))
+                    .append("\n");
+            if (diagnostic.optBoolean("fallback", false)) {
+                out.append("Fallback: ")
+                        .append(diagnostic.optString("selectedModel", "UNKNOWN"))
+                        .append(" · ")
+                        .append(diagnostic.optString("selectedStatus", "UNKNOWN"))
+                        .append("\n");
+            } else {
+                out.append("Fallback: not needed\n");
+            }
+            out.append("Diagnostic latency: ")
+                    .append(diagnostic.optLong("latencyMs", 0L))
+                    .append("ms\n");
+        }
 
         JSONObject latestActual = null;
         for (int i = events.length() - 1; i >= 0; i--) {
@@ -143,12 +196,12 @@ final class ReflectionHistoryStore {
         }
 
         if (latestActual == null) {
-            out.append("Last actual call: NEVER\n")
-                    .append("Fallback used: no");
+            out.append("Last actual reflection call: NEVER\n")
+                    .append("Reflection fallback used: no");
             return;
         }
 
-        out.append("Last actual call: ")
+        out.append("Last actual reflection call: ")
                 .append(latestActual.optString("result", "UNKNOWN"))
                 .append(" · ")
                 .append(latestActual.optString("status", "UNKNOWN"))
@@ -157,7 +210,7 @@ final class ReflectionHistoryStore {
                 .append(" · ")
                 .append(formatTime(latestActual.optLong("at", 0L)))
                 .append("\n")
-                .append("Fallback used: ")
+                .append("Reflection fallback used: ")
                 .append(latestActual.optBoolean("fallback", false) ? "yes" : "no");
     }
 
@@ -172,6 +225,12 @@ final class ReflectionHistoryStore {
     private static JSONArray readArray(String raw) {
         try { return new JSONArray(raw == null ? "[]" : raw); }
         catch (Exception ignored) { return new JSONArray(); }
+    }
+
+    private static JSONObject readObject(String raw) {
+        if (raw == null || raw.trim().isEmpty()) return null;
+        try { return new JSONObject(raw); }
+        catch (Exception ignored) { return null; }
     }
 
     private static String safeModel(String value, boolean actualCall) {
