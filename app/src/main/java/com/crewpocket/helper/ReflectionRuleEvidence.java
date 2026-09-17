@@ -68,14 +68,28 @@ final class ReflectionRuleEvidence {
     private ReflectionRuleEvidence() {}
 
     static List<Candidate> derive(List<Step> previous, List<Step> current) {
-        ArrayList<Step> all = new ArrayList<Step>();
-        if (previous != null) all.addAll(previous);
-        if (current != null) all.addAll(current);
-
         LinkedHashMap<String, Candidate> unique = new LinkedHashMap<String, Candidate>();
-        deriveFailureRecovery(all, unique);
-        deriveDirectRetryRecovery(all, unique);
-        deriveSemanticTransitions(all, unique);
+
+        // Current-task recovery is counted exactly once. Never replay the whole
+        // previous task, otherwise old evidence would be counted again on every
+        // later task in the same goal.
+        deriveFailureRecovery(current, unique);
+        deriveDirectRetryRecovery(current, unique);
+
+        // Preserve only the useful cross-task case: the previous task ended on a
+        // failed mutation and the current task supplied the recovery sequence.
+        Step previousTail = lastMutation(previous);
+        if (previousTail != null && previousTail.failed()) {
+            ArrayList<Step> boundary = new ArrayList<Step>();
+            boundary.add(previousTail);
+            if (current != null) boundary.addAll(current);
+            deriveFailureRecovery(boundary, unique);
+            deriveDirectRetryRecovery(boundary, unique);
+        }
+
+        // Routine success is mined only from the current task so one old path
+        // cannot inflate the repeated-evidence counter on subsequent tasks.
+        deriveSemanticTransitions(current, unique);
 
         ArrayList<Candidate> out = new ArrayList<Candidate>();
         int index = 1;
@@ -224,6 +238,15 @@ final class ReflectionRuleEvidence {
             previousSemantic = current;
             previousSemanticIndex = i;
         }
+    }
+
+    private static Step lastMutation(List<Step> steps) {
+        if (steps == null) return null;
+        for (int i = steps.size() - 1; i >= 0; i--) {
+            Step step = steps.get(i);
+            if (step != null && isMutationTool(step.tool)) return step;
+        }
+        return null;
     }
 
     private static void add(LinkedHashMap<String, Candidate> out,
