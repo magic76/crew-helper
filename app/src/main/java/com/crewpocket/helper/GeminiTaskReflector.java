@@ -187,6 +187,15 @@ final class GeminiTaskReflector {
                         .put("ok", new JSONObject().put("type", "boolean")))
                 .put("required", new JSONArray().put("ok"));
 
+        JSONObject generationConfig = new JSONObject()
+                .put("responseMimeType", "application/json")
+                .put("responseSchema", schema)
+                .put("maxOutputTokens", 256);
+        if (supportsThinkingLevel(model)) {
+            generationConfig.put("thinkingConfig",
+                    new JSONObject().put("thinkingLevel", "MINIMAL"));
+        }
+
         JSONObject body = new JSONObject()
                 .put("contents", new JSONArray().put(
                         new JSONObject().put("role", "user")
@@ -194,10 +203,7 @@ final class GeminiTaskReflector {
                                         new JSONObject().put(
                                                 "text",
                                                 "Connectivity diagnostic only. Return JSON with ok=true.")))))
-                .put("generationConfig", new JSONObject()
-                        .put("responseMimeType", "application/json")
-                        .put("responseSchema", schema)
-                        .put("maxOutputTokens", 32));
+                .put("generationConfig", generationConfig);
 
         String raw = postGenerateContent(model, body);
         JSONObject response = new JSONObject(raw);
@@ -288,13 +294,20 @@ final class GeminiTaskReflector {
         JSONObject generationConfig = new JSONObject()
                 .put("responseMimeType", "application/json")
                 .put("responseSchema", schema)
-                .put("maxOutputTokens", 800);
+                .put("maxOutputTokens", 2048);
         if (includeThinking) {
             generationConfig.put("thinkingConfig",
-                    new JSONObject().put("thinkingLevel", "MEDIUM"));
+                    new JSONObject().put("thinkingLevel", "LOW"));
         }
         body.put("generationConfig", generationConfig);
         return body;
+    }
+
+    private static boolean supportsThinkingLevel(String model) {
+        if (model == null) return false;
+        return model.startsWith("gemini-3.6-")
+                || model.startsWith("gemini-3.5-")
+                || model.startsWith("gemini-3-");
     }
 
     private static String buildPrompt(JSONObject episode) {
