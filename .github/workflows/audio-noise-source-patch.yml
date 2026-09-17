@@ -22,6 +22,7 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           path = Path('app/src/main/java/com/crewpocket/helper/NativeGeminiLiveClient.java')
           text = path.read_text()
@@ -33,53 +34,28 @@ jobs:
                   raise SystemExit(f'{label}: expected 1 match, got {count}')
               text = text.replace(old, new, 1)
 
+          def regex_once(pattern, replacement, label):
+              global text
+              text, count = re.subn(pattern, replacement, text, count=1, flags=re.S)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected 1 match, got {count}')
+
           replace_once(
-          '''    private android.media.audiofx.AcousticEchoCanceler aecEffect = null;
-              private android.media.audiofx.NoiseSuppressor nsEffect = null;
-              private volatile boolean agentMuted = false;''',
-          '''    private android.media.audiofx.AcousticEchoCanceler aecEffect = null;
-              private android.media.audiofx.NoiseSuppressor nsEffect = null;
-              private volatile long serverInterruptedCount = 0L;
-              private volatile long bargeInAdmissionCount = 0L;
-              private volatile long lastBargeInAdmissionAt = 0L;
-              private volatile long audioTrackWriteFailureCount = 0L;
-              private volatile long audioTrackShortWriteCount = 0L;
-              private volatile long oboeWriteFailureCount = 0L;
-              private volatile boolean agentMuted = false;''',
-          'diagnostic counters')
+              '    private android.media.audiofx.AcousticEchoCanceler aecEffect = null;\n'
+              '    private android.media.audiofx.NoiseSuppressor nsEffect = null;\n'
+              '    private volatile boolean agentMuted = false;',
+              '    private android.media.audiofx.AcousticEchoCanceler aecEffect = null;\n'
+              '    private android.media.audiofx.NoiseSuppressor nsEffect = null;\n'
+              '    private volatile long serverInterruptedCount = 0L;\n'
+              '    private volatile long bargeInAdmissionCount = 0L;\n'
+              '    private volatile long lastBargeInAdmissionAt = 0L;\n'
+              '    private volatile long audioTrackWriteFailureCount = 0L;\n'
+              '    private volatile long audioTrackShortWriteCount = 0L;\n'
+              '    private volatile long oboeWriteFailureCount = 0L;\n'
+              '    private volatile boolean agentMuted = false;',
+              'diagnostic counters')
 
-          old_start = '''    private void startAudio() {
-              if (!running || recorder != null) return;
-              int min = AudioRecord.getMinBufferSize(16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
-              int bufferBytes = Math.max(min * 4, 8192);
-              try {
-                  // 🎙️ VOICE_COMMUNICATION engages Android's hardware DSP full-duplex AEC (Acoustic Echo Cancellation) & AGC
-                  recorder = new AudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION, 16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufferBytes);
-              } catch (Exception e) {
-                  recorder = new AudioRecord(MediaRecorder.AudioSource.MIC, 16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufferBytes);
-              }
-
-              // Attach hardware audio effects if supported by Samsung/Android
-              try {
-                  // 🛡️ AcousticEchoCanceler (AEC): Essential to prevent AI hearing its own voice from loudspeaker!
-                  if (android.media.audiofx.AcousticEchoCanceler.isAvailable()) {
-                      aecEffect = android.media.audiofx.AcousticEchoCanceler.create(recorder.getAudioSessionId());
-                      if (aecEffect != null) aecEffect.setEnabled(true);
-                  }
-                  // Keep NoiseSuppressor to clean air conditioner / ambient hiss
-                  if (android.media.audiofx.NoiseSuppressor.isAvailable()) {
-                      nsEffect = android.media.audiofx.NoiseSuppressor.create(recorder.getAudioSessionId());
-                      if (nsEffect != null) nsEffect.setEnabled(true);
-                  }
-              } catch (Exception ignored) {}
-
-              createAudioPlayer();
-              startPlaybackWorker();
-              recorder.startRecording();
-              new Thread(new Runnable() { @Override public void run() { sendMic(); } }, "crew-native-live-mic").start();
-          }'''
-
-          new_start = '''    private void startAudio() {
+          new_start = r'''    private void startAudio() {
               if (!running || recorder != null) return;
               int min = AudioRecord.getMinBufferSize(16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
               int bufferBytes = Math.max(min * 4, 8192);
@@ -171,145 +147,113 @@ jobs:
               }
               new Thread(new Runnable() { @Override public void run() { sendMic(); } }, "crew-native-live-mic").start();
           }'''
-          replace_once(old_start, new_start, 'startAudio diagnostics')
+          regex_once(
+              r'    private void startAudio\(\) \{.*?\n    \}\n\n    private void createAudioPlayer\(\) \{',
+              new_start + '\n\n    private void createAudioPlayer() {',
+              'startAudio method')
 
           replace_once(
-          '''        ActiveNoiseAdmissionGate activeNoiseGate =
-                      new ActiveNoiseAdmissionGate(pcm.length);
-
-              while (running && recorder != null && webSocket != null) {''',
-          '''        ActiveNoiseAdmissionGate activeNoiseGate =
-                      new ActiveNoiseAdmissionGate(pcm.length);
-              long lastNoiseGateDiagnosticAt = 0L;
-
-              while (running && recorder != null && webSocket != null) {''',
-          'noise gate diagnostic clock')
+              '        ActiveNoiseAdmissionGate activeNoiseGate =\n'
+              '                new ActiveNoiseAdmissionGate(pcm.length);\n\n'
+              '        while (running && recorder != null && webSocket != null) {',
+              '        ActiveNoiseAdmissionGate activeNoiseGate =\n'
+              '                new ActiveNoiseAdmissionGate(pcm.length);\n'
+              '        long lastNoiseGateDiagnosticAt = 0L;\n\n'
+              '        while (running && recorder != null && webSocket != null) {',
+              'noise gate diagnostic clock')
 
           replace_once(
-          '''                double activeGateThreshold = Math.max(
-                          gateThreshold, activeNoiseGate.lastThreshold());
-
-                  if (noiseAction == ActiveNoiseAdmissionGate.Action.SUPPRESS) {''',
-          '''                double activeGateThreshold = Math.max(
-                          gateThreshold, activeNoiseGate.lastThreshold());
-                  long gateNow = System.currentTimeMillis();
-                  if (gateNow - lastNoiseGateDiagnosticAt >= 1000L) {
-                      lastNoiseGateDiagnosticAt = gateNow;
-                      Log.d(TAG, "0120 normal gate calibrated="
-                              + (calibrationFrames >= CALIBRATION_FRAMES)
-                              + " mode=" + mode + " "
-                              + activeNoiseGate.diagnosticSummary());
-                  }
-
-                  if (noiseAction == ActiveNoiseAdmissionGate.Action.SUPPRESS) {''',
-          'normal gate diagnostics')
+              '                double activeGateThreshold = Math.max(\n'
+              '                        gateThreshold, activeNoiseGate.lastThreshold());\n\n'
+              '                if (noiseAction == ActiveNoiseAdmissionGate.Action.SUPPRESS) {',
+              '                double activeGateThreshold = Math.max(\n'
+              '                        gateThreshold, activeNoiseGate.lastThreshold());\n'
+              '                long gateNow = System.currentTimeMillis();\n'
+              '                if (gateNow - lastNoiseGateDiagnosticAt >= 1000L) {\n'
+              '                    lastNoiseGateDiagnosticAt = gateNow;\n'
+              '                    Log.d(TAG, "0120 normal gate calibrated="\n'
+              '                            + (calibrationFrames >= CALIBRATION_FRAMES)\n'
+              '                            + " mode=" + mode + " "\n'
+              '                            + activeNoiseGate.diagnosticSummary());\n'
+              '                }\n\n'
+              '                if (noiseAction == ActiveNoiseAdmissionGate.Action.SUPPRESS) {',
+              'normal gate diagnostics')
 
           replace_once(
-          '''                int requiredFrames = 4
-                          + (int) Math.round((1.0 - sensitivity) * 3.0)
-                          + (outputAudible ? 1 : 0)
-                          + (adaptiveNoisy ? 1 : 0);''',
-          '''                int requiredFrames = 4
-                          + (int) Math.round((1.0 - sensitivity) * 3.0)
-                          + (outputAudible ? 2 : 0)
-                          + (adaptiveNoisy ? 1 : 0);''',
-          'barge-in persistence')
+              '                        + (outputAudible ? 1 : 0)\n'
+              '                        + (adaptiveNoisy ? 1 : 0);',
+              '                        + (outputAudible ? 2 : 0)\n'
+              '                        + (adaptiveNoisy ? 1 : 0);',
+              'barge-in persistence')
 
           replace_once(
-          '''                double baseInterrupt = (adaptiveNoisy ? 0.060 : 0.042)
-                          + suppression * 0.00016
-                          + (outputAudible ? 0.010 : 0.0)
-                          + (1.0 - sensitivity) * 0.018
-                          - sensitivity * 0.006;
-                  double floorMultiplier = (adaptiveNoisy ? 2.15 : 1.70)
-                          + suppression * 0.006
-                          + (1.0 - sensitivity) * 0.40;''',
-          '''                double baseInterrupt = (adaptiveNoisy ? 0.068 : 0.050)
-                          + suppression * 0.00016
-                          + (outputAudible ? 0.018 : 0.0)
-                          + (1.0 - sensitivity) * 0.018
-                          - sensitivity * 0.006;
-                  double floorMultiplier = (adaptiveNoisy ? 2.35 : 1.90)
-                          + suppression * 0.006
-                          + (1.0 - sensitivity) * 0.40;''',
-          'barge-in threshold')
+              '                double baseInterrupt = (adaptiveNoisy ? 0.060 : 0.042)\n'
+              '                        + suppression * 0.00016\n'
+              '                        + (outputAudible ? 0.010 : 0.0)\n'
+              '                        + (1.0 - sensitivity) * 0.018\n'
+              '                        - sensitivity * 0.006;\n'
+              '                double floorMultiplier = (adaptiveNoisy ? 2.15 : 1.70)\n'
+              '                        + suppression * 0.006\n'
+              '                        + (1.0 - sensitivity) * 0.40;',
+              '                double baseInterrupt = (adaptiveNoisy ? 0.068 : 0.050)\n'
+              '                        + suppression * 0.00016\n'
+              '                        + (outputAudible ? 0.018 : 0.0)\n'
+              '                        + (1.0 - sensitivity) * 0.018\n'
+              '                        - sensitivity * 0.006;\n'
+              '                double floorMultiplier = (adaptiveNoisy ? 2.35 : 1.90)\n'
+              '                        + suppression * 0.006\n'
+              '                        + (1.0 - sensitivity) * 0.40;',
+              'barge-in threshold')
 
           replace_once(
-          '''                boolean speechLikeBargeIn = rms >= interruptThreshold
-                          // Strong high-frequency hiss / sharp street texture is
-                          // unlikely to be a nearby human interruption.
-                          && bargeInZcr <= 0.42
-                          // Very low-frequency wind/engine rumble needs substantially
-                          // more energy than ordinary speech before it is admitted.
-                          && !(bargeInZcr < 0.008
-                              && rms < interruptThreshold * 1.35);''',
-          '''                boolean speechLikeBargeIn = rms >= interruptThreshold
-                          // Strong high-frequency hiss / sharp street texture is
-                          // unlikely to be a nearby human interruption.
-                          && bargeInZcr <= 0.36
-                          // Very low-frequency wind/engine rumble must look clearly
-                          // near-field before it can interrupt audible assistant speech.
-                          && !(bargeInZcr < 0.010
-                              && rms < interruptThreshold * 1.50);''',
-          'barge-in discriminator')
+              '                        && bargeInZcr <= 0.42\n'
+              '                        // Very low-frequency wind/engine rumble needs substantially\n'
+              '                        // more energy than ordinary speech before it is admitted.\n'
+              '                        && !(bargeInZcr < 0.008\n'
+              '                            && rms < interruptThreshold * 1.35);',
+              '                        && bargeInZcr <= 0.36\n'
+              '                        // Very low-frequency wind/engine rumble must look clearly\n'
+              '                        // near-field before it can interrupt audible assistant speech.\n'
+              '                        && !(bargeInZcr < 0.010\n'
+              '                            && rms < interruptThreshold * 1.50);',
+              'barge-in discriminator')
 
           replace_once(
-          '''                        bargeInGateOpen = true;
-                          Log.i(TAG, "0101 barge-in gate opened after "
-                                  + consecutiveBargeInFrames + " frames; threshold="
-                                  + interruptThreshold + " rms=" + rms);''',
-          '''                        bargeInGateOpen = true;
-                          long admissionIndex = ++bargeInAdmissionCount;
-                          lastBargeInAdmissionAt = System.currentTimeMillis();
-                          Log.i(TAG, "0120 barge-in ADMIT #" + admissionIndex
-                                  + " reason=PERSISTENT_SPEECH frames=" + consecutiveBargeInFrames
-                                  + " required=" + requiredFrames
-                                  + " rms=" + rms
-                                  + " floor=" + noiseFloor
-                                  + " zcr=" + bargeInZcr
-                                  + " threshold=" + interruptThreshold
-                                  + " outputAudible=" + outputAudible
-                                  + " adaptiveNoisy=" + adaptiveNoisy);''',
-          'barge-in admit diagnostics')
+              '                        bargeInGateOpen = true;\n'
+              '                        Log.i(TAG, "0101 barge-in gate opened after "\n'
+              '                                + consecutiveBargeInFrames + " frames; threshold="\n'
+              '                                + interruptThreshold + " rms=" + rms);',
+              '                        bargeInGateOpen = true;\n'
+              '                        long admissionIndex = ++bargeInAdmissionCount;\n'
+              '                        lastBargeInAdmissionAt = System.currentTimeMillis();\n'
+              '                        Log.i(TAG, "0120 barge-in ADMIT #" + admissionIndex\n'
+              '                                + " reason=PERSISTENT_SPEECH frames=" + consecutiveBargeInFrames\n'
+              '                                + " required=" + requiredFrames\n'
+              '                                + " rms=" + rms\n'
+              '                                + " floor=" + noiseFloor\n'
+              '                                + " zcr=" + bargeInZcr\n'
+              '                                + " threshold=" + interruptThreshold\n'
+              '                                + " outputAudible=" + outputAudible\n'
+              '                                + " adaptiveNoisy=" + adaptiveNoisy);',
+              'barge-in admit diagnostics')
 
           replace_once(
-          '''        if (server.optBoolean("interrupted", false)) {
-                  stopPlayback();''',
-          '''        if (server.optBoolean("interrupted", false)) {
-                  long interruptedIndex = ++serverInterruptedCount;
-                  long sinceBargeInMs = lastBargeInAdmissionAt <= 0L
-                          ? -1L : Math.max(0L,
-                              System.currentTimeMillis() - lastBargeInAdmissionAt);
-                  Log.w(TAG, "0120 serverContent.interrupted #" + interruptedIndex
-                          + " aiSpeaking=" + aiSpeaking
-                          + " allowVoiceInterruption=" + allowVoiceInterruption
-                          + " sinceBargeInAdmitMs=" + sinceBargeInMs
-                          + " outputState=" + lastAudioOutputState);
-                  stopPlayback();''',
-          'server interrupted diagnostics')
+              '        if (server.optBoolean("interrupted", false)) {\n'
+              '            stopPlayback();',
+              '        if (server.optBoolean("interrupted", false)) {\n'
+              '            long interruptedIndex = ++serverInterruptedCount;\n'
+              '            long sinceBargeInMs = lastBargeInAdmissionAt <= 0L\n'
+              '                    ? -1L : Math.max(0L,\n'
+              '                        System.currentTimeMillis() - lastBargeInAdmissionAt);\n'
+              '            Log.w(TAG, "0120 serverContent.interrupted #" + interruptedIndex\n'
+              '                    + " aiSpeaking=" + aiSpeaking\n'
+              '                    + " allowVoiceInterruption=" + allowVoiceInterruption\n'
+              '                    + " sinceBargeInAdmitMs=" + sinceBargeInMs\n'
+              '                    + " outputState=" + lastAudioOutputState);\n'
+              '            stopPlayback();',
+              'server interrupted diagnostics')
 
-          old_write = '''    private void writeAudioChunk(byte[] pcm) {
-              if (pcm == null || pcm.length == 0 || interruptedCurrentTurn || agentMuted) return;
-              int written;
-              synchronized (playerLock) {
-                  // 🛡️ Ensure AudioTrack is in PLAYING state (e.g. after interruption flush/pause)
-                  if (player != null && player.getPlayState() != AudioTrack.PLAYSTATE_PLAYING) {
-                      try {
-                          player.play();
-                      } catch (Exception ignored) {}
-                  }
-                  written = player == null ? AudioTrack.ERROR_INVALID_OPERATION : player.write(pcm, 0, pcm.length);
-              }
-              if (written < 0) {
-                  lastAudioOutputState = "AUDIOTRACK_WRITE_FAILED:" + written;
-                  Log.w(TAG, "AudioTrack 寫入失敗（" + written + "），重建播放軌");
-                  recoverAudioPlayer();
-              } else if (written > 0) {
-                  lastAudioOutputState = "AUDIOTRACK_PLAYING";
-              }
-          }'''
-
-          new_write = '''    private void writeAudioChunk(byte[] pcm) {
+          new_write = r'''    private void writeAudioChunk(byte[] pcm) {
               if (pcm == null || pcm.length == 0 || interruptedCurrentTurn || agentMuted) return;
               int totalWritten = 0;
               int writeError = 0;
@@ -360,41 +304,42 @@ jobs:
                   lastAudioOutputState = "AUDIOTRACK_PLAYING";
               }
           }'''
-          replace_once(old_write, new_write, 'AudioTrack write diagnostics')
+          regex_once(
+              r'    private void writeAudioChunk\(byte\[] pcm\) \{.*?\n    \}\n\n    private void recoverAudioPlayer\(\) \{',
+              new_write + '\n\n    private void recoverAudioPlayer() {',
+              'AudioTrack write method')
 
           replace_once(
-          '''        if (usingOboeOutput) {
-                  NativeOboeOutput.write(pcm);
-                  audioPcmBytesAccepted += pcm.length;
-                  lastAudioOutputState = "OBOE_ACCEPTED";
-                  return true;
-              }''',
-          '''        if (usingOboeOutput) {
-                  try {
-                      NativeOboeOutput.write(pcm);
-                      audioPcmBytesAccepted += pcm.length;
-                      lastAudioOutputState = "OBOE_ACCEPTED";
-                      return true;
-                  } catch (Throwable writeError) {
-                      oboeWriteFailureCount++;
-                      lastAudioOutputState = "OBOE_WRITE_FAILED";
-                      Log.w(TAG, "0120 Oboe write failed #" + oboeWriteFailureCount
-                              + " exception=" + writeError.getClass().getSimpleName());
-                      return false;
-                  }
-              }''',
-          'Oboe write diagnostics')
+              '        if (usingOboeOutput) {\n'
+              '            NativeOboeOutput.write(pcm);\n'
+              '            audioPcmBytesAccepted += pcm.length;\n'
+              '            lastAudioOutputState = "OBOE_ACCEPTED";\n'
+              '            return true;\n'
+              '        }',
+              '        if (usingOboeOutput) {\n'
+              '            try {\n'
+              '                NativeOboeOutput.write(pcm);\n'
+              '                audioPcmBytesAccepted += pcm.length;\n'
+              '                lastAudioOutputState = "OBOE_ACCEPTED";\n'
+              '                return true;\n'
+              '            } catch (Throwable writeError) {\n'
+              '                oboeWriteFailureCount++;\n'
+              '                lastAudioOutputState = "OBOE_WRITE_FAILED";\n'
+              '                Log.w(TAG, "0120 Oboe write failed #" + oboeWriteFailureCount\n'
+              '                        + " exception=" + writeError.getClass().getSimpleName());\n'
+              '                return false;\n'
+              '            }\n'
+              '        }',
+              'Oboe write diagnostics')
 
-          # The startup gate now owns calibration admission. Update the stale comment
-          # so future tuning does not accidentally restore direct 800 ms upstream noise.
           replace_once(
-          '''            // Keep the first 0.8 s as a passive acoustic baseline for diagnostics.
-              // 0097 intentionally still sends these frames upstream: server VAD owns
-              // speech-start detection, so Runtime must not eat the user's first word.''',
-          '''            // Keep the first 0.8 s as an acoustic baseline. The local
-              // ActiveNoiseAdmissionGate now protects these uncalibrated frames too;
-              // its 240 ms pre-roll preserves the first word once speech is confirmed.''',
-          'startup gate comment')
+              '            // Keep the first 0.8 s as a passive acoustic baseline for diagnostics.\n'
+              '            // 0097 intentionally still sends these frames upstream: server VAD owns\n'
+              '            // speech-start detection, so Runtime must not eat the user\'s first word.',
+              '            // Keep the first 0.8 s as an acoustic baseline. The local\n'
+              '            // ActiveNoiseAdmissionGate now protects these uncalibrated frames too;\n'
+              '            // its 240 ms pre-roll preserves the first word once speech is confirmed.',
+              'startup gate comment')
 
           path.write_text(text)
           PY
