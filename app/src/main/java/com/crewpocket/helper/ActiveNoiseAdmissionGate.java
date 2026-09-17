@@ -57,6 +57,7 @@ final class ActiveNoiseAdmissionGate {
 
         if (!shouldGuard(noiseFloor, noiseMode, calibrated)) {
             resetGateState();
+            clearBufferedFrames();
             lastThreshold = 0d;
             lastSpeechLike = false;
             lastReason = "QUIET_BYPASS";
