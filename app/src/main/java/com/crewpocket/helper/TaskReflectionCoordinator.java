@@ -28,6 +28,7 @@ final class TaskReflectionCoordinator {
     private static final Object LOCK = new Object();
     private static final Set<String> SCHEDULED = new HashSet<String>();
     private static final int MAX_TRACKED_TASKS = 80;
+    private static final int MAX_MODEL_RULES = 2;
 
     private TaskReflectionCoordinator() {}
 
@@ -71,8 +72,6 @@ final class TaskReflectionCoordinator {
             boolean usedSendText = usedTool(currentSteps, "send_text");
             boolean cancelled = ReflectionLearningPolicy.looksCancelled(rawStatus);
 
-            // Quietly ignore ordinary/sensitive tasks. A normal successful task is
-            // not a reflection attempt and should not pollute model-call history.
             if (!ReflectionLearningPolicy.allowsExperienceLearning(
                     false, cancelled, usedSendText, packageName)) {
                 return;
@@ -81,8 +80,9 @@ final class TaskReflectionCoordinator {
             List<ReflectionRuleEvidence.Candidate> observed = deriveRuleCandidates(task);
             if (observed.isEmpty()) return;
 
-            List<ReflectionRuleEvidence.Candidate> qualified =
-                    ExperienceEvidenceStore.qualify(context, packageName, observed);
+            List<ReflectionRuleEvidence.Candidate> qualified = limitCandidates(
+                    ExperienceEvidenceStore.qualify(context, packageName, observed),
+                    MAX_MODEL_RULES);
             if (qualified.isEmpty()) return;
 
             String apiKey = AppConfig.getGeminiApiKey(context);
@@ -165,6 +165,20 @@ final class TaskReflectionCoordinator {
                 : steps(previousTask.optJSONArray("steps"));
         List<ReflectionRuleEvidence.Step> current = steps(task.optJSONArray("steps"));
         return ReflectionRuleEvidence.derive(previous, current);
+    }
+
+    private static List<ReflectionRuleEvidence.Candidate> limitCandidates(
+            List<ReflectionRuleEvidence.Candidate> source,
+            int max) {
+        ArrayList<ReflectionRuleEvidence.Candidate> out =
+                new ArrayList<ReflectionRuleEvidence.Candidate>();
+        if (source == null || max <= 0) return out;
+        for (ReflectionRuleEvidence.Candidate candidate : source) {
+            if (candidate == null) continue;
+            out.add(candidate);
+            if (out.size() >= max) break;
+        }
+        return out;
     }
 
     private static List<ReflectionRuleEvidence.Step> steps(JSONArray raw) {
