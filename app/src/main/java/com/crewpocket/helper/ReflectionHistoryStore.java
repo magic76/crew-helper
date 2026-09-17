@@ -11,11 +11,11 @@ import java.util.Date;
 import java.util.Locale;
 
 /**
- * Privacy-safe persistent history for recent post-task reflection attempts.
+ * Privacy-safe persistent history for Experience model attempts.
  *
  * Stores only timestamp, model, terminal result, bounded status code and latency.
- * It never stores task text, lesson text, package/app content, screenshots,
- * tool arguments, API keys or model replies.
+ * Ordinary tasks that do not qualify for Crew Experience are intentionally not
+ * recorded here.
  */
 final class ReflectionHistoryStore {
     private static final String PREFS = "crew_reflection_history";
@@ -114,9 +114,10 @@ final class ReflectionHistoryStore {
 
         StringBuilder out = new StringBuilder();
         appendHealth(out, events, diagnostic);
-        out.append("\n\nReflection history (latest 20)\n");
+        out.append("\n\nExperience model history (latest 20)\n");
+        out.append("Ordinary successful tasks stay quiet and do not create skip records.\n");
         if (events.length() == 0) {
-            out.append("No reflection attempts recorded yet.");
+            out.append("No Experience model attempts recorded yet.");
             return out.toString();
         }
 
@@ -158,7 +159,7 @@ final class ReflectionHistoryStore {
     private static void appendHealth(StringBuilder out,
                                      JSONArray events,
                                      JSONObject diagnostic) {
-        out.append("Reflection model health\n")
+        out.append("Experience model health\n")
                 .append("Primary: ").append(GeminiTaskReflector.MODEL).append("\n");
 
         if (diagnostic == null || diagnostic.length() == 0) {
@@ -196,12 +197,12 @@ final class ReflectionHistoryStore {
         }
 
         if (latestActual == null) {
-            out.append("Last actual reflection call: NEVER\n")
-                    .append("Reflection fallback used: no");
+            out.append("Last actual Experience model call: NEVER\n")
+                    .append("Experience fallback used: no");
             return;
         }
 
-        out.append("Last actual reflection call: ")
+        out.append("Last actual Experience model call: ")
                 .append(latestActual.optString("result", "UNKNOWN"))
                 .append(" · ")
                 .append(latestActual.optString("status", "UNKNOWN"))
@@ -210,15 +211,14 @@ final class ReflectionHistoryStore {
                 .append(" · ")
                 .append(formatTime(latestActual.optLong("at", 0L)))
                 .append("\n")
-                .append("Reflection fallback used: ")
+                .append("Experience fallback used: ")
                 .append(latestActual.optBoolean("fallback", false) ? "yes" : "no");
     }
 
     private static boolean isActualCall(JSONObject event) {
         if (event == null) return false;
         if (event.has("actualCall")) return event.optBoolean("actualCall", false);
-        // Backward compatibility: old SKIPPED records displayed the primary model
-        // even though policy/evidence gates returned before any HTTP request.
+        // Backward compatibility for old reflection records.
         return !"SKIPPED".equals(event.optString("result", ""));
     }
 
