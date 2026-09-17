@@ -108,9 +108,20 @@ public class AgentInspectorActivity extends Activity {
         root.addView(scroll, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
+        Button testModel = smallButton(I18n.get(
+                this,
+                "測試 Reflection Model",
+                "Test reflection model"));
+        LinearLayout.LayoutParams testLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(44));
+        testLp.setMargins(dp(3), dp(12), dp(3), 0);
+        testModel.setOnClickListener(v -> runModelDiagnostic(testModel));
+        root.addView(testModel, testLp);
+
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.HORIZONTAL);
-        actions.setPadding(0, dp(12), 0, 0);
+        actions.setPadding(0, dp(8), 0, 0);
 
         Button refresh = smallButton(I18n.get(this, "重新整理", "Refresh"));
         refresh.setOnClickListener(v -> refreshReport());
@@ -128,8 +139,8 @@ public class AgentInspectorActivity extends Activity {
                     AgentInspectorActivity.this,
                     I18n.get(
                             AgentInspectorActivity.this,
-                            "Runtime 與 Reflection History 已清除；已學習的 Lesson 不會刪除",
-                            "Runtime and reflection history cleared; learned lessons were kept"),
+                            "Runtime、Reflection History 與模型健康檢查已清除；已學習的 Lesson 不會刪除",
+                            "Runtime, reflection history, and model health diagnostics cleared; learned lessons were kept"),
                     Toast.LENGTH_SHORT).show();
         });
 
@@ -162,6 +173,67 @@ public class AgentInspectorActivity extends Activity {
         if (reportView != null) {
             reportView.setText(buildFullReport());
         }
+    }
+
+    private void runModelDiagnostic(Button button) {
+        if (button == null || !button.isEnabled()) return;
+        final String idleLabel = I18n.get(
+                this,
+                "測試 Reflection Model",
+                "Test reflection model");
+        button.setEnabled(false);
+        button.setText(I18n.get(this, "測試中…", "Testing…"));
+
+        final Context appContext = getApplicationContext();
+        new Thread(() -> {
+            GeminiTaskReflector.DiagnosticResult result;
+            try {
+                String apiKey = AppConfig.getGeminiApiKey(appContext);
+                result = new GeminiTaskReflector(apiKey).diagnose();
+            } catch (Exception error) {
+                result = new GeminiTaskReflector.DiagnosticResult(
+                        false,
+                        "LOCAL_ERROR",
+                        GeminiTaskReflector.MODEL,
+                        GeminiTaskReflector.safeFailureCode(error),
+                        false,
+                        0L);
+            }
+
+            final GeminiTaskReflector.DiagnosticResult diagnostic = result;
+            ReflectionHistoryStore.recordDiagnostic(appContext, diagnostic);
+
+            runOnUiThread(() -> {
+                button.setEnabled(true);
+                button.setText(idleLabel);
+                refreshReport();
+
+                String message;
+                if (diagnostic.success) {
+                    message = I18n.get(
+                            AgentInspectorActivity.this,
+                            "模型測試成功：",
+                            "Model test succeeded: ")
+                            + diagnostic.selectedModel;
+                    if (diagnostic.fallbackUsed) {
+                        message += I18n.get(
+                                AgentInspectorActivity.this,
+                                "（使用 fallback）",
+                                " (fallback used)");
+                    }
+                } else {
+                    message = I18n.get(
+                            AgentInspectorActivity.this,
+                            "模型測試失敗：",
+                            "Model test failed: ")
+                            + diagnostic.selectedStatus;
+                }
+                Toast.makeText(
+                        AgentInspectorActivity.this,
+                        message,
+                        Toast.LENGTH_LONG).show();
+            });
+        }, "CrewReflectionDiagnostic").start();
     }
 
     private void copyReport() {
