@@ -52,6 +52,16 @@ public final class ReflectionRuleEvidenceTest {
                         "app:MAPS", "APP_NOT_FOUND", "OPEN_APP"),
                 "same-goal next-task recovery should be immediate recovery evidence");
 
+        List<ReflectionRuleEvidence.Step> previousAlreadyRecovered = new ArrayList<ReflectionRuleEvidence.Step>();
+        previousAlreadyRecovered.add(step("tap_screen", "FAILED", "UI_TARGET_NOT_FOUND", "", "TAP"));
+        previousAlreadyRecovered.add(step("tap_screen", "SUCCESS", "", "navigation:START", "TAP"));
+        List<ReflectionRuleEvidence.Step> laterTask = new ArrayList<ReflectionRuleEvidence.Step>();
+        laterTask.add(step("tap_screen", "SUCCESS", "", "navigation:STOP", "TAP"));
+        check(!hasRule(ReflectionRuleEvidence.derive(previousAlreadyRecovered, laterTask),
+                        ReflectionRuleEvidence.KIND_RECOVERY,
+                        "navigation:START", "UI_TARGET_NOT_FOUND", "TAP"),
+                "a recovery completed in the previous task must not be counted again");
+
         List<ReflectionRuleEvidence.Step> unrelatedRecovery = new ArrayList<ReflectionRuleEvidence.Step>();
         unrelatedRecovery.add(step("tap_screen", "FAILED", "UI_TARGET_NOT_FOUND", "", "TAP"));
         unrelatedRecovery.add(step("launch_app", "SUCCESS", "", "app:MAPS", "OPEN_APP"));
