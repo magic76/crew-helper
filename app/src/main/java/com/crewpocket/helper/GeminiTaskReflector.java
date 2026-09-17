@@ -14,13 +14,13 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 
 /**
- * One-shot post-task reviewer using Gemini Flash with model fallback.
+ * One-shot Crew Experience lesson compressor using Gemini Flash with fallback.
  *
- * Runtime supplies deterministic evidence-rule identities. Gemini can only
- * select from those candidates and write the human-readable lesson.
+ * Runtime supplies already-qualified deterministic evidence-rule identities.
+ * Gemini does not decide whether to learn; it only phrases each supplied rule.
  */
 final class GeminiTaskReflector {
-    private static final String TAG = "CrewReflection";
+    private static final String TAG = "CrewExperience";
 
     static final String[] CANDIDATE_MODELS = {
             "gemini-3.6-flash",
@@ -66,17 +66,9 @@ final class GeminiTaskReflector {
         this.apiKey = apiKey == null ? "" : apiKey.trim();
     }
 
-    String lastModel() {
-        return lastModel;
-    }
-
-    boolean hasAttemptedModel() {
-        return lastModelIndex >= 0;
-    }
-
-    boolean usedFallback() {
-        return lastModelIndex > 0;
-    }
+    String lastModel() { return lastModel; }
+    boolean hasAttemptedModel() { return lastModelIndex >= 0; }
+    boolean usedFallback() { return lastModelIndex > 0; }
 
     JSONObject reflect(JSONObject episode) throws Exception {
         if (apiKey.length() < 20) throw new IllegalStateException("GEMINI_API_KEY_MISSING");
@@ -90,26 +82,19 @@ final class GeminiTaskReflector {
                 return reflectWithModel(model, episode, i == 0);
             } catch (Exception error) {
                 lastFailure = error;
-                Log.w(TAG, "reflection model failed: " + model
+                Log.w(TAG, "experience model failed: " + model
                         + " code=" + safeFailureCode(error));
             }
         }
         throw new IllegalStateException("REFLECTION_ALL_MODELS_FAILED", lastFailure);
     }
 
-    /**
-     * Performs a tiny structured-output request to verify model/API availability.
-     * This never stores a lesson and never includes task or user content.
-     */
+    /** Tiny structured-output request to verify model/API availability. */
     DiagnosticResult diagnose() {
         final long startedAt = System.currentTimeMillis();
         if (apiKey.length() < 20) {
             return new DiagnosticResult(
-                    false,
-                    "NO_API_KEY",
-                    MODEL,
-                    "NO_API_KEY",
-                    false,
+                    false, "NO_API_KEY", MODEL, "NO_API_KEY", false,
                     System.currentTimeMillis() - startedAt);
         }
 
@@ -128,26 +113,18 @@ final class GeminiTaskReflector {
                 diagnoseWithModel(model);
                 if (i == 0) primaryStatus = "SUCCESS";
                 return new DiagnosticResult(
-                        true,
-                        primaryStatus,
-                        model,
-                        "SUCCESS",
-                        fallbackUsed,
+                        true, primaryStatus, model, "SUCCESS", fallbackUsed,
                         System.currentTimeMillis() - startedAt);
             } catch (Exception error) {
                 lastStatus = safeFailureCode(error);
                 if (i == 0) primaryStatus = lastStatus;
-                Log.w(TAG, "reflection diagnostic model failed: " + model
+                Log.w(TAG, "experience diagnostic model failed: " + model
                         + " code=" + lastStatus);
             }
         }
 
         return new DiagnosticResult(
-                false,
-                primaryStatus,
-                selectedModel,
-                lastStatus,
-                fallbackUsed,
+                false, primaryStatus, selectedModel, lastStatus, fallbackUsed,
                 System.currentTimeMillis() - startedAt);
     }
 
@@ -265,6 +242,16 @@ final class GeminiTaskReflector {
 
     private static JSONObject buildRequestBody(JSONObject episode,
                                                boolean includeThinking) throws Exception {
+        JSONArray evidenceRules = episode == null ? null : episode.optJSONArray("evidence_rules");
+        int ruleCount = evidenceRules == null ? 0 : Math.min(2, evidenceRules.length());
+        if (ruleCount <= 0) throw new IllegalStateException("REFLECTION_NO_QUALIFIED_RULES");
+
+        JSONArray allowedIds = new JSONArray();
+        for (int i = 0; i < ruleCount; i++) {
+            JSONObject rule = evidenceRules.optJSONObject(i);
+            if (rule != null) allowedIds.put(rule.optString("id", ""));
+        }
+
         JSONObject body = new JSONObject();
         body.put("contents", new JSONArray().put(
                 new JSONObject().put("role", "user")
@@ -274,27 +261,28 @@ final class GeminiTaskReflector {
         JSONObject selectedRule = new JSONObject()
                 .put("type", "object")
                 .put("properties", new JSONObject()
-                        .put("candidate_id", new JSONObject().put("type", "string"))
-                        .put("lesson", new JSONObject().put("type", "string"))
-                        .put("confidence", new JSONObject().put("type", "number")))
+                        .put("candidate_id", new JSONObject()
+                                .put("type", "string")
+                                .put("enum", allowedIds))
+                        .put("lesson", new JSONObject().put("type", "string")))
                 .put("required", new JSONArray()
                         .put("candidate_id")
-                        .put("lesson")
-                        .put("confidence"));
+                        .put("lesson"));
 
         JSONObject schema = new JSONObject()
                 .put("type", "object")
                 .put("properties", new JSONObject()
                         .put("rules", new JSONObject()
                                 .put("type", "array")
-                                .put("maxItems", 2)
+                                .put("minItems", ruleCount)
+                                .put("maxItems", ruleCount)
                                 .put("items", selectedRule)))
                 .put("required", new JSONArray().put("rules"));
 
         JSONObject generationConfig = new JSONObject()
                 .put("responseMimeType", "application/json")
                 .put("responseSchema", schema)
-                .put("maxOutputTokens", 2048);
+                .put("maxOutputTokens", 1536);
         if (includeThinking) {
             generationConfig.put("thinkingConfig",
                     new JSONObject().put("thinkingLevel", "LOW"));
@@ -311,20 +299,19 @@ final class GeminiTaskReflector {
     }
 
     private static String buildPrompt(JSONObject episode) {
-        return "You are Crew Helper's post-task reflection reviewer. "
-                + "You do NOT control the phone and you do NOT define rule identity. "
-                + "Runtime has already derived deterministic evidence-rule candidates. "
-                + "Choose zero, one, or at most two candidates that are clearly supported and reusable.\n\n"
+        return "You are Crew Helper's Experience lesson compressor. "
+                + "Runtime has ALREADY decided that every evidence_rules item qualifies for learning. "
+                + "You do NOT decide whether to remember, rank, filter, or reject rules. "
+                + "Return exactly one lesson for every supplied candidate_id.\n\n"
                 + "Hard rules:\n"
-                + "- You may ONLY return candidate_id values present in evidence_rules. Never invent an id, scope, condition, response, category, or rule key.\n"
-                + "- If no candidate is worth remembering, return {\"rules\":[]}.\n"
-                + "- Learn only reusable UI/navigation/runtime behavior directly supported by the evidence.\n"
-                + "- Never learn user identity, names, message text, search values, URLs, numbers, credentials, OTPs, passwords, payment/account actions, deletion, or SEND authorization.\n"
+                + "- Return every candidate_id from evidence_rules exactly once. Never invent, omit, replace, or reorder ids.\n"
+                + "- Do not invent a scope, condition, response, category, or rule key. Runtime owns all rule identity.\n"
+                + "- Your only job is to compress each selected Runtime rule into one concise human-readable operational lesson.\n"
+                + "- Never include user identity, names, message text, search values, URLs, numbers, credentials, OTPs, passwords, payment/account actions, deletion, or SEND authorization.\n"
                 + "- Never infer missing UI details or claim that an observation caused recovery when the evidence does not show it.\n"
-                + "- A lesson must explain the selected candidate's operational rule, not the user's specific task.\n"
+                + "- A lesson must explain the candidate's reusable operational behavior, not the user's specific task.\n"
                 + "- lesson must be one concise English operational sentence, <= 180 characters, with no personal values and no authorization language.\n"
-                + "- confidence must reflect only how strongly the sanitized evidence supports that rule.\n"
-                + "- Existing app playbook guidance is context only; do not repeat it unless this episode adds genuine confirmation.\n\n"
+                + "- Existing app playbook guidance is context for wording only. It must not cause you to omit a Runtime-qualified candidate.\n\n"
                 + "Sanitized episode:\n" + (episode == null ? "{}" : episode.toString());
     }
 
