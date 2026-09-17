@@ -4667,6 +4667,13 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     // several consecutive frames look like close-range human speech. Gemini
     // remains the authoritative interruption/turn detector once audio is admitted.
     private static final int BARGE_IN_MAX_CANDIDATE_FRAMES = 8;
+    // 0121: residual playback/room noise can occasionally look speech-like for
+    // one or two frames. When output is still audible, require a lower-ZCR voiced
+    // component as well as persistence before allowing Gemini to interrupt.
+    private static final double BARGE_IN_OUTPUT_MAX_ZCR = 0.26;
+    private static final double BARGE_IN_VOICED_MAX_ZCR = 0.20;
+    private static final int BARGE_IN_MIN_VOICED_FRAMES = 2;
+    private static final double MIN_NOISE_FLOOR = 0.008;
 
     private void sendMic() {
         byte[] pcm = new byte[1280]; // 40ms @ 16kHz 16-bit mono
@@ -4680,6 +4687,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         int[] bargeInCandidateLengths = new int[BARGE_IN_MAX_CANDIDATE_FRAMES];
         int bargeInCandidateCount = 0;
         int consecutiveBargeInFrames = 0;
+        int bargeInVoicedFrames = 0;
+        double bargeInCandidateMinRms = Double.MAX_VALUE;
+        double bargeInCandidatePeakRms = 0.0;
+        double bargeInPreviousRms = 0.0;
+        boolean bargeInEnergyRising = false;
         boolean bargeInGateOpen = false;
 
         // 0108: normal-listening noise guard is stateful per Live mic thread.
@@ -4726,8 +4738,17 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 bargeInGateOpen = false;
                 consecutiveBargeInFrames = 0;
                 bargeInCandidateCount = 0;
+                bargeInVoicedFrames = 0;
+                bargeInCandidateMinRms = Double.MAX_VALUE;
+                bargeInCandidatePeakRms = 0.0;
+                bargeInPreviousRms = 0.0;
+                bargeInEnergyRising = false;
                 if (rms < gateThreshold) {
-                    noiseFloor = noiseFloor * 0.985 + Math.min(rms, 0.18) * 0.015;
+                    // Keep the calibrated lower bound. Without this clamp the
+                    // floor slowly decays toward zero during quiet idle periods,
+                    // making playback echo look like a very strong interruption.
+                    noiseFloor = Math.max(MIN_NOISE_FLOOR,
+                            noiseFloor * 0.985 + Math.min(rms, 0.18) * 0.015);
                 }
 
                 double zcr = calculateZeroCrossingRate(pcm, count);
@@ -4786,6 +4807,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 bargeInGateOpen = false;
                 consecutiveBargeInFrames = 0;
                 bargeInCandidateCount = 0;
+                bargeInVoicedFrames = 0;
+                bargeInCandidateMinRms = Double.MAX_VALUE;
+                bargeInCandidatePeakRms = 0.0;
+                bargeInPreviousRms = 0.0;
+                bargeInEnergyRising = false;
                 reportMicrophoneLevel(rms, gateThreshold, false);
                 continue;
             }
@@ -4820,16 +4846,35 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                         baseInterrupt, noiseFloor * floorMultiplier);
 
                 double bargeInZcr = calculateZeroCrossingRate(pcm, count);
+                double bargeInZcrLimit = outputAudible
+                        ? BARGE_IN_OUTPUT_MAX_ZCR : 0.36;
                 boolean speechLikeBargeIn = rms >= interruptThreshold
                         // Strong high-frequency hiss / sharp street texture is
                         // unlikely to be a nearby human interruption.
-                        && bargeInZcr <= 0.36
+                        && bargeInZcr <= bargeInZcrLimit
                         // Very low-frequency wind/engine rumble must look clearly
                         // near-field before it can interrupt audible assistant speech.
                         && !(bargeInZcr < 0.010
                             && rms < interruptThreshold * 1.50);
 
                 if (speechLikeBargeIn) {
+                    boolean voicedFrame = bargeInZcr >= 0.015
+                            && bargeInZcr <= BARGE_IN_VOICED_MAX_ZCR;
+                    if (bargeInCandidateCount == 0) {
+                        bargeInCandidateMinRms = rms;
+                        bargeInCandidatePeakRms = rms;
+                        bargeInPreviousRms = rms;
+                    } else {
+                        bargeInCandidateMinRms = Math.min(
+                                bargeInCandidateMinRms, rms);
+                        bargeInCandidatePeakRms = Math.max(
+                                bargeInCandidatePeakRms, rms);
+                        if (rms >= bargeInPreviousRms * 1.12) {
+                            bargeInEnergyRising = true;
+                        }
+                        bargeInPreviousRms = rms;
+                    }
+                    if (voicedFrame) bargeInVoicedFrames++;
                     consecutiveBargeInFrames++;
                     if (bargeInCandidateCount < BARGE_IN_MAX_CANDIDATE_FRAMES) {
                         System.arraycopy(pcm, 0,
@@ -4838,7 +4883,33 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                         bargeInCandidateCount++;
                     }
 
-                    if (consecutiveBargeInFrames >= requiredFrames) {
+                    boolean candidateEnergyChanged = bargeInCandidatePeakRms
+                            >= bargeInCandidateMinRms
+                            + Math.max(0.012, interruptThreshold * 0.12);
+                    boolean playbackSpeechConfidence = !outputAudible
+                            || (bargeInVoicedFrames >= Math.max(
+                                    BARGE_IN_MIN_VOICED_FRAMES, requiredFrames / 4)
+                                && (bargeInEnergyRising
+                                    || candidateEnergyChanged
+                                    || bargeInCandidatePeakRms
+                                        >= interruptThreshold * 1.30));
+
+                    if (consecutiveBargeInFrames >= requiredFrames
+                            && !playbackSpeechConfidence
+                            && consecutiveBargeInFrames == requiredFrames) {
+                        Log.d(TAG, "0121 barge-in REJECT reason=LOW_CONFIDENCE"
+                                + " frames=" + consecutiveBargeInFrames
+                                + " required=" + requiredFrames
+                                + " voiced=" + bargeInVoicedFrames
+                                + " minRms=" + bargeInCandidateMinRms
+                                + " peakRms=" + bargeInCandidatePeakRms
+                                + " zcr=" + bargeInZcr
+                                + " zcrLimit=" + bargeInZcrLimit
+                                + " outputAudible=" + outputAudible);
+                    }
+
+                    if (consecutiveBargeInFrames >= requiredFrames
+                            && playbackSpeechConfidence) {
                         bargeInGateOpen = true;
                         long admissionIndex = ++bargeInAdmissionCount;
                         lastBargeInAdmissionAt = System.currentTimeMillis();
@@ -4848,6 +4919,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                                 + " rms=" + rms
                                 + " floor=" + noiseFloor
                                 + " zcr=" + bargeInZcr
+                                + " zcrLimit=" + bargeInZcrLimit
+                                + " voiced=" + bargeInVoicedFrames
                                 + " threshold=" + interruptThreshold
                                 + " outputAudible=" + outputAudible
                                 + " adaptiveNoisy=" + adaptiveNoisy);
@@ -4864,6 +4937,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                         }
                         bargeInCandidateCount = 0;
                         consecutiveBargeInFrames = 0;
+                        bargeInVoicedFrames = 0;
+                        bargeInCandidateMinRms = Double.MAX_VALUE;
+                        bargeInCandidatePeakRms = 0.0;
+                        bargeInPreviousRms = 0.0;
+                        bargeInEnergyRising = false;
                         reportMicrophoneLevel(rms, interruptThreshold, true);
                         // Current frame was already included in the candidate flush.
                         continue;
@@ -4871,6 +4949,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 } else {
                     consecutiveBargeInFrames = 0;
                     bargeInCandidateCount = 0;
+                    bargeInVoicedFrames = 0;
+                    bargeInCandidateMinRms = Double.MAX_VALUE;
+                    bargeInCandidatePeakRms = 0.0;
+                    bargeInPreviousRms = 0.0;
+                    bargeInEnergyRising = false;
                 }
 
                 reportMicrophoneLevel(rms, interruptThreshold, false);
