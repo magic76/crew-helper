@@ -24,6 +24,36 @@ public final class ReflectionRuleEvidenceTest {
                         "UI_TARGET", "UI_TARGET_NOT_FOUND", "INSPECT_UI"),
                 "observation followed by another failed mutation must not be learned as recovery");
 
+        List<ReflectionRuleEvidence.Step> directRetry = new ArrayList<ReflectionRuleEvidence.Step>();
+        directRetry.add(step("tap_screen", "FAILED", "UI_TARGET_NOT_FOUND", "", "TAP"));
+        directRetry.add(step("tap_screen", "SUCCESS", "", "navigation:START", "TAP"));
+        List<ReflectionRuleEvidence.Candidate> directRules =
+                ReflectionRuleEvidence.derive(null, directRetry);
+        check(hasRule(directRules, "navigation:START", "UI_TARGET_NOT_FOUND", "TAP"),
+                "direct successful retry should bootstrap a deterministic reflection rule");
+
+        List<ReflectionRuleEvidence.Step> genericRetry = new ArrayList<ReflectionRuleEvidence.Step>();
+        genericRetry.add(step("tap_screen", "FAILED", "", "", "TAP"));
+        genericRetry.add(step("tap_screen", "SUCCESS", "", "navigation:START", "TAP"));
+        check(hasRule(ReflectionRuleEvidence.derive(null, genericRetry),
+                        "navigation:START", "PREVIOUS_ATTEMPT_FAILED", "TAP"),
+                "retry without a failure code should still have bounded bootstrap evidence");
+
+        List<ReflectionRuleEvidence.Step> previousFailure = new ArrayList<ReflectionRuleEvidence.Step>();
+        previousFailure.add(step("launch_app", "FAILED", "APP_NOT_FOUND", "", "OPEN_APP"));
+        List<ReflectionRuleEvidence.Step> recoveredGoal = new ArrayList<ReflectionRuleEvidence.Step>();
+        recoveredGoal.add(step("launch_app", "SUCCESS", "", "app:MAPS", "OPEN_APP"));
+        check(hasRule(ReflectionRuleEvidence.derive(previousFailure, recoveredGoal),
+                        "app:MAPS", "APP_NOT_FOUND", "OPEN_APP"),
+                "same-goal next-task recovery should bootstrap reflection");
+
+        List<ReflectionRuleEvidence.Step> unrelatedRecovery = new ArrayList<ReflectionRuleEvidence.Step>();
+        unrelatedRecovery.add(step("tap_screen", "FAILED", "UI_TARGET_NOT_FOUND", "", "TAP"));
+        unrelatedRecovery.add(step("launch_app", "SUCCESS", "", "app:MAPS", "OPEN_APP"));
+        check(!hasRule(ReflectionRuleEvidence.derive(null, unrelatedRecovery),
+                        "app:MAPS", "UI_TARGET_NOT_FOUND", "OPEN_APP"),
+                "unrelated successful mutation must not be treated as retry evidence");
+
         List<ReflectionRuleEvidence.Step> previous = new ArrayList<ReflectionRuleEvidence.Step>();
         previous.add(step("tap_screen", "SUCCESS", "", "route_mode:TRANSIT", "TAP"));
         List<ReflectionRuleEvidence.Step> current = new ArrayList<ReflectionRuleEvidence.Step>();
