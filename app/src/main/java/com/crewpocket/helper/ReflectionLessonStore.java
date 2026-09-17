@@ -14,10 +14,10 @@ import java.util.Locale;
 import java.util.UUID;
 
 /**
- * Stores post-task reflection rules separately from active App Playbooks.
+ * Stores qualified Crew Experience rules separately from active App Playbooks.
  *
  * Runtime owns rule identity: package + deterministic ruleKey. Gemini only
- * selects an evidence rule and writes its human-readable lesson. Two compatible
+ * compresses qualified evidence into a human-readable lesson. Two compatible
  * high-confidence confirmations are still required before App Playbook promotion.
  */
 final class ReflectionLessonStore {
@@ -140,6 +140,7 @@ final class ReflectionLessonStore {
                     .put("package", pkg)
                     .put("app", appLabel)
                     .put("ruleKey", candidate.ruleKey)
+                    .put("kind", candidate.kind)
                     .put("scope", candidate.scope)
                     .put("condition", candidate.condition)
                     .put("response", candidate.response)
@@ -187,15 +188,14 @@ final class ReflectionLessonStore {
                     average = rollingAverage(average, confirmations - 1, confidence);
                     existing.put("lesson", lesson);
                 } else {
-                    // Same deterministic rule, but Gemini described a materially
-                    // different behavior. Do not mix evidence; restart validation.
                     confirmations = 1;
                     average = confidence;
                     existing.put("lesson", lesson);
                 }
             }
 
-            existing.put("scope", candidate.scope)
+            existing.put("kind", candidate.kind)
+                    .put("scope", candidate.scope)
                     .put("condition", candidate.condition)
                     .put("response", candidate.response)
                     .put("confirmations", confirmations)
@@ -212,7 +212,7 @@ final class ReflectionLessonStore {
         if (!STATE_VERIFIED.equals(state)
                 && confirmations >= ReflectionLearningPolicy.CONFIRMATIONS_TO_VERIFY
                 && average >= ReflectionLearningPolicy.MIN_VERIFIED_CONFIDENCE) {
-            String title = "Auto learned · " + candidate.scope
+            String title = "Crew Experience · " + candidate.scope
                     + " · " + candidate.condition + " -> " + candidate.response;
             JSONObject promoted = playbookStore.remember(
                     pkg,
@@ -230,7 +230,7 @@ final class ReflectionLessonStore {
         return existing;
     }
 
-    /** Human-readable local-only view of sanitized evidence rules. */
+    /** Human-readable local-only view of sanitized Crew Experience rules. */
     static String buildReport(Context context) {
         JSONArray items = new JSONArray();
         if (context != null) {
@@ -242,9 +242,9 @@ final class ReflectionLessonStore {
         }
 
         StringBuilder out = new StringBuilder();
-        out.append("Self-reflection lessons\n");
+        out.append("Crew Experience\n");
         if (items.length() == 0) {
-            out.append("No evidence-based reflection rules recorded yet.");
+            out.append("No learned experiences yet. Normal successful tasks stay quiet; Crew learns from proven recovery or repeated successful patterns.");
             return out.toString();
         }
 
@@ -255,6 +255,7 @@ final class ReflectionLessonStore {
             String app = collapse(item.optString("app", ""));
             String pkg = cleanPackage(item.optString("package", ""));
             String state = item.optString("state", STATE_CANDIDATE);
+            String kind = collapse(item.optString("kind", "LEGACY"));
             int confirmations = Math.max(0, item.optInt("confirmations", 0));
             int contradictions = Math.max(0, item.optInt("contradictions", 0));
             double confidence = Math.max(0d,
@@ -265,6 +266,7 @@ final class ReflectionLessonStore {
             if (!app.isEmpty() && !pkg.isEmpty()) out.append(" · ").append(pkg);
             out.append("\n")
                     .append(state)
+                    .append(" · ").append(kind)
                     .append(" · confirmations ")
                     .append(confirmations)
                     .append("/")
