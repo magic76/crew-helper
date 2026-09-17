@@ -17,7 +17,7 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-/** Developer-facing, sanitized view of self-improvement and runtime traces. */
+/** Developer-facing, sanitized view of Crew Experience and runtime traces. */
 public class AgentInspectorActivity extends Activity {
     private TextView reportView;
 
@@ -47,7 +47,7 @@ public class AgentInspectorActivity extends Activity {
         titleCol.setOrientation(LinearLayout.VERTICAL);
 
         TextView title = new TextView(this);
-        title.setText(I18n.get(this, "自省紀錄", "Reflection Insights"));
+        title.setText("Crew Experience");
         title.setTextSize(22);
         title.setTextColor(CrewTheme.TEXT_PRIMARY);
         title.setTypeface(Typeface.DEFAULT_BOLD);
@@ -56,8 +56,8 @@ public class AgentInspectorActivity extends Activity {
         TextView subtitle = new TextView(this);
         subtitle.setText(I18n.get(
                 this,
-                "Self-Improvement · Evidence Rules、模型與 Runtime 診斷",
-                "Self-improvement · evidence rules, models, and runtime diagnostics"));
+                "從真正的修正與重複成功路徑中學習 · Developer diagnostics",
+                "Learns from proven recovery and repeated successful patterns · Developer diagnostics"));
         subtitle.setTextSize(11);
         subtitle.setTextColor(CrewTheme.TEXT_SECONDARY);
         subtitle.setPadding(0, dp(2), 0, 0);
@@ -74,12 +74,12 @@ public class AgentInspectorActivity extends Activity {
         TextView privacy = new TextView(this);
         privacy.setText(I18n.get(
                 this,
-                "這裡顯示的是已脫敏的自省結果：App、Runtime Evidence Rule、Lesson、信心與確認次數。"
-                        + "Rule identity 由 Runtime evidence 決定，不由模型自由命名。"
+                "Crew 只會在 Runtime 有足夠證據時學習：失敗後修正成功會立即進入 Experience Review；一般成功路徑需重複出現才會進入模型。"
+                        + "Rule identity 由 Runtime evidence 決定，模型只負責把已驗證的 evidence 壓成 Lesson。"
                         + "不保存或顯示對話內容、訊息文字、搜尋值、密碼、OTP、付款資料、任意工具參數、API Key 或模型原始回答。",
-                "This page shows sanitized reflection results: app, Runtime evidence rule, lesson, confidence, and confirmations. "
-                        + "Rule identity comes from Runtime evidence, not model-authored categories. "
-                        + "It does not store or show conversations, message text, search values, passwords, OTPs, payment data, arbitrary tool arguments, API keys, or raw model replies."));
+                "Crew learns only when Runtime has sufficient evidence: proven recovery is reviewed immediately, while normal successful paths must repeat before model review. "
+                        + "Rule identity comes from Runtime evidence; the model only compresses qualified evidence into a lesson. "
+                        + "No conversations, message text, search values, passwords, OTPs, payment data, arbitrary tool arguments, API keys, or raw model replies are stored here."));
         privacy.setTextSize(11);
         privacy.setTextColor(CrewTheme.TEXT_SECONDARY);
         privacy.setPadding(0, dp(14), 0, dp(10));
@@ -110,8 +110,8 @@ public class AgentInspectorActivity extends Activity {
 
         Button testModel = smallButton(I18n.get(
                 this,
-                "測試 Reflection Model",
-                "Test reflection model"));
+                "測試 Experience Model",
+                "Test Experience model"));
         LinearLayout.LayoutParams testLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(44));
@@ -139,8 +139,8 @@ public class AgentInspectorActivity extends Activity {
                     AgentInspectorActivity.this,
                     I18n.get(
                             AgentInspectorActivity.this,
-                            "Runtime、Reflection History 與模型健康檢查已清除；已學習的 Lesson 不會刪除",
-                            "Runtime, reflection history, and model health diagnostics cleared; learned lessons were kept"),
+                            "Runtime 與 Experience Model 診斷已清除；學習中的 Experience 與已學 Lesson 不會刪除",
+                            "Runtime and Experience model diagnostics cleared; accumulated experience and learned lessons were kept"),
                     Toast.LENGTH_SHORT).show();
         });
 
@@ -162,6 +162,8 @@ public class AgentInspectorActivity extends Activity {
     private String buildFullReport() {
         return ReflectionLessonStore.buildReport(this)
                 + "\n\n────────────────────\n\n"
+                + ExperienceEvidenceStore.buildReport(this)
+                + "\n\n────────────────────\n\n"
                 + ReflectionHistoryStore.buildReport(this)
                 + "\n\n────────────────────\n\n"
                 + ReflectionLearningStats.buildReport(this)
@@ -170,17 +172,15 @@ public class AgentInspectorActivity extends Activity {
     }
 
     private void refreshReport() {
-        if (reportView != null) {
-            reportView.setText(buildFullReport());
-        }
+        if (reportView != null) reportView.setText(buildFullReport());
     }
 
     private void runModelDiagnostic(Button button) {
         if (button == null || !button.isEnabled()) return;
         final String idleLabel = I18n.get(
                 this,
-                "測試 Reflection Model",
-                "Test reflection model");
+                "測試 Experience Model",
+                "Test Experience model");
         button.setEnabled(false);
         button.setText(I18n.get(this, "測試中…", "Testing…"));
 
@@ -233,7 +233,7 @@ public class AgentInspectorActivity extends Activity {
                         message,
                         Toast.LENGTH_LONG).show();
             });
-        }, "CrewReflectionDiagnostic").start();
+        }, "CrewExperienceDiagnostic").start();
     }
 
     private void copyReport() {
@@ -242,10 +242,10 @@ public class AgentInspectorActivity extends Activity {
                 (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
         if (clipboard != null) {
             clipboard.setPrimaryClip(
-                    ClipData.newPlainText("Crew Helper Reflection Report", report));
+                    ClipData.newPlainText("Crew Helper Experience Report", report));
             Toast.makeText(
                     this,
-                    I18n.get(this, "自省報告已複製", "Reflection report copied"),
+                    I18n.get(this, "Experience 報告已複製", "Experience report copied"),
                     Toast.LENGTH_SHORT).show();
         }
     }

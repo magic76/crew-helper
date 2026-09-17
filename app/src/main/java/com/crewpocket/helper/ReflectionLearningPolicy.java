@@ -5,14 +5,12 @@ import java.util.Locale;
 import java.util.Set;
 
 /**
- * Pure policy for post-task reflection learning.
+ * Pure policy for Crew Experience learning.
  *
- * Rule identity comes from deterministic Runtime evidence. This class only
- * decides whether a task is worth reviewing and whether Gemini's human-readable
- * lesson is safe/reusable enough to retain.
+ * Runtime decides whether evidence is strong enough to review. Gemini is only
+ * allowed to compress already-qualified evidence into a reusable lesson.
  */
 final class ReflectionLearningPolicy {
-    static final int MIN_MUTATIONS_FOR_SUCCESS = 3;
     static final double MIN_CANDIDATE_CONFIDENCE = 0.70d;
     static final double MIN_VERIFIED_CONFIDENCE = 0.78d;
     static final int CONFIRMATIONS_TO_VERIFY = 2;
@@ -35,6 +33,19 @@ final class ReflectionLearningPolicy {
 
     private ReflectionLearningPolicy() {}
 
+    static boolean allowsExperienceLearning(boolean activeTask,
+                                            boolean cancelled,
+                                            boolean usedSendText,
+                                            String packageName) {
+        if (activeTask || cancelled || usedSendText) return false;
+        return !isSensitivePackage(packageName);
+    }
+
+    /**
+     * Backward-compatible entry point used by tests/callers. Mutation count and
+     * generic failure signals no longer trigger a model review on their own.
+     * Only deterministic evidence that passed the Experience gate may do so.
+     */
     static boolean shouldReflect(int mutationActions,
                                  int outcomeSignals,
                                  boolean hasRuleEvidence,
@@ -42,11 +53,8 @@ final class ReflectionLearningPolicy {
                                  boolean cancelled,
                                  boolean usedSendText,
                                  String packageName) {
-        if (activeTask || cancelled || usedSendText) return false;
-        if (isSensitivePackage(packageName)) return false;
-        return hasRuleEvidence
-                || outcomeSignals > 0
-                || mutationActions >= MIN_MUTATIONS_FOR_SUCCESS;
+        return allowsExperienceLearning(activeTask, cancelled, usedSendText, packageName)
+                && hasRuleEvidence;
     }
 
     static boolean isSensitivePackage(String packageName) {

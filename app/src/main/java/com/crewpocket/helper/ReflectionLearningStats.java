@@ -6,7 +6,7 @@ import android.content.SharedPreferences;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-/** Privacy-safe counters for developer observability of reflection learning. */
+/** Privacy-safe counters for developer observability of Crew Experience learning. */
 final class ReflectionLearningStats {
     private static final String PREFS = "crew_reflection_learning";
     private static final String KEY_ITEMS = "rules_v2";
@@ -39,8 +39,10 @@ final class ReflectionLearningStats {
         }
 
         StringBuilder out = new StringBuilder();
-        out.append("Reflection learning\n");
+        out.append("Experience learning\n");
         out.append("Identity: Runtime evidence rule key\n");
+        out.append("Trigger: proven recovery or repeated routine evidence\n");
+        out.append("Model role: compress qualified evidence into a lesson\n");
         out.append("Model: ").append(GeminiTaskReflector.MODEL).append("\n");
         out.append("Candidates: ").append(candidate).append("\n");
         out.append("Verified: ").append(verified).append("\n");

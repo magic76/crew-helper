@@ -6,13 +6,15 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * Derives reusable reflection rule candidates from sanitized Runtime evidence.
+ * Derives reusable Crew Experience candidates from sanitized Runtime evidence.
  *
  * Identity is deterministic and Runtime-owned. Gemini never invents the key;
- * it may only choose among these candidates and phrase the human-readable lesson.
+ * it may only compress qualified evidence into a human-readable lesson.
  */
 final class ReflectionRuleEvidence {
     static final int MAX_CANDIDATES = 6;
+    static final String KIND_RECOVERY = "RECOVERY";
+    static final String KIND_ROUTINE = "ROUTINE";
 
     static final class Step {
         final String tool;
@@ -40,6 +42,7 @@ final class ReflectionRuleEvidence {
     static final class Candidate {
         final String id;
         final String ruleKey;
+        final String kind;
         final String scope;
         final String condition;
         final String response;
@@ -47,12 +50,14 @@ final class ReflectionRuleEvidence {
 
         Candidate(String id,
                   String ruleKey,
+                  String kind,
                   String scope,
                   String condition,
                   String response,
                   String evidence) {
             this.id = id;
             this.ruleKey = ruleKey;
+            this.kind = KIND_RECOVERY.equals(kind) ? KIND_RECOVERY : KIND_ROUTINE;
             this.scope = scope;
             this.condition = condition;
             this.response = response;
@@ -63,14 +68,28 @@ final class ReflectionRuleEvidence {
     private ReflectionRuleEvidence() {}
 
     static List<Candidate> derive(List<Step> previous, List<Step> current) {
-        ArrayList<Step> all = new ArrayList<Step>();
-        if (previous != null) all.addAll(previous);
-        if (current != null) all.addAll(current);
-
         LinkedHashMap<String, Candidate> unique = new LinkedHashMap<String, Candidate>();
-        deriveFailureRecovery(all, unique);
-        deriveDirectRetryRecovery(all, unique);
-        deriveSemanticTransitions(all, unique);
+
+        // Current-task recovery is counted exactly once. Never replay the whole
+        // previous task, otherwise old evidence would be counted again on every
+        // later task in the same goal.
+        deriveFailureRecovery(current, unique);
+        deriveDirectRetryRecovery(current, unique);
+
+        // Preserve only the useful cross-task case: the previous task ended on a
+        // failed mutation and the current task supplied the recovery sequence.
+        Step previousTail = lastMutation(previous);
+        if (previousTail != null && previousTail.failed()) {
+            ArrayList<Step> boundary = new ArrayList<Step>();
+            boundary.add(previousTail);
+            if (current != null) boundary.addAll(current);
+            deriveFailureRecovery(boundary, unique);
+            deriveDirectRetryRecovery(boundary, unique);
+        }
+
+        // Routine success is mined only from the current task so one old path
+        // cannot inflate the repeated-evidence counter on subsequent tasks.
+        deriveSemanticTransitions(current, unique);
 
         ArrayList<Candidate> out = new ArrayList<Candidate>();
         int index = 1;
@@ -79,6 +98,7 @@ final class ReflectionRuleEvidence {
             out.add(new Candidate(
                     "r" + index++,
                     candidate.ruleKey,
+                    candidate.kind,
                     candidate.scope,
                     candidate.condition,
                     candidate.response,
@@ -107,9 +127,6 @@ final class ReflectionRuleEvidence {
             int visualIndex = nextVisualObservation(steps, i + 1);
             if (visualIndex < 0) continue;
 
-            // Evidence is accepted only when the FIRST mutation after the
-            // observation succeeds. This avoids learning from an observation
-            // that did not actually recover the failed path.
             int mutationIndex = nextMutation(steps, visualIndex + 1);
             if (mutationIndex < 0) continue;
             Step recovered = steps.get(mutationIndex);
@@ -118,20 +135,12 @@ final class ReflectionRuleEvidence {
             String scope = failureScope(failed);
             String condition = failed.failureCode;
             String response = "INSPECT_UI";
-            add(out, scope, condition, response,
+            add(out, KIND_RECOVERY, scope, condition, response,
                     condition + " -> INSPECT_UI -> SUCCESS");
         }
     }
 
-    /**
-     * Bootstrap learning from a direct retry/correction that is already proven
-     * by Runtime evidence. This intentionally does not require an existing rule
-     * or a screenshot: a failed mutation immediately followed by a compatible
-     * successful mutation is enough evidence to let the reviewer consider it.
-     *
-     * If a visual observation happened between the two mutations, the stronger
-     * INSPECT_UI recovery rule above owns that sequence instead.
-     */
+    /** Proven failed mutation followed by a compatible successful correction. */
     private static void deriveDirectRetryRecovery(
             List<Step> steps,
             LinkedHashMap<String, Candidate> out) {
@@ -168,7 +177,7 @@ final class ReflectionRuleEvidence {
             String response = actionToken(recovered);
             if (response.isEmpty()) continue;
 
-            add(out, scope, condition, response,
+            add(out, KIND_RECOVERY, scope, condition, response,
                     failureEvidence(failed) + " -> " + response + " SUCCESS");
         }
     }
@@ -192,6 +201,10 @@ final class ReflectionRuleEvidence {
         return code.isEmpty() ? tool + " FAILED" : tool + " FAILED:" + code;
     }
 
+    /**
+     * Routine successful transitions are evidence only. They are not immediately
+     * sent to Gemini; ExperienceEvidenceStore requires repeated occurrences first.
+     */
     private static void deriveSemanticTransitions(List<Step> steps,
                                                   LinkedHashMap<String, Candidate> out) {
         if (steps == null) return;
@@ -217,7 +230,7 @@ final class ReflectionRuleEvidence {
                 String scope = current.semanticTarget;
                 String condition = "AFTER:" + semanticFamily(previousSemantic.semanticTarget);
                 String response = actionToken(current);
-                add(out, scope, condition, response,
+                add(out, KIND_ROUTINE, scope, condition, response,
                         semanticFamily(previousSemantic.semanticTarget)
                                 + " SUCCESS -> " + current.semanticTarget + " SUCCESS");
             }
@@ -227,7 +240,17 @@ final class ReflectionRuleEvidence {
         }
     }
 
+    private static Step lastMutation(List<Step> steps) {
+        if (steps == null) return null;
+        for (int i = steps.size() - 1; i >= 0; i--) {
+            Step step = steps.get(i);
+            if (step != null && isMutationTool(step.tool)) return step;
+        }
+        return null;
+    }
+
     private static void add(LinkedHashMap<String, Candidate> out,
+                            String kind,
                             String scope,
                             String condition,
                             String response,
@@ -244,6 +267,7 @@ final class ReflectionRuleEvidence {
         out.put(key, new Candidate(
                 "",
                 key,
+                kind,
                 safeScope,
                 safeCondition,
                 safeResponse,

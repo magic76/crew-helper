@@ -5,19 +5,19 @@ public final class ReflectionLearningPolicyTest {
 
     public static void main(String[] args) {
         check(!ReflectionLearningPolicy.shouldReflect(2, 0, false, false, false, false,
-                "com.android.settings"), "short successful task without evidence should not reflect");
-        check(ReflectionLearningPolicy.shouldReflect(3, 0, false, false, false, false,
-                "com.android.settings"), "3-mutation task should reflect");
-        check(ReflectionLearningPolicy.shouldReflect(1, 1, false, false, false, false,
-                "com.android.settings"), "failed task should reflect");
+                "com.android.settings"), "routine success without qualified evidence should stay quiet");
+        check(!ReflectionLearningPolicy.shouldReflect(8, 0, false, false, false, false,
+                "com.android.settings"), "mutation count alone must not trigger model review");
+        check(!ReflectionLearningPolicy.shouldReflect(1, 2, false, false, false, false,
+                "com.android.settings"), "generic failure signals alone must not trigger model review");
         check(ReflectionLearningPolicy.shouldReflect(2, 0, true, false, false, false,
-                "com.android.settings"), "deterministic rule evidence should trigger reflection");
+                "com.android.settings"), "qualified deterministic experience evidence should trigger review");
         check(!ReflectionLearningPolicy.shouldReflect(5, 1, true, false, false, true,
-                "com.android.settings"), "send_text task must not reflect");
+                "com.android.settings"), "send_text task must not learn experience");
         check(!ReflectionLearningPolicy.shouldReflect(5, 1, true, false, true, false,
-                "com.android.settings"), "cancelled task must not reflect");
+                "com.android.settings"), "cancelled task must not learn experience");
         check(!ReflectionLearningPolicy.shouldReflect(5, 1, true, false, false, false,
-                "com.example.wallet"), "sensitive package must not reflect");
+                "com.example.wallet"), "sensitive package must not learn experience");
 
         check(ReflectionLearningPolicy.isSafeRuleLesson(
                 "Inspect the current screen before retrying an unresolved UI target.",

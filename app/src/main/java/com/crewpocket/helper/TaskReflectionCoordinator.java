@@ -16,18 +16,19 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Bridges sanitized Agent Inspector metadata to the post-task reviewer.
+ * Bridges sanitized Runtime evidence to Crew Experience learning.
  *
- * Reflection identity is Runtime-owned. The coordinator derives bounded,
- * deterministic evidence rules first; Gemini may only select among those rules
- * and phrase a concise human-readable lesson.
+ * Runtime owns rule identity and trigger eligibility. Gemini is called only for
+ * already-qualified experience evidence and only compresses it into a concise,
+ * human-readable lesson.
  */
 final class TaskReflectionCoordinator {
-    private static final String TAG = "CrewReflection";
+    private static final String TAG = "CrewExperience";
     private static final ExecutorService EXECUTOR = Executors.newSingleThreadExecutor();
     private static final Object LOCK = new Object();
     private static final Set<String> SCHEDULED = new HashSet<String>();
     private static final int MAX_TRACKED_TASKS = 80;
+    private static final int MAX_MODEL_RULES = 2;
 
     private TaskReflectionCoordinator() {}
 
@@ -55,62 +56,40 @@ final class TaskReflectionCoordinator {
         final String statusSnapshot = rawStatus == null ? "" : rawStatus;
         EXECUTOR.execute(new Runnable() {
             @Override public void run() {
-                runReflection(appContext, statusSnapshot, task);
+                runExperienceReview(appContext, statusSnapshot, task);
             }
         });
     }
 
-    private static void runReflection(Context context,
-                                      String rawStatus,
-                                      JSONObject task) {
+    private static void runExperienceReview(Context context,
+                                            String rawStatus,
+                                            JSONObject task) {
         final long startedAt = System.currentTimeMillis();
         GeminiTaskReflector reflector = null;
         try {
             String packageName = currentPackage();
             JSONArray currentSteps = task.optJSONArray("steps");
-            int failedSteps = failedStepCount(currentSteps);
             boolean usedSendText = usedTool(currentSteps, "send_text");
             boolean cancelled = ReflectionLearningPolicy.looksCancelled(rawStatus);
-            int mutations = task.optInt("mutationActions", 0);
 
-            int outcomeSignals = failedSteps;
-            if (task.optBoolean("partialOutcome", false)) outcomeSignals++;
-            if (task.optBoolean("modelRefusal", false)) outcomeSignals++;
-            if (!task.optString("blockCategory", "").isEmpty()) outcomeSignals++;
-            if (hasPreviousGoalFailureEvidence(task.optJSONObject("previousGoalTask"))) {
-                outcomeSignals++;
-            }
-
-            List<ReflectionRuleEvidence.Candidate> candidates =
-                    deriveRuleCandidates(task);
-            boolean hasRuleEvidence = !candidates.isEmpty();
-
-            if (!ReflectionLearningPolicy.shouldReflect(
-                    mutations,
-                    outcomeSignals,
-                    hasRuleEvidence,
-                    false,
-                    cancelled,
-                    usedSendText,
-                    packageName)) {
-                ReflectionHistoryStore.recordNoModelCall(
-                        context, "SKIPPED", "POLICY", elapsed(startedAt));
-                Log.d(TAG, "skip task reflection by policy");
+            if (!ReflectionLearningPolicy.allowsExperienceLearning(
+                    false, cancelled, usedSendText, packageName)) {
                 return;
             }
 
-            if (!hasRuleEvidence) {
-                ReflectionHistoryStore.recordNoModelCall(
-                        context, "SKIPPED", "NO_RULE_EVIDENCE", elapsed(startedAt));
-                Log.d(TAG, "skip task reflection: no deterministic rule evidence");
-                return;
-            }
+            List<ReflectionRuleEvidence.Candidate> observed = deriveRuleCandidates(task);
+            if (observed.isEmpty()) return;
+
+            List<ReflectionRuleEvidence.Candidate> qualified = limitCandidates(
+                    ExperienceEvidenceStore.qualify(context, packageName, observed),
+                    MAX_MODEL_RULES);
+            if (qualified.isEmpty()) return;
 
             String apiKey = AppConfig.getGeminiApiKey(context);
             if (apiKey == null || apiKey.trim().length() < 20) {
                 ReflectionHistoryStore.recordNoModelCall(
                         context, "SKIPPED", "NO_API_KEY", elapsed(startedAt));
-                Log.d(TAG, "skip task reflection: api key unavailable");
+                Log.d(TAG, "experience review skipped: api key unavailable");
                 return;
             }
 
@@ -123,21 +102,18 @@ final class TaskReflectionCoordinator {
                 outcome = "PARTIAL";
             }
 
-            // Reviewer sees only deterministic evidence candidates plus current
-            // App Playbook context. The full task trace is no longer needed once
-            // Runtime has derived the candidate rules.
             JSONObject episode = new JSONObject()
                     .put("app", new JSONObject()
                             .put("package", packageName)
                             .put("label", appLabel))
                     .put("outcome", outcome)
-                    .put("evidence_rules", candidateJson(candidates))
+                    .put("evidence_rules", candidateJson(qualified))
                     .put("existing_app_playbook", playbooks.modelContext(packageName));
 
             reflector = new GeminiTaskReflector(apiKey);
             JSONObject reflection = reflector.reflect(episode);
             JSONObject stored = new ReflectionLessonStore(context)
-                    .recordRules(packageName, appLabel, candidates, reflection);
+                    .recordRules(packageName, appLabel, qualified, reflection);
 
             String historyStatus;
             if (stored.optInt("storedCount", 0) > 0) {
@@ -153,15 +129,14 @@ final class TaskReflectionCoordinator {
                     reflector.lastModel(),
                     reflector.usedFallback());
 
-            Log.i(TAG, "post-task reflection complete: model="
+            Log.i(TAG, "experience review complete: model="
                     + reflector.lastModel()
                     + " fallback=" + reflector.usedFallback()
-                    + " candidates=" + candidates.size()
+                    + " observed=" + observed.size()
+                    + " qualified=" + qualified.size()
                     + " stored=" + stored.optInt("storedCount", 0)
                     + " state=" + stored.optString("state", "SKIPPED"));
         } catch (Exception error) {
-            // Reflection is best-effort and never allowed to affect Live latency,
-            // execution, user-visible status, or task completion.
             String code = safeErrorCode(error);
             if (reflector != null && reflector.hasAttemptedModel()) {
                 ReflectionHistoryStore.recordModelCall(
@@ -178,7 +153,7 @@ final class TaskReflectionCoordinator {
                         code,
                         elapsed(startedAt));
             }
-            Log.d(TAG, "post-task reflection skipped: " + code);
+            Log.d(TAG, "experience review skipped: " + code);
         }
     }
 
@@ -190,6 +165,20 @@ final class TaskReflectionCoordinator {
                 : steps(previousTask.optJSONArray("steps"));
         List<ReflectionRuleEvidence.Step> current = steps(task.optJSONArray("steps"));
         return ReflectionRuleEvidence.derive(previous, current);
+    }
+
+    private static List<ReflectionRuleEvidence.Candidate> limitCandidates(
+            List<ReflectionRuleEvidence.Candidate> source,
+            int max) {
+        ArrayList<ReflectionRuleEvidence.Candidate> out =
+                new ArrayList<ReflectionRuleEvidence.Candidate>();
+        if (source == null || max <= 0) return out;
+        for (ReflectionRuleEvidence.Candidate candidate : source) {
+            if (candidate == null) continue;
+            out.add(candidate);
+            if (out.size() >= max) break;
+        }
+        return out;
     }
 
     private static List<ReflectionRuleEvidence.Step> steps(JSONArray raw) {
@@ -218,6 +207,7 @@ final class TaskReflectionCoordinator {
             try {
                 out.put(new JSONObject()
                         .put("id", candidate.id)
+                        .put("trigger_kind", candidate.kind)
                         .put("scope", candidate.scope)
                         .put("condition", candidate.condition)
                         .put("response", candidate.response)
@@ -225,14 +215,6 @@ final class TaskReflectionCoordinator {
             } catch (Exception ignored) {}
         }
         return out;
-    }
-
-    private static boolean hasPreviousGoalFailureEvidence(JSONObject previous) {
-        if (previous == null || previous.length() == 0) return false;
-        if (failedStepCount(previous.optJSONArray("steps")) > 0) return true;
-        if (previous.optBoolean("partialOutcome", false)) return true;
-        if (previous.optBoolean("modelRefusal", false)) return true;
-        return !previous.optString("blockCategory", "").isEmpty();
     }
 
     private static long elapsed(long startedAt) {
@@ -271,16 +253,6 @@ final class TaskReflectionCoordinator {
                 try { root.recycle(); } catch (Exception ignored) {}
             }
         }
-    }
-
-    private static int failedStepCount(JSONArray steps) {
-        if (steps == null) return 0;
-        int failed = 0;
-        for (int i = 0; i < steps.length(); i++) {
-            JSONObject step = steps.optJSONObject(i);
-            if (step != null && "FAILED".equals(step.optString("outcome", ""))) failed++;
-        }
-        return failed;
     }
 
     private static boolean usedTool(JSONArray steps, String toolName) {
