@@ -1663,13 +1663,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             return;
         }
 
-        if (userActionScope.blocksNamedRecipientMessagingAction()
-                && isMutationTool(name)) {
-            sendBlockedToolResponse(id, requestedName,
-                    "CURRENT_SCREEN_MESSAGING_ONLY：不支援『跟某人說／傳給某人』的自動找人或跨聊天室傳訊。請使用者先自行開到正確聊天室。");
-            return;
-        }
-
         // If THIS turn contains new text + send intent, TYPE is upgraded to
         // the simple TYPE -> SEND_CURRENT path. Standalone send-only turns are
         // intercepted before model tool selection.
@@ -4244,16 +4237,178 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                         "搜尋文字已確認輸入，但尚未觀察到結果且沒有可用提交鍵。依 fresh after 判斷 live-filter 結果；若沒有，回報目前卡點，不要宣稱搜尋完成。");
     }
 
+    /**
+     * Named-recipient SEND boundary.
+     *
+     * Navigation is allowed after an explicit named-recipient request, but the
+     * actual submit stays fail-closed until Accessibility proves both:
+     * 1) a non-search chat composer is visible, and
+     * 2) the requested recipient appears in the header region above it.
+     *
+     * This intentionally uses only the current semantic screen. No contact
+     * history, prior conversation memory, screenshots, or model inference can
+     * satisfy the target check.
+     */
+    private JSONObject verifyAuthorizedRecipientOnCurrentScreen() throws Exception {
+        String recipient = userActionScope.authorizedRecipient();
+        if (recipient == null || recipient.trim().isEmpty()) {
+            return runtimeBlocked("RECIPIENT_TARGET_UNKNOWN",
+                    "缺少可驗證的收件人；不要猜測或直接送出。");
+        }
+
+        JSONObject semantic = helperGet("/semantic_screen");
+        if (semantic == null || !semantic.optBoolean("success", false)) {
+            return runtimeBlocked("RECIPIENT_SCREEN_UNAVAILABLE",
+                    "Runtime 目前無法讀取畫面來確認收件人；不要送出，先 inspect_ui 或等待畫面可讀。");
+        }
+
+        JSONArray elements = semantic.optJSONArray("elements");
+        if (elements == null || elements.length() == 0) {
+            return runtimeBlocked("RECIPIENT_CHAT_NOT_VERIFIED",
+                    "目前沒有足夠的 Accessibility 結構來確認聊天室；不要送出。");
+        }
+
+        int composerTop = Integer.MAX_VALUE;
+        boolean composerFound = false;
+        boolean composerLooksChatLike = false;
+        boolean sendControlVisible = false;
+
+        for (int i = 0; i < elements.length(); i++) {
+            JSONObject element = elements.optJSONObject(i);
+            if (element == null || element.optBoolean("sensitive", false)) continue;
+
+            String role = element.optString("role", "");
+            String label = element.optString("label", "");
+            String hint = element.optString("semanticHint", "");
+            String viewId = element.optString("viewId", "");
+            String metadata = label + " " + hint + " " + viewId;
+
+            if ("send".equalsIgnoreCase(hint)
+                    || UserActionScope.looksLikeSendTarget(metadata)) {
+                sendControlVisible = true;
+            }
+
+            if (!element.optBoolean("editable", false)
+                    && !"text_field".equals(role)) {
+                continue;
+            }
+            if (isSearchLikeMessagingField(element)) continue;
+
+            composerFound = true;
+            if (looksLikeChatComposer(element)) composerLooksChatLike = true;
+            JSONObject bounds = element.optJSONObject("bounds");
+            if (bounds != null) {
+                int top = bounds.optInt("top", Integer.MAX_VALUE);
+                if (top >= 0 && top < composerTop) composerTop = top;
+            }
+        }
+
+        // An unlabeled composer is still acceptable when the current screen
+        // exposes a semantic Send control. This preserves support for apps with
+        // minimal Accessibility metadata while staying stricter than "any EditText".
+        if (!composerFound || (!composerLooksChatLike && !sendControlVisible)) {
+            return runtimeBlocked("RECIPIENT_CHAT_NOT_VERIFIED",
+                    "尚未確認目前畫面是可傳訊息的聊天室。請先搜尋/開啟指定對象，再呼叫 send_text；不要把搜尋框或一般表單當成聊天輸入框。");
+        }
+
+        if (composerTop == Integer.MAX_VALUE) {
+            composerTop = 1600;
+        }
+        int headerBottomLimit = Math.max(360, (int) (composerTop * 0.45d));
+        boolean recipientMatched = false;
+
+        for (int i = 0; i < elements.length(); i++) {
+            JSONObject element = elements.optJSONObject(i);
+            if (element == null || element.optBoolean("sensitive", false)) continue;
+            if (element.optBoolean("editable", false)) continue;
+
+            String label = element.optString("label", "");
+            if (!recipientLabelMatches(label, recipient)) continue;
+
+            JSONObject bounds = element.optJSONObject("bounds");
+            int bottom = bounds == null ? 0 : bounds.optInt("bottom", 0);
+            if (bottom <= 0 || bottom <= headerBottomLimit) {
+                recipientMatched = true;
+                break;
+            }
+        }
+
+        if (!recipientMatched) {
+            return runtimeBlocked("RECIPIENT_TARGET_NOT_VERIFIED",
+                    "目前畫面尚未證明是指定收件人的聊天室。請先用 phone_action(SEARCH) 或語意 TAP 開啟該對象；Runtime 驗證成功前不要送出，也不要改猜其他收件人。");
+        }
+
+        return new JSONObject()
+                .put("success", true)
+                .put("recipientVerified", true)
+                .put("verificationSource", "ACCESSIBILITY_CURRENT_SCREEN");
+    }
+
+    private boolean isSearchLikeMessagingField(JSONObject element) {
+        if (element == null) return false;
+        String metadata = TextMatch.caseFold(
+                element.optString("semanticHint", "") + " "
+                        + element.optString("label", "") + " "
+                        + element.optString("viewId", ""));
+        return metadata.contains("search")
+                || metadata.contains("query")
+                || metadata.contains("filter")
+                || metadata.contains("搜尋")
+                || metadata.contains("搜索")
+                || metadata.contains("查找");
+    }
+
+    private boolean looksLikeChatComposer(JSONObject element) {
+        if (element == null) return false;
+        String metadata = TextMatch.caseFold(
+                element.optString("label", "") + " "
+                        + element.optString("semanticHint", "") + " "
+                        + element.optString("viewId", ""));
+        return metadata.contains("message")
+                || metadata.contains("chat")
+                || metadata.contains("composer")
+                || metadata.contains("reply")
+                || metadata.contains("訊息")
+                || metadata.contains("消息")
+                || metadata.contains("回覆")
+                || metadata.contains("回复")
+                || metadata.contains("輸入訊息")
+                || metadata.contains("输入消息");
+    }
+
+    private boolean recipientLabelMatches(String label, String recipient) {
+        String left = normalizeRecipientEvidence(label);
+        String right = normalizeRecipientEvidence(recipient);
+        if (left.isEmpty() || right.isEmpty()) return false;
+        if (left.equals(right)) return true;
+        // Avoid broad one-character substring matches. Two+ characters are
+        // narrow enough for common Chinese names/relationship labels.
+        return right.length() >= 2 && left.contains(right);
+    }
+
+    private String normalizeRecipientEvidence(String value) {
+        return TextMatch.caseFold(value == null ? "" : value)
+                .replaceAll("[\\s，,。！？!「」『』\\\"'：:；;（）()\\[\\]]", "")
+                .trim();
+    }
+
     private JSONObject sendTextToPhone(JSONObject args) throws Exception {
         String text = args == null ? "" : args.optString("text", "");
 
         if (userActionScope.blocksNamedRecipientMessagingAction()) {
-            return runtimeBlocked("CURRENT_SCREEN_MESSAGING_ONLY",
-                    "目前只支援對當前畫面已開啟的輸入框操作；不支援自動尋找或驗證收件人。");
+            return runtimeBlocked("RECIPIENT_TARGET_UNKNOWN",
+                    "這一輪看起來要傳給特定對象，但 Runtime 無法從原始指令抽出可驗證的收件人。不要猜收件人；請使用者用『跟 X 說…』或『傳給 X：「…」』明確指定。");
         }
         if (!userActionScope.canSend()) {
             return runtimeBlocked("CURRENT_SCREEN_SEND_NOT_AUTHORIZED",
-                    "send_text 只用於最新一句明確要求送出目前聊天室訊息。若使用者只是要在目前可見欄位打字、填入或貼上內容（包含設定、system prompt、表單或聊天輸入框），請改用 phone_action(TYPE)；不要宣稱 Crew 無法一般打字。");
+                    "send_text 只用於最新一句明確要求送出訊息。若使用者只是要在目前可見欄位打字、填入或貼上內容（包含設定、system prompt、表單或聊天輸入框），請改用 phone_action(TYPE)；不要宣稱 Crew 無法一般打字。");
+        }
+
+        if (userActionScope.requiresRecipientVerification()) {
+            JSONObject recipientVerification = verifyAuthorizedRecipientOnCurrentScreen();
+            if (!recipientVerification.optBoolean("success", false)) {
+                return recipientVerification;
+            }
         }
 
         PerformanceMetrics.recordTextRouteSend();
