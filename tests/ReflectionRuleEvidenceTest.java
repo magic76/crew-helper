@@ -13,7 +13,7 @@ public final class ReflectionRuleEvidenceTest {
         recovery.add(step("tap_screen", "SUCCESS", "", "navigation:DIRECTIONS", "TAP"));
         List<ReflectionRuleEvidence.Candidate> rules = ReflectionRuleEvidence.derive(null, recovery);
         check(rules.size() == 1, "clean recovery sequence should yield one evidence rule");
-        check(hasRule(rules, ReflectionRuleEvidence.KIND_RECOVERY,
+        check(hasRule(rules, ReflectionRuleEvidence.KIND_FRICTION,
                         "UI_TARGET", "UI_TARGET_NOT_FOUND", "INSPECT_UI"),
                 "successful observation recovery should be immediate recovery evidence");
 
@@ -22,7 +22,7 @@ public final class ReflectionRuleEvidenceTest {
         failedRecovery.add(step("inspect_ui", "SUCCESS", "", "", ""));
         failedRecovery.add(step("tap_screen", "FAILED", "UI_TARGET_NOT_FOUND", "", "TAP"));
         check(!hasRule(ReflectionRuleEvidence.derive(null, failedRecovery),
-                        ReflectionRuleEvidence.KIND_RECOVERY,
+                        ReflectionRuleEvidence.KIND_FRICTION,
                         "UI_TARGET", "UI_TARGET_NOT_FOUND", "INSPECT_UI"),
                 "observation followed by another failed mutation must not be learned as recovery");
 
@@ -31,7 +31,7 @@ public final class ReflectionRuleEvidenceTest {
         directRetry.add(step("tap_screen", "SUCCESS", "", "navigation:START", "TAP"));
         List<ReflectionRuleEvidence.Candidate> directRules =
                 ReflectionRuleEvidence.derive(null, directRetry);
-        check(hasRule(directRules, ReflectionRuleEvidence.KIND_RECOVERY,
+        check(hasRule(directRules, ReflectionRuleEvidence.KIND_FRICTION,
                         "navigation:START", "UI_TARGET_NOT_FOUND", "TAP"),
                 "direct successful retry should be recovery evidence");
 
@@ -39,7 +39,7 @@ public final class ReflectionRuleEvidenceTest {
         genericRetry.add(step("tap_screen", "FAILED", "", "", "TAP"));
         genericRetry.add(step("tap_screen", "SUCCESS", "", "navigation:START", "TAP"));
         check(hasRule(ReflectionRuleEvidence.derive(null, genericRetry),
-                        ReflectionRuleEvidence.KIND_RECOVERY,
+                        ReflectionRuleEvidence.KIND_FRICTION,
                         "navigation:START", "PREVIOUS_ATTEMPT_FAILED", "TAP"),
                 "retry without a failure code should still have bounded recovery evidence");
 
@@ -48,7 +48,7 @@ public final class ReflectionRuleEvidenceTest {
         List<ReflectionRuleEvidence.Step> recoveredGoal = new ArrayList<ReflectionRuleEvidence.Step>();
         recoveredGoal.add(step("launch_app", "SUCCESS", "", "app:MAPS", "OPEN_APP"));
         check(hasRule(ReflectionRuleEvidence.derive(previousFailure, recoveredGoal),
-                        ReflectionRuleEvidence.KIND_RECOVERY,
+                        ReflectionRuleEvidence.KIND_FRICTION,
                         "app:MAPS", "APP_NOT_FOUND", "OPEN_APP"),
                 "same-goal next-task recovery should be immediate recovery evidence");
 
@@ -58,7 +58,7 @@ public final class ReflectionRuleEvidenceTest {
         List<ReflectionRuleEvidence.Step> laterTask = new ArrayList<ReflectionRuleEvidence.Step>();
         laterTask.add(step("tap_screen", "SUCCESS", "", "navigation:STOP", "TAP"));
         check(!hasRule(ReflectionRuleEvidence.derive(previousAlreadyRecovered, laterTask),
-                        ReflectionRuleEvidence.KIND_RECOVERY,
+                        ReflectionRuleEvidence.KIND_FRICTION,
                         "navigation:START", "UI_TARGET_NOT_FOUND", "TAP"),
                 "a recovery completed in the previous task must not be counted again");
 
@@ -66,30 +66,30 @@ public final class ReflectionRuleEvidenceTest {
         unrelatedRecovery.add(step("tap_screen", "FAILED", "UI_TARGET_NOT_FOUND", "", "TAP"));
         unrelatedRecovery.add(step("launch_app", "SUCCESS", "", "app:MAPS", "OPEN_APP"));
         check(!hasRule(ReflectionRuleEvidence.derive(null, unrelatedRecovery),
-                        ReflectionRuleEvidence.KIND_RECOVERY,
+                        ReflectionRuleEvidence.KIND_FRICTION,
                         "app:MAPS", "UI_TARGET_NOT_FOUND", "OPEN_APP"),
                 "unrelated successful mutation must not be treated as retry evidence");
 
-        List<ReflectionRuleEvidence.Step> previous = new ArrayList<ReflectionRuleEvidence.Step>();
-        previous.add(step("tap_screen", "SUCCESS", "", "route_mode:TRANSIT", "TAP"));
-        List<ReflectionRuleEvidence.Step> current = new ArrayList<ReflectionRuleEvidence.Step>();
-        current.add(step("tap_screen", "SUCCESS", "", "route_mode:WALKING", "TAP"));
-        current.add(step("tap_screen", "SUCCESS", "", "navigation:START", "TAP"));
-        List<ReflectionRuleEvidence.Candidate> navigation = ReflectionRuleEvidence.derive(previous, current);
-        check(hasRule(navigation, ReflectionRuleEvidence.KIND_ROUTINE,
-                        "navigation:START", "AFTER:route_mode:*", "TAP"),
-                "normal semantic transition should be routine evidence only");
-        check(!hasScope(navigation, "route_mode:WALKING"),
-                "same semantic family changes should not create experience rules");
+        List<ReflectionRuleEvidence.Step> plainSuccess =
+                new ArrayList<ReflectionRuleEvidence.Step>();
+        plainSuccess.add(step(
+                "tap_screen", "SUCCESS", "", "route_mode:WALKING", "TAP"));
+        plainSuccess.add(step(
+                "tap_screen", "SUCCESS", "", "navigation:START", "TAP"));
+        check(ReflectionRuleEvidence.derive(null, plainSuccess).isEmpty(),
+                "plain successful transitions must never create Experience evidence");
 
-        List<ReflectionRuleEvidence.Step> interrupted = new ArrayList<ReflectionRuleEvidence.Step>();
-        interrupted.add(step("tap_screen", "SUCCESS", "", "route_mode:WALKING", "TAP"));
-        interrupted.add(step("tap_screen", "FAILED", "UI_TARGET_NOT_FOUND", "", "TAP"));
-        interrupted.add(step("tap_screen", "SUCCESS", "", "navigation:START", "TAP"));
-        check(!hasRule(ReflectionRuleEvidence.derive(null, interrupted),
-                        ReflectionRuleEvidence.KIND_ROUTINE,
-                        "navigation:START", "AFTER:route_mode:*", "TAP"),
-                "failed mutation must break routine semantic transition evidence");
+        List<ReflectionRuleEvidence.Candidate> strongFriction =
+                ReflectionRuleEvidence.derive(null, recovery);
+        check(!strongFriction.isEmpty()
+                        && strongFriction.get(0).frictionScore >= 5,
+                "inspect-based recovery should carry strong friction score");
+
+        List<ReflectionRuleEvidence.Candidate> mediumFriction =
+                ReflectionRuleEvidence.derive(null, directRetry);
+        check(!mediumFriction.isEmpty()
+                        && mediumFriction.get(0).frictionScore == 4,
+                "direct retry should carry medium friction score");
 
         check("route_mode:*".equals(
                 ReflectionRuleEvidence.semanticFamily("route_mode:WALKING")),
