@@ -11,6 +11,7 @@ final class RuntimeToolRouting {
 
     static boolean handles(String name) {
         return "read_web_page".equals(name)
+                || "take_screenshot".equals(name)
                 || "schedule_reminder".equals(name)
                 || "list_active_schedules".equals(name)
                 || "cancel_schedule".equals(name)
