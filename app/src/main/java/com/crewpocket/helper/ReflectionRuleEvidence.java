@@ -14,7 +14,7 @@ import java.util.Locale;
 final class ReflectionRuleEvidence {
     static final int MAX_CANDIDATES = 6;
     static final String KIND_RECOVERY = "RECOVERY";
-    static final String KIND_ROUTINE = "ROUTINE";
+    static final String KIND_FRICTION = "FRICTION";
 
     static final class Step {
         final String tool;
@@ -47,6 +47,8 @@ final class ReflectionRuleEvidence {
         final String condition;
         final String response;
         final String evidence;
+        final int frictionScore;
+        final String frictionSignals;
 
         Candidate(String id,
                   String ruleKey,
@@ -54,14 +56,20 @@ final class ReflectionRuleEvidence {
                   String scope,
                   String condition,
                   String response,
-                  String evidence) {
+                  String evidence,
+                  int frictionScore,
+                  String frictionSignals) {
             this.id = id;
             this.ruleKey = ruleKey;
-            this.kind = KIND_RECOVERY.equals(kind) ? KIND_RECOVERY : KIND_ROUTINE;
+            this.kind = KIND_RECOVERY.equals(kind)
+                    ? KIND_RECOVERY
+                    : KIND_FRICTION;
             this.scope = scope;
             this.condition = condition;
             this.response = response;
             this.evidence = evidence;
+            this.frictionScore = Math.max(0, frictionScore);
+            this.frictionSignals = clean(frictionSignals);
         }
     }
 
@@ -87,10 +95,6 @@ final class ReflectionRuleEvidence {
             deriveDirectRetryRecovery(boundary, unique);
         }
 
-        // Routine success is mined only from the current task so one old path
-        // cannot inflate the repeated-evidence counter on subsequent tasks.
-        deriveSemanticTransitions(current, unique);
-
         ArrayList<Candidate> out = new ArrayList<Candidate>();
         int index = 1;
         for (Candidate candidate : unique.values()) {
@@ -102,7 +106,9 @@ final class ReflectionRuleEvidence {
                     candidate.scope,
                     candidate.condition,
                     candidate.response,
-                    candidate.evidence));
+                    candidate.evidence,
+                    candidate.frictionScore,
+                    candidate.frictionSignals));
         }
         return out;
     }
@@ -135,8 +141,10 @@ final class ReflectionRuleEvidence {
             String scope = failureScope(failed);
             String condition = failed.failureCode;
             String response = "INSPECT_UI";
-            add(out, KIND_RECOVERY, scope, condition, response,
-                    condition + " -> INSPECT_UI -> SUCCESS");
+            add(out, KIND_FRICTION, scope, condition, response,
+                    condition + " -> INSPECT_UI -> SUCCESS",
+                    5,
+                    "FAILED_RECOVERY|EXTRA_INSPECT|RETRY");
         }
     }
 
@@ -177,8 +185,10 @@ final class ReflectionRuleEvidence {
             String response = actionToken(recovered);
             if (response.isEmpty()) continue;
 
-            add(out, KIND_RECOVERY, scope, condition, response,
-                    failureEvidence(failed) + " -> " + response + " SUCCESS");
+            add(out, KIND_FRICTION, scope, condition, response,
+                    failureEvidence(failed) + " -> " + response + " SUCCESS",
+                    4,
+                    "FAILED_RECOVERY|RETRY");
         }
     }
 
@@ -201,45 +211,6 @@ final class ReflectionRuleEvidence {
         return code.isEmpty() ? tool + " FAILED" : tool + " FAILED:" + code;
     }
 
-    /**
-     * Routine successful transitions are evidence only. They are not immediately
-     * sent to Gemini; ExperienceEvidenceStore requires repeated occurrences first.
-     */
-    private static void deriveSemanticTransitions(List<Step> steps,
-                                                  LinkedHashMap<String, Candidate> out) {
-        if (steps == null) return;
-        Step previousSemantic = null;
-        int previousSemanticIndex = -1;
-
-        for (int i = 0; i < steps.size(); i++) {
-            Step current = steps.get(i);
-            if (current == null) continue;
-
-            if (current.failed() && isMutationTool(current.tool)) {
-                previousSemantic = null;
-                previousSemanticIndex = -1;
-                continue;
-            }
-
-            if (!current.succeeded() || current.semanticTarget.isEmpty()) continue;
-
-            if (previousSemantic != null
-                    && !hasFailedMutationBetween(steps, previousSemanticIndex + 1, i)
-                    && !semanticFamily(previousSemantic.semanticTarget)
-                            .equals(semanticFamily(current.semanticTarget))) {
-                String scope = current.semanticTarget;
-                String condition = "AFTER:" + semanticFamily(previousSemantic.semanticTarget);
-                String response = actionToken(current);
-                add(out, KIND_ROUTINE, scope, condition, response,
-                        semanticFamily(previousSemantic.semanticTarget)
-                                + " SUCCESS -> " + current.semanticTarget + " SUCCESS");
-            }
-
-            previousSemantic = current;
-            previousSemanticIndex = i;
-        }
-    }
-
     private static Step lastMutation(List<Step> steps) {
         if (steps == null) return null;
         for (int i = steps.size() - 1; i >= 0; i--) {
@@ -254,7 +225,9 @@ final class ReflectionRuleEvidence {
                             String scope,
                             String condition,
                             String response,
-                            String evidence) {
+                            String evidence,
+                            int frictionScore,
+                            String frictionSignals) {
         String safeScope = safeRulePart(scope, 80);
         String safeCondition = safeRulePart(condition, 96);
         String safeResponse = safeRulePart(response, 48);
@@ -271,7 +244,9 @@ final class ReflectionRuleEvidence {
                 safeScope,
                 safeCondition,
                 safeResponse,
-                safeRulePart(evidence, 160)));
+                safeRulePart(evidence, 160),
+                frictionScore,
+                safeRulePart(frictionSignals, 120)));
     }
 
     private static String failureScope(Step step) {
