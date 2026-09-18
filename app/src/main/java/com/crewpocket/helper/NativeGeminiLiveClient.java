@@ -87,16 +87,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private volatile long visualHoldUntil;
     private volatile boolean setupReady;
     private long screenFrameSequence;
-    private final Set<String> handledToolCalls = new HashSet<String>();
-    /**
-     * A Gemini Live function-call may be re-delivered while its first copy is
-     * still queued.  This set coalesces that transport-level duplicate.  It is
-     * deliberately scoped by userIntentGeneration, so a later user command is
-     * never suppressed by an earlier command's de-duplication state.
-     */
-    private final Set<String> inFlightToolSignatures = new HashSet<String>();
-    private final java.util.HashMap<String, String> primaryToolCallSignatures = new java.util.HashMap<String, String>();
-    private final java.util.HashMap<String, ArrayList<ToolResponseRecipient>> coalescedToolCallRecipients = new java.util.HashMap<String, ArrayList<ToolResponseRecipient>>();
     // Phone tasks routinely need several semantic actions plus model turns.
     // Observation/verification calls do not consume the mutation-action budget.
     private static final long AGENT_FINAL_RESPONSE_WAIT_MS = 12_000L;
@@ -104,9 +94,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     // Navigation is deliberately repeatable during a presentation. All other
     // tools keep the conservative 3-run default safety limit.
     private final Object agentLock = new Object();
-    private final ArrayList<JSONObject> pendingToolCalls = new ArrayList<JSONObject>();
     private final ArrayList<AgentTaskRecord> agentHistory = new ArrayList<AgentTaskRecord>();
-    private volatile boolean toolWorkerRunning;
+    private final ToolCallDispatcher toolCallDispatcher;
     private volatile Thread activeToolThread;
     private volatile HttpURLConnection activeToolConnection;
     private volatile int agentMaxSteps = 30;
@@ -191,6 +180,36 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         this.appContext = context == null ? null : context.getApplicationContext();
         this.notebookToolHandler = new NotebookToolHandler(this.appContext);
         this.appPlaybookStore = new AppPlaybookStore(this.appContext);
+        this.toolCallDispatcher = new ToolCallDispatcher(
+                new ToolCallDispatcher.Host() {
+                    @Override public void executeTool(JSONObject call) {
+                        executeSingleTool(call);
+                    }
+
+                    @Override public void onToolQueued(
+                            String id,
+                            String name,
+                            long generation) {
+                        shadowAgentRuntime.onToolQueued(id, name, generation);
+                        agentRuntimeV2.onToolQueued(id, name, generation);
+                    }
+
+                    @Override public void onDuplicateIgnored(
+                            String id,
+                            String name,
+                            long generation) {
+                        shadowAgentRuntime.onDuplicateIgnored(
+                                id, name, generation);
+                    }
+
+                    @Override public void onWorkerChanged(Thread worker) {
+                        activeToolThread = worker;
+                    }
+
+                    @Override public void onDispatchError(Exception error) {
+                        Log.w(TAG, "工具呼叫排程失敗", error);
+                    }
+                });
         this.visionController = new LiveVisionController(new LiveVisionController.Sender() {
             @Override public boolean send(String payload) {
                 WebSocket socket = NativeGeminiLiveClient.this.webSocket;
@@ -381,7 +400,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             task.finished = true;
             task.endReason = reason == null ? "使用者取消" : reason;
             task.status = "Agent 任務已停止";
-            pendingToolCalls.clear();
+            toolCallDispatcher.clearPending();
             clearAgentResponseWatchdogLocked();
             agentHistory.add(task);
             lastFinishedIntentGeneration = task.intentGeneration;
@@ -459,10 +478,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             PerformanceMetrics.markAgentUserIntent(userIntentGeneration);
             // Calls that have not started belong to the old utterance. An
             // executing call is additionally guarded by its generation below.
-            pendingToolCalls.clear();
-            inFlightToolSignatures.clear();
-            primaryToolCallSignatures.clear();
-            coalescedToolCallRecipients.clear();
+            toolCallDispatcher.resetForNewIntent();
             if (activeAgentTask != null) shadowTaskId = activeAgentTask.taskId;
         }
 
@@ -1567,69 +1583,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
 
     private void executeToolAsync(final JSONObject call) {
-        final String id = call.optString("id", "tool_" + System.nanoTime());
-        synchronized (handledToolCalls) { if (!handledToolCalls.add(id)) return; }
-        try {
-            synchronized (agentLock) {
-                final long generation = userIntentGeneration;
-                final String signature = generation + "|" + buildIncomingToolSignature(call);
-                // Gemini can emit the same function call twice in one streamed
-                // response with distinct ids.  Coalesce it while it is pending
-                // or executing; this is not a model-loop failure.
-                if (!inFlightToolSignatures.add(signature)) {
-                    ArrayList<ToolResponseRecipient> recipients = coalescedToolCallRecipients.get(signature);
-                    if (recipients == null) {
-                        recipients = new ArrayList<ToolResponseRecipient>();
-                        coalescedToolCallRecipients.put(signature, recipients);
-                    }
-                    recipients.add(new ToolResponseRecipient(id, call.optString("name", "unknown")));
-                    shadowAgentRuntime.onDuplicateIgnored(
-                            id, call.optString("name", "unknown"), generation);
-                    Log.d(TAG, "合併同輪重送工具呼叫：" + signature);
-                    return;
-                }
-                primaryToolCallSignatures.put(id, signature);
-                call.put("_crew_intent_generation", generation);
-                call.put("_crew_inflight_signature", signature);
-                pendingToolCalls.add(call);
-                shadowAgentRuntime.onToolQueued(
-                        id, call.optString("name", "unknown"), generation);
-                agentRuntimeV2.onToolQueued(
-                        id, call.optString("name", "unknown"), generation);
-            }
-        } catch (Exception error) {
-            Log.w(TAG, "工具呼叫排程失敗", error);
-            return;
-        }
-        drainToolQueue();
-    }
-
-    private String buildIncomingToolSignature(JSONObject call) {
-        JSONObject args = call.optJSONObject("args");
-        return call.optString("name", "unknown") + ":" + (args == null ? "{}" : args.toString());
-    }
-
-    private void drainToolQueue() {
-        final JSONObject call;
+        final long generation;
         synchronized (agentLock) {
-            if (toolWorkerRunning || pendingToolCalls.isEmpty()) return;
-            toolWorkerRunning = true;
-            call = pendingToolCalls.remove(0);
+            generation = userIntentGeneration;
         }
-        new Thread(new Runnable() {
-            @Override public void run() {
-                try {
-                    executeSingleTool(call);
-                } finally {
-                    synchronized (agentLock) {
-                        inFlightToolSignatures.remove(call.optString("_crew_inflight_signature", ""));
-                    }
-                    activeToolThread = null;
-                    synchronized (agentLock) { toolWorkerRunning = false; }
-                    drainToolQueue();
-                }
-            }
-        }, "crew-native-live-agent-tool").start();
+        toolCallDispatcher.enqueue(call, generation);
     }
 
     private void executeSingleTool(final JSONObject call) {
@@ -1833,7 +1791,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         }
         JSONObject result = new JSONObject();
         long toolStartedAt = android.os.SystemClock.elapsedRealtime();
-        activeToolThread = Thread.currentThread();
         try {
             shadowAgentRuntime.onActionExecuted(id);
             if (SemanticPhoneAction.ERROR_TOOL.equals(name)) result = args;
@@ -4654,29 +4611,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             modelResult.put("appPlaybook", appPlaybook);
         }
 
-        JSONArray responses = new JSONArray();
-        responses.put(new JSONObject().put("response", new JSONObject().put("result", modelResult)).put("id", id).put("name", name));
-        synchronized (agentLock) {
-            String signature = primaryToolCallSignatures.remove(id);
-            if (signature != null) {
-                ArrayList<ToolResponseRecipient> duplicates = coalescedToolCallRecipients.remove(signature);
-                if (duplicates != null) {
-                    for (ToolResponseRecipient duplicate : duplicates) {
-                        responses.put(new JSONObject().put("response", new JSONObject().put("result", modelResult))
-                                .put("id", duplicate.id).put("name", duplicate.name));
-                    }
-                }
-            }
-        }
+        JSONArray responses =
+                toolCallDispatcher.expandResponses(id, name, modelResult);
         if (webSocket == null || !webSocket.send(new JSONObject().put("toolResponse", new JSONObject().put("functionResponses", responses)).toString())) {
             throw new Exception("工具結果無法傳回 Gemini");
         }
-    }
-
-    private static final class ToolResponseRecipient {
-        final String id;
-        final String name;
-        ToolResponseRecipient(String id, String name) { this.id = id; this.name = name; }
     }
 
     private void startAudio() {
