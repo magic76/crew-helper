@@ -34,6 +34,12 @@ public final class SendAuthorizationTest {
         check(!SendAuthorization.isStandaloneCurrentScreenSendCommand("輸入晚點到並送出"),
                 "message plus send is not standalone");
 
+        SendAuthorization discussion = new SendAuthorization();
+        discussion.updateFromUserText("怎麼送出");
+        check(!discussion.canAttempt(), "how-to discussion grants no send");
+        discussion.updateFromUserText("不要送出");
+        check(!discussion.canAttempt(), "negated send grants no send");
+
         System.out.println("PASS SendAuthorizationTest: " + assertions + " checks");
     }
 }
