@@ -102,6 +102,7 @@ public class FloatingBubbleManager {
     private String currentState = "IDLE";
     private boolean nativeLiveRequested = false;
     private String latestLiveStatus = "待命";
+    private RuntimeUiState latestLiveUiState = RuntimeUiState.idle("待命");
     private double latestMicDbfs = -96d;
     private boolean latestMicSending = false;
     private String latestLiveTranscript = "等待對話開始…";
@@ -281,6 +282,10 @@ public class FloatingBubbleManager {
     }
 
     public void showCompactStatus(final String title, final String detail) {
+        showRuntimeUiState(RuntimeUiState.fromLegacy(title, detail));
+    }
+
+    public void showRuntimeUiState(final RuntimeUiState state) {
         mainHandler.post(new Runnable() {
             @Override
             public void run() {
@@ -291,8 +296,11 @@ public class FloatingBubbleManager {
                     compactStatusAutoHideRunnable = null;
                 }
 
-                String heading = title == null ? "" : title.trim();
-                String body = detail == null ? "" : detail.trim();
+                RuntimeUiState resolved = state == null
+                        ? RuntimeUiState.info("", "")
+                        : state;
+                String heading = resolved.title;
+                String body = resolved.detail;
                 String primary = heading.isEmpty() ? body : heading;
                 String secondary = heading.isEmpty()
                         || body.isEmpty()
@@ -303,21 +311,11 @@ public class FloatingBubbleManager {
 
                 String message = secondary.isEmpty()
                         ? primary : primary + " · " + secondary;
-                String lower = message.toLowerCase(java.util.Locale.ROOT);
-                boolean error = lower.contains("失敗")
-                        || lower.contains("錯誤")
-                        || lower.contains("無法");
-                boolean attention = lower.contains("需要你")
-                        || lower.contains("需要權限")
-                        || lower.contains("選擇")
-                        || lower.contains("正在學習");
-                boolean contextReady = lower.contains("已框選")
-                        || lower.contains("已選取");
-                boolean done = lower.contains("完成")
-                        || lower.contains("已開")
-                        || lower.contains("已送")
-                        || lower.contains("找到")
-                        || lower.contains("已記住");
+                boolean error = resolved.isError();
+                boolean attention = resolved.needsAttention();
+                boolean contextReady =
+                        resolved.phase == RuntimeUiState.Phase.CONTEXT_READY;
+                boolean done = resolved.isSuccess();
 
                 if (compactStatusView != null) {
                     try { windowManager.removeViewImmediate(compactStatusView); }
@@ -448,11 +446,7 @@ public class FloatingBubbleManager {
                     return;
                 }
 
-                final long autoHideMs = attention
-                        ? ATTENTION_STATUS_AUTO_HIDE_MS
-                        : (contextReady
-                                ? CONTEXT_READY_STATUS_AUTO_HIDE_MS
-                                : MINI_STATUS_AUTO_HIDE_MS);
+                final long autoHideMs = resolved.recommendedAutoHideMs();
                 compactStatusAutoHideRunnable = new Runnable() {
                     @Override public void run() {
                         hideCompactStatus();
