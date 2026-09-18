@@ -3,21 +3,27 @@ package com.crewpocket.helper;
 /**
  * Pure trigger policy for Crew Experience learning.
  *
- * Proven recovery is immediately reviewable. Routine successful patterns are
- * intentionally quiet until Runtime has observed the same deterministic rule
- * enough times to make it worth a model call.
+ * Plain success never triggers Experience. Runtime first detects deterministic
+ * friction. Strong friction is reviewable immediately; medium friction must
+ * repeat for the same rule key before a model call is allowed.
  */
 final class ExperienceTriggerPolicy {
-    static final int ROUTINE_REPEAT_THRESHOLD = 3;
+    static final int IMMEDIATE_FRICTION_SCORE = 5;
+    static final int REPEATED_FRICTION_MIN_SCORE = 3;
+    static final int REPEATED_FRICTION_OCCURRENCES = 2;
 
     private ExperienceTriggerPolicy() {}
 
-    static boolean isImmediate(String kind) {
-        return ReflectionRuleEvidence.KIND_RECOVERY.equals(kind);
+    static boolean isImmediateFriction(int score) {
+        return score >= IMMEDIATE_FRICTION_SCORE;
     }
 
-    static boolean shouldReviewRoutineAtCount(int count) {
-        return count >= ROUTINE_REPEAT_THRESHOLD
-                && count % ROUTINE_REPEAT_THRESHOLD == 0;
+    static boolean isTrackableFriction(int score) {
+        return score >= REPEATED_FRICTION_MIN_SCORE;
+    }
+
+    static boolean shouldReviewRepeatedFriction(int score, int occurrences) {
+        return isTrackableFriction(score)
+                && occurrences >= REPEATED_FRICTION_OCCURRENCES;
     }
 }
