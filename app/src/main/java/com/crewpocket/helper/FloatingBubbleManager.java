@@ -73,9 +73,6 @@ public class FloatingBubbleManager {
     private Runnable compactStatusAutoHideRunnable = null;
     private String lastShownAgentStage = "";
     private ScreenSelectionOverlay screenSelectionOverlay = null;
-    private static final long MINI_STATUS_AUTO_HIDE_MS = 2300L;
-    private static final long ATTENTION_STATUS_AUTO_HIDE_MS = 6200L;
-    private static final long CONTEXT_READY_STATUS_AUTO_HIDE_MS = 4200L;
     private static final int BUBBLE_SIZE_DP = 48;
 
     private DockIconButton voiceCallButton = null;
