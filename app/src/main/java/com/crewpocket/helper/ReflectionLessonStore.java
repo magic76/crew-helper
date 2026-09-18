@@ -243,7 +243,7 @@ final class ReflectionLessonStore {
         StringBuilder out = new StringBuilder();
         out.append("Crew Experience\n");
         if (items.length() == 0) {
-            out.append("No learned experiences yet. Normal successful tasks stay quiet; Crew learns from proven recovery or repeated successful patterns.");
+            out.append("No learned experiences yet. Plain success stays quiet; Crew learns from strong or repeated friction patterns.");
             return out.toString();
         }
 
@@ -343,9 +343,12 @@ final class ReflectionLessonStore {
     }
 
     private static double experienceConfidence(ReflectionRuleEvidence.Candidate candidate) {
-        return candidate != null
-                && ReflectionRuleEvidence.KIND_RECOVERY.equals(candidate.kind)
-                ? 0.86d : 0.80d;
+        if (candidate == null) return 0.80d;
+        if (candidate.frictionScore >=
+                ExperienceTriggerPolicy.IMMEDIATE_FRICTION_SCORE) {
+            return 0.88d;
+        }
+        return 0.82d;
     }
 
     private static double rollingAverage(double previous, int previousCount, double next) {
