@@ -52,6 +52,11 @@ public final class SendOnlyPolicyTest {
 
         check("john".equals(UserActionScope.extractNamedRecipient("send a message to John saying I arrived")),
                 "english recipient extracted");
+        UserActionScope englishNamed = new UserActionScope();
+        englishNamed.updateFromUserText("send a message to John saying I arrived");
+        check(englishNamed.canSend(), "english named recipient send authorized");
+        check(englishNamed.requiresRecipientVerification(), "english named recipient requires verification");
+        check("john".equals(englishNamed.authorizedRecipient()), "english named recipient stored");
 
         System.out.println("PASS SendOnlyPolicyTest: " + assertions + " checks");
     }
