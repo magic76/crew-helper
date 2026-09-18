@@ -1815,11 +1815,10 @@ public class CrewAccessibilityService extends AccessibilityService {
     }
 
     /**
-     * 0052 simple SEND_CURRENT primitive.
+     * Shared one-shot message transaction.
      *
-     * Current-screen only:
-     * composer with text -> learned/semantic Send -> IME fallback -> one verify.
-     * No recipient routing, no second click, no retry loop.
+     * /send_text and /send_current now use the same resolver, safety boundary,
+     * Accessibility-event timing signal and SendVerification contract.
      */
     private SendTextTransaction newSendTextTransaction() {
         return new SendTextTransaction(
