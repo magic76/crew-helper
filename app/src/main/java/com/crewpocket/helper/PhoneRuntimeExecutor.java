@@ -486,7 +486,7 @@ final class PhoneRuntimeExecutor {
                                 + visionController.lastScreenHeight());
     }
 
-    JSONObject semanticTap(String elementId) {
+    JSONObject semanticTap(String elementId) throws Exception {
         try {
             return post(
                     "/semantic_tap",
