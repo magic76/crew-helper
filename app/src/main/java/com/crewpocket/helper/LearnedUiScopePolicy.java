@@ -26,10 +26,14 @@ final class LearnedUiScopePolicy {
             String packageA,
             String roleA,
             String composerStateA,
+            String composerClassA,
+            String composerViewIdA,
             String structureA,
             String packageB,
             String roleB,
             String composerStateB,
+            String composerClassB,
+            String composerViewIdB,
             String structureB) {
         if (!safe(packageA).equals(safe(packageB))) return false;
         if (!safe(roleA).equals(safe(roleB))) return false;
@@ -43,6 +47,18 @@ final class LearnedUiScopePolicy {
                         || "UNKNOWN".equals(bState)
                         || aState.equals(bState);
         if (!stateCompatible) return false;
+
+        String aViewId = safe(composerViewIdA);
+        String bViewId = safe(composerViewIdB);
+        if (!aViewId.isEmpty() && !bViewId.isEmpty()) {
+            return aViewId.equals(bViewId);
+        }
+
+        String aClass = safe(composerClassA);
+        String bClass = safe(composerClassB);
+        if (!aClass.isEmpty() && !bClass.isEmpty() && !aClass.equals(bClass)) {
+            return false;
+        }
 
         String aStructure = safe(structureA);
         String bStructure = safe(structureB);
