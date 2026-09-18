@@ -180,17 +180,18 @@ final class SendTextTransaction {
                         return result;
                     }
                     try {
-                        boolean clickAccepted = send.performAction(AccessibilityNodeInfo.ACTION_CLICK);
-                        if (clickAccepted) {
-                            result.submitted = true;
-                            result.submitMethod = "SEMANTIC_SEND";
-                        } else {
-                            // Do not guess or immediately fall back to another submit primitive:
-                            // a duplicate send is worse than a visible failure.  Surface the real
-                            // Android result so the resolver can be fixed from device evidence.
-                            result.submitMethod = "SEMANTIC_SEND_REJECTED";
-                            result.error = "SUBMIT_CLICK_REJECTED";
-                        }
+                        boolean clickAccepted =
+                                send.performAction(
+                                        AccessibilityNodeInfo.ACTION_CLICK);
+                        // Accessibility implementations sometimes return false
+                        // even after accepting the semantic click. Never fall
+                        // through to a second submit primitive. Treat the click
+                        // as one dispatched attempt and let fresh UI evidence
+                        // decide whether it actually sent.
+                        result.submitted = true;
+                        result.submitMethod = clickAccepted
+                                ? "SEMANTIC_SEND"
+                                : "SEMANTIC_SEND_UNCONFIRMED";
                     } finally {
                         recycle(send);
                         send = null;
