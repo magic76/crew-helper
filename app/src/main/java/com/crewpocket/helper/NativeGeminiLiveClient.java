@@ -150,6 +150,12 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private volatile long runtimeShortcutGuardUntil = 0L;
     // 0052: standalone "送出/發送/send" is owned directly by Runtime.
     private volatile boolean runtimeSendCurrentExecuting = false;
+    // Finalized user intent is the only authority source for SEND. These fields
+    // bridge Gemini Live's cross-frame ordering race without granting permission
+    // from a model tool call.
+    private volatile long finalizedSendAuthorizationGeneration = -1L;
+    private volatile String finalizedSendAuthorizationText = "";
+    private volatile long runtimeSendCurrentHandledGeneration = -1L;
     private AudioIncidentRecorder audioIncidentRecorder;
     private volatile PendingCondition pendingCondition = null;
     private final Object pendingChoiceLock = new Object();
@@ -508,6 +514,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
             beginNewUserIntent(input);
             userActionScope.updateFromUserText(input);
+            recordFinalizedSendAuthorization(input);
             if (tryHandleRuntimeAppTeaching(input)) {
                 listener.onTranscript("你", input);
                 return true;
@@ -1001,6 +1008,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             }
 
             userActionScope.updateFromUserText(completeUserInput);
+            recordFinalizedSendAuthorization(completeUserInput);
             if (tryHandleRuntimeAppTeaching(completeUserInput)) return;
             if (tryHandleRuntimeSendCurrent(completeUserInput)) return;
             if (isStopAgentTaskPhrase(completeUserInput)) {
@@ -1153,6 +1161,78 @@ final class NativeGeminiLiveClient extends WebSocketListener {
      * 0052: standalone send-only commands never depend on Gemini tool choice.
      * Runtime owns the physical SEND_CURRENT operation.
      */
+    private void recordFinalizedSendAuthorization(String text) {
+        finalizedSendAuthorizationGeneration = userIntentGeneration;
+        finalizedSendAuthorizationText = text == null ? "" : text.trim();
+    }
+
+    /**
+     * Gemini Live may emit send_text in one frame and the finalized user
+     * transcription in the next. Give only SEND a short grace window so the
+     * authoritative user transcript can arrive. The model tool call itself
+     * never grants permission.
+     */
+    private long awaitFinalizedSendAuthorization(
+            String requestedName,
+            JSONObject requestedArgs,
+            long queuedGeneration) {
+        if (!"send_text".equals(requestedName)
+                || userActionScope.canSend()
+                || queuedGeneration != userIntentGeneration) {
+            return queuedGeneration;
+        }
+
+        long deadline = System.currentTimeMillis() + 500L;
+        while (System.currentTimeMillis() < deadline) {
+            if (finalizedSendAuthorizationGeneration > queuedGeneration
+                    || runtimeSendCurrentHandledGeneration > queuedGeneration) {
+                break;
+            }
+            try {
+                Thread.sleep(20L);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+
+        long finalizedGeneration = finalizedSendAuthorizationGeneration;
+        if (finalizedGeneration != queuedGeneration + 1L) {
+            return queuedGeneration;
+        }
+
+        // A standalone "幫我送出" is Runtime-owned and may already be executing
+        // or completed by the time this early model tool wakes up.
+        if (runtimeSendCurrentHandledGeneration == finalizedGeneration
+                && SendAuthorization.isStandaloneCurrentScreenSendCommand(
+                        finalizedSendAuthorizationText)) {
+            return finalizedGeneration;
+        }
+
+        if (!userActionScope.canSend()
+                || !sendToolMatchesFinalizedUserIntent(
+                        requestedArgs, finalizedSendAuthorizationText)) {
+            return queuedGeneration;
+        }
+
+        return finalizedGeneration;
+    }
+
+    private boolean sendToolMatchesFinalizedUserIntent(
+            JSONObject requestedArgs,
+            String finalizedText) {
+        if (requestedArgs == null || finalizedText == null) return false;
+        String toolText = requestedArgs.optString("text", "").trim();
+        if (toolText.isEmpty()) {
+            return SendAuthorization.isStandaloneCurrentScreenSendCommand(finalizedText);
+        }
+        String normalizedTool = TextMatch.caseFold(toolText)
+                .replaceAll("[\\s，,。！？!「」『』\\\"'：:；;（）()]", "");
+        String normalizedFinal = TextMatch.caseFold(finalizedText)
+                .replaceAll("[\\s，,。！？!「」『』\\\"'：:；;（）()]", "");
+        return !normalizedTool.isEmpty() && normalizedFinal.contains(normalizedTool);
+    }
+
     private boolean tryHandleRuntimeSendCurrent(String inputText) {
         if (!UserActionScope.isStandaloneCurrentScreenSendCommand(inputText)) {
             return false;
@@ -1166,6 +1246,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             generation = userIntentGeneration;
         }
 
+        runtimeSendCurrentHandledGeneration = generation;
         runtimeSendCurrentExecuting = true;
         runtimeShortcutGuardUntil = Long.MAX_VALUE;
 
@@ -1567,7 +1648,34 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         final String requestedName = call.optString("name", "unknown");
         final JSONObject requestedArgs = call.optJSONObject("args") == null
                 ? new JSONObject() : call.optJSONObject("args");
-        final long callIntentGeneration = call.optLong("_crew_intent_generation", -1L);
+        long callIntentGeneration = call.optLong("_crew_intent_generation", -1L);
+
+        // send_text is the only mutation with a known Gemini Live ordering race:
+        // toolCall can arrive just before the finalized user transcription.
+        // Wait briefly for user authority, never for model authority.
+        long reconciledSendGeneration = awaitFinalizedSendAuthorization(
+                requestedName, requestedArgs, callIntentGeneration);
+        if (reconciledSendGeneration != callIntentGeneration) {
+            callIntentGeneration = reconciledSendGeneration;
+            try { call.put("_crew_intent_generation", callIntentGeneration); }
+            catch (Exception ignored) {}
+
+            if (runtimeSendCurrentHandledGeneration == callIntentGeneration
+                    && SendAuthorization.isStandaloneCurrentScreenSendCommand(
+                            finalizedSendAuthorizationText)) {
+                JSONObject runtimeOwned = new JSONObject();
+                try {
+                    runtimeOwned.put("success", true)
+                            .put("taskState", "IN_PROGRESS")
+                            .put("runtimeHandled", "SEND_CURRENT")
+                            .put("message",
+                                    "Runtime 已接管這次送出；不要再呼叫 send_text 或其他 mutation。");
+                    sendToolResponse(id, requestedName, runtimeOwned);
+                } catch (Exception ignored) {}
+                return;
+            }
+        }
+
         if (!isCurrentUserIntent(callIntentGeneration)) {
             // The user has already spoken a new command.  Do not execute a
             // queued mutation from the old turn, and do not create a new task

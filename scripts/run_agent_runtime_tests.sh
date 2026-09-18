@@ -23,6 +23,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/AgentRuntimeV2.java" \
   "$SRC/TextMatch.java" \
   "$SRC/TextEntryGoalGuard.java" \
+  "$SRC/SendAuthorization.java" \
   "$SRC/UserActionScope.java" \
   "$SRC/SearchTransactionPolicy.java" \
   "$SRC/ScrollDirectionPolicy.java" \
@@ -40,6 +41,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/AppSemanticConcept.java" \
   "$SRC/GoogleMapsSemanticContract.java" \
   "$SRC/AgentTapDiagnostic.java" \
+  "$ROOT/tests/SendAuthorizationTest.java" \
   "$ROOT/tests/SendOnlyPolicyTest.java" \
   "$ROOT/tests/SearchTransactionPolicyTest.java" \
   "$ROOT/tests/ScrollDirectionPolicyTest.java" \
@@ -64,6 +66,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/AgentTapDiagnosticTest.java" \
   "$ROOT/tests/AgentReplayRunner.java"
 
+java -cp "$OUT" com.crewpocket.helper.SendAuthorizationTest
 java -cp "$OUT" com.crewpocket.helper.SendOnlyPolicyTest
 java -cp "$OUT" com.crewpocket.helper.SearchTransactionPolicyTest
 java -cp "$OUT" com.crewpocket.helper.ScrollDirectionPolicyTest
