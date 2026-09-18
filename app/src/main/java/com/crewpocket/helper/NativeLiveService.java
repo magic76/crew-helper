@@ -1402,7 +1402,9 @@ public class NativeLiveService extends Service {
 
     private void updateStatus(String status, boolean showOngoing) {
         if (!active) return;
-        FloatingBubbleManager.getInstance(this).updateNativeLiveStatus(status, showOngoing);
+        FloatingBubbleManager.getInstance(this).updateNativeLiveState(
+                RuntimeUiState.fromLiveStatus(status, showOngoing),
+                showOngoing);
         updateForegroundNotification(status == null || status.isEmpty() ? "Gemini Live 使用中" : status);
     }
 

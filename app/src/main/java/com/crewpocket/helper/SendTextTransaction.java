@@ -18,6 +18,8 @@ final class SendTextTransaction {
         AccessibilityNodeInfo resolveComposer(AccessibilityNodeInfo root);
         AccessibilityNodeInfo resolveSendButton(AccessibilityNodeInfo root);
         void recordSendResolutionResult(boolean success);
+        long uiRevision();
+        boolean awaitUiChange(long afterRevision, long timeoutMs);
     }
 
     static final class Result {
@@ -57,9 +59,9 @@ final class SendTextTransaction {
         }
     }
 
-    private static final long INPUT_SETTLE_MS = 180L;
-    private static final long SUBMIT_SETTLE_MS = 450L;
-    private static final long SECOND_VERIFY_MS = 500L;
+    private static final long INPUT_EVENT_TIMEOUT_MS = 350L;
+    private static final long VERIFY_EVENT_TIMEOUT_MS = 1200L;
+    private static final long VERIFY_WAIT_SLICE_MS = 260L;
 
     private final Environment environment;
 
@@ -125,6 +127,7 @@ final class SendTextTransaction {
                 result.textLength = submittedText.length();
             } else {
                 result.stage = "TYPE";
+                long inputRevision = environment.uiRevision();
                 if (!setText(composer, requestedText)) {
                     result.error = "INPUT_FAILED";
                     return result;
@@ -132,7 +135,11 @@ final class SendTextTransaction {
                 result.typed = true;
                 result.textLength = requestedText.length();
 
-                sleep(INPUT_SETTLE_MS);
+                // Accessibility text/content events are timing hints only.
+                // Verification below remains authoritative.
+                environment.awaitUiChange(
+                        inputRevision,
+                        INPUT_EVENT_TIMEOUT_MS);
 
                 recycle(composer);
                 composer = null;
@@ -161,6 +168,7 @@ final class SendTextTransaction {
                     SendVerification.capture(root, composer);
 
             result.stage = "SUBMIT";
+            long submitRevision = environment.uiRevision();
             AccessibilityNodeInfo send = null;
             try {
                 send = environment.resolveSendButton(root);
@@ -172,17 +180,18 @@ final class SendTextTransaction {
                         return result;
                     }
                     try {
-                        boolean clickAccepted = send.performAction(AccessibilityNodeInfo.ACTION_CLICK);
-                        if (clickAccepted) {
-                            result.submitted = true;
-                            result.submitMethod = "SEMANTIC_SEND";
-                        } else {
-                            // Do not guess or immediately fall back to another submit primitive:
-                            // a duplicate send is worse than a visible failure.  Surface the real
-                            // Android result so the resolver can be fixed from device evidence.
-                            result.submitMethod = "SEMANTIC_SEND_REJECTED";
-                            result.error = "SUBMIT_CLICK_REJECTED";
-                        }
+                        boolean clickAccepted =
+                                send.performAction(
+                                        AccessibilityNodeInfo.ACTION_CLICK);
+                        // Accessibility implementations sometimes return false
+                        // even after accepting the semantic click. Never fall
+                        // through to a second submit primitive. Treat the click
+                        // as one dispatched attempt and let fresh UI evidence
+                        // decide whether it actually sent.
+                        result.submitted = true;
+                        result.submitMethod = clickAccepted
+                                ? "SEMANTIC_SEND"
+                                : "SEMANTIC_SEND_UNCONFIRMED";
                     } finally {
                         recycle(send);
                         send = null;
@@ -203,14 +212,11 @@ final class SendTextTransaction {
             }
 
             result.stage = "VERIFY";
-            sleep(SUBMIT_SETTLE_MS);
-
             SendVerification.Result verification =
-                    verifyWithFreshSnapshot(before, submittedText);
-            if (verification.state == SendVerification.State.UNVERIFIED) {
-                sleep(SECOND_VERIFY_MS);
-                verification = verifyWithFreshSnapshot(before, submittedText);
-            }
+                    verifyUntilSettled(
+                            before,
+                            submittedText,
+                            submitRevision);
 
             result.verification = verification;
             boolean verifiedOrLikely =
@@ -315,12 +321,33 @@ final class SendTextTransaction {
         return false;
     }
 
-    private static void sleep(long millis) {
-        try {
-            Thread.sleep(millis);
-        } catch (InterruptedException interrupted) {
-            Thread.currentThread().interrupt();
+    private SendVerification.Result verifyUntilSettled(
+            SendVerification.Snapshot before,
+            String submittedText,
+            long initialRevision) {
+        SendVerification.Result verification =
+                verifyWithFreshSnapshot(before, submittedText);
+        if (verification.state != SendVerification.State.UNVERIFIED) {
+            return verification;
         }
+
+        long deadlineNanos =
+                System.nanoTime() + VERIFY_EVENT_TIMEOUT_MS * 1_000_000L;
+        long observedRevision = initialRevision;
+
+        while (verification.state == SendVerification.State.UNVERIFIED) {
+            long remainingNanos = deadlineNanos - System.nanoTime();
+            if (remainingNanos <= 0L) break;
+
+            long remainingMs = Math.max(1L, remainingNanos / 1_000_000L);
+            long sliceMs = Math.min(VERIFY_WAIT_SLICE_MS, remainingMs);
+
+            environment.awaitUiChange(observedRevision, sliceMs);
+            observedRevision = environment.uiRevision();
+
+            verification = verifyWithFreshSnapshot(before, submittedText);
+        }
+        return verification;
     }
 
     private static void recycle(AccessibilityNodeInfo node) {

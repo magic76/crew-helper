@@ -150,11 +150,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private volatile long runtimeShortcutGuardUntil = 0L;
     // 0052: standalone "送出/發送/send" is owned directly by Runtime.
     private volatile boolean runtimeSendCurrentExecuting = false;
-    // Finalized user intent is the only authority source for SEND. These fields
-    // bridge Gemini Live's cross-frame ordering race without granting permission
-    // from a model tool call.
-    private volatile long finalizedSendAuthorizationGeneration = -1L;
-    private volatile String finalizedSendAuthorizationText = "";
+    // Finalized user turns are coordinated separately from model/tool frames.
+    // Tool calls never grant authority; only finalized user input advances this.
+    private final LiveTurnCoordinator liveTurnCoordinator = new LiveTurnCoordinator();
     private volatile long runtimeSendCurrentHandledGeneration = -1L;
     private AudioIncidentRecorder audioIncidentRecorder;
     private volatile PendingCondition pendingCondition = null;
@@ -1162,8 +1160,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
      * Runtime owns the physical SEND_CURRENT operation.
      */
     private void recordFinalizedSendAuthorization(String text) {
-        finalizedSendAuthorizationGeneration = userIntentGeneration;
-        finalizedSendAuthorizationText = text == null ? "" : text.trim();
+        liveTurnCoordinator.onFinalizedUserTurn(userIntentGeneration, text);
     }
 
     /**
@@ -1182,40 +1179,27 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             return queuedGeneration;
         }
 
-        long deadline = System.currentTimeMillis() + 500L;
-        while (System.currentTimeMillis() < deadline) {
-            if (finalizedSendAuthorizationGeneration > queuedGeneration
-                    || runtimeSendCurrentHandledGeneration > queuedGeneration) {
-                break;
-            }
-            try {
-                Thread.sleep(20L);
-            } catch (InterruptedException interrupted) {
-                Thread.currentThread().interrupt();
-                break;
-            }
-        }
-
-        long finalizedGeneration = finalizedSendAuthorizationGeneration;
-        if (finalizedGeneration != queuedGeneration + 1L) {
+        LiveTurnCoordinator.FinalizedTurn finalized =
+                liveTurnCoordinator.awaitNextAfter(queuedGeneration, 500L);
+        if (finalized.generation != queuedGeneration + 1L) {
             return queuedGeneration;
         }
 
         // A standalone "幫我送出" is Runtime-owned and may already be executing
-        // or completed by the time this early model tool wakes up.
-        if (runtimeSendCurrentHandledGeneration == finalizedGeneration
+        // or completed by the time this early model tool is reconciled.
+        if (runtimeSendCurrentHandledGeneration == finalized.generation
                 && SendAuthorization.isStandaloneCurrentScreenSendCommand(
-                        finalizedSendAuthorizationText)) {
-            return finalizedGeneration;
+                        finalized.text)) {
+            return finalized.generation;
         }
 
         if (!userActionScope.canSend()
                 || !sendToolMatchesFinalizedUserIntent(
-                        requestedArgs, finalizedSendAuthorizationText)) {
+                        requestedArgs, finalized.text)) {
             return queuedGeneration;
         }
 
-        return finalizedGeneration;
+        return finalized.generation;
     }
 
     private boolean sendToolMatchesFinalizedUserIntent(
@@ -1278,9 +1262,14 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 String error = result.optString("error", "");
 
                 try {
-                    FloatingBubbleManager.getInstance(appContext).showCompactStatus(
-                            success ? "已送出" : "訊息尚未送出",
-                            success ? "" : stage + (error.isEmpty() ? "" : " · " + error));
+                    FloatingBubbleManager.getInstance(appContext).showRuntimeUiState(
+                            success
+                                    ? RuntimeUiState.success("已送出", "")
+                                    : RuntimeUiState.error(
+                                            "訊息尚未送出",
+                                            stage + (error.isEmpty()
+                                                    ? ""
+                                                    : " · " + error)));
                 } catch (Exception ignored) {}
 
                 workingContext.updateLastResult(success ? "STEP_OK" : "STEP_FAILED");
@@ -1660,9 +1649,12 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             try { call.put("_crew_intent_generation", callIntentGeneration); }
             catch (Exception ignored) {}
 
+            LiveTurnCoordinator.FinalizedTurn finalizedTurn =
+                    liveTurnCoordinator.latest();
             if (runtimeSendCurrentHandledGeneration == callIntentGeneration
+                    && finalizedTurn.generation == callIntentGeneration
                     && SendAuthorization.isStandaloneCurrentScreenSendCommand(
-                            finalizedSendAuthorizationText)) {
+                            finalizedTurn.text)) {
                 JSONObject runtimeOwned = new JSONObject();
                 try {
                     runtimeOwned.put("success", true)
