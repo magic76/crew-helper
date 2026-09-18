@@ -2104,7 +2104,8 @@ public class FloatingBubbleManager {
                 boolean isAiSpeaking = NativeLiveService.isAiSpeaking();
                 
                 if (bubbleView != null) {
-                    if (isLiveError(latestLiveStatus)) {
+                    if (latestLiveUiState != null
+                            && latestLiveUiState.isError()) {
                         wakeBubbleFromDock();
                         bubbleView.setNativeVoiceState(3);
                     } else if (isAiSpeaking) {
