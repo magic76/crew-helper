@@ -1262,9 +1262,14 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 String error = result.optString("error", "");
 
                 try {
-                    FloatingBubbleManager.getInstance(appContext).showCompactStatus(
-                            success ? "已送出" : "訊息尚未送出",
-                            success ? "" : stage + (error.isEmpty() ? "" : " · " + error));
+                    FloatingBubbleManager.getInstance(appContext).showRuntimeUiState(
+                            success
+                                    ? RuntimeUiState.success("已送出", "")
+                                    : RuntimeUiState.error(
+                                            "訊息尚未送出",
+                                            stage + (error.isEmpty()
+                                                    ? ""
+                                                    : " · " + error)));
                 } catch (Exception ignored) {}
 
                 workingContext.updateLastResult(success ? "STEP_OK" : "STEP_FAILED");
