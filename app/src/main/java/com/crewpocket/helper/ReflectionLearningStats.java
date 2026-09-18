@@ -41,7 +41,7 @@ final class ReflectionLearningStats {
         StringBuilder out = new StringBuilder();
         out.append("Experience learning\n");
         out.append("Identity: Runtime evidence rule key\n");
-        out.append("Trigger: proven recovery or repeated routine evidence\n");
+        out.append("Trigger: strong or repeated deterministic friction\n");
         out.append("Model role: compress qualified evidence into a lesson\n");
         out.append("Model: ").append(GeminiTaskReflector.MODEL).append("\n");
         out.append("Candidates: ").append(candidate).append("\n");
