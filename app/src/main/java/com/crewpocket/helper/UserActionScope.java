@@ -1,26 +1,16 @@
 package com.crewpocket.helper;
 
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-
 /**
  * Deterministic latest-turn action boundary.
  *
- * Messaging action boundary:
- * - TYPE never implies Send;
- * - an explicit current-turn send intent grants exactly one send attempt;
- * - a named-recipient request may navigate within the chosen/current app;
- * - SEND stays blocked until Runtime verifies the requested recipient on the
- *   current conversation screen;
- * - recipient identity is ephemeral current-turn state and is never persisted.
+ * Cross-action latest-turn boundary for search, call ending and learning.
+ * SEND permission is intentionally isolated in SendAuthorization; compatibility
+ * accessors here only delegate to that single-purpose state object.
  */
 final class UserActionScope {
     private static final long SCOPE_TTL_MS = 120_000L;
 
-    private boolean sendAuthorized;
-    private boolean messageTransactionHandled;
-    private boolean namedRecipientMessagingRequested;
-    private String authorizedRecipient = "";
+    private final SendAuthorization sendAuthorization = new SendAuthorization();
 
     private boolean searchIntent;
     private boolean openSearchResultAuthorized;
@@ -92,16 +82,7 @@ final class UserActionScope {
         boolean resultSelection = navigation;
         boolean openResult = navigation || hasPostSearchOpenIntent(value);
 
-        namedRecipientMessagingRequested = isNamedRecipientMessagingRequest(text);
-        authorizedRecipient = namedRecipientMessagingRequested
-                ? extractNamedRecipient(text)
-                : "";
-        // Named-recipient messaging is permitted only when Runtime can extract
-        // a concrete target for later screen verification. No target means no SEND.
-        sendAuthorized = namedRecipientMessagingRequested
-                ? !authorizedRecipient.isEmpty()
-                : hasCurrentScreenSendIntent(text);
-        messageTransactionHandled = false;
+        sendAuthorization.updateFromUserText(text);
 
         searchIntent = search;
         searchResultSelectionRequested = resultSelection;
@@ -124,38 +105,35 @@ final class UserActionScope {
 
     synchronized boolean canSend() {
         expireIfNeeded();
-        return sendAuthorized;
+        return sendAuthorization.canAttempt();
     }
 
     synchronized void consumeSendAuthorization() {
-        sendAuthorized = false;
+        sendAuthorization.consume();
     }
 
     synchronized boolean requiresRecipientVerification() {
         expireIfNeeded();
-        return namedRecipientMessagingRequested && !authorizedRecipient.isEmpty();
+        return sendAuthorization.requiresRecipientVerification();
     }
 
     synchronized String authorizedRecipient() {
         expireIfNeeded();
-        return authorizedRecipient == null ? "" : authorizedRecipient;
+        return sendAuthorization.recipient();
     }
 
-    /** A single explicit-send turn owns one atomic transaction, never a tap loop. */
     synchronized void markMessageTransactionHandled() {
-        messageTransactionHandled = true;
+        sendAuthorization.markTransactionHandled();
     }
 
     synchronized boolean shouldBlockFurtherMessageMutation() {
         expireIfNeeded();
-        return messageTransactionHandled;
+        return sendAuthorization.shouldBlockFurtherMessageMutation();
     }
 
     synchronized boolean blocksNamedRecipientMessagingAction() {
         expireIfNeeded();
-        // Navigation is allowed for a named-recipient task. Only an ambiguous
-        // target remains blocked from SEND because Runtime cannot verify it.
-        return namedRecipientMessagingRequested && authorizedRecipient.isEmpty();
+        return sendAuthorization.hasAmbiguousNamedRecipient();
     }
 
     synchronized boolean shouldAutoCommitSearch() {
@@ -311,7 +289,7 @@ final class UserActionScope {
     }
 
     private boolean isSearchOnlyLocked() {
-        return searchIntent && !sendAuthorized && !openSearchResultAuthorized;
+        return searchIntent && !sendAuthorization.canAttempt() && !openSearchResultAuthorized;
     }
 
     private void expireIfNeeded() {
@@ -323,10 +301,7 @@ final class UserActionScope {
     }
 
     private void clearActionGrants() {
-        sendAuthorized = false;
-        messageTransactionHandled = false;
-        namedRecipientMessagingRequested = false;
-        authorizedRecipient = "";
+        sendAuthorization.clear();
         endCallAuthorized = false;
         appLearningAuthorized = false;
         searchIntent = false;
@@ -367,114 +342,15 @@ final class UserActionScope {
     }
 
     static boolean looksLikeSendTarget(String metadata) {
-        String value = normalize(metadata);
-        return containsAny(value,
-                "send", "composer_send", "messagesend", "message_send", "action_send",
-                "send_btn", "send_button", "paper_plane", "paperplane",
-                "傳送", "传送", "發送", "发送", "送出");
+        return SendAuthorization.looksLikeSendTarget(metadata);
     }
 
-    /**
-     * 0052 deterministic fast path for a send-only follow-up.
-     * Keep this intentionally narrow: these phrases contain no new message text,
-     * so Runtime can safely submit only the currently visible composer.
-     */
-    /**
-     * 0053 deterministic classifier for a send-only follow-up.
-     *
-     * Goal:
-     * - accept natural control phrasing such as "幫我點一下送出" / "幫我按送出按鈕";
-     * - reject new message content such as "輸入晚點到並送出";
-     * - reject negation, explanation, hypothetical questions and recipient routing.
-     *
-     * This is intentionally grammar-like instead of a giant exact-phrase whitelist.
-     */
     static boolean isStandaloneCurrentScreenSendCommand(String rawText) {
-        if (rawText == null || rawText.trim().isEmpty()) return false;
+        return SendAuthorization.isStandaloneCurrentScreenSendCommand(rawText);
+    }
 
-        String folded = TextMatch.caseFold(rawText).trim();
-        String value = normalize(rawText);
-        if (value.isEmpty()) return false;
-
-        // Never treat discussion / negation / hypothetical wording as execution.
-        if (containsAny(value,
-                "不要", "別", "别", "不用", "取消", "停止",
-                "不是", "不能", "不可以", "先不要", "暫時不要", "暂时不要",
-                "怎麼", "怎么", "如何", "為什麼", "为什么", "如果", "假如", "能不能")) {
-            return false;
-        }
-        if (folded.matches(".*\\b(don't|dont|do not|never|cancel|stop|how|why|if|should)\\b.*")) {
-            return false;
-        }
-
-        // Named-recipient commands need navigation + Runtime target verification,
-        // so they must never take the direct current-composer fast path.
-        if (isNamedRecipientMessagingRequest(rawText)) {
-            return false;
-        }
-
-        // If this turn contains new text-entry language, let the normal
-        // same-turn TYPE -> SEND_CURRENT path handle it instead.
-        if (containsAny(value,
-                "輸入", "输入", "打字", "寫", "写",
-                "貼上", "贴上", "填入", "填上", "加上")) {
-            return false;
-        }
-        if (folded.matches(".*\\b(type|input|enter|write|paste|append)\\b.*")) {
-            return false;
-        }
-
-        boolean hasSendVerb = containsAny(value,
-                "送出去", "發出去", "发出去", "傳出去", "传出去",
-                "送出", "發送", "发送", "傳送", "传送")
-                || folded.matches(".*\\bsend\\b.*");
-        if (!hasSendVerb) return false;
-
-        // Strip only command/control language. Any residue is treated as
-        // possible message content and therefore NOT a send-only command.
-        String residual = value;
-        String[] controlTokens = new String[]{
-                // Chinese wrappers / politeness
-                "麻煩你", "麻烦你", "幫我", "帮我", "幫忙", "帮忙",
-                "請", "请", "給我", "给我", "替我", "你",
-                "好啦", "好的", "好啊", "好", "那就", "然後", "然后",
-                "那", "就", "再", "直接", "現在", "现在", "可以",
-
-                // Current-message references
-                "目前", "當前", "当前", "這則", "这则",
-                "訊息", "讯息", "消息", "這個", "这个", "把", "它",
-
-                // Physical-control wording
-                "按鈕", "按钮",
-                "按一下", "點一下", "点一下",
-                "按下", "點下", "点下",
-                "點擊", "点击", "按", "點", "点",
-                "鍵", "键", "一下",
-
-                // Send verbs (longest first)
-                "送出去", "發出去", "发出去", "傳出去", "传出去",
-                "送出", "發送", "发送", "傳送", "传送",
-
-                // Particles / polite endings
-                "吧", "了", "喔", "哦", "啦", "呢", "嘛", "啊", "呀",
-                "嗎", "吗", "謝謝", "谢谢",
-
-                // English command grammar after normalize() removes spaces
-                "goaheadand", "goahead", "couldyou", "wouldyou", "canyou",
-                "please", "helpme", "okay", "then", "just", "now",
-                "click", "tap", "press", "hit",
-                "current", "message", "button", "this", "it",
-                "send", "the", "for", "me", "and", "ok"
-        };
-
-        for (String token : controlTokens) {
-            String normalizedToken = normalize(token);
-            if (!normalizedToken.isEmpty()) {
-                residual = residual.replace(normalizedToken, "");
-            }
-        }
-
-        return residual.isEmpty();
+    static String extractNamedRecipient(String rawText) {
+        return SendAuthorization.extractNamedRecipient(rawText);
     }
 
     static boolean isSearchControl(String metadata) {
