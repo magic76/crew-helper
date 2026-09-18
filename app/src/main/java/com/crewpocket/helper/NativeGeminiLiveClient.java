@@ -60,7 +60,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private final Context appContext;
     private final NotebookToolHandler notebookToolHandler;
     private final AppPlaybookStore appPlaybookStore;
+    private final PhoneRuntimeExecutor phoneRuntimeExecutor;
     private final RuntimeToolExecutor runtimeToolExecutor;
+    private final LiveAudioController liveAudioController;
     private final java.util.HashSet<String> injectedAppPlaybooks = new java.util.HashSet<String>();
     // 0117: one-shot App teaching is Runtime-owned, never inferred from a model tool choice.
     private static final long APP_TEACH_MODE_TTL_MS = 45_000L;
@@ -73,16 +75,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private volatile String stage = "尚未開始";
     private OkHttpClient httpClient;
     private WebSocket webSocket;
-    private AudioRecord recorder;
-    private AudioTrack player;
-    private volatile boolean usingOboeOutput;
-    private volatile String audioOutputBackend = "尚未初始化";
-    // WebSocket callbacks must stay fast: audio writes can block for a whole
-    // buffer. Keep PCM on a bounded queue and feed AudioTrack from one thread.
-    private final BlockingQueue<byte[]> audioQueue = new LinkedBlockingQueue<byte[]>(96);
-    private final Object playerLock = new Object();
-    private volatile boolean audioPlaybackRunning;
-    private Thread audioPlaybackThread;
     private String resumptionHandle;
     private boolean reconnecting;
     private volatile long visualHoldUntil;
@@ -98,7 +90,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private final ArrayList<AgentTaskRecord> agentHistory = new ArrayList<AgentTaskRecord>();
     private final ToolCallDispatcher toolCallDispatcher;
     private volatile Thread activeToolThread;
-    private volatile HttpURLConnection activeToolConnection;
     private volatile int agentMaxSteps = 30;
     private AgentTaskRecord activeAgentTask;
     // 0018: a goal can span several execution tasks/follow-ups inside one Live session.
@@ -111,7 +102,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private final Handler agentWatchdogHandler = new Handler(Looper.getMainLooper());
     private Runnable agentResponseWatchdog;
     private String customPrompt = "";
-    private final ArrayList<JSONObject> lastCandidateApps = new ArrayList<JSONObject>();
     private final java.util.concurrent.atomic.AtomicBoolean screenCaptureInProgress = new java.util.concurrent.atomic.AtomicBoolean(false);
     private volatile String lastObservedScreenFingerprint = "";
     private volatile int consecutiveNoProgress = 0;
@@ -158,9 +148,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private boolean currentModelTurnProducedSpeech = false;
     // 0047: transcript text is not audible-output proof.
     private boolean currentModelTurnReceivedAudio = false;
-    private volatile String lastAudioOutputState = "NONE";
-    private long audioPcmBytesReceived = 0L;
-    private long audioPcmBytesAccepted = 0L;
 
     NativeGeminiLiveClient(String apiKey, Listener listener) { this(apiKey, "", AppConfig.DEFAULT_VOICE, "auto", 35, "warm", "", 55, "call", listener); }
     NativeGeminiLiveClient(String apiKey, String serverUrl, Listener listener) { this(apiKey, serverUrl, AppConfig.DEFAULT_VOICE, "auto", 35, "warm", "", 55, "call", listener); }
@@ -179,6 +166,19 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     }
     NativeGeminiLiveClient(Context context, String apiKey, String serverUrl, String voiceName, String noiseMode, int noiseSuppression, String liveTone, String customPrompt, int interruptionSensitivity, String audioOutput, Listener listener) {
         this.appContext = context == null ? null : context.getApplicationContext();
+        this.apiKey = apiKey;
+        this.voiceName = voiceName == null || voiceName.trim().isEmpty()
+                ? AppConfig.DEFAULT_VOICE : voiceName.trim();
+        this.noiseMode = "quiet".equals(noiseMode) || "noisy".equals(noiseMode)
+                ? noiseMode : "auto";
+        this.noiseSuppression = Math.max(0, Math.min(100, noiseSuppression));
+        this.liveTone = liveTone == null ? "warm" : liveTone;
+        this.customPrompt = customPrompt == null ? "" : customPrompt.trim();
+        this.interruptionSensitivity =
+                Math.max(0, Math.min(100, interruptionSensitivity));
+        this.audioOutput = "media".equals(audioOutput) ? "media" : "call";
+        this.listener = listener;
+
         this.notebookToolHandler = new NotebookToolHandler(this.appContext);
         this.appPlaybookStore = new AppPlaybookStore(this.appContext);
         this.toolCallDispatcher = new ToolCallDispatcher(
@@ -211,34 +211,100 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                         Log.w(TAG, "工具呼叫排程失敗", error);
                     }
                 });
-        this.visionController = new LiveVisionController(new LiveVisionController.Sender() {
-            @Override public boolean send(String payload) {
-                WebSocket socket = NativeGeminiLiveClient.this.webSocket;
-                return socket != null && socket.send(payload);
-            }
-        });
+        this.visionController = new LiveVisionController(
+                new LiveVisionController.Sender() {
+                    @Override public boolean send(String payload) {
+                        WebSocket socket = NativeGeminiLiveClient.this.webSocket;
+                        return socket != null && socket.send(payload);
+                    }
+                });
+        this.phoneRuntimeExecutor = new PhoneRuntimeExecutor(
+                this.appContext, this.visionController);
         this.runtimeToolExecutor = new RuntimeToolExecutor(
                 this.notebookToolHandler,
                 this.visionController,
-                new RuntimeToolExecutor.Environment() {
-                    @Override public JSONObject helperPost(
-                            String endpoint,
-                            JSONObject payload) throws Exception {
-                        return NativeGeminiLiveClient.this.helperPost(
-                                endpoint, payload);
+                this.phoneRuntimeExecutor);
+        this.memoryRuleIndex = this.appContext == null
+                ? null : new MemoryRuleIndex(this.appContext);
+        this.audioIncidentRecorder = this.appContext == null
+                ? null : new AudioIncidentRecorder(this.appContext);
+        this.liveAudioController = new LiveAudioController(
+                this.audioOutput,
+                new LiveAudioController.Host() {
+                    @Override public boolean isRunning() {
+                        return NativeGeminiLiveClient.this.running;
+                    }
+
+                    @Override public boolean isAgentMuted() {
+                        return NativeGeminiLiveClient.this.agentMuted;
+                    }
+
+                    @Override public boolean isInterruptedCurrentTurn() {
+                        return NativeGeminiLiveClient.this.interruptedCurrentTurn;
+                    }
+
+                    @Override public boolean isAiSpeaking() {
+                        return NativeGeminiLiveClient.this.aiSpeaking;
+                    }
+
+                    @Override public boolean isVoiceInterruptionAllowed() {
+                        return NativeGeminiLiveClient.this.allowVoiceInterruption;
+                    }
+
+                    @Override public String getNoiseMode() {
+                        return NativeGeminiLiveClient.this.noiseMode;
+                    }
+
+                    @Override public int getNoiseSuppression() {
+                        return NativeGeminiLiveClient.this.noiseSuppression;
+                    }
+
+                    @Override public int getInterruptionSensitivity() {
+                        return NativeGeminiLiveClient.this.interruptionSensitivity;
+                    }
+
+                    @Override public boolean canSendRealtime() {
+                        return NativeGeminiLiveClient.this.webSocket != null;
+                    }
+
+                    @Override public boolean sendRealtime(String payload) {
+                        WebSocket socket = NativeGeminiLiveClient.this.webSocket;
+                        return socket != null && socket.send(payload);
+                    }
+
+                    @Override public void onStatus(String text) {
+                        NativeGeminiLiveClient.this.listener.onStatus(text);
+                    }
+
+                    @Override public void onMicrophoneLevel(
+                            double dbfs,
+                            double gateDbfs,
+                            boolean sending) {
+                        NativeGeminiLiveClient.this.listener.onMicrophoneLevel(
+                                dbfs, gateDbfs, sending);
+                    }
+
+                    @Override public void onUpstreamPcm(
+                            byte[] pcm,
+                            int count,
+                            double rms,
+                            double noiseFloor,
+                            double gateThreshold) {
+                        AudioIncidentRecorder recorder =
+                                NativeGeminiLiveClient.this.audioIncidentRecorder;
+                        if (recorder != null) {
+                            recorder.onUpstreamPcm(
+                                    pcm, count, rms, noiseFloor, gateThreshold);
+                        }
+                    }
+
+                    @Override public void onFailure(
+                            String message,
+                            Throwable error) {
+                        NativeGeminiLiveClient.this.fail(message, error);
                     }
                 });
-        this.memoryRuleIndex = this.appContext == null ? null : new MemoryRuleIndex(this.appContext);
-        this.audioIncidentRecorder = this.appContext == null ? null : new AudioIncidentRecorder(this.appContext);
-        this.apiKey = apiKey;
-        this.voiceName = voiceName == null || voiceName.trim().isEmpty() ? AppConfig.DEFAULT_VOICE : voiceName.trim();
-        this.noiseMode = "quiet".equals(noiseMode) || "noisy".equals(noiseMode) ? noiseMode : "auto";
-        this.noiseSuppression = Math.max(0, Math.min(100, noiseSuppression));
-        this.liveTone = liveTone == null ? "warm" : liveTone;
-        this.customPrompt = customPrompt == null ? "" : customPrompt.trim();
-        this.interruptionSensitivity = Math.max(0, Math.min(100, interruptionSensitivity));
-        this.audioOutput = "media".equals(audioOutput) ? "media" : "call";
-        this.listener = listener;
+
         shadowAgentRuntime.setListener(new AgentLedger.Listener() {
             @Override public void onEvent(AgentEvent event, AgentState state) {
                 Log.d(TAG, "AgentLedger " + event.type + " => " + state.phase);
@@ -281,7 +347,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     }
     boolean isRunning() { return running; }
     String getStage() { return stage; }
-    String getAudioOutputBackend() { return audioOutputBackend; }
+    String getAudioOutputBackend() {
+        return liveAudioController.getAudioOutputBackend();
+    }
     boolean canSendVisualFrame() { return running && System.currentTimeMillis() >= visualHoldUntil; }
     boolean isSetupReadyForSelection() {
         return running && setupReady && webSocket != null;
@@ -321,7 +389,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if (aiSpeaking) {
             triggerLocalInterruption();
         } else {
-            stopPlayback();
+            liveAudioController.stopPlayback();
         }
 
         String hint = "";
@@ -387,7 +455,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             workingContext.resetTransientForNewGoal();
             consecutiveNoProgress = 0;
             pendingCondition = null;
-            lastCandidateApps.clear();
+            phoneRuntimeExecutor.resetTransientState();
         }
         conversationGoalTouchedAt = now;
         if (safeHint != null && !safeHint.trim().isEmpty()) {
@@ -419,8 +487,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             lastFinishedTaskId = task.taskId;
             activeAgentTask = null;
         }
-        HttpURLConnection connection = activeToolConnection;
-        if (connection != null) try { connection.disconnect(); } catch (Exception ignored) {}
+        phoneRuntimeExecutor.cancelActiveRequest();
         Thread worker = activeToolThread;
         if (worker != null) worker.interrupt();
         PerformanceMetrics.markAgentTaskFinished(
@@ -461,7 +528,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             workingContext.startNewGoal(userText);
             consecutiveNoProgress = 0;
             pendingCondition = null;
-            lastCandidateApps.clear();
+            phoneRuntimeExecutor.resetTransientState();
         } else {
             conversationGoalTouchedAt = now;
             workingContext.beginUserTurn(userText);
@@ -699,14 +766,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         webSocket = httpClient.newWebSocket(request, this);
     }
 
-    private android.media.audiofx.AcousticEchoCanceler aecEffect = null;
-    private android.media.audiofx.NoiseSuppressor nsEffect = null;
     private volatile long serverInterruptedCount = 0L;
-    private volatile long bargeInAdmissionCount = 0L;
-    private volatile long lastBargeInAdmissionAt = 0L;
-    private volatile long audioTrackWriteFailureCount = 0L;
-    private volatile long audioTrackShortWriteCount = 0L;
-    private volatile long oboeWriteFailureCount = 0L;
     private volatile boolean agentMuted = false;
     private volatile boolean aiSpeaking = false;
     private volatile boolean interruptedCurrentTurn = false;
@@ -859,7 +919,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if (aiSpeaking) {
             markCurrentTurnInterrupted();
             aiSpeaking = false;
-            stopPlayback();
+            liveAudioController.stopPlayback();
             listener.onSpeakingChanged(false);
             // Send zeroed silence frame to trigger Gemini server VAD turn completion instantly
             try {
@@ -879,23 +939,12 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         return agentMuted;
     }
 
-    void stopPlayback() {
-        audioQueue.clear();
-        if (usingOboeOutput) { NativeOboeOutput.flush(); return; }
-        synchronized (playerLock) {
-            try {
-                if (player != null) {
-                    player.pause();
-                    player.flush();
-                }
-            } catch (Exception ignored) {}
-        }
-    }
+
 
     private void triggerLocalInterruption() {
         markCurrentTurnInterrupted();
         aiSpeaking = false;
-        stopPlayback();
+        liveAudioController.stopPlayback();
         listener.onSpeakingChanged(false);
         Log.d(TAG, "⚡ 本地零延遲語音插話觸發：立即停止播放並無縫收音");
     }
@@ -926,7 +975,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         running = false;
         setupReady = false;
         interruptionHandler.removeCallbacks(clearInterruptedFallback);
-        stopAudio();
+        liveAudioController.stop();
         try { if (webSocket != null) webSocket.close(1000, "Client ended call"); } catch (Exception ignored) {}
         try { if (httpClient != null) httpClient.dispatcher().executorService().shutdown(); } catch (Exception ignored) {}
         if (wasRunning) listener.onStopped("已結束");
@@ -995,7 +1044,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if (response.has("setupComplete") || response.has("setup_complete")) {
             setupReady = true;
             reportStage("🎙️ 已連線，直接說話");
-            startAudio();
+            liveAudioController.start();
             dispatchDeckStartupIfNeeded();
             return;
         }
@@ -1061,6 +1110,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if (server == null) return;
         if (server.optBoolean("interrupted", false)) {
             long interruptedIndex = ++serverInterruptedCount;
+            long lastBargeInAdmissionAt =
+                    liveAudioController.getLastBargeInAdmissionAt();
             long sinceBargeInMs = lastBargeInAdmissionAt <= 0L
                     ? -1L : Math.max(0L,
                         System.currentTimeMillis() - lastBargeInAdmissionAt);
@@ -1068,8 +1119,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                     + " aiSpeaking=" + aiSpeaking
                     + " allowVoiceInterruption=" + allowVoiceInterruption
                     + " sinceBargeInAdmitMs=" + sinceBargeInMs
-                    + " outputState=" + lastAudioOutputState);
-            stopPlayback();
+                    + " outputState="
+                    + liveAudioController.getLastAudioOutputState());
+            liveAudioController.stopPlayback();
             if (aiSpeaking) {
                 aiSpeaking = false;
                 listener.onSpeakingChanged(false);
@@ -1120,7 +1172,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                     if (inline != null && inline.optString("data").length() > 0) {
                         byte[] responsePcm = Base64.decode(inline.getString("data"), Base64.DEFAULT);
                         noteCurrentModelTurnAudioReceived(responsePcm.length);
-                        boolean audioAccepted = enqueueAudio(responsePcm);
+                        boolean audioAccepted =
+                                liveAudioController.enqueueAudio(responsePcm);
                         if (!responseHasToolCall && audioAccepted) {
                             markCurrentModelTurnSpeech();
                             markAgentUserVisibleReplyProduced();
@@ -1146,7 +1199,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
             // Match agy-web AudioWorklet's `turn-complete`: a final short
             // PCM phrase must not remain below the normal pre-roll threshold.
-            if (usingOboeOutput) NativeOboeOutput.finishTurn();
+            liveAudioController.finishTurn();
             visualHoldUntil = System.currentTimeMillis() + 1000;
             interruptedCurrentTurn = false;
             interruptionHandler.removeCallbacks(clearInterruptedFallback);
@@ -1899,7 +1952,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         } catch (Exception error) {
             try { result.put("success", false).put("error", error.getMessage() == null ? "工具執行失敗" : error.getMessage()); } catch (Exception ignored) {}
         } finally {
-            activeToolConnection = null;
             long toolElapsedMs = android.os.SystemClock.elapsedRealtime() - toolStartedAt;
             PerformanceMetrics.recordTool(name, toolElapsedMs);
             PerformanceMetrics.markAgentToolRuntime(
@@ -2335,7 +2387,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         // Bind this page turn to the card whose narration just completed.
         deckAdvanceExpectedIndex = DeckRepository.activeIndex();
 
-        long remaining = Math.max(0, lastPlaybackActiveAt - System.currentTimeMillis());
+        long remaining = Math.max(
+                0,
+                liveAudioController.getLastPlaybackActiveAt()
+                        - System.currentTimeMillis());
         long delay = remaining + 650; // wait for the real audio queue to drain + natural pause
         deckAdvanceHandler.removeCallbacks(deckAdvanceRunnable);
         deckAdvanceHandler.postDelayed(deckAdvanceRunnable, delay);
@@ -2365,7 +2420,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             return;
         }
 
-        long remaining = lastPlaybackActiveAt - System.currentTimeMillis();
+        long remaining = liveAudioController.getLastPlaybackActiveAt()
+                - System.currentTimeMillis();
         if (remaining > 100) {
             deckAdvanceHandler.removeCallbacks(deckAdvanceRunnable);
             deckAdvanceHandler.postDelayed(deckAdvanceRunnable, remaining + 450);
@@ -2440,7 +2496,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private void noteCurrentModelTurnAudioReceived(int bytes) {
         synchronized (agentLock) {
             currentModelTurnReceivedAudio = true;
-            audioPcmBytesReceived += Math.max(0, bytes);
+            liveAudioController.notePcmReceived(bytes);
         }
         Log.d(TAG, "0047 Gemini PCM received: " + bytes + " bytes");
     }
@@ -2551,9 +2607,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                     + "/" + AGENT_FINAL_SPEECH_MAX_RETRIES + "）";
         }
 
-        reportStage(task.status + " · audio=" + lastAudioOutputState
-                + " · pcmReceived=" + audioPcmBytesReceived
-                + " · pcmAccepted=" + audioPcmBytesAccepted);
+        reportStage(task.status + " · audio="
+                + liveAudioController.getLastAudioOutputState()
+                + " · pcmReceived=" + liveAudioController.getPcmBytesReceived()
+                + " · pcmAccepted=" + liveAudioController.getPcmBytesAccepted());
         sendInternalAgentDirective(
                 "【FINAL TURN REQUIRED】上一個 active Agent turn 沒有產生使用者可聽見的最終回覆，"
                 + "也沒有下一個工具動作。現在只能二選一："
@@ -2599,7 +2656,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
     private JSONObject teachUiElement(JSONObject args) throws Exception {
         String role = args.optString("role", "COMPOSER_SEND").trim().toUpperCase(Locale.ROOT);
-        JSONObject reply = helperPost("/teach_ui", new JSONObject().put("role", role));
+        JSONObject reply = phoneRuntimeExecutor.post("/teach_ui", new JSONObject().put("role", role));
         reply.put("role", role);
         reply.put("instruction", "已啟動畫面教導遮罩。請以語音引導使用者直接在螢幕上點擊該「" + role + "」按鈕以完成學習。");
         return reply;
@@ -2617,69 +2674,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
 
     private JSONObject swipe(JSONObject args) throws Exception {
-        String direction = args.optString("direction", "up").toLowerCase();
-        String distance = args.optString("distance", "normal").toLowerCase();
-        
-        JSONObject metrics = helperGet("/status");
-        int width = metrics.optInt("screenWidth", visionController.lastScreenWidth());
-        int height = metrics.optInt("screenHeight", visionController.lastScreenHeight());
-        if (width <= 1 || height <= 1) return new JSONObject().put("success", false).put("error", "無法取得目前裝置螢幕尺寸");
-        // Default normal uses proportions so it works on every resolution.
-        int x1 = Math.round(width * 0.50f), y1 = Math.round(height * 0.74f), x2 = Math.round(width * 0.50f), y2 = Math.round(height * 0.22f);
-        int duration = 320; // optimal drag duration for Android ViewPager / ScrollView recognition
+        JSONObject reply = phoneRuntimeExecutor.swipe(args);
+        if (!reply.has("direction")) return reply;
 
-        if ("down".equals(direction)) {
-            y1 = Math.round(height * 0.22f); y2 = Math.round(height * 0.74f);
-        } else if ("left".equals(direction)) {
-            x1 = Math.round(width * 0.87f); y1 = Math.round(height * 0.50f); x2 = Math.round(width * 0.13f); y2 = Math.round(height * 0.50f);
-        } else if ("right".equals(direction)) {
-            x1 = Math.round(width * 0.13f); y1 = Math.round(height * 0.50f); x2 = Math.round(width * 0.87f); y2 = Math.round(height * 0.50f);
-        }
-
-        if ("long".equals(distance) || "page".equals(distance) || "fast".equals(distance)) {
-            duration = 280;
-            if ("up".equals(direction)) { y1 = Math.round(height * 0.87f); y2 = Math.round(height * 0.13f); }
-            else if ("down".equals(direction)) { y1 = Math.round(height * 0.13f); y2 = Math.round(height * 0.87f); }
-            else if ("left".equals(direction)) { x1 = Math.round(width * 0.94f); x2 = Math.round(width * 0.06f); }
-            else if ("right".equals(direction)) { x1 = Math.round(width * 0.06f); x2 = Math.round(width * 0.94f); }
-        } else if ("short".equals(distance) || "little".equals(distance)) {
-            duration = 260;
-            if ("up".equals(direction)) { y1 = Math.round(height * 0.58f); y2 = Math.round(height * 0.38f); }
-            else if ("down".equals(direction)) { y1 = Math.round(height * 0.38f); y2 = Math.round(height * 0.58f); }
-            else if ("left".equals(direction)) { x1 = Math.round(width * 0.66f); x2 = Math.round(width * 0.34f); }
-            else if ("right".equals(direction)) { x1 = Math.round(width * 0.34f); x2 = Math.round(width * 0.66f); }
-        }
-
-        JSONObject before = new JSONObject();
-        try { before = helperGet("/nodes"); } catch (Exception ignored) {}
-        JSONObject reply = new JSONObject();
-        String execution = "gesture";
-        String currentPkg = before.optString("package", "").toLowerCase(Locale.ROOT);
-        boolean isMapsOrCanvas = currentPkg.contains("maps") || currentPkg.contains("game") || currentPkg.contains("camera");
-
-        // Vertical scrolling can use the foreground app's own scroll action for standard lists (e.g. Settings).
-        // Skip ui_node scroll for maps/canvas/horizontal gestures to avoid 1.3s unnecessary wait.
-        if (!isMapsOrCanvas && ("up".equals(direction) || "down".equals(direction))) {
-            reply = helperPost("/scroll", new JSONObject().put("direction", "up".equals(direction) ? "forward" : "backward"));
-            execution = "ui_node";
-            Thread.sleep(250);
-        }
-        JSONObject after = new JSONObject();
-        try { after = helperGet("/nodes"); } catch (Exception ignored) {}
-        boolean changed = !nodeSignature(before).equals(nodeSignature(after));
-        // Canvas, maps and custom views expose no scrollable node. Fall back to fluid gesture.
-        if (!reply.optBoolean("success") || !changed) {
-            reply = helperPost("/swipe", new JSONObject().put("x1", x1).put("y1", y1).put("x2", x2).put("y2", y2).put("duration", duration));
-            execution = "gesture";
-            Thread.sleep(350);
-            try { after = helperGet("/nodes"); } catch (Exception ignored) {}
-            changed = !nodeSignature(before).equals(nodeSignature(after));
-        }
-        reply.put("direction", direction);
-        reply.put("distance", distance);
-        reply.put("screenSize", width + "x" + height);
-        reply.put("execution", execution);
-        // Send the post-gesture frame so Gemini sees the actual viewport
         JSONObject visual = new JSONObject();
         try {
             visual = runtimeToolExecutor.execute(
@@ -2687,53 +2684,33 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         } catch (Exception error) {
             visual.put("success", false).put("error", error.getMessage());
         }
-        reply.put("screenChanged", changed);
+
+        boolean changed = reply.optBoolean("screenChanged", false);
         reply.put("screenFrameSent", visual.optBoolean("success"));
-        reply.put("verification", changed
-                ? "UI 節點位置或內容已變更；最新螢幕影格已送達，請分析新畫面"
-                : (visual.optBoolean("success")
-                    ? "文字節點未變，但最新螢幕影格已送達；請依畫面判斷是否已滑動"
-                    : "UI 節點與最新螢幕影格皆無法確認變化，請改用另一方向或尋找按鈕"));
-        workingContext.recordAction("swipe:" + direction, reply.optBoolean("success", false) ? "submitted" : "failed");
+        reply.put(
+                "verification",
+                changed
+                        ? "UI 節點位置或內容已變更；最新螢幕影格已送達，請分析新畫面"
+                        : (visual.optBoolean("success")
+                                ? "文字節點未變，但最新螢幕影格已送達；請依畫面判斷是否已滑動"
+                                : "UI 節點與最新螢幕影格皆無法確認變化，請改用另一方向或尋找按鈕"));
+        workingContext.recordAction(
+                "swipe:" + reply.optString("direction", "up"),
+                reply.optBoolean("success", false)
+                        ? "submitted" : "failed");
         return autoObserveAfterMutation(reply, "swipe_screen");
     }
 
-    private String nodeSignature(JSONObject response) {
-        if (response == null || !response.optBoolean("success")) return "unavailable";
-        JSONArray nodes = response.optJSONArray("nodes");
-        if (nodes == null) return "empty";
-        StringBuilder signature = new StringBuilder();
-        for (int i = 0; i < nodes.length(); i++) {
-            JSONObject node = nodes.optJSONObject(i);
-            if (node != null) {
-                signature.append(node.optString("text")).append('|')
-                        .append(node.optString("desc")).append('|').append(node.optString("className")).append('|');
-                JSONObject bounds = node.optJSONObject("bounds");
-                if (bounds != null) signature.append(bounds.optInt("left")).append(',').append(bounds.optInt("top"))
-                        .append(',').append(bounds.optInt("right")).append(',').append(bounds.optInt("bottom"));
-                signature.append(';');
-            }
-        }
-        return Integer.toHexString(signature.toString().hashCode());
-    }
+
 
     private JSONObject tap(JSONObject args) throws Exception {
-        double targetX = args.optDouble("x", -1);
-        double targetY = args.optDouble("y", -1);
-        String label = args.optString("label", args.optString("text", args.optString("name", ""))).trim();
+        String label = args.optString(
+                "label",
+                args.optString("text", args.optString("name", ""))).trim();
         String id = args.optString("id", "").trim();
-        String coordinateSpace = args.optString("coordinate_space", "").trim().toLowerCase();
-        boolean resolvedFromNode = false;
-
         String tapMeta = label + " " + id;
+
         if (UserActionScope.looksLikeSendTarget(tapMeta)) {
-            // 0078: keep Send Runtime-owned, but tolerate a weak model choosing
-            // TAP("Send") instead of the dedicated SEND_CURRENT path.
-            //
-            // This does NOT bypass authorization:
-            // sendTextToPhone() still requires the latest user turn to explicitly
-            // authorize send, consumes that authorization, sends at most once,
-            // and uses the verified current-composer transaction.
             if (userActionScope.shouldBlockFurtherMessageMutation()) {
                 return new JSONObject()
                         .put("success", true)
@@ -2748,86 +2725,26 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             JSONObject routedSend = sendTextToPhone(new JSONObject());
             routedSend.put("remappedFrom", "TAP_SEND_CONTROL");
             if (routedSend.optBoolean("success", false)) {
-                routedSend.put("instruction",
+                routedSend.put(
+                        "instruction",
                         "TAP Send 已由 Runtime 轉成單次 SEND_CURRENT 並完成；不要再呼叫 Send/TAP。");
             }
             return routedSend;
         }
+
         if (!pendingChoiceExecuting
-                && userActionScope.shouldBlockTapForSearch(tapMeta, label.isEmpty() && id.isEmpty())) {
-            return runtimeBlocked("SEARCH_SCOPE_RESULT_OPEN_NOT_AUTHORIZED",
+                && userActionScope.shouldBlockTapForSearch(
+                        tapMeta, label.isEmpty() && id.isEmpty())) {
+            return runtimeBlocked(
+                    "SEARCH_SCOPE_RESULT_OPEN_NOT_AUTHORIZED",
                     "最新任務只要求搜尋。搜尋結果出現後不要打開人、群組或聊天室；直接回報結果。");
         }
 
-        // 🎯 1. Let Android activate the matching Accessibility node directly.
-        if (!label.isEmpty() || !id.isEmpty()) {
-            try {
-                JSONObject nodeClick = helperPost("/click", new JSONObject().put("label", label).put("id", id));
-                if (nodeClick.optBoolean("success")) {
-                    nodeClick.put("resolvedFrom", "ui_node_action");
-                    workingContext.recordAction("tap_screen", "submitted");
-                    return autoObserveAfterMutation(nodeClick, "tap_screen");
-                }
-                JSONObject nodesResp = helperGet("/nodes");
-                if (nodesResp.optBoolean("success")) {
-                    JSONArray nodes = nodesResp.optJSONArray("nodes");
-                    if (nodes != null) {
-                        for (int i = 0; i < nodes.length(); i++) {
-                            JSONObject node = nodes.getJSONObject(i);
-                            String text = node.optString("text", "");
-                            String desc = node.optString("desc", "");
-                            String nodeId = node.optString("id", "");
-                            boolean matchId = !id.isEmpty() && nodeId.toLowerCase().contains(id.toLowerCase());
-                            boolean matchLabel = !label.isEmpty() && (text.toLowerCase().contains(label.toLowerCase()) || desc.toLowerCase().contains(label.toLowerCase()));
-                            if (matchId || matchLabel) {
-                                JSONObject bounds = node.optJSONObject("bounds");
-                                if (bounds != null) {
-                                    targetX = (bounds.optDouble("left", 0) + bounds.optDouble("right", 0)) / 2.0;
-                                    targetY = (bounds.optDouble("top", 0) + bounds.optDouble("bottom", 0)) / 2.0;
-                                    resolvedFromNode = true;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-            } catch (Exception ignored) {}
-        }
-
-        if (targetX < 0 || targetY < 0) {
-            return new JSONObject()
-                    .put("success", false)
-                    .put("stepResult", "STEP_FAILED")
-                    .put("error", "UI_TARGET_NOT_FOUND")
-                    .put("instruction",
-                            "找不到指定點擊目標。這不是使用者消歧義事件；不要顯示選擇卡，請依最新畫面改用不同方法。");
-        }
-
-        // 📐 2. Explicit coordinate conversion. Visual transport resolution may
-        // change independently from device resolution, so image-space fallback
-        // always uses the actual most-recent full-screen frame dimensions.
-        if (!resolvedFromNode && "image".equals(coordinateSpace)) {
-            if (visionController.lastScreenWidth() <= 1 || visionController.lastScreenHeight() <= 1) return new JSONObject().put("success", false).put("error", "尚未取得目前螢幕尺寸，請先要求查看螢幕後再依影像座標點擊");
-            targetX = VisionCoordinateMapper.imageToScreen(
-                    targetX, visionController.lastVisionWidth(), visionController.lastScreenWidth());
-            targetY = VisionCoordinateMapper.imageToScreen(
-                    targetY, visionController.lastVisionHeight(), visionController.lastScreenHeight());
-        } else if (!resolvedFromNode && "normalized_1000".equals(coordinateSpace)) {
-            if (visionController.lastScreenWidth() <= 1 || visionController.lastScreenHeight() <= 1) return new JSONObject().put("success", false).put("error", "尚未取得目前螢幕尺寸，請先 inspect_ui 或查看螢幕");
-            targetX = (targetX / 1000.0) * visionController.lastScreenWidth();
-            targetY = (targetY / 1000.0) * visionController.lastScreenHeight();
-        } else if (!resolvedFromNode && coordinateSpace.isEmpty() && targetX <= 1.0 && targetY <= 1.0 && (targetX > 0 || targetY > 0)) {
-            targetX = targetX * Math.max(1, visionController.lastScreenWidth());
-            targetY = targetY * Math.max(1, visionController.lastScreenHeight());
-        } else if (!resolvedFromNode && coordinateSpace.isEmpty() && targetX <= 1000.0 && targetY <= 1000.0 && targetX > 0 && targetY > 0 && targetY < 1200) {
-            targetX = (targetX / 1000.0) * Math.max(1, visionController.lastScreenWidth());
-            targetY = (targetY / 1000.0) * Math.max(1, visionController.lastScreenHeight());
-        }
-
-        JSONObject reply = helperPost("/tap", new JSONObject().put("x", Math.round(targetX)).put("y", Math.round(targetY)));
-        reply.put("resolvedFrom", resolvedFromNode ? "ui_node" : (coordinateSpace.isEmpty() ? "legacy" : coordinateSpace));
-        reply.put("visionSize", visionController.lastVisionWidth() + "x" + visionController.lastVisionHeight()).put("screenSize", visionController.lastScreenWidth() + "x" + visionController.lastScreenHeight());
-        workingContext.recordAction("tap_screen", reply.optBoolean("success", false) ? "submitted" : "failed");
+        JSONObject reply = phoneRuntimeExecutor.tap(args);
+        workingContext.recordAction(
+                "tap_screen",
+                reply.optBoolean("success", false)
+                        ? "submitted" : "failed");
         return autoObserveAfterMutation(reply, "tap_screen");
     }
 
@@ -2850,7 +2767,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 }
             }
             try {
-                analysis = helperPost("/search_result_candidates",
+                analysis = phoneRuntimeExecutor.post("/search_result_candidates",
                         new JSONObject().put("query", query == null ? "" : query));
             } catch (Exception error) {
                 analysis = new JSONObject()
@@ -3031,7 +2948,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if (containsElement(latest.optJSONArray("elements"), elementId)) return false;
 
         try {
-            JSONObject analysis = helperPost(
+            JSONObject analysis = phoneRuntimeExecutor.post(
                     "/search_result_candidates",
                     new JSONObject().put("query", query == null ? "" : query));
             if ("READY".equals(analysis.optString("state", ""))) {
@@ -3216,8 +3133,13 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     }
 
     private JSONObject tapSemanticElement(JSONObject args) throws Exception {
-        String elementId = args == null ? "" : args.optString("element_id", "").trim();
-        if (elementId.isEmpty()) return new JSONObject().put("success", false).put("error", "MISSING_ELEMENT_ID");
+        String elementId = args == null
+                ? "" : args.optString("element_id", "").trim();
+        if (elementId.isEmpty()) {
+            return new JSONObject()
+                    .put("success", false)
+                    .put("error", "MISSING_ELEMENT_ID");
+        }
 
         String elementMeta = semanticElementMeta(elementId);
         if (UserActionScope.looksLikeSendTarget(elementMeta)) {
@@ -3228,30 +3150,32 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                         .put("sendMode", "ALREADY_HANDLED")
                         .put("remappedFrom", "TAP_SEND_CONTROL")
                         .put("stepResult", "STEP_OK")
-                        .put("instruction", "本輪訊息送出 transaction 已經處理過；不要再次點擊或重送。");
+                        .put("instruction",
+                                "本輪訊息送出 transaction 已經處理過；不要再次點擊或重送。");
             }
             JSONObject routedSend = sendTextToPhone(new JSONObject());
             routedSend.put("remappedFrom", "TAP_SEND_CONTROL");
             if (routedSend.optBoolean("success", false)) {
-                routedSend.put("instruction", "TAP Send 已由 Runtime 轉成單次 SEND_CURRENT 並完成；不要再呼叫 Send/TAP。");
+                routedSend.put(
+                        "instruction",
+                        "TAP Send 已由 Runtime 轉成單次 SEND_CURRENT 並完成；不要再呼叫 Send/TAP。");
             }
             return routedSend;
         }
+
         if (!pendingChoiceExecuting
-                && userActionScope.shouldBlockTapForSearch(elementMeta, elementMeta.isEmpty())) {
-            return runtimeBlocked("SEARCH_SCOPE_RESULT_OPEN_NOT_AUTHORIZED",
+                && userActionScope.shouldBlockTapForSearch(
+                        elementMeta, elementMeta.isEmpty())) {
+            return runtimeBlocked(
+                    "SEARCH_SCOPE_RESULT_OPEN_NOT_AUTHORIZED",
                     "最新任務只要求搜尋。搜尋結果出現後不要打開人、群組或聊天室；直接回報結果。");
         }
 
-        JSONObject reply = null;
-        try {
-            reply = helperPost("/semantic_tap", new JSONObject().put("elementId", elementId));
-        } catch (Exception e) {
-            reply = new JSONObject().put("success", false).put("error", e.getMessage() == null ? "tap failed" : e.getMessage());
-        }
-        if (reply == null) reply = new JSONObject();
-        workingContext.recordAction("tap:" + elementId,
-                reply.optBoolean("success", false) ? "submitted"
+        JSONObject reply = phoneRuntimeExecutor.semanticTap(elementId);
+        workingContext.recordAction(
+                "tap:" + elementId,
+                reply.optBoolean("success", false)
+                        ? "submitted"
                         : reply.optString("error", "failed"));
         return autoObserveAfterMutation(reply, "tap_element");
     }
@@ -3278,7 +3202,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 break;
             }
             try {
-                last = helperGet("/semantic_screen");
+                last = phoneRuntimeExecutor.get("/semantic_screen");
             } catch (Exception ignored) {}
             if (last == null || !last.optBoolean("success", false)) continue;
 
@@ -3406,7 +3330,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
     private JSONObject readSemanticScreenQuietly() {
         try {
-            return helperGet("/semantic_screen");
+            return phoneRuntimeExecutor.get("/semantic_screen");
         } catch (Exception ignored) {
             return null;
         }
@@ -3769,7 +3693,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
      * The compact semantic view is retained internally only as fallback/debug.
      */
     private JSONObject inspectUi(JSONObject args) throws Exception {
-        JSONObject semantic = helperGet("/semantic_screen");
+        JSONObject semantic = phoneRuntimeExecutor.get("/semantic_screen");
         if (semantic == null) semantic = new JSONObject();
 
         if (semantic.optBoolean("success", false)) {
@@ -3856,7 +3780,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     }
 
     private JSONObject inspectUiLegacy() throws Exception {
-        JSONObject raw = helperGet("/screen_state");
+        JSONObject raw = phoneRuntimeExecutor.get("/screen_state");
         if (!raw.optBoolean("success")) return raw;
         String fingerprint = raw.optString("fingerprint", "");
         if (!fingerprint.isEmpty()) {
@@ -3896,7 +3820,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         try {
             String beforeFingerprint = lastObservedScreenFingerprint;
             if (waitDelayMs > 0) Thread.sleep(waitDelayMs);
-            JSONObject raw = helperGet("/screen_state");
+            JSONObject raw = phoneRuntimeExecutor.get("/screen_state");
             if (raw.optBoolean("success")) {
                 String currentPkg = raw.optString("package", "");
                 String afterFingerprint = raw.optString("fingerprint", "");
@@ -3949,111 +3873,27 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     }
 
     private JSONObject launchApp(JSONObject args) throws Exception {
-        String app = args.optString("app", "").trim();
-        int explicitIndex = args.optInt("index", -1);
-        String explicitPkg = args.optString("package_name", "").trim();
-
-        if (!explicitPkg.isEmpty()) {
-            JSONObject reply = helperPost("/launch", new JSONObject().put("package", explicitPkg));
-            if (reply.optBoolean("success")) {
-                lastCandidateApps.clear();
-                reply.put("app", app.isEmpty() ? explicitPkg : app).put("message", "已啟動 App，以下為啟動後的最新畫面。");
-            }
-            workingContext.recordAction("launch:" + explicitPkg, reply.optBoolean("success", false) ? "submitted" : "failed");
-            return autoObserveAfterMutation(reply, "launch_app");
+        PhoneRuntimeExecutor.MutationResult execution =
+                phoneRuntimeExecutor.launchApp(args);
+        JSONObject reply = execution.result;
+        if (!execution.actionKey.isEmpty()) {
+            workingContext.recordAction(
+                    execution.actionKey,
+                    reply.optBoolean("success", false)
+                            ? "submitted" : "failed");
         }
-
-        int selectedIndex = parseOrdinalIndex(app);
-        if (selectedIndex < 0 && explicitIndex > 0) selectedIndex = explicitIndex - 1;
-        if (selectedIndex >= 0 && !lastCandidateApps.isEmpty()) {
-            if (selectedIndex >= lastCandidateApps.size()) return new JSONObject().put("success", false).put("error", "候選 App 編號超出範圍");
-            JSONObject chosen = lastCandidateApps.get(selectedIndex);
-            lastCandidateApps.clear();
-            String pkg = chosen.optString("package", "");
-            JSONObject reply = helperPost("/launch", new JSONObject().put("package", pkg));
-            if (reply.optBoolean("success")) reply.put("app", chosen.optString("label", "App")).put("message", "已啟動 App，以下為啟動後的最新畫面。");
-            workingContext.recordAction("launch:" + pkg, reply.optBoolean("success", false) ? "submitted" : "failed");
-            return autoObserveAfterMutation(reply, "launch_app");
-        }
-
-        if (app.isEmpty()) return new JSONObject().put("success", false).put("error", "App 名稱不可為空");
-
-        // Fast path: one localhost request. Runtime resolves from cached AppCatalog.
-        JSONObject reply = helperPost("/launch", new JSONObject().put("app", app));
-        if (reply.optBoolean("success", false)) {
-            lastCandidateApps.clear();
-            String pkg = reply.optString("package", "");
-            reply.put("app", reply.optString("label", app)).put("message", "已啟動 App，以下為啟動後的最新畫面。");
-            workingContext.recordAction("launch:" + (pkg.isEmpty() ? app : pkg), "submitted");
-            return autoObserveAfterMutation(reply, "launch_app");
-        }
-
-        if ("MULTIPLE_MATCHES".equals(reply.optString("status", ""))) {
-            JSONArray matches = reply.optJSONArray("matches");
-            lastCandidateApps.clear();
-            JSONArray candidates = new JSONArray();
-            StringBuilder prompt = new StringBuilder("找到多個相近 App，請說第幾個：\n");
-            if (matches != null) {
-                for (int i = 0; i < matches.length(); i++) {
-                    JSONObject c = matches.optJSONObject(i);
-                    if (c == null) continue;
-                    lastCandidateApps.add(c);
-                    candidates.put(new JSONObject().put("index", lastCandidateApps.size()).put("label", c.optString("label", "App")).put("package", c.optString("package", "")));
-                    prompt.append(lastCandidateApps.size()).append(". ").append(c.optString("label", "App")).append("\n");
-                }
-            }
-            return new JSONObject().put("success", false).put("status", "MULTIPLE_MATCHES").put("candidates", candidates)
-                    .put("error", prompt.toString().trim()).put("instruction", "只詢問使用者要開第幾個；回答後再呼叫 phone_action(action=OPEN_APP,target=使用者選的序號)。");
-        }
-        return reply;
-    }
-
-    private int parseOrdinalIndex(String input) {
-        if (input == null) return -1;
-        String s = input.trim().toLowerCase(Locale.ROOT);
-        if (s.equals("第一個") || s.equals("第1個") || s.equals("第 1 個") || s.equals("1") || s.equals("first") || s.equals("one") || s.equals("前一個")) return 0;
-        if (s.equals("第二個") || s.equals("第2個") || s.equals("第 2 個") || s.equals("2") || s.equals("second") || s.equals("two")) return 1;
-        if (s.equals("第三個") || s.equals("第3個") || s.equals("第 3 個") || s.equals("3") || s.equals("third") || s.equals("three")) return 2;
-        if (s.equals("第四個") || s.equals("第4個") || s.equals("第 4 個") || s.equals("4") || s.equals("fourth") || s.equals("four")) return 3;
-        if (s.equals("第五個") || s.equals("第5個") || s.equals("第 5 個") || s.equals("5") || s.equals("fifth") || s.equals("five")) return 4;
-        if (s.equals("最後一個") || s.equals("最後") || s.equals("last")) {
-            return lastCandidateApps.isEmpty() ? -1 : lastCandidateApps.size() - 1;
-        }
-        return -1;
+        return execution.observeAfter
+                ? autoObserveAfterMutation(reply, "launch_app")
+                : reply;
     }
 
 
 
-    private void authenticateLocalBridge(HttpURLConnection connection) {
-        if (connection == null) {
-            throw new IllegalArgumentException("LOCAL_BRIDGE_CONNECTION_REQUIRED");
-        }
-        if (appContext == null) {
-            throw new IllegalStateException("LOCAL_BRIDGE_CONTEXT_REQUIRED");
-        }
-        String token = AppConfig.getLocalBridgeToken(appContext);
-        if (token == null || token.isEmpty()) {
-            throw new IllegalStateException("LOCAL_BRIDGE_TOKEN_UNAVAILABLE");
-        }
-        connection.setRequestProperty("X-Crew-Bridge-Token", token);
-    }
 
-    private JSONObject helperGet(String endpoint) throws Exception {
-        HttpURLConnection connection = null;
-        try {
-            connection = (HttpURLConnection) new URL("http://127.0.0.1:8766" + endpoint).openConnection();
-            activeToolConnection = connection;
-            connection.setRequestMethod("GET");
-            authenticateLocalBridge(connection);
-            connection.setConnectTimeout(3000); connection.setReadTimeout(5000);
-            int code = connection.getResponseCode();
-            BufferedReader reader = new BufferedReader(new InputStreamReader(code >= 200 && code < 300 ? connection.getInputStream() : connection.getErrorStream(), "UTF-8"));
-            StringBuilder text = new StringBuilder(); String line;
-            while ((line = reader.readLine()) != null) text.append(line);
-            reader.close();
-            return text.length() == 0 ? new JSONObject() : new JSONObject(text.toString());
-        } finally { if (connection != null) connection.disconnect(); if (activeToolConnection == connection) activeToolConnection = null; }
-    }
+
+
+
+
 
     private JSONObject typeText(JSONObject args) throws Exception {
         String text = args.optString("text", "").trim();
@@ -4094,7 +3934,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         // 2. Send text to Accessibility Service.
         // Preserve the bridge result; Runtime reconciliation below decides the final outcome.
         PerformanceMetrics.recordTextRouteType();
-        JSONObject reply = helperPost("/type", new JSONObject().put("text", text));
+        JSONObject reply = phoneRuntimeExecutor.typeText(text);
         if (reply.optBoolean("success", false)) {
             reply.put("message", "已在輸入框輸入文字");
         }
@@ -4112,7 +3952,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
             JSONObject commit;
             try {
-                commit = helperPost("/commit_search", new JSONObject());
+                commit = phoneRuntimeExecutor.commitSearch();
             } catch (Exception error) {
                 commit = new JSONObject().put("success", false)
                         .put("action", "SEARCH_COMMIT")
@@ -4220,7 +4060,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         }
 
         PerformanceMetrics.recordSearchExecution();
-        JSONObject reply = helperPost("/search_in_app", new JSONObject().put("query", text));
+        JSONObject reply = phoneRuntimeExecutor.post("/search_in_app", new JSONObject().put("query", text));
         workingContext.recordAction("app_search",
                 reply.optBoolean("success", false) ? "submitted" : "failed");
         JSONObject observed = autoObserveAfterMutation(reply, "search_current_app");
@@ -4308,7 +4148,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                     "缺少可驗證的收件人；不要猜測或直接送出。");
         }
 
-        JSONObject semantic = helperGet("/semantic_screen");
+        JSONObject semantic = phoneRuntimeExecutor.get("/semantic_screen");
         if (semantic == null || !semantic.optBoolean("success", false)) {
             return runtimeBlocked("RECIPIENT_SCREEN_UNAVAILABLE",
                     "Runtime 目前無法讀取畫面來確認收件人；不要送出，先 inspect_ui 或等待畫面可讀。");
@@ -4470,7 +4310,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         // 0052 active messaging path is intentionally simple:
         // optional TYPE(text) -> SEND_CURRENT.
         if (!text.isEmpty()) {
-            JSONObject typed = helperPost(
+            JSONObject typed = phoneRuntimeExecutor.post(
                     "/type",
                     new JSONObject().put("text", text));
             workingContext.recordAction(
@@ -4490,7 +4330,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             }
         }
 
-        JSONObject reply = helperPost("/send_current", new JSONObject());
+        JSONObject reply = phoneRuntimeExecutor.post("/send_current", new JSONObject());
         JSONObject sendVerification = reply.optJSONObject("verification");
         Log.i(TAG, "RuntimeSend SEND_CURRENT_RESULT success="
                 + reply.optBoolean("success", false)
@@ -4523,15 +4363,17 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
     private JSONObject pressKey(JSONObject args) throws Exception {
         String key = args.optString("key", "").toUpperCase();
-        if (!("HOME".equals(key) || "BACK".equals(key) || "RECENTS".equals(key) || "NOTIFICATIONS".equals(key) || "QUICK_SETTINGS".equals(key) || "POWER_DIALOG".equals(key))) return new JSONObject().put("success", false).put("error", "不支援的系統按鍵");
-        JSONObject reply = helperPost("/key", new JSONObject().put("key", key));
-        workingContext.recordAction("key:" + key, reply.optBoolean("success", false) ? "submitted" : "failed");
+        JSONObject reply = phoneRuntimeExecutor.pressKey(key);
+        workingContext.recordAction(
+                "key:" + key,
+                reply.optBoolean("success", false)
+                        ? "submitted" : "failed");
         return autoObserveAfterMutation(reply, "press_key");
     }
 
     /** Explicitly commits the currently focused search field via the IME key. */
     private JSONObject commitSearch() throws Exception {
-        JSONObject reply = helperPost("/commit_search", new JSONObject());
+        JSONObject reply = phoneRuntimeExecutor.post("/commit_search", new JSONObject());
         workingContext.recordAction("search_commit",
                 reply.optBoolean("success", false) ? "submitted" : "failed");
         if (reply.optBoolean("success", false)) {
@@ -4555,27 +4397,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
 
 
-    private JSONObject helperPost(String endpoint, JSONObject payload) throws Exception {
-        HttpURLConnection connection = null;
-        try {
-            connection = (HttpURLConnection) new URL("http://127.0.0.1:8766" + endpoint).openConnection();
-            activeToolConnection = connection;
-            connection.setRequestMethod("POST"); connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
-            authenticateLocalBridge(connection);
-            connection.setDoOutput(true); connection.setConnectTimeout(3500); connection.setReadTimeout(7000);
-            byte[] body = payload.toString().getBytes("UTF-8");
-            connection.setFixedLengthStreamingMode(body.length);
-            OutputStream out = connection.getOutputStream(); out.write(body); out.close();
-            int code = connection.getResponseCode();
-            BufferedReader reader = new BufferedReader(new InputStreamReader(code >= 200 && code < 300 ? connection.getInputStream() : connection.getErrorStream(), "UTF-8"));
-            StringBuilder text = new StringBuilder(); String line;
-            while ((line = reader.readLine()) != null) text.append(line);
-            reader.close();
-            JSONObject response = text.length() == 0 ? new JSONObject() : new JSONObject(text.toString());
-            if (!response.has("success")) response.put("success", code >= 200 && code < 300);
-            return response;
-        } finally { if (connection != null) connection.disconnect(); if (activeToolConnection == connection) activeToolConnection = null; }
-    }
+
 
     private void sendToolResponse(String id, String name, JSONObject result) throws Exception {
         boolean shadowSuccess = result != null && result.optBoolean("success", false);
@@ -4606,238 +4428,19 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         }
     }
 
-    private void startAudio() {
-    if (!running || recorder != null) return;
-    int min = AudioRecord.getMinBufferSize(16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
-    int bufferBytes = Math.max(min * 4, 8192);
-    int selectedAudioSource = MediaRecorder.AudioSource.VOICE_COMMUNICATION;
-    try {
-        recorder = new AudioRecord(selectedAudioSource, 16000,
-                AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT, bufferBytes);
-        if (recorder.getState() != AudioRecord.STATE_INITIALIZED) {
-            throw new IllegalStateException("VOICE_COMMUNICATION_NOT_INITIALIZED");
-        }
-    } catch (Exception voiceError) {
-        Log.w(TAG, "0120 AudioRecord VOICE_COMMUNICATION unavailable: "
-                + voiceError.getClass().getSimpleName() + "; fallback=MIC");
-        try { if (recorder != null) recorder.release(); } catch (Exception ignored) {}
-        recorder = null;
-        selectedAudioSource = MediaRecorder.AudioSource.MIC;
-        recorder = new AudioRecord(selectedAudioSource, 16000,
-                AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT, bufferBytes);
-    }
 
-    if (recorder == null || recorder.getState() != AudioRecord.STATE_INITIALIZED) {
-        fail("麥克風初始化失敗", null);
-        return;
-    }
-    Log.i(TAG, "0120 AudioRecord source="
-            + (selectedAudioSource == MediaRecorder.AudioSource.VOICE_COMMUNICATION
-                ? "VOICE_COMMUNICATION" : "MIC")
-            + " state=" + recorder.getState()
-            + " session=" + recorder.getAudioSessionId()
-            + " bufferBytes=" + bufferBytes);
 
-    boolean aecAvailable = android.media.audiofx.AcousticEchoCanceler.isAvailable();
-    boolean aecCreated = false;
-    int aecEnableStatus = Integer.MIN_VALUE;
-    boolean aecEnabled = false;
-    try {
-        if (aecAvailable) {
-            aecEffect = android.media.audiofx.AcousticEchoCanceler.create(
-                    recorder.getAudioSessionId());
-            aecCreated = aecEffect != null;
-            if (aecEffect != null) {
-                aecEnableStatus = aecEffect.setEnabled(true);
-                aecEnabled = aecEffect.getEnabled();
-            }
-        }
-    } catch (Exception effectError) {
-        Log.w(TAG, "0120 AEC setup exception="
-                + effectError.getClass().getSimpleName());
-    }
-    Log.i(TAG, "0120 AEC available=" + aecAvailable
-            + " created=" + aecCreated
-            + " enableStatus=" + aecEnableStatus
-            + " enabled=" + aecEnabled);
 
-    boolean nsAvailable = android.media.audiofx.NoiseSuppressor.isAvailable();
-    boolean nsCreated = false;
-    int nsEnableStatus = Integer.MIN_VALUE;
-    boolean nsEnabled = false;
-    try {
-        if (nsAvailable) {
-            nsEffect = android.media.audiofx.NoiseSuppressor.create(
-                    recorder.getAudioSessionId());
-            nsCreated = nsEffect != null;
-            if (nsEffect != null) {
-                nsEnableStatus = nsEffect.setEnabled(true);
-                nsEnabled = nsEffect.getEnabled();
-            }
-        }
-    } catch (Exception effectError) {
-        Log.w(TAG, "0120 NoiseSuppressor setup exception="
-                + effectError.getClass().getSimpleName());
-    }
-    Log.i(TAG, "0120 NoiseSuppressor available=" + nsAvailable
-            + " created=" + nsCreated
-            + " enableStatus=" + nsEnableStatus
-            + " enabled=" + nsEnabled);
 
-    createAudioPlayer();
-    startPlaybackWorker();
-    try {
-        recorder.startRecording();
-        Log.i(TAG, "0120 AudioRecord recordingState="
-                + recorder.getRecordingState());
-    } catch (Exception startError) {
-        fail("麥克風啟動失敗：" + startError.getClass().getSimpleName(), startError);
-        return;
-    }
-    new Thread(new Runnable() { @Override public void run() { sendMic(); } }, "crew-native-live-mic").start();
-}
 
-    private void createAudioPlayer() {
-        usingOboeOutput = NativeOboeOutput.start(audioOutput);
-        if (usingOboeOutput) {
-            String info = NativeOboeOutput.getInfo();
-            audioOutputBackend = info == null ? "Oboe／AAudio 低延遲" : info;
-            Log.i(TAG, "Oboe low-latency output enabled");
-            return;
-        }
-        audioOutputBackend = "Android AudioTrack 備援";
-        synchronized (playerLock) {
-            try { if (player != null) { player.stop(); player.release(); } } catch (Exception ignored) {}
-            int outMin = AudioTrack.getMinBufferSize(24000, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
-            // One second leaves room for GC, image upload, and transient Wi-Fi jitter.
-            int bufferBytes = Math.max(outMin * 8, 48000);
-            AudioAttributes attributes = new AudioAttributes.Builder()
-                    .setUsage("media".equals(audioOutput) ? AudioAttributes.USAGE_MEDIA : AudioAttributes.USAGE_VOICE_COMMUNICATION)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build();
-            AudioFormat format = new AudioFormat.Builder().setSampleRate(24000)
-                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO).setEncoding(AudioFormat.ENCODING_PCM_16BIT).build();
-            player = new AudioTrack.Builder().setAudioAttributes(attributes).setAudioFormat(format)
-                    .setBufferSizeInBytes(bufferBytes).setTransferMode(AudioTrack.MODE_STREAM).build();
-        }
-    }
 
-    private void startPlaybackWorker() {
-        audioQueue.clear();
-        if (usingOboeOutput) { audioPlaybackRunning = true; return; }
-        audioPlaybackRunning = true;
-        audioPlaybackThread = new Thread(new Runnable() {
-            @Override public void run() { runPlaybackLoop(); }
-        }, "crew-native-live-playback");
-        audioPlaybackThread.start();
-    }
 
-    private void runPlaybackLoop() {
-        boolean started = false;
-        while (audioPlaybackRunning) {
-            try {
-                byte[] first = audioQueue.poll(300, TimeUnit.MILLISECONDS);
-                if (first == null) continue;
-                if (!started) {
-                    // Start with about 200 ms buffered. It avoids the initial
-                    // AudioTrack underrun that previously disabled the track.
-                    ArrayList<byte[]> initial = new ArrayList<byte[]>();
-                    initial.add(first);
-                    int bytes = first.length;
-                    long deadline = System.currentTimeMillis() + 180;
-                    while (bytes < 9600 && System.currentTimeMillis() < deadline) {
-                        byte[] next = audioQueue.poll(Math.max(1, deadline - System.currentTimeMillis()), TimeUnit.MILLISECONDS);
-                        if (next == null) break;
-                        initial.add(next); bytes += next.length;
-                    }
-                    synchronized (playerLock) { if (player != null) player.play(); }
-                    started = true;
-                    for (byte[] chunk : initial) writeAudioChunk(chunk);
-                } else {
-                    writeAudioChunk(first);
-                }
-            } catch (InterruptedException ignored) {
-                // stopAudio interrupts this worker; the loop condition decides exit.
-            } catch (Exception error) {
-                Log.w(TAG, "音訊播放工作執行失敗：" + error.getMessage());
-                recoverAudioPlayer();
-                started = false;
-            }
-        }
-    }
 
-    private void writeAudioChunk(byte[] pcm) {
-    if (pcm == null || pcm.length == 0 || interruptedCurrentTurn || agentMuted) return;
-    int totalWritten = 0;
-    int writeError = 0;
-    synchronized (playerLock) {
-        if (player != null && player.getPlayState() != AudioTrack.PLAYSTATE_PLAYING) {
-            try {
-                player.play();
-            } catch (Exception playError) {
-                audioTrackWriteFailureCount++;
-                lastAudioOutputState = "AUDIOTRACK_PLAY_FAILED";
-                Log.w(TAG, "0120 AudioTrack play failed #"
-                        + audioTrackWriteFailureCount + " exception="
-                        + playError.getClass().getSimpleName());
-            }
-        }
-        if (player == null) {
-            writeError = AudioTrack.ERROR_INVALID_OPERATION;
-        } else {
-            while (totalWritten < pcm.length) {
-                int remaining = pcm.length - totalWritten;
-                int written = player.write(pcm, totalWritten, remaining);
-                if (written < 0) {
-                    writeError = written;
-                    break;
-                }
-                if (written == 0) break;
-                if (written < remaining) audioTrackShortWriteCount++;
-                totalWritten += written;
-            }
-        }
-    }
-    if (writeError < 0) {
-        audioTrackWriteFailureCount++;
-        lastAudioOutputState = "AUDIOTRACK_WRITE_FAILED:" + writeError;
-        Log.w(TAG, "0120 AudioTrack write failed #"
-                + audioTrackWriteFailureCount + " code=" + writeError
-                + " shortWrites=" + audioTrackShortWriteCount
-                + "; rebuilding track");
-        recoverAudioPlayer();
-    } else if (totalWritten < pcm.length) {
-        audioTrackShortWriteCount++;
-        lastAudioOutputState = "AUDIOTRACK_SHORT_WRITE:"
-                + totalWritten + "/" + pcm.length;
-        Log.w(TAG, "0120 AudioTrack short write #"
-                + audioTrackShortWriteCount + " bytes="
-                + totalWritten + "/" + pcm.length);
-    } else if (totalWritten > 0) {
-        lastAudioOutputState = "AUDIOTRACK_PLAYING";
-    }
-}
 
-    private void recoverAudioPlayer() {
-        if (!audioPlaybackRunning || !running) return;
-        createAudioPlayer();
-    }
-    private double calculateRms(byte[] pcm, int count) {
-        if (count < 2) return 0;
-        long sum = 0;
-        int samples = count / 2;
-        for (int i = 0; i < count - 1; i += 2) {
-            short val = (short) ((pcm[i] & 0xFF) | (pcm[i + 1] << 8));
-            sum += (long) val * val;
-        }
-        return Math.sqrt((double) sum / samples) / 32768.0;
-    }
 
-    private volatile long lastPlaybackActiveAt = 0;
-    private volatile long lastMeterReportAt = 0;
-    private double noiseFloor = 0.015;
-    private static final int CALIBRATION_FRAMES = 20; // 800 ms at 40 ms/frame
+
+
+
     // 0097 tuning: deliberately easy to start, reluctant to cut a natural pause.
     // Change these only with recorded A/B evidence from a real device.
     private static final int SERVER_VAD_PREFIX_PADDING_MS = 80;
@@ -4848,394 +4451,18 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     // call triggerLocalInterruption(); it only withholds likely speaker echo until
     // several consecutive frames look like close-range human speech. Gemini
     // remains the authoritative interruption/turn detector once audio is admitted.
-    private static final int BARGE_IN_MAX_CANDIDATE_FRAMES = 8;
     // 0121: residual playback/room noise can occasionally look speech-like for
     // one or two frames. When output is still audible, require a lower-ZCR voiced
     // component as well as persistence before allowing Gemini to interrupt.
-    private static final double BARGE_IN_OUTPUT_MAX_ZCR = 0.26;
-    private static final double BARGE_IN_VOICED_MAX_ZCR = 0.20;
-    private static final int BARGE_IN_MIN_VOICED_FRAMES = 2;
-    private static final double MIN_NOISE_FLOOR = 0.008;
 
-    private void sendMic() {
-        byte[] pcm = new byte[1280]; // 40ms @ 16kHz 16-bit mono
-        int calibrationFrames = 0;
-        double[] calibrationSamples = new double[CALIBRATION_FRAMES];
 
-        // Fixed buffers avoid re-introducing the 25 Hz allocation churn removed
-        // by 0099. Only candidate speech during AI playback is copied here.
-        byte[][] bargeInCandidatePcm =
-                new byte[BARGE_IN_MAX_CANDIDATE_FRAMES][pcm.length];
-        int[] bargeInCandidateLengths = new int[BARGE_IN_MAX_CANDIDATE_FRAMES];
-        int bargeInCandidateCount = 0;
-        int consecutiveBargeInFrames = 0;
-        int bargeInVoicedFrames = 0;
-        double bargeInCandidateMinRms = Double.MAX_VALUE;
-        double bargeInCandidatePeakRms = 0.0;
-        double bargeInPreviousRms = 0.0;
-        boolean bargeInEnergyRising = false;
-        boolean bargeInGateOpen = false;
-
-        // 0108: normal-listening noise guard is stateful per Live mic thread.
-        // It bypasses quiet environments and never owns AudioRecord.
-        ActiveNoiseAdmissionGate activeNoiseGate =
-                new ActiveNoiseAdmissionGate(pcm.length);
-        long lastNoiseGateDiagnosticAt = 0L;
-
-        while (running && recorder != null && webSocket != null) {
-            int count = recorder.read(pcm, 0, pcm.length); if (count <= 0) continue;
-            if (agentMuted) continue;
-
-            double rms = calculateRms(pcm, count);
-            String mode = noiseMode;
-            int suppression = noiseSuppression;
-
-            // Keep the first 0.8 s as an acoustic baseline. The local
-            // ActiveNoiseAdmissionGate now protects these uncalibrated frames too;
-            // its 240 ms pre-roll preserves the first word once speech is confirmed.
-            if (calibrationFrames < CALIBRATION_FRAMES) {
-                calibrationSamples[calibrationFrames] = rms;
-                calibrationFrames++;
-                if (calibrationFrames == CALIBRATION_FRAMES) {
-                    Arrays.sort(calibrationSamples);
-                    double baseline = 0;
-                    for (int i = 0; i < 12; i++) baseline += calibrationSamples[i];
-                    noiseFloor = Math.max(0.008, baseline / 12.0);
-                    listener.onStatus("環境音基線已校正（" + mode + "）");
-                }
-            }
-
-            double modeBase = "noisy".equals(mode) ? 1.45 : ("quiet".equals(mode) ? 0.65 : 0.90);
-            double gateMultiplier = modeBase + suppression * 0.008;
-            double minBase = "noisy".equals(mode) ? 0.022 : ("quiet".equals(mode) ? 0.002 : 0.006);
-            double minGate = minBase + suppression * 0.00010;
-            double gateThreshold = Math.max(minGate, noiseFloor * gateMultiplier);
-
-            // 0108: normal listening stays zero-added-latency in quiet environments.
-            // Once the calibrated ambient floor is clearly noisy, require a short
-            // run of speech-like frames before exposing audio to Gemini Server VAD.
-            // A fixed pre-roll preserves the first word, and trailing audio remains
-            // long enough for the server's 450 ms end-of-speech detector to close.
-            if (!aiSpeaking) {
-                bargeInGateOpen = false;
-                consecutiveBargeInFrames = 0;
-                bargeInCandidateCount = 0;
-                bargeInVoicedFrames = 0;
-                bargeInCandidateMinRms = Double.MAX_VALUE;
-                bargeInCandidatePeakRms = 0.0;
-                bargeInPreviousRms = 0.0;
-                bargeInEnergyRising = false;
-                if (rms < gateThreshold) {
-                    // Keep the calibrated lower bound. Without this clamp the
-                    // floor slowly decays toward zero during quiet idle periods,
-                    // making playback echo look like a very strong interruption.
-                    noiseFloor = Math.max(MIN_NOISE_FLOOR,
-                            noiseFloor * 0.985 + Math.min(rms, 0.18) * 0.015);
-                }
-
-                double zcr = calculateZeroCrossingRate(pcm, count);
-                ActiveNoiseAdmissionGate.Action noiseAction = activeNoiseGate.accept(
-                        pcm, count, rms, zcr, noiseFloor, mode, suppression,
-                        calibrationFrames >= CALIBRATION_FRAMES);
-                double activeGateThreshold = Math.max(
-                        gateThreshold, activeNoiseGate.lastThreshold());
-                long gateNow = System.currentTimeMillis();
-                if (gateNow - lastNoiseGateDiagnosticAt >= 1000L) {
-                    lastNoiseGateDiagnosticAt = gateNow;
-                    Log.d(TAG, "0120 normal gate calibrated="
-                            + (calibrationFrames >= CALIBRATION_FRAMES)
-                            + " mode=" + mode + " "
-                            + activeNoiseGate.diagnosticSummary());
-                }
-
-                if (noiseAction == ActiveNoiseAdmissionGate.Action.SUPPRESS) {
-                    PerformanceMetrics.recordActiveNoiseFrameSuppressed();
-                    reportMicrophoneLevel(rms, activeGateThreshold, false);
-                    continue;
-                }
-
-                if (noiseAction == ActiveNoiseAdmissionGate.Action.FLUSH_PREROLL) {
-                    PerformanceMetrics.recordActiveNoiseSpeechAdmission();
-                    int bufferedFrames = activeNoiseGate.bufferedFrameCount();
-                    for (int i = 0; i < bufferedFrames; i++) {
-                        byte[] buffered = activeNoiseGate.bufferedFrame(i);
-                        int bufferedCount = activeNoiseGate.bufferedLength(i);
-                        if (buffered == null || bufferedCount <= 0) continue;
-                        double bufferedRms = calculateRms(buffered, bufferedCount);
-                        if (!sendMicChunk(buffered, bufferedCount,
-                                bufferedRms, activeGateThreshold)) return;
-                    }
-                    activeNoiseGate.clearBufferedFrames();
-                    reportMicrophoneLevel(rms, activeGateThreshold, true);
-                    // Current frame is already part of the pre-roll flush.
-                    continue;
-                }
-
-                reportMicrophoneLevel(rms,
-                        noiseAction == ActiveNoiseAdmissionGate.Action.BYPASS
-                                ? gateThreshold : activeGateThreshold,
-                        true);
-                if (!sendMicChunk(pcm, count, rms,
-                        noiseAction == ActiveNoiseAdmissionGate.Action.BYPASS
-                                ? gateThreshold : activeGateThreshold)) break;
-                continue;
-            }
-
-            // 0101 remains the sole local admission policy while AI output is audible.
-            activeNoiseGate.reset();
-
-            if (!allowVoiceInterruption) {
-                // Existing explicit protection mode: AI speech owns the channel.
-                bargeInGateOpen = false;
-                consecutiveBargeInFrames = 0;
-                bargeInCandidateCount = 0;
-                bargeInVoicedFrames = 0;
-                bargeInCandidateMinRms = Double.MAX_VALUE;
-                bargeInCandidatePeakRms = 0.0;
-                bargeInPreviousRms = 0.0;
-                bargeInEnergyRising = false;
-                reportMicrophoneLevel(rms, gateThreshold, false);
-                continue;
-            }
-
-            if (!bargeInGateOpen) {
-                // AEC/NS remain the first line of defense. This gate is deliberately
-                // active only during assistant playback to catch residual self-echo.
-                boolean outputAudible = System.currentTimeMillis() < lastPlaybackActiveAt;
-                double sensitivity = interruptionSensitivity / 100.0;
-                // 0119 noisy barge-in speech discriminator: auto mode becomes
-                // deliberately more conservative once the calibrated ambient floor
-                // is clearly outdoors/noisy. This affects assistant-playback barge-in
-                // only; normal listening keeps the existing ActiveNoiseAdmissionGate.
-                boolean adaptiveNoisy = "noisy".equals(mode)
-                        || ("auto".equals(mode) && noiseFloor >= 0.035);
-                int requiredFrames = 4
-                        + (int) Math.round((1.0 - sensitivity) * 3.0)
-                        + (outputAudible ? 2 : 0)
-                        + (adaptiveNoisy ? 1 : 0);
-                requiredFrames = Math.max(4,
-                        Math.min(BARGE_IN_MAX_CANDIDATE_FRAMES, requiredFrames));
-
-                double baseInterrupt = (adaptiveNoisy ? 0.068 : 0.050)
-                        + suppression * 0.00016
-                        + (outputAudible ? 0.018 : 0.0)
-                        + (1.0 - sensitivity) * 0.018
-                        - sensitivity * 0.006;
-                double floorMultiplier = (adaptiveNoisy ? 2.35 : 1.90)
-                        + suppression * 0.006
-                        + (1.0 - sensitivity) * 0.40;
-                double interruptThreshold = Math.max(
-                        baseInterrupt, noiseFloor * floorMultiplier);
-
-                double bargeInZcr = calculateZeroCrossingRate(pcm, count);
-                double bargeInZcrLimit = outputAudible
-                        ? BARGE_IN_OUTPUT_MAX_ZCR : 0.36;
-                boolean speechLikeBargeIn = rms >= interruptThreshold
-                        // Strong high-frequency hiss / sharp street texture is
-                        // unlikely to be a nearby human interruption.
-                        && bargeInZcr <= bargeInZcrLimit
-                        // Very low-frequency wind/engine rumble must look clearly
-                        // near-field before it can interrupt audible assistant speech.
-                        && !(bargeInZcr < 0.010
-                            && rms < interruptThreshold * 1.50);
-
-                if (speechLikeBargeIn) {
-                    boolean voicedFrame = bargeInZcr >= 0.015
-                            && bargeInZcr <= BARGE_IN_VOICED_MAX_ZCR;
-                    if (bargeInCandidateCount == 0) {
-                        bargeInCandidateMinRms = rms;
-                        bargeInCandidatePeakRms = rms;
-                        bargeInPreviousRms = rms;
-                    } else {
-                        bargeInCandidateMinRms = Math.min(
-                                bargeInCandidateMinRms, rms);
-                        bargeInCandidatePeakRms = Math.max(
-                                bargeInCandidatePeakRms, rms);
-                        if (rms >= bargeInPreviousRms * 1.12) {
-                            bargeInEnergyRising = true;
-                        }
-                        bargeInPreviousRms = rms;
-                    }
-                    if (voicedFrame) bargeInVoicedFrames++;
-                    consecutiveBargeInFrames++;
-                    if (bargeInCandidateCount < BARGE_IN_MAX_CANDIDATE_FRAMES) {
-                        System.arraycopy(pcm, 0,
-                                bargeInCandidatePcm[bargeInCandidateCount], 0, count);
-                        bargeInCandidateLengths[bargeInCandidateCount] = count;
-                        bargeInCandidateCount++;
-                    }
-
-                    boolean candidateEnergyChanged = bargeInCandidatePeakRms
-                            >= bargeInCandidateMinRms
-                            + Math.max(0.012, interruptThreshold * 0.12);
-                    boolean playbackSpeechConfidence = !outputAudible
-                            || (bargeInVoicedFrames >= Math.max(
-                                    BARGE_IN_MIN_VOICED_FRAMES, requiredFrames / 4)
-                                && (bargeInEnergyRising
-                                    || candidateEnergyChanged
-                                    || bargeInCandidatePeakRms
-                                        >= interruptThreshold * 1.30));
-
-                    if (consecutiveBargeInFrames >= requiredFrames
-                            && !playbackSpeechConfidence
-                            && consecutiveBargeInFrames == requiredFrames) {
-                        Log.d(TAG, "0121 barge-in REJECT reason=LOW_CONFIDENCE"
-                                + " frames=" + consecutiveBargeInFrames
-                                + " required=" + requiredFrames
-                                + " voiced=" + bargeInVoicedFrames
-                                + " minRms=" + bargeInCandidateMinRms
-                                + " peakRms=" + bargeInCandidatePeakRms
-                                + " zcr=" + bargeInZcr
-                                + " zcrLimit=" + bargeInZcrLimit
-                                + " outputAudible=" + outputAudible);
-                    }
-
-                    if (consecutiveBargeInFrames >= requiredFrames
-                            && playbackSpeechConfidence) {
-                        bargeInGateOpen = true;
-                        long admissionIndex = ++bargeInAdmissionCount;
-                        lastBargeInAdmissionAt = System.currentTimeMillis();
-                        Log.i(TAG, "0120 barge-in ADMIT #" + admissionIndex
-                                + " reason=PERSISTENT_SPEECH frames=" + consecutiveBargeInFrames
-                                + " required=" + requiredFrames
-                                + " rms=" + rms
-                                + " floor=" + noiseFloor
-                                + " zcr=" + bargeInZcr
-                                + " zcrLimit=" + bargeInZcrLimit
-                                + " voiced=" + bargeInVoicedFrames
-                                + " threshold=" + interruptThreshold
-                                + " outputAudible=" + outputAudible
-                                + " adaptiveNoisy=" + adaptiveNoisy);
-
-                        // Flush only the candidate speech frames. We intentionally do
-                        // not prepend arbitrary pre-candidate audio because that is
-                        // exactly where residual speaker echo tends to live.
-                        for (int i = 0; i < bargeInCandidateCount; i++) {
-                            int bufferedCount = bargeInCandidateLengths[i];
-                            byte[] buffered = bargeInCandidatePcm[i];
-                            double bufferedRms = calculateRms(buffered, bufferedCount);
-                            if (!sendMicChunk(buffered, bufferedCount,
-                                    bufferedRms, interruptThreshold)) return;
-                        }
-                        bargeInCandidateCount = 0;
-                        consecutiveBargeInFrames = 0;
-                        bargeInVoicedFrames = 0;
-                        bargeInCandidateMinRms = Double.MAX_VALUE;
-                        bargeInCandidatePeakRms = 0.0;
-                        bargeInPreviousRms = 0.0;
-                        bargeInEnergyRising = false;
-                        reportMicrophoneLevel(rms, interruptThreshold, true);
-                        // Current frame was already included in the candidate flush.
-                        continue;
-                    }
-                } else {
-                    consecutiveBargeInFrames = 0;
-                    bargeInCandidateCount = 0;
-                    bargeInVoicedFrames = 0;
-                    bargeInCandidateMinRms = Double.MAX_VALUE;
-                    bargeInCandidatePeakRms = 0.0;
-                    bargeInPreviousRms = 0.0;
-                    bargeInEnergyRising = false;
-                }
-
-                reportMicrophoneLevel(rms, interruptThreshold, false);
-                continue;
-            }
-
-            // The local gate has admitted likely human speech. From this point on
-            // full PCM flows continuously and Gemini Server VAD remains responsible
-            // for emitting serverContent.interrupted and ending the old model turn.
-            reportMicrophoneLevel(rms, gateThreshold, true);
-            if (!sendMicChunk(pcm, count, rms, gateThreshold)) break;
-        }
-    }
 
     /** 0099 hot-path encoding retained; 0101 reuses it for buffered barge-in frames. */
-    private boolean sendMicChunk(byte[] pcm, int count, double rms, double gateThreshold) {
-        try {
-            WebSocket socket = webSocket;
-            if (socket == null) return false;
-            String encoded = Base64.encodeToString(
-                    pcm, 0, count, Base64.NO_WRAP);
-            String payload = "{\"realtimeInput\":{\"audio\":{"
-                    + "\"mimeType\":\"audio/pcm;rate=16000\","
-                    + "\"data\":\"" + encoded + "\"}}}";
-            if (!socket.send(payload)) throw new Exception("audio send failed");
-            if (audioIncidentRecorder != null) {
-                audioIncidentRecorder.onUpstreamPcm(
-                        pcm, count, rms, noiseFloor, gateThreshold);
-            }
-            return true;
-        } catch (Exception error) {
-            fail("麥克風串流失敗：" + error.getMessage(), error);
-            return false;
-        }
-    }
-    private double calculateZeroCrossingRate(byte[] pcm, int count) {
-        if (count < 4) return 0;
-        int crossings = 0;
-        short previous = (short) ((pcm[0] & 0xFF) | (pcm[1] << 8));
-        for (int i = 2; i < count - 1; i += 2) {
-            short current = (short) ((pcm[i] & 0xFF) | (pcm[i + 1] << 8));
-            if ((previous < 0 && current >= 0) || (previous >= 0 && current < 0)) crossings++;
-            previous = current;
-        }
-        return (double) crossings / Math.max(1, count / 2);
-    }
 
-    private void reportMicrophoneLevel(double rms, double gate, boolean sending) {
-        long now = System.currentTimeMillis();
-        if (now - lastMeterReportAt < 180) return;
-        lastMeterReportAt = now;
-        double dbfs = rms <= 0.000001 ? -96.0 : Math.max(-96.0, 20.0 * Math.log10(rms));
-        double gateDbfs = gate <= 0.000001 ? -96.0 : Math.max(-96.0, 20.0 * Math.log10(gate));
-        listener.onMicrophoneLevel(dbfs, gateDbfs, sending);
-    }
-    private boolean enqueueAudio(byte[] pcm) {
-        if (pcm == null || pcm.length == 0) {
-            lastAudioOutputState = "EMPTY_PCM";
-            return false;
-        }
-        if (agentMuted) {
-            lastAudioOutputState = "BLOCKED_MUTED";
-            Log.w(TAG, "0047 audio blocked because agentMuted=true");
-            return false;
-        }
-        if (interruptedCurrentTurn) {
-            lastAudioOutputState = "BLOCKED_INTERRUPTED";
-            Log.w(TAG, "0047 audio blocked because interruptedCurrentTurn=true");
-            return false;
-        }
-        long durationMs = pcm.length * 1000L / (24000 * 2);
-        lastPlaybackActiveAt = Math.max(System.currentTimeMillis(), lastPlaybackActiveAt) + durationMs;
-        if (usingOboeOutput) {
-            try {
-                NativeOboeOutput.write(pcm);
-                audioPcmBytesAccepted += pcm.length;
-                lastAudioOutputState = "OBOE_ACCEPTED";
-                return true;
-            } catch (Throwable writeError) {
-                oboeWriteFailureCount++;
-                lastAudioOutputState = "OBOE_WRITE_FAILED";
-                Log.w(TAG, "0120 Oboe write failed #" + oboeWriteFailureCount
-                        + " exception=" + writeError.getClass().getSimpleName());
-                return false;
-            }
-        }
-        boolean accepted = audioQueue.offer(pcm);
-        if (!accepted) {
-            audioQueue.poll();
-            accepted = audioQueue.offer(pcm);
-        }
-        if (accepted) {
-            audioPcmBytesAccepted += pcm.length;
-            lastAudioOutputState = "AUDIOTRACK_QUEUED";
-        } else {
-            lastAudioOutputState = "AUDIOTRACK_QUEUE_FULL";
-            Log.w(TAG, "音訊佇列已滿，略過過期語音片段");
-        }
-        return accepted;
-    }
+
+
+
+
 
     private void reportStage(String text) { stage = text; listener.onStatus(text); Log.d(TAG, text); }
     private synchronized void fail(String message, Throwable error) {
@@ -5243,19 +4470,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if (error != null) Log.e(TAG, message, error); else Log.e(TAG, message);
         running = false;
         interruptionHandler.removeCallbacks(clearInterruptedFallback);
-        stopAudio(); listener.onStopped(message);
+        liveAudioController.stop(); listener.onStopped(message);
     }
-    private void stopAudio() {
-        audioPlaybackRunning = false;
-        audioQueue.clear();
-        if (usingOboeOutput) { NativeOboeOutput.stop(); usingOboeOutput = false; }
-        try { if (audioPlaybackThread != null) audioPlaybackThread.interrupt(); } catch (Exception ignored) {}
-        audioPlaybackThread = null;
-        if (aecEffect != null) { try { aecEffect.release(); } catch (Exception ignored) {} aecEffect = null; }
-        if (nsEffect != null) { try { nsEffect.release(); } catch (Exception ignored) {} nsEffect = null; }
-        try { if (recorder != null) { recorder.stop(); recorder.release(); recorder = null; } } catch (Exception ignored) {}
-        synchronized (playerLock) {
-            try { if (player != null) { player.stop(); player.release(); player = null; } } catch (Exception ignored) {}
-        }
-    }
+
 }
