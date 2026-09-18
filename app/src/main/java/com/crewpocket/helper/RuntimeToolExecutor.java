@@ -9,21 +9,17 @@ import org.json.JSONObject;
  * a tool may run, own a user generation, complete a task, or authorize SEND.
  */
 final class RuntimeToolExecutor {
-    interface Environment {
-        JSONObject helperPost(String endpoint, JSONObject payload) throws Exception;
-    }
-
     private final NotebookToolHandler notebookToolHandler;
     private final LiveVisionController visionController;
-    private final Environment environment;
+    private final PhoneRuntimeExecutor phoneRuntimeExecutor;
 
     RuntimeToolExecutor(
             NotebookToolHandler notebookToolHandler,
             LiveVisionController visionController,
-            Environment environment) {
+            PhoneRuntimeExecutor phoneRuntimeExecutor) {
         this.notebookToolHandler = notebookToolHandler;
         this.visionController = visionController;
-        this.environment = environment;
+        this.phoneRuntimeExecutor = phoneRuntimeExecutor;
     }
 
     boolean handles(String name) {
@@ -54,7 +50,7 @@ final class RuntimeToolExecutor {
     }
 
     private JSONObject captureAndSendScreen() throws Exception {
-        JSONObject capture = environment.helperPost(
+        JSONObject capture = phoneRuntimeExecutor.post(
                 "/screenshot", new JSONObject());
         if (!capture.optBoolean("success")) return capture;
         String path = capture.optString(
