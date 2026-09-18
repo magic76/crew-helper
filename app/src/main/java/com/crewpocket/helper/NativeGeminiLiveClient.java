@@ -664,7 +664,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 long perfStarted = android.os.SystemClock.elapsedRealtime();
                 boolean perfSuccess = false;
                 try {
-                    JSONObject result = captureAndSendScreen();
+                    JSONObject result = runtimeToolExecutor.execute(
+                            "take_screenshot", new JSONObject());
                     perfSuccess = result.optBoolean("success", false);
                     long sequence = ++screenFrameSequence;
                     Log.d(TAG, perfSuccess ? "螢幕影格 #" + sequence + " 已送達 Gemini（" + System.currentTimeMillis() + "）" : "螢幕影格 #" + sequence + " 未送達 Gemini：" + result.optString("error"));
@@ -2680,7 +2681,12 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         reply.put("execution", execution);
         // Send the post-gesture frame so Gemini sees the actual viewport
         JSONObject visual = new JSONObject();
-        try { visual = captureAndSendScreen(); } catch (Exception error) { visual.put("success", false).put("error", error.getMessage()); }
+        try {
+            visual = runtimeToolExecutor.execute(
+                    "take_screenshot", new JSONObject());
+        } catch (Exception error) {
+            visual.put("success", false).put("error", error.getMessage());
+        }
         reply.put("screenChanged", changed);
         reply.put("screenFrameSent", visual.optBoolean("success"));
         reply.put("verification", changed
