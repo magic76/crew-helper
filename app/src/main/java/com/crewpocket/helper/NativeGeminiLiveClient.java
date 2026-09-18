@@ -4314,7 +4314,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if (composerTop == Integer.MAX_VALUE) {
             composerTop = 1600;
         }
-        int headerBottomLimit = Math.max(360, (int) (composerTop * 0.45d));
+        int headerBottomLimit = Math.max(360, (int) (composerTop * 0.25d));
         boolean recipientMatched = false;
 
         for (int i = 0; i < elements.length(); i++) {
