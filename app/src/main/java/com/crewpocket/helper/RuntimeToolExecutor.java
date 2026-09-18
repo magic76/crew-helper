@@ -1,7 +1,5 @@
 package com.crewpocket.helper;
 
-import android.content.Context;
-
 import org.json.JSONObject;
 
 /**
@@ -11,24 +9,10 @@ import org.json.JSONObject;
  * a tool may run, own a user generation, complete a task, or authorize SEND.
  */
 final class RuntimeToolExecutor {
-    interface Environment {
-        String currentForegroundPackageName();
-    }
-
-    private final Context appContext;
     private final NotebookToolHandler notebookToolHandler;
-    private final AppPlaybookStore appPlaybookStore;
-    private final Environment environment;
 
-    RuntimeToolExecutor(
-            Context appContext,
-            NotebookToolHandler notebookToolHandler,
-            AppPlaybookStore appPlaybookStore,
-            Environment environment) {
-        this.appContext = appContext;
+    RuntimeToolExecutor(NotebookToolHandler notebookToolHandler) {
         this.notebookToolHandler = notebookToolHandler;
-        this.appPlaybookStore = appPlaybookStore;
-        this.environment = environment;
     }
 
     boolean handles(String name) {
@@ -39,9 +23,6 @@ final class RuntimeToolExecutor {
         JSONObject safeArgs = args == null ? new JSONObject() : args;
         if ("read_web_page".equals(name)) {
             return SafeWebPageReader.read(safeArgs.optString("url", ""));
-        }
-        if ("list_app_guidance".equals(name)) {
-            return listCurrentAppGuidance();
         }
         if (NotebookToolHandler.handles(name)) {
             return notebookToolHandler.execute(name, safeArgs);
@@ -56,30 +37,6 @@ final class RuntimeToolExecutor {
             return cancelSchedule(safeArgs);
         }
         throw new IllegalArgumentException("Unsupported RuntimeToolExecutor tool: " + name);
-    }
-
-    private JSONObject listCurrentAppGuidance() {
-        String packageName = environment == null
-                ? ""
-                : environment.currentForegroundPackageName();
-        if (packageName == null) packageName = "";
-        packageName = packageName.trim();
-        if (packageName.isEmpty()) {
-            return blocked("APP_CONTEXT_UNAVAILABLE", "目前無法確認前景 App。");
-        }
-
-        JSONObject context = appPlaybookStore == null
-                ? new JSONObject()
-                : appPlaybookStore.modelContext(packageName);
-        JSONObject out = new JSONObject();
-        try {
-            out.put("success", true)
-                    .put("package", packageName)
-                    .put("app", AppRuntimeRegistry.displayName(appContext, packageName));
-            if (context.length() > 0) out.put("appPlaybook", context);
-            else out.put("message", "目前這個 App 還沒有內建或自訂經驗。");
-        } catch (Exception ignored) {}
-        return out;
     }
 
     private JSONObject scheduleReminder(JSONObject args) throws Exception {
@@ -122,16 +79,5 @@ final class RuntimeToolExecutor {
         CrewAccessibilityService service = CrewAccessibilityService.getInstance();
         return ScheduledTaskManager.getInstance(
                 service != null ? service : MainActivity.class.cast(null));
-    }
-
-    private static JSONObject blocked(String code, String message) {
-        JSONObject result = new JSONObject();
-        try {
-            result.put("success", false)
-                    .put("blocked", true)
-                    .put("error", code)
-                    .put("message", message);
-        } catch (Exception ignored) {}
-        return result;
     }
 }
