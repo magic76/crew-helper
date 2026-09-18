@@ -211,7 +211,9 @@ final class TaskReflectionCoordinator {
                         .put("scope", candidate.scope)
                         .put("condition", candidate.condition)
                         .put("response", candidate.response)
-                        .put("evidence", candidate.evidence));
+                        .put("evidence", candidate.evidence)
+                        .put("friction_score", candidate.frictionScore)
+                        .put("friction_signals", candidate.frictionSignals));
             } catch (Exception ignored) {}
         }
         return out;
