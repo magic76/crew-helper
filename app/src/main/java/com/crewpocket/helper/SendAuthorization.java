@@ -23,6 +23,11 @@ final class SendAuthorization {
     private String recipient = "";
 
     synchronized void updateFromUserText(String rawText) {
+        if (isNonExecutingDiscussion(rawText)) {
+            clear();
+            return;
+        }
+
         namedRecipientRequested = isNamedRecipientMessagingRequest(rawText);
         recipient = namedRecipientRequested ? extractNamedRecipient(rawText) : "";
 
@@ -67,6 +72,19 @@ final class SendAuthorization {
 
     synchronized String recipient() {
         return recipient == null ? "" : recipient;
+    }
+
+    private static boolean isNonExecutingDiscussion(String rawText) {
+        String folded = TextMatch.caseFold(rawText == null ? "" : rawText).trim();
+        String value = normalize(rawText);
+        if (containsAny(value,
+                "不要", "別", "别", "不用", "取消", "停止",
+                "不是", "不能", "不可以", "先不要", "暫時不要", "暂时不要",
+                "怎麼", "怎么", "如何", "為什麼", "为什么", "如果", "假如", "能不能")) {
+            return true;
+        }
+        return folded.matches(
+                ".*\\b(don't|dont|do not|never|cancel|stop|how|why|if|should)\\b.*");
     }
 
     static boolean looksLikeSendTarget(String metadata) {
