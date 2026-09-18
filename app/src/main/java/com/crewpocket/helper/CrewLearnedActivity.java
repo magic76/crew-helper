@@ -176,7 +176,18 @@ public class CrewLearnedActivity extends Activity {
             top.addView(status);
             card.addView(top);
 
-            card.addView(text(pkg, 10, CrewTheme.TEXT_SECONDARY, false));
+            String appLabel = AppRuntimeRegistry.displayName(this, pkg);
+            if (appLabel == null || appLabel.trim().isEmpty()
+                    || appLabel.equals(pkg)) {
+                appLabel = pkg;
+            } else {
+                appLabel = appLabel + " · " + pkg;
+            }
+            card.addView(text(
+                    appLabel,
+                    10,
+                    CrewTheme.TEXT_SECONDARY,
+                    false));
 
             String detail = I18n.get(this, "成功 ", "Verified ")
                     + successes
