@@ -37,6 +37,7 @@ final class LearnedUiMappingStore {
     static final class Rule {
         String packageName = "";
         String screenSignature = "";
+        String stableScreenKey = "";
         String role = "";
         String viewId = "";
         String className = "";
@@ -63,6 +64,7 @@ final class LearnedUiMappingStore {
         long lastVerifiedAt = 0L;
         int successCount = 0;
         int failureCount = 0;
+        transient int screenAffinityBonus = 0;
 
         double confidence() {
             int total = successCount + failureCount;
@@ -79,6 +81,7 @@ final class LearnedUiMappingStore {
             try {
                 o.put("packageName", packageName);
                 o.put("screenSignature", screenSignature);
+                o.put("stableScreenKey", stableScreenKey);
                 o.put("role", role);
                 o.put("viewId", viewId);
                 o.put("className", className);
@@ -112,6 +115,7 @@ final class LearnedUiMappingStore {
             if (o == null) return r;
             r.packageName = o.optString("packageName", "");
             r.screenSignature = o.optString("screenSignature", "");
+            r.stableScreenKey = o.optString("stableScreenKey", "");
             r.role = o.optString("role", "");
             r.viewId = o.optString("viewId", "");
             r.className = o.optString("className", "");
@@ -160,6 +164,7 @@ final class LearnedUiMappingStore {
 
     synchronized Rule learn(String packageName,
                             String screenSignature,
+                            String stableScreenKey,
                             String role,
                             AccessibilityNodeInfo node,
                             AccessibilityNodeInfo referenceNode) {
@@ -168,6 +173,7 @@ final class LearnedUiMappingStore {
         Rule rule = new Rule();
         rule.packageName = safe(packageName);
         rule.screenSignature = safe(screenSignature);
+        rule.stableScreenKey = safe(stableScreenKey);
         rule.role = normalizeRole(role);
         rule.viewId = safe(node.getViewIdResourceName());
         rule.className = safe(node.getClassName());
@@ -214,10 +220,17 @@ final class LearnedUiMappingStore {
 
     synchronized Rule learnAnchored(String packageName,
                                     String screenSignature,
+                                    String stableScreenKey,
                                     String role,
                                     AccessibilityNodeInfo anchor,
                                     AccessibilityNodeInfo target) {
-        Rule rule = learn(packageName, screenSignature, role, target, anchor);
+        Rule rule = learn(
+                packageName,
+                screenSignature,
+                stableScreenKey,
+                role,
+                target,
+                anchor);
         if (rule == null) return null;
         if (anchor == null || target == null) return rule;
         android.graphics.Rect a = new android.graphics.Rect();
@@ -245,21 +258,36 @@ final class LearnedUiMappingStore {
         return rule;
     }
 
-    synchronized List<Rule> findRules(String packageName, String screenSignature, String role) {
+    synchronized List<Rule> findRules(
+            String packageName,
+            String screenSignature,
+            String stableScreenKey,
+            String role) {
         String pkg = safe(packageName);
         String normalizedRole = normalizeRole(role);
+        String currentStructure = safe(stableScreenKey);
         List<Rule> result = new ArrayList<>();
         for (Rule r : loadRules()) {
             if (!pkg.equals(r.packageName)) continue;
             if (!normalizedRole.equals(r.role)) continue;
             if (!r.enabled) continue;
-            // Exact screen signatures are intentionally not required here.
-            // Conversation contents frequently change the fingerprint while the
-            // app-level action control stays the same. Re-teaching replaces the
-            // slot explicitly when the UI changes.
+
+            // Full screen signatures are deliberately not a hard requirement:
+            // message/chat content changes them constantly. The structural key
+            // is a soft affinity signal consumed by LearnedUiResolver.
+            r.screenAffinityBonus = LearnedUiScopePolicy.affinityBonus(
+                    r.stableScreenKey,
+                    currentStructure);
             result.add(r);
         }
         return result;
+    }
+
+    synchronized List<Rule> findRules(
+            String packageName,
+            String screenSignature,
+            String role) {
+        return findRules(packageName, screenSignature, "", role);
     }
 
     synchronized void recordResultByIdentity(Rule target, boolean success) {
@@ -353,20 +381,21 @@ final class LearnedUiMappingStore {
 
     private static boolean sameActionSlot(Rule a, Rule b) {
         if (a == null || b == null) return false;
-        if (!a.packageName.equals(b.packageName)) return false;
-        if (!a.role.equals(b.role)) return false;
-        String aState = safe(a.composerState).trim();
-        String bState = safe(b.composerState).trim();
-        if (aState.isEmpty() || "UNKNOWN".equals(aState)
-                || bState.isEmpty() || "UNKNOWN".equals(bState)) {
-            return true;
-        }
-        return aState.equals(bState);
+        return LearnedUiScopePolicy.sameActionSlot(
+                a.packageName,
+                a.role,
+                a.composerState,
+                a.stableScreenKey,
+                b.packageName,
+                b.role,
+                b.composerState,
+                b.stableScreenKey);
     }
 
     private static boolean sameIdentity(Rule a, Rule b) {
         return a.packageName.equals(b.packageName)
                 && a.screenSignature.equals(b.screenSignature)
+                && a.stableScreenKey.equals(b.stableScreenKey)
                 && a.role.equals(b.role)
                 && a.viewId.equals(b.viewId)
                 && a.className.equals(b.className)
