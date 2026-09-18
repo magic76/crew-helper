@@ -181,7 +181,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         this.appContext = context == null ? null : context.getApplicationContext();
         this.notebookToolHandler = new NotebookToolHandler(this.appContext);
         this.appPlaybookStore = new AppPlaybookStore(this.appContext);
-        this.runtimeToolExecutor = new RuntimeToolExecutor(this.notebookToolHandler);
         this.toolCallDispatcher = new ToolCallDispatcher(
                 new ToolCallDispatcher.Host() {
                     @Override public void executeTool(JSONObject call) {
@@ -218,6 +217,17 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 return socket != null && socket.send(payload);
             }
         });
+        this.runtimeToolExecutor = new RuntimeToolExecutor(
+                this.notebookToolHandler,
+                this.visionController,
+                new RuntimeToolExecutor.Environment() {
+                    @Override public JSONObject helperPost(
+                            String endpoint,
+                            JSONObject payload) throws Exception {
+                        return NativeGeminiLiveClient.this.helperPost(
+                                endpoint, payload);
+                    }
+                });
         this.memoryRuleIndex = this.appContext == null ? null : new MemoryRuleIndex(this.appContext);
         this.audioIncidentRecorder = this.appContext == null ? null : new AudioIncidentRecorder(this.appContext);
         this.apiKey = apiKey;
@@ -1815,7 +1825,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 }
                 result = runtimeToolExecutor.execute(name, args);
             }
-            else if ("take_screenshot".equals(name)) result = captureAndSendScreen();
             else if ("inspect_ui".equals(name)) {
                 SelectedRegionContext selected = latestSelectedRegion;
                 if (selected != null && selected.isFresh() && !selected.hardSensitive) {
@@ -3799,7 +3808,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
         JSONObject visual;
         try {
-            visual = captureAndSendScreen();
+            visual = runtimeToolExecutor.execute(
+                    "take_screenshot", new JSONObject());
         } catch (Exception error) {
             visual = new JSONObject()
                     .put("success", false)
@@ -4536,14 +4546,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
 
 
-    private JSONObject captureAndSendScreen() throws Exception {
-        JSONObject capture = helperPost("/screenshot", new JSONObject());
-        if (!capture.optBoolean("success")) return capture;
-        String path = capture.optString("latestPath", capture.optString("path", ""));
-        if (path.isEmpty()) return new JSONObject().put("success", false).put("error", "截圖未提供檔案路徑");
-        if (!visionController.sendImageFile(path, true)) return new JSONObject().put("success", false).put("error", "截圖已取得，但 Gemini 連線不可用");
-        return new JSONObject().put("success", true).put("silent", capture.optBoolean("silent")).put("message", "最新手機螢幕已傳送，請只依這張畫面回答。");
-    }
+
 
 
     private JSONObject helperPost(String endpoint, JSONObject payload) throws Exception {
