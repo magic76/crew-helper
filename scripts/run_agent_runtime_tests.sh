@@ -23,6 +23,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/AgentRuntimeV2.java" \
   "$SRC/TextMatch.java" \
   "$SRC/TextEntryGoalGuard.java" \
+  "$SRC/SendAuthorization.java" \
   "$SRC/UserActionScope.java" \
   "$SRC/SearchTransactionPolicy.java" \
   "$SRC/ScrollDirectionPolicy.java" \
