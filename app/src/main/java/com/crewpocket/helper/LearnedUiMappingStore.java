@@ -385,10 +385,14 @@ final class LearnedUiMappingStore {
                 a.packageName,
                 a.role,
                 a.composerState,
+                a.composerClassName,
+                a.composerViewId,
                 a.stableScreenKey,
                 b.packageName,
                 b.role,
                 b.composerState,
+                b.composerClassName,
+                b.composerViewId,
                 b.stableScreenKey);
     }
 
