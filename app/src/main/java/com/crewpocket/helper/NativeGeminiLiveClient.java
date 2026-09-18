@@ -181,15 +181,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         this.appContext = context == null ? null : context.getApplicationContext();
         this.notebookToolHandler = new NotebookToolHandler(this.appContext);
         this.appPlaybookStore = new AppPlaybookStore(this.appContext);
-        this.runtimeToolExecutor = new RuntimeToolExecutor(
-                this.appContext,
-                this.notebookToolHandler,
-                this.appPlaybookStore,
-                new RuntimeToolExecutor.Environment() {
-                    @Override public String currentForegroundPackageName() {
-                        return NativeGeminiLiveClient.this.currentForegroundPackageName();
-                    }
-                });
+        this.runtimeToolExecutor = new RuntimeToolExecutor(this.notebookToolHandler);
         this.toolCallDispatcher = new ToolCallDispatcher(
                 new ToolCallDispatcher.Host() {
                     @Override public void executeTool(JSONObject call) {
@@ -1813,6 +1805,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             }
             else if ("remember_app_guidance".equals(name)) {
                 result = rememberCurrentAppGuidance(args);
+            }
+            else if ("list_app_guidance".equals(name)) {
+                result = listCurrentAppGuidance();
             }
             else if (runtimeToolExecutor.handles(name)) {
                 if ("create_note".equals(name) || "update_note".equals(name)) {
@@ -3629,6 +3624,22 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     }
 
 
+    private JSONObject listCurrentAppGuidance() {
+        String packageName = currentForegroundPackageName();
+        if (packageName.isEmpty()) {
+            return runtimeBlocked("APP_CONTEXT_UNAVAILABLE", "目前無法確認前景 App。");
+        }
+        JSONObject context = appPlaybookStore.modelContext(packageName);
+        JSONObject out = new JSONObject();
+        try {
+            out.put("success", true)
+                    .put("package", packageName)
+                    .put("app", AppRuntimeRegistry.displayName(appContext, packageName));
+            if (context.length() > 0) out.put("appPlaybook", context);
+            else out.put("message", "目前這個 App 還沒有內建或自訂經驗。");
+        } catch (Exception ignored) {}
+        return out;
+    }
     private String currentForegroundPackageName() {
         // App learning must bind to the app that is actually foreground NOW.
         // Prefer a fresh local semantic read; only fall back to the last action
