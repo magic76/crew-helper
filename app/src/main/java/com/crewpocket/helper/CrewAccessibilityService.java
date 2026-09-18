@@ -1554,8 +1554,9 @@ public class CrewAccessibilityService extends AccessibilityService {
             }
             String pkg = root.getPackageName() == null ? "" : root.getPackageName().toString();
             String sig = ScreenFingerprint.create(root);
+            String structureKey = ScreenFingerprint.createStructure(root);
             java.util.List<LearnedUiMappingStore.Rule> rules = getLearnedUiMappingStore()
-                    .findRules(pkg, sig, "COMPOSER_SEND");
+                    .findRules(pkg, sig, structureKey, "COMPOSER_SEND");
             LearnedUiResolver.Match match = LearnedUiResolver.resolveAnchored(root, rules);
             if (match == null && composer != null) {
                 match = LearnedUiResolver.resolve(root, rules, composer);
@@ -1691,9 +1692,16 @@ public class CrewAccessibilityService extends AccessibilityService {
                     try {
                         String pkg = root.getPackageName() == null ? "" : root.getPackageName().toString();
                         String sig = ScreenFingerprint.create(root);
+                        String structureKey =
+                                ScreenFingerprint.createStructure(root);
                         if (learnedUiMappingStore == null) learnedUiMappingStore = new LearnedUiMappingStore(CrewAccessibilityService.this);
                         learnedUiMappingStore.learnAnchored(
-                            pkg, sig, role, pendingTeachAnchor, hit
+                            pkg,
+                            sig,
+                            structureKey,
+                            role,
+                            pendingTeachAnchor,
+                            hit
                         );
                         FloatingBubbleManager fb = FloatingBubbleManager.getInstance();
                         if (fb != null) fb.showCompactStatus("已記住：基準點 → 送出按鈕", pkg);
@@ -1756,6 +1764,8 @@ public class CrewAccessibilityService extends AccessibilityService {
                             : root.getPackageName().toString();
 
                         String screenSignature = ScreenFingerprint.create(root);
+                        String structureKey =
+                                ScreenFingerprint.createStructure(root);
 
                         if ("COMPOSER_SEND".equals(requestedRole)) {
                             composer = findActiveEditText(root);
@@ -1765,6 +1775,7 @@ public class CrewAccessibilityService extends AccessibilityService {
                         LearnedUiMappingStore.Rule rule = learnedUiMappingStore.learn(
                             packageName,
                             screenSignature,
+                            structureKey,
                             requestedRole,
                             picked,
                             composer

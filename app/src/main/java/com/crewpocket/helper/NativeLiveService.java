@@ -35,6 +35,7 @@ public class NativeLiveService extends Service {
     private static final String ACTION_ENABLE_ALWAYS_ON = "com.crewpocket.helper.ALWAYS_ON_ENABLE";
     private static final String ACTION_DISABLE_ALWAYS_ON = "com.crewpocket.helper.ALWAYS_ON_DISABLE";
     private static final String ACTION_RESTART_WAKE = "com.crewpocket.helper.ALWAYS_ON_RESTART_WAKE";
+    private static final String ACTION_SHOW_BUBBLE = "com.crewpocket.helper.SHOW_BUBBLE";
     private static final int NOTIFICATION_ID = 8767;
     private static final String CHANNEL_ID = "crew_native_live";
 
@@ -1008,6 +1009,13 @@ public class NativeLiveService extends Service {
             return alwaysOnEnabled ? START_STICKY : START_NOT_STICKY;
         }
 
+        if (ACTION_SHOW_BUBBLE.equals(action)) {
+            FloatingBubbleManager manager =
+                    FloatingBubbleManager.getInstance(this);
+            manager.showBubble();
+            return alwaysOnEnabled ? START_STICKY : START_NOT_STICKY;
+        }
+
         if (ACTION_ENABLE_ALWAYS_ON.equals(action)) {
             enableAlwaysOnInternal();
             return START_STICKY;
@@ -1600,6 +1608,19 @@ public class NativeLiveService extends Service {
         if (Build.VERSION.SDK_INT >= 26) {
             builder.setChannelId(CHANNEL_ID);
         }
+
+        int bubbleActionFlags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= 23) {
+            bubbleActionFlags |= PendingIntent.FLAG_IMMUTABLE;
+        }
+        Intent showBubbleIntent = new Intent(this, NativeLiveService.class)
+                .setAction(ACTION_SHOW_BUBBLE);
+        PendingIntent showBubblePending = PendingIntent.getService(
+                this, 87673, showBubbleIntent, bubbleActionFlags);
+        builder.addAction(
+                android.R.drawable.ic_menu_view,
+                "顯示 Crew 泡泡",
+                showBubblePending);
 
         if (!active && alwaysOnEnabled) {
             int actionFlags = PendingIntent.FLAG_UPDATE_CURRENT;

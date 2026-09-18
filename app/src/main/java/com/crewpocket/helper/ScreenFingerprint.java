@@ -12,23 +12,41 @@ final class ScreenFingerprint {
     private ScreenFingerprint() {}
 
     static String create(AccessibilityNodeInfo root) {
+        return createInternal(root, true);
+    }
+
+    static String createStructure(AccessibilityNodeInfo root) {
+        return createInternal(root, false);
+    }
+
+    private static String createInternal(
+            AccessibilityNodeInfo root,
+            boolean includeContent) {
         if (root == null) return "";
         StringBuilder state = new StringBuilder();
         CharSequence pkg = root.getPackageName();
         state.append(pkg == null ? "" : pkg.toString()).append('|');
         int[] count = new int[]{0};
-        appendNode(root, state, count);
+        appendNode(root, state, count, includeContent);
         return sha256(state.toString());
     }
 
-    private static void appendNode(AccessibilityNodeInfo node, StringBuilder out, int[] count) {
+    private static void appendNode(
+            AccessibilityNodeInfo node,
+            StringBuilder out,
+            int[] count,
+            boolean includeContent) {
         if (node == null || count[0]++ >= MAX_NODES) return;
         Rect b = new Rect();
         node.getBoundsInScreen(b);
         boolean sensitive = SensitiveDataGuard.isSensitiveNode(node);
 
-        String text = sensitive || node.getText() == null ? "" : normalize(node.getText().toString());
-        String desc = sensitive || node.getContentDescription() == null ? "" : normalize(node.getContentDescription().toString());
+        String text = !includeContent || sensitive || node.getText() == null
+                ? ""
+                : normalize(node.getText().toString());
+        String desc = !includeContent || sensitive || node.getContentDescription() == null
+                ? ""
+                : normalize(node.getContentDescription().toString());
         String id = node.getViewIdResourceName() == null ? "" : normalize(node.getViewIdResourceName().toString());
         String cls = node.getClassName() == null ? "" : normalize(node.getClassName().toString());
 
@@ -49,7 +67,7 @@ final class ScreenFingerprint {
             AccessibilityNodeInfo child = node.getChild(i);
             if (child == null) continue;
             try {
-                appendNode(child, out, count);
+                appendNode(child, out, count, includeContent);
             } finally {
                 child.recycle();
             }

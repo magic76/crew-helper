@@ -27,6 +27,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/LiveTurnCoordinator.java" \
   "$SRC/UiChangeSignal.java" \
   "$SRC/RuntimeUiState.java" \
+  "$SRC/LearnedUiScopePolicy.java" \
   "$SRC/UserActionScope.java" \
   "$SRC/SearchTransactionPolicy.java" \
   "$SRC/ScrollDirectionPolicy.java" \
@@ -48,6 +49,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/LiveTurnCoordinatorTest.java" \
   "$ROOT/tests/UiChangeSignalTest.java" \
   "$ROOT/tests/RuntimeUiStateTest.java" \
+  "$ROOT/tests/LearnedUiScopePolicyTest.java" \
   "$ROOT/tests/SendOnlyPolicyTest.java" \
   "$ROOT/tests/SearchTransactionPolicyTest.java" \
   "$ROOT/tests/ScrollDirectionPolicyTest.java" \
@@ -76,6 +78,7 @@ java -cp "$OUT" com.crewpocket.helper.SendAuthorizationTest
 java -cp "$OUT" com.crewpocket.helper.LiveTurnCoordinatorTest
 java -cp "$OUT" com.crewpocket.helper.UiChangeSignalTest
 java -cp "$OUT" com.crewpocket.helper.RuntimeUiStateTest
+java -cp "$OUT" com.crewpocket.helper.LearnedUiScopePolicyTest
 java -cp "$OUT" com.crewpocket.helper.SendOnlyPolicyTest
 java -cp "$OUT" com.crewpocket.helper.SearchTransactionPolicyTest
 java -cp "$OUT" com.crewpocket.helper.ScrollDirectionPolicyTest

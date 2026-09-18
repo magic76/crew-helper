@@ -1110,19 +1110,22 @@ public class MainActivity extends Activity
                 I18n.get(this, "進階", "ADVANCED"));
 
         AppPlaybookStore appPlaybooks = new AppPlaybookStore(this);
+        int learnedActions =
+                new LearnedUiMappingStore(this).dumpForDebug("").length();
         pageContent.addView(makeSettingsRow(
                 CrewIcons.PHONE_ACTIONS,
-                I18n.get(this, "App 經驗", "App Playbooks"),
-                appPlaybooks.learnedRuleCount() + " "
-                        + I18n.get(this, "條自訂", "learned") + " · "
-                        + AppRuntimeRegistry.builtInPackages().size() + " "
-                        + I18n.get(this, "個內建", "built-in"),
+                I18n.get(this, "Crew 已學會", "Crew Learned"),
+                learnedActions + " "
+                        + I18n.get(this, "個 UI 動作", "UI actions")
+                        + " · "
+                        + appPlaybooks.learnedRuleCount() + " "
+                        + I18n.get(this, "條 App 規則", "App rules"),
                 CrewTheme.TEAL_300,
                 new View.OnClickListener() {
                     @Override public void onClick(View v) {
                         startActivity(new Intent(
                                 MainActivity.this,
-                                AppPlaybookActivity.class));
+                                CrewLearnedActivity.class));
                     }
                 }));
 

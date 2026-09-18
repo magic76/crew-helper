@@ -236,6 +236,7 @@ final class LearnedUiResolver {
             }
             if (strongSignals < 2 || score < 80) return Integer.MIN_VALUE;
         }
+        score += rule.screenAffinityBonus;
         return score;
     }
 

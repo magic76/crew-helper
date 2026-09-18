@@ -858,7 +858,7 @@ public class FloatingBubbleManager {
                                         hideBubble();
                                         Toast.makeText(
                                                 context,
-                                                "浮動泡泡已隱藏",
+                                                "浮動泡泡已隱藏 · 可從通知或 App 顯示",
                                                 Toast.LENGTH_SHORT).show();
                                         return true;
                                     }
