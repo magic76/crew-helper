@@ -492,7 +492,8 @@ public class FloatingBubbleManager {
                                 : ("需要權限".equals(important)
                                         ? "完成權限設定後，再回來繼續"
                                         : "");
-                        showCompactStatus(important, detail);
+                        showRuntimeUiState(
+                                RuntimeUiState.waitingUser(important, detail));
                         return;
                     }
 
@@ -506,7 +507,8 @@ public class FloatingBubbleManager {
                                 && !stage.isEmpty()
                                 && !stage.equals(lastShownAgentStage)) {
                             lastShownAgentStage = stage;
-                            showCompactStatus("Crew 正在處理", stage);
+                            showRuntimeUiState(
+                                    RuntimeUiState.working("Crew 正在處理", stage));
                         }
                     }
                     return;
@@ -523,14 +525,16 @@ public class FloatingBubbleManager {
 
                 if ("操作失敗".equals(important)) {
                     bubbleView.flashAgentResult(false);
-                    showCompactStatus(
-                            important,
-                            "可以再說一次，或打開控制台查看狀態");
+                    showRuntimeUiState(
+                            RuntimeUiState.error(
+                                    important,
+                                    "可以再說一次，或打開控制台查看狀態"));
                     return;
                 }
 
                 if (important != null && !important.isEmpty()) {
-                    showCompactStatus(important, "");
+                    showRuntimeUiState(
+                            RuntimeUiState.info(important, ""));
                 }
             }
         });
@@ -1371,15 +1375,31 @@ public class FloatingBubbleManager {
 
     /** Called by the foreground voice service; intentionally does not open a panel. */
     public void updateNativeLiveStatus(final String text, final boolean active) {
+        updateNativeLiveState(
+                RuntimeUiState.fromLiveStatus(text, active),
+                active);
+    }
+
+    public void updateNativeLiveState(
+            final RuntimeUiState state,
+            final boolean active) {
         mainHandler.post(new Runnable() {
             @Override public void run() {
                 nativeLiveRequested = active;
-                latestLiveStatus = text == null || text.trim().isEmpty()
+                latestLiveUiState = state == null
+                        ? RuntimeUiState.fromLiveStatus("", active)
+                        : state;
+                latestLiveStatus = latestLiveUiState.title.isEmpty()
                         ? (active ? "語音通話中" : "待命")
-                        : text.trim();
+                        : latestLiveUiState.title;
                 if (bubbleView != null) {
-                    bubbleView.setNativeVoiceState(
-                            isLiveError(latestLiveStatus) ? 3 : (active ? 1 : 0));
+                    int voiceState = latestLiveUiState.isError()
+                            ? 3
+                            : (latestLiveUiState.phase
+                                            == RuntimeUiState.Phase.SPEAKING
+                                    ? 2
+                                    : (active ? 1 : 0));
+                    bubbleView.setNativeVoiceState(voiceState);
                     if (!active) {
                         bubbleView.setMicrophoneActivity(-96d, false);
                     }
@@ -1468,15 +1488,9 @@ public class FloatingBubbleManager {
         });
     }
 
-    private boolean isLiveError(String status) {
-        String lower = status == null ? "" : status.toLowerCase();
-        return lower.contains("失敗") || lower.contains("錯誤") || lower.contains("未取得")
-                || lower.contains("尚未設定") || lower.contains("無法");
-    }
-
     private void updateVoiceTelemetryUi() {
         boolean liveRequested = nativeLiveRequested || NativeLiveService.isActive();
-        boolean error = isLiveError(latestLiveStatus);
+        boolean error = latestLiveUiState != null && latestLiveUiState.isError();
         boolean activeTask = NativeLiveService.hasActiveAgentTask();
         boolean speaking = NativeLiveService.isAiSpeaking();
         boolean muted = NativeLiveService.isAgentMuted();
@@ -1498,12 +1512,9 @@ public class FloatingBubbleManager {
             statusText = "麥克風已靜音";
             statusColor = Color.parseColor("#FDA4AF");
         } else if (liveRequested) {
-            String lower = latestLiveStatus == null
-                    ? ""
-                    : latestLiveStatus.toLowerCase();
-            if (lower.contains("正在連線")
-                    || lower.contains("連線中")
-                    || lower.contains("connecting")) {
+            if (latestLiveUiState != null
+                    && latestLiveUiState.phase
+                            == RuntimeUiState.Phase.CONNECTING) {
                 statusText = "正在連線…";
                 statusColor = Color.parseColor("#93C5FD");
             } else {
