@@ -261,8 +261,8 @@ public class CrewLearnedActivity extends Activity {
         addSectionHeader(
                 I18n.get(this, "Crew Experience", "Crew Experience"),
                 I18n.get(this,
-                        "EVIDENCE · 成功模式與修正證據",
-                        "EVIDENCE · repeated success and recovery evidence"),
+                        "EVIDENCE · 摩擦、重試與修正證據",
+                        "EVIDENCE · friction, retries, and correction evidence"),
                 "");
 
         LinearLayout card = card();
@@ -275,8 +275,8 @@ public class CrewLearnedActivity extends Activity {
 
         TextView note = text(
                 I18n.get(this,
-                        "一般成功不會直接建立 Experience；只有符合 recovery 或重複成功門檻才會進入 review。",
-                        "Ordinary successes stay quiet; only qualified recovery or repeated-success evidence enters review."),
+                        "一般成功永遠不觸發 Experience；只有明顯摩擦，或同一個中度摩擦重複出現，才會進入 review。",
+                        "Plain success never triggers Experience; only strong friction or repeated medium friction enters review."),
                 10, CrewTheme.TEXT_MUTED, false);
         note.setPadding(0, dp(9), 0, 0);
         card.addView(note);
