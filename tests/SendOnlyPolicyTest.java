@@ -27,6 +27,37 @@ public final class SendOnlyPolicyTest {
         check(!UserActionScope.isStandaloneCurrentScreenSendCommand("怎麼送出"), "how-to question");
         check(!UserActionScope.isStandaloneCurrentScreenSendCommand("如果要送出怎麼辦"), "hypothetical");
 
+        UserActionScope currentChat = new UserActionScope();
+        currentChat.updateFromUserText("輸入晚點到並送出");
+        check(currentChat.canSend(), "current chat explicit send authorized");
+        check(!currentChat.requiresRecipientVerification(), "current chat needs no recipient verification");
+
+        UserActionScope named = new UserActionScope();
+        named.updateFromUserText("跟小明說我晚點到");
+        check(named.canSend(), "named recipient send authorized");
+        check(named.requiresRecipientVerification(), "named recipient requires verification");
+        check("小明".equals(named.authorizedRecipient()), "named recipient extracted");
+        check(!named.blocksNamedRecipientMessagingAction(), "named recipient navigation allowed");
+
+        UserActionScope quoted = new UserActionScope();
+        quoted.updateFromUserText("傳給老婆：「我到了」");
+        check(quoted.canSend(), "quoted recipient send authorized");
+        check(quoted.requiresRecipientVerification(), "quoted recipient requires verification");
+        check("老婆".equals(quoted.authorizedRecipient()), "quoted recipient extracted");
+
+        UserActionScope ambiguous = new UserActionScope();
+        ambiguous.updateFromUserText("告訴店員我晚一點退房");
+        check(!ambiguous.canSend(), "ambiguous recipient fails closed");
+        check(ambiguous.blocksNamedRecipientMessagingAction(), "ambiguous recipient blocked from send");
+
+        check("john".equals(UserActionScope.extractNamedRecipient("send a message to John saying I arrived")),
+                "english recipient extracted");
+        UserActionScope englishNamed = new UserActionScope();
+        englishNamed.updateFromUserText("send a message to John saying I arrived");
+        check(englishNamed.canSend(), "english named recipient send authorized");
+        check(englishNamed.requiresRecipientVerification(), "english named recipient requires verification");
+        check("john".equals(englishNamed.authorizedRecipient()), "english named recipient stored");
+
         System.out.println("PASS SendOnlyPolicyTest: " + assertions + " checks");
     }
 }

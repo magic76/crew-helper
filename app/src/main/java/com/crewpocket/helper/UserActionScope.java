@@ -1,21 +1,26 @@
 package com.crewpocket.helper;
 
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
 /**
  * Deterministic latest-turn action boundary.
  *
- * 0042 current-screen messaging:
- * - Runtime never resolves, remembers, searches for, or verifies a recipient;
- * - message sending applies only to the composer already visible on screen;
+ * Messaging action boundary:
  * - TYPE never implies Send;
- * - an explicit current-turn send verb grants exactly one send attempt;
- * - named-recipient messaging is intentionally unsupported for this mode.
+ * - an explicit current-turn send intent grants exactly one send attempt;
+ * - a named-recipient request may navigate within the chosen/current app;
+ * - SEND stays blocked until Runtime verifies the requested recipient on the
+ *   current conversation screen;
+ * - recipient identity is ephemeral current-turn state and is never persisted.
  */
 final class UserActionScope {
     private static final long SCOPE_TTL_MS = 120_000L;
 
     private boolean sendAuthorized;
     private boolean messageTransactionHandled;
-    private boolean namedRecipientMessagingUnsupported;
+    private boolean namedRecipientMessagingRequested;
+    private String authorizedRecipient = "";
 
     private boolean searchIntent;
     private boolean openSearchResultAuthorized;
@@ -87,9 +92,15 @@ final class UserActionScope {
         boolean resultSelection = navigation;
         boolean openResult = navigation || hasPostSearchOpenIntent(value);
 
-        namedRecipientMessagingUnsupported = isNamedRecipientMessagingRequest(text);
-        sendAuthorized = !namedRecipientMessagingUnsupported
-                && hasCurrentScreenSendIntent(text);
+        namedRecipientMessagingRequested = isNamedRecipientMessagingRequest(text);
+        authorizedRecipient = namedRecipientMessagingRequested
+                ? extractNamedRecipient(text)
+                : "";
+        // Named-recipient messaging is permitted only when Runtime can extract
+        // a concrete target for later screen verification. No target means no SEND.
+        sendAuthorized = namedRecipientMessagingRequested
+                ? !authorizedRecipient.isEmpty()
+                : hasCurrentScreenSendIntent(text);
         messageTransactionHandled = false;
 
         searchIntent = search;
@@ -120,16 +131,14 @@ final class UserActionScope {
         sendAuthorized = false;
     }
 
-    /**
-     * Compatibility stubs for old callers outside the active Live path.
-     * Recipient routing is intentionally disabled.
-     */
     synchronized boolean requiresRecipientVerification() {
-        return false;
+        expireIfNeeded();
+        return namedRecipientMessagingRequested && !authorizedRecipient.isEmpty();
     }
 
     synchronized String authorizedRecipient() {
-        return "";
+        expireIfNeeded();
+        return authorizedRecipient == null ? "" : authorizedRecipient;
     }
 
     /** A single explicit-send turn owns one atomic transaction, never a tap loop. */
@@ -144,7 +153,9 @@ final class UserActionScope {
 
     synchronized boolean blocksNamedRecipientMessagingAction() {
         expireIfNeeded();
-        return namedRecipientMessagingUnsupported;
+        // Navigation is allowed for a named-recipient task. Only an ambiguous
+        // target remains blocked from SEND because Runtime cannot verify it.
+        return namedRecipientMessagingRequested && authorizedRecipient.isEmpty();
     }
 
     synchronized boolean shouldAutoCommitSearch() {
@@ -314,7 +325,8 @@ final class UserActionScope {
     private void clearActionGrants() {
         sendAuthorized = false;
         messageTransactionHandled = false;
-        namedRecipientMessagingUnsupported = false;
+        namedRecipientMessagingRequested = false;
+        authorizedRecipient = "";
         endCallAuthorized = false;
         appLearningAuthorized = false;
         searchIntent = false;
@@ -395,7 +407,8 @@ final class UserActionScope {
             return false;
         }
 
-        // Recipient routing remains unsupported for current-screen messaging.
+        // Named-recipient commands need navigation + Runtime target verification,
+        // so they must never take the direct current-composer fast path.
         if (isNamedRecipientMessagingRequest(rawText)) {
             return false;
         }
@@ -529,7 +542,7 @@ final class UserActionScope {
      * - 輸入測試123然後發送
      * - send this message
      *
-     * Named-recipient commands are rejected before reaching this check.
+     * Named-recipient commands use a separate verified-target path.
      */
     private static boolean hasCurrentScreenSendIntent(String rawText) {
         String value = normalize(rawText == null ? "" : rawText);
@@ -539,10 +552,6 @@ final class UserActionScope {
                 "sendmessage", "sendtext", "send");
     }
 
-    /**
-     * This mode deliberately does not route messages to people.
-     * The user must manually open the intended chat first.
-     */
     private static boolean isNamedRecipientMessagingRequest(String rawText) {
         if (rawText == null || rawText.trim().isEmpty()) return false;
         String raw = TextMatch.caseFold(rawText).trim();
@@ -557,8 +566,53 @@ final class UserActionScope {
 
         boolean conversationalTell = raw.matches(
                 ".*(?:跟|向|對|对)\\s*[^，,。！？!：:]+\\s*(?:說|说).*");
+        boolean englishRecipient = raw.matches(
+                ".*\\b(?:send(?:\\s+(?:a\\s+)?(?:message|text))?\\s+to|tell)\\s+[^,.!?;:]{1,40}.*");
 
-        return recipientVerb || conversationalTell;
+        return recipientVerb || conversationalTell || englishRecipient;
+    }
+
+    /**
+     * Extract only an explicitly named recipient. This is deliberately narrow:
+     * Runtime must never guess a recipient from message content or history.
+     */
+    static String extractNamedRecipient(String rawText) {
+        if (rawText == null || rawText.trim().isEmpty()) return "";
+        String raw = TextMatch.caseFold(rawText).trim();
+
+        String recipient = firstGroup(raw,
+                "(?:跟|向|對|对)\\s*([^，,。！？!：:\\n]{1,40}?)\\s*(?:說|说)");
+        if (!recipient.isEmpty()) return cleanRecipient(recipient);
+
+        recipient = firstGroup(raw,
+                "(?:傳訊息給|传讯息给|發訊息給|发讯息给|傳消息給|传消息给|發消息給|发消息给|傳給|传给|發給|发给)\\s*"
+                        + "([^，,。！？!：:\\n]{1,40}?)(?=\\s*(?:說|说|：|:|，|,|「|『|\\\"))");
+        if (!recipient.isEmpty()) return cleanRecipient(recipient);
+
+        recipient = firstGroup(raw,
+                "(?:告訴|告诉)\\s*([^，,。！？!：:\\n]{1,40}?)(?=\\s*(?:說|说|：|:|，|,|「|『|\\\"))");
+        if (!recipient.isEmpty()) return cleanRecipient(recipient);
+
+        recipient = firstGroup(raw,
+                "\\b(?:send(?:\\s+(?:a\\s+)?(?:message|text))?\\s+to|tell)\\s+"
+                        + "([^,.!?;:]{1,40}?)(?=\\s+(?:that|saying|say)\\b|[,.:!?])");
+        return cleanRecipient(recipient);
+    }
+
+    private static String firstGroup(String raw, String regex) {
+        try {
+            Matcher matcher = Pattern.compile(regex, Pattern.CASE_INSENSITIVE).matcher(raw);
+            return matcher.find() ? matcher.group(1) : "";
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
+    private static String cleanRecipient(String value) {
+        if (value == null) return "";
+        String out = value.replaceAll("\\s+", " ").trim();
+        if (out.length() > 40) out = out.substring(0, 40).trim();
+        return out;
     }
 
     private static boolean containsAny(String value, String... needles) {
