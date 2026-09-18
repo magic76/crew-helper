@@ -5,10 +5,7 @@ import android.util.Log;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Set;
+import java.util.List;
 
 /**
  * Owns Gemini Live tool-call transport orchestration.
@@ -34,25 +31,12 @@ final class ToolCallDispatcher {
 
     private static final String TAG = "ToolCallDispatcher";
 
-    private static final class ResponseRecipient {
-        final String id;
-        final String name;
-
-        ResponseRecipient(String id, String name) {
-            this.id = id == null ? "" : id;
-            this.name = name == null ? "unknown" : name;
-        }
-    }
-
     private final Object lock = new Object();
     private final Host host;
-    private final Set<String> handledCallIds = new HashSet<String>();
-    private final Set<String> inFlightSignatures = new HashSet<String>();
-    private final HashMap<String, String> primarySignatures =
-            new HashMap<String, String>();
-    private final HashMap<String, ArrayList<ResponseRecipient>> coalescedRecipients =
-            new HashMap<String, ArrayList<ResponseRecipient>>();
-    private final ArrayList<JSONObject> pending = new ArrayList<JSONObject>();
+    private final ToolCallDispatchLedger ledger =
+            new ToolCallDispatchLedger();
+    private final java.util.ArrayList<JSONObject> pending =
+            new java.util.ArrayList<JSONObject>();
 
     private boolean workerRunning;
     private volatile Thread activeWorker;
@@ -68,34 +52,30 @@ final class ToolCallDispatcher {
         final String id = call.optString(
                 "id", "tool_" + System.nanoTime());
         final String name = call.optString("name", "unknown");
-        final String signature =
-                generation + "|" + incomingSignature(call);
+        final String argsIdentity = call.optJSONObject("args") == null
+                ? "{}"
+                : call.optJSONObject("args").toString();
+        final ToolCallDispatchLedger.Registration registration =
+                ledger.register(id, name, argsIdentity, generation);
+
+        if (registration.duplicateCallId) return false;
+        if (registration.coalesced) {
+            host.onDuplicateIgnored(id, name, generation);
+            Log.d(TAG, "coalesced duplicate call: "
+                    + registration.signature);
+            return false;
+        }
+        if (!registration.accepted) return false;
 
         synchronized (lock) {
-            if (!handledCallIds.add(id)) return false;
-
-            if (!inFlightSignatures.add(signature)) {
-                ArrayList<ResponseRecipient> recipients =
-                        coalescedRecipients.get(signature);
-                if (recipients == null) {
-                    recipients = new ArrayList<ResponseRecipient>();
-                    coalescedRecipients.put(signature, recipients);
-                }
-                recipients.add(new ResponseRecipient(id, name));
-                host.onDuplicateIgnored(id, name, generation);
-                Log.d(TAG, "coalesced duplicate call: " + signature);
-                return false;
-            }
-
             try {
-                primarySignatures.put(id, signature);
                 call.put("_crew_intent_generation", generation);
-                call.put("_crew_inflight_signature", signature);
+                call.put(
+                        "_crew_inflight_signature",
+                        registration.signature);
                 pending.add(call);
             } catch (Exception error) {
-                inFlightSignatures.remove(signature);
-                primarySignatures.remove(id);
-                handledCallIds.remove(id);
+                ledger.releaseInFlight(registration.signature);
                 host.onDispatchError(error);
                 return false;
             }
@@ -110,9 +90,7 @@ final class ToolCallDispatcher {
     void resetForNewIntent() {
         synchronized (lock) {
             pending.clear();
-            inFlightSignatures.clear();
-            primarySignatures.clear();
-            coalescedRecipients.clear();
+            ledger.resetForNewIntent();
         }
     }
 
@@ -131,22 +109,13 @@ final class ToolCallDispatcher {
             String primaryName,
             JSONObject modelResult) {
         JSONArray responses = new JSONArray();
-        responses.put(response(primaryId, primaryName, modelResult));
-
-        synchronized (lock) {
-            String signature = primarySignatures.remove(primaryId);
-            if (signature == null) return responses;
-
-            ArrayList<ResponseRecipient> duplicates =
-                    coalescedRecipients.remove(signature);
-            if (duplicates == null) return responses;
-
-            for (ResponseRecipient duplicate : duplicates) {
-                responses.put(response(
-                        duplicate.id,
-                        duplicate.name,
-                        modelResult));
-            }
+        List<ToolCallDispatchLedger.Recipient> recipients =
+                ledger.responseRecipients(primaryId, primaryName);
+        for (ToolCallDispatchLedger.Recipient recipient : recipients) {
+            responses.put(response(
+                    recipient.id,
+                    recipient.name,
+                    modelResult));
         }
         return responses;
     }
@@ -158,9 +127,7 @@ final class ToolCallDispatcher {
     }
 
     int inFlightCountForTest() {
-        synchronized (lock) {
-            return inFlightSignatures.size();
-        }
+        return ledger.inFlightCount();
     }
 
     private void drain() {
@@ -181,7 +148,7 @@ final class ToolCallDispatcher {
                     host.executeTool(call);
                 } finally {
                     synchronized (lock) {
-                        inFlightSignatures.remove(
+                        ledger.releaseInFlight(
                                 call.optString(
                                         "_crew_inflight_signature", ""));
                         workerRunning = false;
@@ -194,14 +161,6 @@ final class ToolCallDispatcher {
         }, "crew-native-live-agent-tool");
 
         worker.start();
-    }
-
-    private static String incomingSignature(JSONObject call) {
-        JSONObject args = call == null ? null : call.optJSONObject("args");
-        String name = call == null
-                ? "unknown"
-                : call.optString("name", "unknown");
-        return name + ":" + (args == null ? "{}" : args.toString());
     }
 
     private static JSONObject response(
