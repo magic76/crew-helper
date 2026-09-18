@@ -5,6 +5,7 @@ public final class RuntimeToolRoutingTest {
 
     public static void main(String[] args) {
         checkHandled("read_web_page");
+        checkHandled("take_screenshot");
         checkHandled("schedule_reminder");
         checkHandled("list_active_schedules");
         checkHandled("cancel_schedule");
