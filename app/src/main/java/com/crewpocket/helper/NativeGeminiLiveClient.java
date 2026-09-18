@@ -60,6 +60,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private final Context appContext;
     private final NotebookToolHandler notebookToolHandler;
     private final AppPlaybookStore appPlaybookStore;
+    private final RuntimeToolExecutor runtimeToolExecutor;
     private final java.util.HashSet<String> injectedAppPlaybooks = new java.util.HashSet<String>();
     // 0117: one-shot App teaching is Runtime-owned, never inferred from a model tool choice.
     private static final long APP_TEACH_MODE_TTL_MS = 45_000L;
@@ -180,6 +181,15 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         this.appContext = context == null ? null : context.getApplicationContext();
         this.notebookToolHandler = new NotebookToolHandler(this.appContext);
         this.appPlaybookStore = new AppPlaybookStore(this.appContext);
+        this.runtimeToolExecutor = new RuntimeToolExecutor(
+                this.appContext,
+                this.notebookToolHandler,
+                this.appPlaybookStore,
+                new RuntimeToolExecutor.Environment() {
+                    @Override public String currentForegroundPackageName() {
+                        return NativeGeminiLiveClient.this.currentForegroundPackageName();
+                    }
+                });
         this.toolCallDispatcher = new ToolCallDispatcher(
                 new ToolCallDispatcher.Host() {
                     @Override public void executeTool(JSONObject call) {
@@ -1801,14 +1811,14 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 }
                 result = getSelectedRegionContext();
             }
-            else if ("read_web_page".equals(name)) result = readWebPage(args);
-            else if ("remember_app_guidance".equals(name)) result = rememberCurrentAppGuidance(args);
-            else if ("list_app_guidance".equals(name)) result = listCurrentAppGuidance();
-            else if (NotebookToolHandler.handles(name)) {
+            else if ("remember_app_guidance".equals(name)) {
+                result = rememberCurrentAppGuidance(args);
+            }
+            else if (runtimeToolExecutor.handles(name)) {
                 if ("create_note".equals(name) || "update_note".equals(name)) {
                     PerformanceMetrics.recordTextRouteNotebook();
                 }
-                result = notebookToolHandler.execute(name, args);
+                result = runtimeToolExecutor.execute(name, args);
             }
             else if ("take_screenshot".equals(name)) result = captureAndSendScreen();
             else if ("inspect_ui".equals(name)) {
@@ -1828,10 +1838,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             else if ("commit_search".equals(name)) result = commitSearch();
             else if ("send_text".equals(name)) result = sendTextToPhone(args);
             else if ("press_key".equals(name)) result = pressKey(args);
-            else if ("schedule_reminder".equals(name)) result = scheduleReminder(args);
             else if ("start_screen_monitor".equals(name)) result = startScreenMonitor(args);
-            else if ("list_active_schedules".equals(name)) result = listSchedules();
-            else if ("cancel_schedule".equals(name)) result = cancelSchedule(args);
             else if ("end_voice_session".equals(name)) {
                 if (!userActionScope.consumeEndCallAuthorization()) {
                     JSONObject blocked = runtimeBlocked("END_CALL_NOT_AUTHORIZED", "請使用者明確說結束通話；關閉視窗或再見不代表掛斷。");
@@ -2593,14 +2600,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         return reply;
     }
 
-    private JSONObject scheduleReminder(JSONObject args) throws Exception {
-        int delay = (int) args.optDouble("delay_seconds", 60);
-        String msg = args.optString("message", args.optString("label", "時間到了"));
-        String lbl = args.optString("label", delay + "秒後提醒");
-        ScheduledTaskManager mgr = ScheduledTaskManager.getInstance(CrewAccessibilityService.getInstance() != null ? CrewAccessibilityService.getInstance() : MainActivity.class.cast(null));
-        ScheduledTaskManager.ScheduledTask task = mgr.scheduleReminder(lbl, delay, msg);
-        return new JSONObject().put("success", true).put("task", task.toJson()).put("message", "已設定計時器：" + lbl);
-    }
 
     private JSONObject startScreenMonitor(JSONObject args) throws Exception {
         int interval = (int) args.optDouble("interval_seconds", 60), duration = (int) args.optDouble("duration_minutes", 10);
@@ -2610,19 +2609,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         return new JSONObject().put("success", true).put("task", task.toJson()).put("message", "已啟動畫面監控：" + lbl);
     }
 
-    private JSONObject listSchedules() throws Exception {
-        ScheduledTaskManager mgr = ScheduledTaskManager.getInstance(CrewAccessibilityService.getInstance() != null ? CrewAccessibilityService.getInstance() : MainActivity.class.cast(null));
-        return new JSONObject().put("success", true).put("tasks", mgr.getActiveTasksJson()).put("summary", mgr.getActiveTasksSummaryText());
-    }
 
-    private JSONObject cancelSchedule(JSONObject args) throws Exception {
-        boolean all = args.optBoolean("cancel_all", false);
-        String taskId = args.optString("task_id", args.optString("label_hint", ""));
-        ScheduledTaskManager mgr = ScheduledTaskManager.getInstance(CrewAccessibilityService.getInstance() != null ? CrewAccessibilityService.getInstance() : MainActivity.class.cast(null));
-        if (all) return new JSONObject().put("success", true).put("cancelledCount", mgr.cancelAllTasks()).put("message", "已取消所有計時器與畫面巡檢");
-        boolean ok = mgr.cancelTask(taskId);
-        return new JSONObject().put("success", ok).put("message", ok ? "已成功取消該計時器" : "找不到指定計時器或巡檢任務");
-    }
 
     private JSONObject swipe(JSONObject args) throws Exception {
         String direction = args.optString("direction", "up").toLowerCase();
@@ -3641,22 +3628,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         return saved;
     }
 
-    private JSONObject listCurrentAppGuidance() {
-        String packageName = currentForegroundPackageName();
-        if (packageName.isEmpty()) {
-            return runtimeBlocked("APP_CONTEXT_UNAVAILABLE", "目前無法確認前景 App。");
-        }
-        JSONObject context = appPlaybookStore.modelContext(packageName);
-        JSONObject out = new JSONObject();
-        try {
-            out.put("success", true)
-                    .put("package", packageName)
-                    .put("app", AppRuntimeRegistry.displayName(appContext, packageName));
-            if (context.length() > 0) out.put("appPlaybook", context);
-            else out.put("message", "目前這個 App 還沒有內建或自訂經驗。");
-        } catch (Exception ignored) {}
-        return out;
-    }
 
     private String currentForegroundPackageName() {
         // App learning must bind to the app that is actually foreground NOW.
@@ -3729,9 +3700,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         } catch (Exception ignored) {}
     }
 
-    private JSONObject readWebPage(JSONObject args) {
-        return SafeWebPageReader.read(args.optString("url", ""));
-    }
 
 
 
