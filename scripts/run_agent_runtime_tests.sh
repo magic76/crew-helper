@@ -25,6 +25,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/TextEntryGoalGuard.java" \
   "$SRC/SendAuthorization.java" \
   "$SRC/LiveTurnCoordinator.java" \
+  "$SRC/ToolCallDispatchLedger.java" \
   "$SRC/UiChangeSignal.java" \
   "$SRC/RuntimeUiState.java" \
   "$SRC/LearnedUiScopePolicy.java" \
@@ -47,6 +48,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/AgentTapDiagnostic.java" \
   "$ROOT/tests/SendAuthorizationTest.java" \
   "$ROOT/tests/LiveTurnCoordinatorTest.java" \
+  "$ROOT/tests/ToolCallDispatchLedgerTest.java" \
   "$ROOT/tests/UiChangeSignalTest.java" \
   "$ROOT/tests/RuntimeUiStateTest.java" \
   "$ROOT/tests/LearnedUiScopePolicyTest.java" \
@@ -76,6 +78,7 @@ javac -encoding UTF-8 -d "$OUT" \
 
 java -cp "$OUT" com.crewpocket.helper.SendAuthorizationTest
 java -cp "$OUT" com.crewpocket.helper.LiveTurnCoordinatorTest
+java -cp "$OUT" com.crewpocket.helper.ToolCallDispatchLedgerTest
 java -cp "$OUT" com.crewpocket.helper.UiChangeSignalTest
 java -cp "$OUT" com.crewpocket.helper.RuntimeUiStateTest
 java -cp "$OUT" com.crewpocket.helper.LearnedUiScopePolicyTest
