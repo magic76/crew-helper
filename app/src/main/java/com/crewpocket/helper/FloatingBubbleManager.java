@@ -57,6 +57,9 @@ public class FloatingBubbleManager {
 
     private FluidBubbleView bubbleView = null;
     private LinearLayout bubbleContainer = null;
+    private TextView bubbleRemoveTargetView = null;
+    private WindowManager.LayoutParams bubbleRemoveTargetParams = null;
+    private boolean bubbleRemoveTargetActive = false;
     private ValueAnimator bubbleExpandAnimator = null;
     private int bubbleExpandAnimationGeneration = 0;
     private View voiceControlView = null;
@@ -665,6 +668,7 @@ public class FloatingBubbleManager {
 
     // 🌟 Show Floating Ball with Smart Auto-Dock & Ghost Opacity
     public void hideBubble() {
+        dismissBubbleRemoveTarget();
         autoDockHandler.removeCallbacks(autoDockRunnable);
         if (dockAnimator != null) {
             dockAnimator.cancel();
@@ -772,6 +776,7 @@ public class FloatingBubbleManager {
                         private int initialX, initialY;
                         private float initialTouchX, initialTouchY;
                         private boolean moved = false;
+                        private boolean removeTargetEntered = false;
 
                         @Override
                         public boolean onTouch(View v, MotionEvent event) {
@@ -789,6 +794,8 @@ public class FloatingBubbleManager {
                                     initialTouchX = event.getRawX();
                                     initialTouchY = event.getRawY();
                                     moved = false;
+                                    removeTargetEntered = false;
+                                    dismissBubbleRemoveTarget();
                                     if (isDocked) {
                                         wakeBubbleFromDock();
                                     } else {
@@ -803,6 +810,7 @@ public class FloatingBubbleManager {
                                     if (moveDist > dp(32) && !moved) {
                                         moved = true;
                                         collapseBubbleActions(false);
+                                        showBubbleRemoveTarget();
                                         initialX = bubbleParams.x;
                                         initialY = bubbleParams.y;
                                         initialTouchX = event.getRawX();
@@ -825,7 +833,18 @@ public class FloatingBubbleManager {
                                     bubbleParams.y = Math.max(
                                             topLimit,
                                             Math.min(bottomLimit, targetY));
-                                    bubbleView.setAlpha(1.0f);
+                                    boolean insideRemoveTarget = isInsideBubbleRemoveTarget(
+                                            event.getRawX(), event.getRawY());
+                                    if (insideRemoveTarget != removeTargetEntered) {
+                                        removeTargetEntered = insideRemoveTarget;
+                                        setBubbleRemoveTargetActive(insideRemoveTarget);
+                                        if (insideRemoveTarget) {
+                                            vibrateShort();
+                                        }
+                                    }
+                                    bubbleView.setAlpha(insideRemoveTarget ? 0.72f : 1.0f);
+                                    bubbleView.setScaleX(insideRemoveTarget ? 0.88f : 1.0f);
+                                    bubbleView.setScaleY(insideRemoveTarget ? 0.88f : 1.0f);
                                     isDocked = false;
                                     windowManager.updateViewLayout(
                                             bubbleContainer,
@@ -834,6 +853,27 @@ public class FloatingBubbleManager {
 
                                 case MotionEvent.ACTION_UP:
                                 case MotionEvent.ACTION_CANCEL:
+                                    boolean shouldHide = moved
+                                            && removeTargetEntered
+                                            && event.getActionMasked() == MotionEvent.ACTION_UP;
+                                    dismissBubbleRemoveTarget();
+
+                                    if (shouldHide) {
+                                        vibrateSuccess();
+                                        hideBubble();
+                                        Toast.makeText(
+                                                context,
+                                                "浮動泡泡已隱藏",
+                                                Toast.LENGTH_SHORT).show();
+                                        return true;
+                                    }
+
+                                    if (bubbleView != null) {
+                                        bubbleView.setAlpha(1.0f);
+                                        bubbleView.setScaleX(1.0f);
+                                        bubbleView.setScaleY(1.0f);
+                                    }
+
                                     if (!moved) {
                                         float dx = Math.abs(
                                                 event.getRawX() - initialTouchX);
@@ -866,6 +906,121 @@ public class FloatingBubbleManager {
                 }
             }
         });
+    }
+
+    private int getNavigationBarHeight() {
+        try {
+            int resId = context.getResources().getIdentifier(
+                    "navigation_bar_height", "dimen", "android");
+            if (resId > 0) {
+                return context.getResources().getDimensionPixelSize(resId);
+            }
+        } catch (Exception ignored) {}
+        return dp(24);
+    }
+
+    private void showBubbleRemoveTarget() {
+        if (bubbleRemoveTargetView != null || !canDrawOverlays()) return;
+        try {
+            TextView target = new TextView(context);
+            target.setText("✕  放這裡隱藏");
+            target.setTextSize(14f);
+            target.setTextColor(Color.parseColor("#F8FAFC"));
+            target.setGravity(Gravity.CENTER);
+            target.setTypeface(
+                    android.graphics.Typeface.DEFAULT,
+                    android.graphics.Typeface.BOLD);
+            target.setPadding(dp(18), 0, dp(18), 0);
+            target.setAlpha(0f);
+            target.setScaleX(0.92f);
+            target.setScaleY(0.92f);
+
+            GradientDrawable bg = bubbleRemoveTargetBackground(false);
+            target.setBackground(bg);
+            target.setElevation(dp(16));
+
+            int overlayType = Build.VERSION.SDK_INT >= 26
+                    ? 2038
+                    : WindowManager.LayoutParams.TYPE_PHONE;
+            WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
+                    dp(144),
+                    dp(56),
+                    overlayType,
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                            | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                            | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                    PixelFormat.TRANSLUCENT);
+            lp.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
+            lp.x = 0;
+            lp.y = getNavigationBarHeight() + dp(12);
+
+            windowManager.addView(target, lp);
+            bubbleRemoveTargetView = target;
+            bubbleRemoveTargetParams = lp;
+            bubbleRemoveTargetActive = false;
+
+            target.animate()
+                    .alpha(1f)
+                    .scaleX(1f)
+                    .scaleY(1f)
+                    .setDuration(120L)
+                    .start();
+        } catch (Exception ignored) {
+            bubbleRemoveTargetView = null;
+            bubbleRemoveTargetParams = null;
+            bubbleRemoveTargetActive = false;
+        }
+    }
+
+    private void dismissBubbleRemoveTarget() {
+        if (bubbleRemoveTargetView != null) {
+            try { windowManager.removeViewImmediate(bubbleRemoveTargetView); }
+            catch (Exception ignored) {}
+        }
+        bubbleRemoveTargetView = null;
+        bubbleRemoveTargetParams = null;
+        bubbleRemoveTargetActive = false;
+    }
+
+    private boolean isInsideBubbleRemoveTarget(float rawX, float rawY) {
+        int screenWidth = windowManager.getDefaultDisplay().getWidth();
+        int screenHeight = windowManager.getDefaultDisplay().getHeight();
+        float centerX = screenWidth / 2f;
+        float centerY = screenHeight
+                - getNavigationBarHeight()
+                - dp(12)
+                - dp(28);
+        float dx = rawX - centerX;
+        float dy = rawY - centerY;
+        return Math.hypot(dx, dy) <= dp(92);
+    }
+
+    private void setBubbleRemoveTargetActive(boolean active) {
+        if (bubbleRemoveTargetView == null
+                || bubbleRemoveTargetActive == active) {
+            return;
+        }
+        bubbleRemoveTargetActive = active;
+        bubbleRemoveTargetView.setBackground(
+                bubbleRemoveTargetBackground(active));
+        bubbleRemoveTargetView.animate()
+                .scaleX(active ? 1.10f : 1.0f)
+                .scaleY(active ? 1.10f : 1.0f)
+                .setDuration(90L)
+                .start();
+    }
+
+    private GradientDrawable bubbleRemoveTargetBackground(boolean active) {
+        GradientDrawable bg = new GradientDrawable();
+        bg.setCornerRadius(dp(28));
+        if (active) {
+            bg.setColor(Color.argb(245, 190, 24, 93));
+            bg.setStroke(dp(2), Color.parseColor("#FDA4AF"));
+        } else {
+            bg.setColor(Color.argb(235, 39, 39, 42));
+            bg.setStroke(dp(1), Color.parseColor("#71717A"));
+        }
+        return bg;
     }
 
     private int getStatusBarHeight() {
