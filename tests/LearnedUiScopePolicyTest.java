@@ -17,24 +17,39 @@ public final class LearnedUiScopePolicyTest {
                 "legacy rule remains neutral");
 
         check(LearnedUiScopePolicy.sameActionSlot(
-                        "com.line", "COMPOSER_SEND", "HAS_TEXT", "chat-a",
-                        "com.line", "COMPOSER_SEND", "HAS_TEXT", "chat-a"),
+                        "com.line", "COMPOSER_SEND", "HAS_TEXT",
+                        "EditText", "composer", "chat-a",
+                        "com.line", "COMPOSER_SEND", "HAS_TEXT",
+                        "EditText", "composer", "chat-a"),
                 "same structural composer replaces old teaching");
 
         check(!LearnedUiScopePolicy.sameActionSlot(
-                        "com.line", "COMPOSER_SEND", "HAS_TEXT", "chat-a",
-                        "com.line", "COMPOSER_SEND", "HAS_TEXT", "search"),
+                        "com.line", "COMPOSER_SEND", "HAS_TEXT",
+                        "EditText", "", "chat-a",
+                        "com.line", "COMPOSER_SEND", "HAS_TEXT",
+                        "EditText", "", "search"),
                 "different screen structures keep separate mappings");
 
         check(LearnedUiScopePolicy.sameActionSlot(
-                        "com.line", "COMPOSER_SEND", "HAS_TEXT", "",
-                        "com.line", "COMPOSER_SEND", "HAS_TEXT", "chat-a"),
+                        "com.line", "COMPOSER_SEND", "HAS_TEXT",
+                        "EditText", "", "",
+                        "com.line", "COMPOSER_SEND", "HAS_TEXT",
+                        "EditText", "", "chat-a"),
                 "legacy mapping is replaced on explicit reteach");
 
         check(!LearnedUiScopePolicy.sameActionSlot(
-                        "com.line", "COMPOSER_SEND", "EMPTY", "chat-a",
-                        "com.line", "COMPOSER_SEND", "HAS_TEXT", "chat-a"),
+                        "com.line", "COMPOSER_SEND", "EMPTY",
+                        "EditText", "composer", "chat-a",
+                        "com.line", "COMPOSER_SEND", "HAS_TEXT",
+                        "EditText", "composer", "chat-a"),
                 "different known composer states stay separate");
+
+        check(!LearnedUiScopePolicy.sameActionSlot(
+                        "com.line", "COMPOSER_SEND", "HAS_TEXT",
+                        "EditText", "composer", "chat-a",
+                        "com.line", "COMPOSER_SEND", "HAS_TEXT",
+                        "EditText", "other_composer", "chat-a"),
+                "different composer ids stay separate");
 
         System.out.println("PASS LearnedUiScopePolicyTest: " + assertions + " checks");
     }
