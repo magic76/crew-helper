@@ -566,8 +566,10 @@ final class UserActionScope {
 
         boolean conversationalTell = raw.matches(
                 ".*(?:跟|向|對|对)\\s*[^，,。！？!：:]+\\s*(?:說|说).*");
+        boolean englishRecipient = raw.matches(
+                ".*\\b(?:send(?:\\s+(?:a\\s+)?(?:message|text))?\\s+to|tell)\\s+[^,.!?;:]{1,40}.*");
 
-        return recipientVerb || conversationalTell;
+        return recipientVerb || conversationalTell || englishRecipient;
     }
 
     /**
