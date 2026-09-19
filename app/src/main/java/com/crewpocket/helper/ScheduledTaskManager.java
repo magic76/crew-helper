@@ -149,10 +149,38 @@ public class ScheduledTaskManager {
             manager = instance;
         }
         if (manager == null || manager.activeTasks.isEmpty()) return;
-        manager.pendingEventPackage =
+        final String eventPackage =
                 packageName == null ? "" : packageName.trim();
-        manager.pendingEventAtMs =
+        final long receivedAtMs =
                 eventAtMs > 0L ? eventAtMs : System.currentTimeMillis();
+
+        // App-open notifications are cheap and packageName is already present
+        // on the AccessibilityEvent, so do not debounce them behind tree work.
+        if (!eventPackage.isEmpty()) {
+            manager.mainHandler.post(new Runnable() {
+                @Override public void run() {
+                    for (ScheduledTask task : manager.activeTasks.values()) {
+                        if (task == null || task.cancelled) continue;
+                        if (!"pending_action".equals(task.type)) continue;
+                        if (!PendingActionPolicy.CONDITION_APP_OPENED.equals(
+                                task.conditionType)) continue;
+                        if (!PendingActionPolicy.ACTION_NOTIFY.equals(
+                                task.action)) continue;
+                        if (eventPackage.equals(task.conditionPackage)) {
+                            task.checkCount++;
+                            task.eventCheckCount++;
+                            task.lastCheckReason = "APP_EVENT_FAST_PATH";
+                            manager.completeNotificationTask(
+                                    task,
+                                    receivedAtMs);
+                        }
+                    }
+                }
+            });
+        }
+
+        manager.pendingEventPackage = eventPackage;
+        manager.pendingEventAtMs = receivedAtMs;
         manager.mainHandler.removeCallbacks(manager.accessibilityEventCheck);
         manager.mainHandler.postDelayed(
                 manager.accessibilityEventCheck,
@@ -340,6 +368,10 @@ public class ScheduledTaskManager {
         task.targetTime =
                 task.createdAt + (task.durationMinutes * 60 * 1000L);
         task.checkCount = 0;
+        task.eventCheckCount = 0;
+        task.pollCheckCount = 0;
+        task.triggerLatencyMs = 0L;
+        task.lastCheckReason = "";
         task.cancelled = false;
         task.pendingActionExecutor = executor;
 
