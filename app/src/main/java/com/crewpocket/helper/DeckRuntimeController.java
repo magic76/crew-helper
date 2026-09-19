@@ -31,6 +31,7 @@ final class DeckRuntimeController {
     private volatile boolean autoAdvanceActive;
     private volatile String startupMode = "";
     private volatile String startupDeckId = "";
+    private volatile String startupWorkspaceId = "";
     private volatile boolean startupDispatched;
     private volatile int advanceExpectedIndex = -1;
 
@@ -55,12 +56,17 @@ final class DeckRuntimeController {
     }
 
     void configureStartup(String mode, String deckId) {
+        configureStartup(mode, deckId, "");
+    }
+
+    void configureStartup(String mode, String deckId, String workspaceId) {
         String normalized = mode == null ? "" : mode.trim();
         if (!"create".equals(normalized) && !"present".equals(normalized)) {
             normalized = "";
         }
         startupMode = normalized;
         startupDeckId = deckId == null ? "" : deckId.trim();
+        startupWorkspaceId = workspaceId == null ? "" : workspaceId.trim();
         startupDispatched = false;
     }
 
@@ -105,6 +111,8 @@ final class DeckRuntimeController {
                 || "present_deck_card".equals(name)
                 || "advance_deck".equals(name)
                 || "create_ephemeral_deck".equals(name)
+                || "list_deck_workspace_sources".equals(name)
+                || "read_deck_workspace_source".equals(name)
                 || "list_deck_images".equals(name)
                 || "attach_deck_image".equals(name)
                 || "update_deck_card".equals(name)
@@ -155,10 +163,35 @@ final class DeckRuntimeController {
             }
             return result;
         }
+        if ("list_deck_workspace_sources".equals(name)) {
+            if (startupWorkspaceId.isEmpty()
+                    || !DeckWorkspaceRepository.hasWorkspace(startupWorkspaceId)) {
+                return new JSONObject()
+                        .put("success", false)
+                        .put("error", "這次 AI 建立簡報沒有指定 Deck Workspace");
+            }
+            return DeckWorkspaceRepository.listSources();
+        }
+        if ("read_deck_workspace_source".equals(name)) {
+            if (startupWorkspaceId.isEmpty()
+                    || !DeckWorkspaceRepository.hasWorkspace(startupWorkspaceId)) {
+                return new JSONObject()
+                        .put("success", false)
+                        .put("error", "這次 AI 建立簡報沒有指定 Deck Workspace");
+            }
+            return DeckWorkspaceRepository.readSource(
+                    safeArgs.optString("source_id"));
+        }
         if ("create_ephemeral_deck".equals(name)) {
+            java.io.File assetDirectory =
+                    startupWorkspaceId.isEmpty()
+                            ? null
+                            : DeckWorkspaceRepository.workspaceFilesDirectory(
+                                    startupWorkspaceId);
             JSONObject result = DeckRepository.createEphemeralDeck(
                     safeArgs.optString("title"),
-                    safeArgs.optJSONArray("cards"));
+                    safeArgs.optJSONArray("cards"),
+                    assetDirectory);
             if (result.optBoolean("success", false)) {
                 autoAdvanceActive = true;
             }
@@ -198,12 +231,29 @@ final class DeckRuntimeController {
 
         if (isCreateStartup()) {
             startupDispatched = true;
-            host.sendInternalDirective(
-                    "【AI 簡報建立入口】使用者剛剛主動選擇『AI 建立新簡報』。"
-                            + "如果使用者還沒說主題，現在只用一句話問：想做什麼主題的簡報？"
-                            + "不要要求 deck.json、檔案、資料夾或任何技術設定。"
-                            + "使用者提供主題後，呼叫 create_ephemeral_deck 一次建立 3–8 頁，"
-                            + "建立完成後直接以 Gemini 主講人的身分開始介紹第一頁。");
+            if (!startupWorkspaceId.isEmpty()
+                    && DeckWorkspaceRepository.hasWorkspace(startupWorkspaceId)) {
+                JSONObject workspace = DeckWorkspaceRepository.getWorkspaceSummary();
+                host.sendInternalDirective(
+                        "【Deck Workspace 建立入口】使用者已主動指定一個『簡報資料來源』資料夾。"
+                                + "Workspace 摘要：" + workspace.toString()
+                                + "。先呼叫 list_deck_workspace_sources，看有哪些來源；"
+                                + "再只讀與主題最相關的來源，不要把所有檔案全部讀完。"
+                                + "如果使用者尚未說明簡報目的/主題，可用一句話詢問。"
+                                + "掌握資料後，先用語音提出 4–8 頁的簡短大綱，等待使用者確認或修改；"
+                                + "在使用者確認前不要呼叫 create_ephemeral_deck。"
+                                + "確認後建立 3–8 頁簡報，每頁的 sources 必須列出實際支援該頁、且你真的讀過的檔案路徑；"
+                                + "若 workspace source 有 image assetId，可直接放進 card.image。"
+                                + "PDF 或其他 readable=false 的來源只能依檔名/類型判斷，不得猜測檔案內容。"
+                                + "建立完成後直接以 Gemini 主講人的身分開始介紹第一頁。");
+            } else {
+                host.sendInternalDirective(
+                        "【AI 簡報建立入口】使用者剛剛主動選擇『AI 建立新簡報』。"
+                                + "如果使用者還沒說主題，現在只用一句話問：想做什麼主題的簡報？"
+                                + "不要要求 deck.json、檔案、資料夾或任何技術設定。"
+                                + "使用者提供主題後，呼叫 create_ephemeral_deck 一次建立 3–8 頁，"
+                                + "建立完成後直接以 Gemini 主講人的身分開始介紹第一頁。");
+            }
             return;
         }
 
