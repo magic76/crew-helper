@@ -155,6 +155,11 @@ final class ModelToolResponseAdapter {
                     "SEND_NOT_AUTHORIZED")) {
                 return "目前沒有明確送出授權；不要重試，等待使用者的新指令。";
             }
+            if (containsAny(error, "PENDING_WAIT_SETUP_FAILED")) {
+                return result.optString(
+                        "instruction",
+                        "無法建立等待任務；請確認要監控的 App 或條件。");
+            }
             if (containsAny(error,
                     "UI_TARGET_NOT_FOUND",
                     "TARGET_NOT_FOUND",
