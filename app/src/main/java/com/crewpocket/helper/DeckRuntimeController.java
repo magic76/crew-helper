@@ -86,6 +86,12 @@ final class DeckRuntimeController {
         return "create".equals(startupMode);
     }
 
+    boolean hasWorkspaceStartup() {
+        return isCreateStartup()
+                && !startupWorkspaceId.isEmpty()
+                && DeckWorkspaceRepository.hasWorkspace(startupWorkspaceId);
+    }
+
     boolean isPresentStartup() {
         return "present".equals(startupMode);
     }
