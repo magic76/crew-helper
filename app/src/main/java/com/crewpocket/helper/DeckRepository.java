@@ -177,6 +177,13 @@ final class DeckRepository {
 
     /** Creates a session-only Deck from model-provided, schema-normalized text. It is never written to disk. */
     static JSONObject createEphemeralDeck(String requestedTitle, JSONArray requestedCards) {
+        return createEphemeralDeck(requestedTitle, requestedCards, null);
+    }
+
+    static JSONObject createEphemeralDeck(
+            String requestedTitle,
+            JSONArray requestedCards,
+            File assetDirectory) {
         synchronized (LOCK) {
             try {
                 if (requestedCards == null || requestedCards.length() < 1 || requestedCards.length() > 12) throw new Exception("即席 Deck 需要 1–12 張卡片");
@@ -194,7 +201,8 @@ final class DeckRepository {
                             .put("subtitle", clip(input.optString("subtitle"), 180))
                             .put("speakerNotes", clip(input.optString("speakerNotes", input.optString("speaker_notes")), 700))
                             .put("facts", normalizeStrings(input.optJSONArray("facts"), 8, 140))
-                            .put("items", normalizeStrings(input.optJSONArray("items"), 8, 180));
+                            .put("items", normalizeStrings(input.optJSONArray("items"), 8, 180))
+                            .put("sources", normalizeStrings(input.optJSONArray("sources"), 6, 180));
                     if (input.has("image")) card.put("image", clip(input.optString("image"), 500));
                     if (input.has("imageCaption") || input.has("image_caption")) card.put("imageCaption", clip(input.optString("imageCaption", input.optString("image_caption")), 160));
                     if ("metric".equals(type)) card.put("metrics", normalizeMetrics(input.optJSONArray("metrics")));
@@ -208,10 +216,13 @@ final class DeckRepository {
                 }
                 JSONObject source = new JSONObject().put("deckId", "ephemeral_" + System.currentTimeMillis())
                         .put("title", clip(requestedTitle, 100)).put("theme", "dark-tech").put("cards", cards);
-                activeDeck = new Deck(source, null); activeIndex = 0;
+                activeDeck = new Deck(source, assetDirectory); activeIndex = 0;
                 launchDeckActivity();
                 return cardResult(cards.getJSONObject(0), 0, true).put("ephemeral", true)
-                        .put("message", "已建立即席 Deck；這是模型既有知識的整理，不保證為最新資料。請先顯示此卡並以語音介紹。");
+                        .put("workspaceBacked", assetDirectory != null)
+                        .put("message", assetDirectory == null
+                                ? "已建立即席 Deck；這是模型既有知識的整理，不保證為最新資料。請先顯示此卡並以語音介紹。"
+                                : "已依簡報資料來源建立 Deck；請先顯示此卡並以語音介紹。");
             } catch (Exception error) { return failure("無法建立即席 Deck：" + error.getMessage()); }
         }
     }
@@ -338,6 +349,7 @@ final class DeckRepository {
                 if (patch.has("speakerNotes") || patch.has("speaker_notes")) card.put("speakerNotes", clip(patch.optString("speakerNotes", patch.optString("speaker_notes")), 700));
                 if (patch.has("facts")) card.put("facts", normalizeStrings(patch.optJSONArray("facts"), 8, 140));
                 if (patch.has("items")) card.put("items", normalizeStrings(patch.optJSONArray("items"), 8, 180));
+                if (patch.has("sources")) card.put("sources", normalizeStrings(patch.optJSONArray("sources"), 6, 180));
                 if (patch.has("metrics")) card.put("metrics", normalizeMetrics(patch.optJSONArray("metrics")));
                 if (patch.has("image")) card.put("image", clip(patch.optString("image"), 500));
                 if (patch.has("imageCaption") || patch.has("image_caption")) card.put("imageCaption", clip(patch.optString("imageCaption", patch.optString("image_caption")), 160));
@@ -384,7 +396,9 @@ final class DeckRepository {
         JSONObject card = new JSONObject().put("type", type).put("title", clip(input.optString("title", "補充內容"), 100))
                 .put("subtitle", clip(input.optString("subtitle"), 180)).put("body", clip(input.optString("body"), 1200))
                 .put("speakerNotes", clip(input.optString("speakerNotes", input.optString("speaker_notes")), 700))
-                .put("facts", normalizeStrings(input.optJSONArray("facts"), 8, 140)).put("items", normalizeStrings(input.optJSONArray("items"), 8, 180));
+                .put("facts", normalizeStrings(input.optJSONArray("facts"), 8, 140))
+                .put("items", normalizeStrings(input.optJSONArray("items"), 8, 180))
+                .put("sources", normalizeStrings(input.optJSONArray("sources"), 6, 180));
         if (input.has("image")) card.put("image", clip(input.optString("image"), 500));
         if (input.has("imageCaption") || input.has("image_caption")) card.put("imageCaption", clip(input.optString("imageCaption", input.optString("image_caption")), 160));
         if ("metric".equals(type)) card.put("metrics", normalizeMetrics(input.optJSONArray("metrics")));
@@ -459,6 +473,7 @@ final class DeckRepository {
         JSONArray facts = card.optJSONArray("facts");
         JSONArray items = card.optJSONArray("items");
         JSONArray metrics = card.optJSONArray("metrics");
+        JSONArray sources = card.optJSONArray("sources");
         JSONArray next = card.optJSONArray("next");
 
         JSONObject result = new JSONObject()
@@ -476,6 +491,7 @@ final class DeckRepository {
                 .put("facts", facts == null ? new JSONArray() : facts)
                 .put("items", items == null ? new JSONArray() : items)
                 .put("metrics", metrics == null ? new JSONArray() : metrics)
+                .put("sources", sources == null ? new JSONArray() : sources)
                 .put("imageCaption", card.optString("imageCaption"))
                 .put("allowedNext", next == null ? new JSONArray() : next);
 
