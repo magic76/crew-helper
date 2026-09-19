@@ -143,6 +143,39 @@ final class WorkingContext {
         return out;
     }
 
+    /**
+     * Small progress projection for Gemini tool responses.
+     *
+     * Deliberately excludes fingerprints, stable screen keys, selected raw text
+     * and any authorization/debug state. Gemini already has the user utterance;
+     * this only reminds it of the active goal and recent verified Runtime flow.
+     */
+    synchronized JSONObject toProgressJson() {
+        JSONObject out = new JSONObject();
+        try {
+            if (!latestUserTurn.isEmpty()) out.put("goal", latestUserTurn);
+            if (!rootGoal.isEmpty() && !rootGoal.equals(latestUserTurn)) {
+                out.put("rootGoal", rootGoal);
+            }
+            if (!currentApp.isEmpty()) out.put("currentApp", currentApp);
+
+            if (!lastActions.isEmpty()) {
+                JSONArray actions = new JSONArray();
+                int skip = Math.max(0, lastActions.size() - 3);
+                int index = 0;
+                for (String action : lastActions) {
+                    if (index++ < skip) continue;
+                    actions.put(action);
+                }
+                out.put("recentActions", actions);
+            }
+
+            if (!lastResult.isEmpty()) out.put("lastResult", lastResult);
+            if (!pendingTask.isEmpty()) out.put("pendingTask", pendingTask);
+        } catch (Exception ignored) {}
+        return out;
+    }
+
     synchronized void resetTransientForNewGoal() {
         rootGoal = "";
         latestUserTurn = "";
