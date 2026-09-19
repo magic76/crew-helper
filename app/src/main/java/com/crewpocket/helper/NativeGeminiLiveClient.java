@@ -143,6 +143,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     // different WebSocket frames. These flags describe the whole current
     // server model turn, not one handleJson() invocation.
     private boolean currentModelTurnHadToolCall = false;
+    private boolean currentModelTurnBlocksDeckAutoAdvance = false;
     private boolean currentModelTurnProducedSpeech = false;
     // 0047: transcript text is not audible-output proof.
     private boolean currentModelTurnReceivedAudio = false;
@@ -1200,9 +1201,12 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             if (calls == null) calls = toolCall.optJSONArray("function_calls");
             if (calls != null && calls.length() > 0) {
                 responseHasToolCall = true;
-                markCurrentModelTurnToolCall();
+                markCurrentModelTurnToolCall(
+                        toolCallsAllowDeckNarrationAdvance(calls));
                 clearAgentResponseWatchdog();
-                for (int i = 0; i < calls.length(); i++) executeToolAsync(calls.getJSONObject(i));
+                for (int i = 0; i < calls.length(); i++) {
+                    executeToolAsync(calls.getJSONObject(i));
+                }
             }
         }
         if (server == null) return;
@@ -1319,14 +1323,15 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     }
 
     /**
-     * 0054: auto-advance only after one pure narration turn whose PCM was
-     * actually accepted for playback. Tool turns must never inherit this state.
+     * 0054: auto-advance after audible narration. A Deck-only tool call may
+     * precede that narration in the same model turn; unrelated tools still block it.
      */
     private boolean shouldAutoAdvanceDeckAfterCurrentTurn() {
         synchronized (agentLock) {
-            return currentModelTurnProducedSpeech
-                    && currentModelTurnReceivedAudio
-                    && !currentModelTurnHadToolCall;
+            return DeckTurnAdvancePolicy.shouldAdvance(
+                    currentModelTurnProducedSpeech,
+                    currentModelTurnReceivedAudio,
+                    currentModelTurnBlocksDeckAutoAdvance);
         }
     }
 
@@ -1348,33 +1353,111 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             String requestedName,
             JSONObject requestedArgs,
             long queuedGeneration) {
-        if (!"send_text".equals(requestedName)
-                || userActionScope.canSend()
-                || queuedGeneration != userIntentGeneration) {
+        if (!"send_text".equals(requestedName)) {
+            return queuedGeneration;
+        }
+
+        long currentGeneration = userIntentGeneration;
+        if (queuedGeneration == currentGeneration
+                && userActionScope.canSend()) {
             return queuedGeneration;
         }
 
         LiveTurnCoordinator.FinalizedTurn finalized =
-                liveTurnCoordinator.awaitNextAfter(queuedGeneration, 500L);
+                liveTurnCoordinator.latest();
+
+        if (finalized.generation != queuedGeneration + 1L) {
+            finalized = liveTurnCoordinator.awaitNextAfter(
+                    queuedGeneration, 1400L);
+        }
         if (finalized.generation != queuedGeneration + 1L) {
             return queuedGeneration;
         }
 
-        // A standalone "幫我送出" is Runtime-owned and may already be executing
-        // or completed by the time this early model tool is reconciled.
+        // A standalone send-only utterance is Runtime-owned. Never re-arm a
+        // model send after Runtime has already claimed that finalized turn.
         if (runtimeSendCurrentHandledGeneration == finalized.generation
                 && SendAuthorization.isStandaloneCurrentScreenSendCommand(
                         finalized.text)) {
             return finalized.generation;
         }
 
-        if (!userActionScope.canSend()
-                || !sendToolMatchesFinalizedUserIntent(
-                        requestedArgs, finalized.text)) {
+        if (!sendToolMatchesFinalizedUserIntent(
+                requestedArgs, finalized.text)) {
+            return queuedGeneration;
+        }
+
+        if (!ensureSendAuthorizationFromFinalized(
+                finalized, requestedArgs)) {
             return queuedGeneration;
         }
 
         return finalized.generation;
+    }
+
+    private long awaitFinalizedLiteralTypeGeneration(
+            String requestedName,
+            JSONObject requestedArgs,
+            long queuedGeneration) {
+        String text = literalTypeText(requestedName, requestedArgs);
+        if (text.isEmpty() || text.length() > 64) {
+            return queuedGeneration;
+        }
+
+        LiveTurnCoordinator.FinalizedTurn latest =
+                liveTurnCoordinator.latest();
+        if (latest.generation == queuedGeneration
+                && typeToolMatchesFinalizedIntent(text, latest.text)) {
+            return queuedGeneration;
+        }
+
+        LiveTurnCoordinator.FinalizedTurn finalized =
+                liveTurnCoordinator.awaitNextAfter(
+                        queuedGeneration, 900L);
+        if (finalized.generation != queuedGeneration + 1L
+                || !typeToolMatchesFinalizedIntent(
+                        text, finalized.text)) {
+            return queuedGeneration;
+        }
+
+        Log.i(
+                TAG,
+                "TYPE reconciled to finalized turn generation="
+                        + finalized.generation);
+        return finalized.generation;
+    }
+
+    private String literalTypeText(
+            String requestedName,
+            JSONObject requestedArgs) {
+        JSONObject args = requestedArgs == null
+                ? new JSONObject() : requestedArgs;
+        if ("type_text".equals(requestedName)) {
+            return args.optString("text", "").trim();
+        }
+        if (SemanticPhoneAction.TOOL_NAME.equals(requestedName)
+                && "TYPE".equalsIgnoreCase(
+                        args.optString("action", "").trim())) {
+            return args.optString("text", "").trim();
+        }
+        return "";
+    }
+
+    private boolean typeToolMatchesFinalizedIntent(
+            String toolText,
+            String finalizedText) {
+        if (toolText == null
+                || toolText.trim().isEmpty()
+                || finalizedText == null
+                || finalizedText.trim().isEmpty()) {
+            return false;
+        }
+        String normalizedTool = TextMatch.caseFold(toolText)
+                .replaceAll("[\\s，,。！？!「」『』\\\"'：:；;（）()]", "");
+        String normalizedFinal = TextMatch.caseFold(finalizedText)
+                .replaceAll("[\\s，,。！？!「」『』\\\"'：:；;（）()]", "");
+        return !normalizedTool.isEmpty()
+                && normalizedFinal.contains(normalizedTool);
     }
 
     private boolean sendToolMatchesFinalizedUserIntent(
@@ -1390,6 +1473,39 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         String normalizedFinal = TextMatch.caseFold(finalizedText)
                 .replaceAll("[\\s，,。！？!「」『』\\\"'：:；;（）()]", "");
         return !normalizedTool.isEmpty() && normalizedFinal.contains(normalizedTool);
+    }
+
+    private boolean ensureSendAuthorizationFromFinalized(
+            LiveTurnCoordinator.FinalizedTurn finalized,
+            JSONObject requestedArgs) {
+        if (finalized == null
+                || finalized.generation != userIntentGeneration
+                || userActionScope.shouldBlockFurtherMessageMutation()
+                || runtimeSendCurrentExecuting
+                || runtimeSendCurrentHandledGeneration
+                        == finalized.generation) {
+            return false;
+        }
+
+        SendAuthorization probe = new SendAuthorization();
+        probe.updateFromUserText(finalized.text);
+        if (!probe.canAttempt()) {
+            return false;
+        }
+        if (!sendToolMatchesFinalizedUserIntent(
+                requestedArgs, finalized.text)) {
+            return false;
+        }
+
+        userActionScope.updateFromUserText(finalized.text);
+        boolean restored = userActionScope.canSend();
+        if (restored) {
+            Log.i(
+                    TAG,
+                    "RuntimeSend restored authorization from finalized turn generation="
+                            + finalized.generation);
+        }
+        return restored;
     }
 
     private boolean tryHandleRuntimeSendCurrent(String inputText) {
@@ -1600,15 +1716,19 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 ? new JSONObject() : call.optJSONObject("args");
         long callIntentGeneration = call.optLong("_crew_intent_generation", -1L);
 
-        // send_text is the only mutation with a known Gemini Live ordering race:
-        // toolCall can arrive just before the finalized user transcription.
-        // Wait briefly for user authority, never for model authority.
-        long reconciledSendGeneration = awaitFinalizedSendAuthorization(
+        // Gemini Live may emit the tool frame before the authoritative
+        // finalized user transcript. Reconcile only operations whose payload
+        // can be matched deterministically to that finalized turn.
+        long reconciledGeneration = awaitFinalizedSendAuthorization(
                 requestedName, requestedArgs, callIntentGeneration);
-        if (reconciledSendGeneration != callIntentGeneration) {
-            callIntentGeneration = reconciledSendGeneration;
-            try { call.put("_crew_intent_generation", callIntentGeneration); }
-            catch (Exception ignored) {}
+        reconciledGeneration = awaitFinalizedLiteralTypeGeneration(
+                requestedName, requestedArgs, reconciledGeneration);
+
+        if (reconciledGeneration != callIntentGeneration) {
+            callIntentGeneration = reconciledGeneration;
+            try {
+                call.put("_crew_intent_generation", callIntentGeneration);
+            } catch (Exception ignored) {}
 
             LiveTurnCoordinator.FinalizedTurn finalizedTurn =
                     liveTurnCoordinator.latest();
@@ -1621,7 +1741,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                     runtimeOwned.put("success", true)
                             .put("taskState", "IN_PROGRESS")
                             .put("runtimeHandled", "SEND_CURRENT")
-                            .put("message",
+                            .put(
+                                    "message",
                                     "Runtime 已接管這次送出；不要再呼叫 send_text 或其他 mutation。");
                     sendToolResponse(id, requestedName, runtimeOwned);
                 } catch (Exception ignored) {}
@@ -2272,12 +2393,29 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         }
     }
 
-    private void markCurrentModelTurnToolCall() {
+    private void markCurrentModelTurnToolCall(
+            boolean allowsDeckNarrationAdvance) {
         synchronized (agentLock) {
             currentModelTurnHadToolCall = true;
+            if (!allowsDeckNarrationAdvance) {
+                currentModelTurnBlocksDeckAutoAdvance = true;
+            }
             // Any speech before a later tool call was intermediate, not final.
             currentModelTurnProducedSpeech = false;
         }
+    }
+
+    private boolean toolCallsAllowDeckNarrationAdvance(JSONArray calls) {
+        if (calls == null || calls.length() == 0) return false;
+        for (int i = 0; i < calls.length(); i++) {
+            JSONObject call = calls.optJSONObject(i);
+            if (call == null) return false;
+            String name = call.optString("name", "").trim();
+            if (!deckRuntimeController.handles(name)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private void noteCurrentModelTurnAudioReceived(int bytes) {
@@ -2307,6 +2445,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             hadToolCall = currentModelTurnHadToolCall;
             producedSpeech = currentModelTurnProducedSpeech;
             currentModelTurnHadToolCall = false;
+            currentModelTurnBlocksDeckAutoAdvance = false;
             currentModelTurnProducedSpeech = false;
         }
         if (hadToolCall && !producedSpeech) {
@@ -2319,6 +2458,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private void resetCurrentModelTurnState() {
         synchronized (agentLock) {
             currentModelTurnHadToolCall = false;
+            currentModelTurnBlocksDeckAutoAdvance = false;
             currentModelTurnProducedSpeech = false;
             currentModelTurnReceivedAudio = false;
         }
@@ -4075,12 +4215,20 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private JSONObject sendTextToPhone(JSONObject args) throws Exception {
         String text = args == null ? "" : args.optString("text", "");
 
+        if (!userActionScope.canSend()
+                || userActionScope.blocksNamedRecipientMessagingAction()) {
+            LiveTurnCoordinator.FinalizedTurn finalized =
+                    liveTurnCoordinator.latest();
+            ensureSendAuthorizationFromFinalized(finalized, args);
+        }
         if (userActionScope.blocksNamedRecipientMessagingAction()) {
-            return runtimeBlocked("RECIPIENT_TARGET_UNKNOWN",
+            return runtimeBlocked(
+                    "RECIPIENT_TARGET_UNKNOWN",
                     "這一輪看起來要傳給特定對象，但 Runtime 無法從原始指令抽出可驗證的收件人。不要猜收件人；請使用者用『跟 X 說…』或『傳給 X：「…」』明確指定。");
         }
         if (!userActionScope.canSend()) {
-            return runtimeBlocked("CURRENT_SCREEN_SEND_NOT_AUTHORIZED",
+            return runtimeBlocked(
+                    "CURRENT_SCREEN_SEND_NOT_AUTHORIZED",
                     "send_text 只用於最新一句明確要求送出訊息。若使用者只是要在目前可見欄位打字、填入或貼上內容（包含設定、system prompt、表單或聊天輸入框），請改用 phone_action(TYPE)；不要宣稱 Crew 無法一般打字。");
         }
 
@@ -4098,9 +4246,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         // 0052 active messaging path is intentionally simple:
         // optional TYPE(text) -> SEND_CURRENT.
         if (!text.isEmpty()) {
-            JSONObject typed = phoneRuntimeExecutor.post(
-                    "/type",
-                    new JSONObject().put("text", text));
+            JSONObject typed = phoneRuntimeExecutor.typeText(text);
             workingContext.recordAction(
                     "type_for_send",
                     typed.optBoolean("success", false) ? "submitted" : "failed");

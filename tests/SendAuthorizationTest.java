@@ -34,6 +34,13 @@ public final class SendAuthorizationTest {
         check(!SendAuthorization.isStandaloneCurrentScreenSendCommand("輸入晚點到並送出"),
                 "message plus send is not standalone");
 
+        SendAuthorization typeAndSend = new SendAuthorization();
+        typeAndSend.updateFromUserText("幫我輸入測試測試123並送出");
+        check(typeAndSend.canAttempt(),
+                "type plus send explicitly authorizes send_text");
+        check(!typeAndSend.requiresRecipientVerification(),
+                "current-chat type plus send needs no recipient gate");
+
         SendAuthorization discussion = new SendAuthorization();
         discussion.updateFromUserText("怎麼送出");
         check(!discussion.canAttempt(), "how-to discussion grants no send");
