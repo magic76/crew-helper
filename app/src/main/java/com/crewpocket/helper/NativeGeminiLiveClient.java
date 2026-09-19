@@ -935,6 +935,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         deckRuntimeController.configureStartup(mode, deckId);
     }
 
+    void configureDeckStartup(String mode, String deckId, String workspaceId) {
+        deckRuntimeController.configureStartup(mode, deckId, workspaceId);
+    }
+
 
 
 
