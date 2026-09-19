@@ -184,7 +184,7 @@ final class LiveToolCatalog {
     private static JSONArray filterModelFacingTools(JSONArray declared,
                                                      boolean deckMode,
                                                      boolean createMode,
-                                                     boolean presentMode) {
+                                                     boolean presentMode) throws Exception {
         JSONArray exposed = new JSONArray();
 
         for (int i = 0; i < declared.length(); i++) {
