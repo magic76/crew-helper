@@ -31,12 +31,14 @@ import android.widget.Toast;
 public class NativeLiveActivity extends Activity {
     static final String EXTRA_DECK_ENTRY_MODE = "crew.deck.entry_mode";
     static final String EXTRA_DECK_ID = "crew.deck.id";
+    static final String EXTRA_DECK_WORKSPACE_ID = "crew.deck.workspace_id";
     static final String EXTRA_DECK_AUTO_START = "crew.deck.auto_start";
     static final String DECK_ENTRY_CREATE = "create";
     static final String DECK_ENTRY_PRESENT = "present";
 
     private String deckEntryMode = "";
     private String deckEntryDeckId = "";
+    private String deckWorkspaceId = "";
     private boolean deckAutoStartRequested = false;
     // The full-page screen is a configuration/diagnostic entry point.  Keep a
     // reference only so the foreground service can synchronously release an
@@ -101,6 +103,7 @@ public class NativeLiveActivity extends Activity {
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         DeckRepository.initialize(this);
+        DeckWorkspaceRepository.initialize(this);
         activeInstance = this;
 
         Intent launchIntent = getIntent();
@@ -109,6 +112,8 @@ public class NativeLiveActivity extends Activity {
             if (deckEntryMode == null) deckEntryMode = "";
             deckEntryDeckId = launchIntent.getStringExtra(EXTRA_DECK_ID);
             if (deckEntryDeckId == null) deckEntryDeckId = "";
+            deckWorkspaceId = launchIntent.getStringExtra(EXTRA_DECK_WORKSPACE_ID);
+            if (deckWorkspaceId == null) deckWorkspaceId = "";
             deckAutoStartRequested =
                     launchIntent.getBooleanExtra(EXTRA_DECK_AUTO_START, false);
         }
@@ -1035,7 +1040,10 @@ public class NativeLiveActivity extends Activity {
                 });
             }
         });
-        client.configureDeckStartup(deckEntryMode, deckEntryDeckId);
+        client.configureDeckStartup(
+                deckEntryMode,
+                deckEntryDeckId,
+                deckWorkspaceId);
         client.setAgentMaxSteps(AppConfig.getAgentMaxSteps(this));
         client.start();
         handler.removeCallbacks(connectionWatchdog);

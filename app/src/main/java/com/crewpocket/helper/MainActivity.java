@@ -42,6 +42,8 @@ public class MainActivity extends Activity
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        DeckRepository.initialize(this);
+        DeckWorkspaceRepository.initialize(this);
 
         // 🌌 Immersive Dark Status & Navigation Bar
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
@@ -730,8 +732,8 @@ public class MainActivity extends Activity
         addPageHeading(CrewIcons.PRESENTATION,
             I18n.get(this, "AI 簡報", "AI Presentations"),
             I18n.get(this,
-                "說一個主題，Gemini 幫你建立並主講；也可以直接主講既有簡報。",
-                "Give Gemini a topic to create and present, or present an existing deck."));
+                "說一個主題，或指定資料夾讓 Gemini 依你的資料建立並主講簡報。",
+                "Give Gemini a topic, or select a source folder to create and present from your own material."));
 
         Button createDeckBtn = new Button(this);
         createDeckBtn.setText(I18n.get(this, "AI 建立新簡報", "Create with AI"));
@@ -769,6 +771,55 @@ public class MainActivity extends Activity
         createHint.setTextColor(CrewTheme.TEXT_SECONDARY);
         createHint.setPadding(dp(4), 0, dp(4), dp(16));
         pageContent.addView(createHint);
+
+        addSectionTitle(pageContent, I18n.get(this, "簡報資料來源", "DECK WORKSPACE"));
+
+        final org.json.JSONObject workspace = DeckWorkspaceRepository.getWorkspaceSummary();
+        if (workspace.optBoolean("success", false)) {
+            final String workspaceId = workspace.optString("workspaceId");
+            String detail = workspace.optString("title", I18n.get(this, "已選資料夾", "Selected folder"))
+                    + " · " + workspace.optInt("files", 0) + " "
+                    + I18n.get(this, "個檔案", "files")
+                    + " · " + workspace.optInt("readableSources", 0) + " "
+                    + I18n.get(this, "個可讀內容", "readable");
+
+            pageContent.addView(makeDeckActionCard(
+                    CrewIcons.PRESENTATION,
+                    I18n.get(this, "用目前資料來源建立簡報", "Create from current Workspace"),
+                    detail,
+                    CrewTheme.EMERALD_400,
+                    new View.OnClickListener() {
+                        @Override public void onClick(View v) {
+                            startWorkspaceDeckCreation(workspaceId);
+                        }
+                    }));
+
+            pageContent.addView(makeDeckActionCard(
+                    CrewIcons.PLUS,
+                    I18n.get(this, "更換／重新整理資料夾", "Change / refresh source folder"),
+                    I18n.get(this,
+                            "重新選擇資料夾會重建索引；原始檔案不會被修改。",
+                            "Selecting a folder rebuilds the private index; original files are never modified."),
+                    CrewTheme.INDIGO_400,
+                    new View.OnClickListener() {
+                        @Override public void onClick(View v) {
+                            openDeckWorkspacePicker();
+                        }
+                    }));
+        } else {
+            pageContent.addView(makeDeckActionCard(
+                    CrewIcons.PLUS,
+                    I18n.get(this, "選擇資料夾生成簡報", "Choose a folder to create a presentation"),
+                    I18n.get(this,
+                            "Crew 先建立輕量索引，再由 Gemini 按需讀取相關檔案、提出大綱，確認後才生成簡報。",
+                            "Crew builds a lightweight index first. Gemini reads only relevant sources, proposes an outline, then creates the deck after you confirm."),
+                    CrewTheme.TEAL_400,
+                    new View.OnClickListener() {
+                        @Override public void onClick(View v) {
+                            openDeckWorkspacePicker();
+                        }
+                    }));
+        }
 
         addSectionTitle(pageContent, I18n.get(this, "我的簡報", "MY PRESENTATIONS"));
 
@@ -821,10 +872,10 @@ public class MainActivity extends Activity
 
         pageContent.addView(makeDeckActionCard(
             CrewIcons.PLUS,
-            I18n.get(this, "進階：匯入 Deck 資料夾", "Advanced: Import Deck Folder"),
+            I18n.get(this, "進階：匯入既有 deck.json", "Advanced: Import existing deck.json"),
             I18n.get(this,
-                "給已經準備好 deck.json 與圖片的外部簡報使用；一般 AI 建立簡報不需要這個。",
-                "For externally prepared folders containing deck.json and images. AI-created presentations do not need this."),
+                "只給已經準備好 deck.json 與圖片的舊式 Deck 使用；資料來源資料夾請用上面的 Deck Workspace。",
+                "Only for legacy folders already containing deck.json and images. Use Deck Workspace above for source material."),
             CrewTheme.INDIGO_400,
             new View.OnClickListener() {
                 @Override public void onClick(View v) {
@@ -836,6 +887,26 @@ public class MainActivity extends Activity
             }));
 
         addFooter(pageContent, false);
+    }
+
+    private void openDeckWorkspacePicker() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        startActivityForResult(intent, 742);
+    }
+
+    private void startWorkspaceDeckCreation(String workspaceId) {
+        if (workspaceId == null || workspaceId.trim().isEmpty()) return;
+        Intent intent = new Intent(MainActivity.this, NativeLiveActivity.class);
+        intent.putExtra(
+                NativeLiveActivity.EXTRA_DECK_ENTRY_MODE,
+                NativeLiveActivity.DECK_ENTRY_CREATE);
+        intent.putExtra(
+                NativeLiveActivity.EXTRA_DECK_WORKSPACE_ID,
+                workspaceId);
+        intent.putExtra(NativeLiveActivity.EXTRA_DECK_AUTO_START, true);
+        startActivity(intent);
     }
 
     private void renderSettingsPage() {
@@ -2323,6 +2394,45 @@ public class MainActivity extends Activity
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == 742 && resultCode == RESULT_OK && data != null && data.getData() != null) {
+            final Uri workspaceUri = data.getData();
+            Toast.makeText(
+                    this,
+                    I18n.get(this, "正在建立簡報資料索引…", "Indexing presentation sources..."),
+                    Toast.LENGTH_SHORT).show();
+            new Thread(new Runnable() {
+                @Override public void run() {
+                    final org.json.JSONObject res =
+                            DeckWorkspaceRepository.importWorkspaceTree(
+                                    MainActivity.this,
+                                    workspaceUri);
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() {
+                            if (isFinishing()) return;
+                            if (res.optBoolean("success", false)) {
+                                Toast.makeText(
+                                        MainActivity.this,
+                                        I18n.get(
+                                                MainActivity.this,
+                                                "已索引 " + res.optInt("files", 0) + " 個檔案，開始規劃簡報",
+                                                "Indexed " + res.optInt("files", 0) + " files. Starting deck planning."),
+                                        Toast.LENGTH_LONG).show();
+                                startWorkspaceDeckCreation(
+                                        res.optString("workspaceId"));
+                            } else {
+                                Toast.makeText(
+                                        MainActivity.this,
+                                        "❌ " + res.optString("error"),
+                                        Toast.LENGTH_LONG).show();
+                                if (activeTab == 1) renderDecksPage();
+                            }
+                        }
+                    });
+                }
+            }, "crew-deck-workspace-index").start();
+            return;
+        }
+
         if (requestCode == 741 && resultCode == RESULT_OK && data != null && data.getData() != null) {
             Toast.makeText(this, I18n.get(this, "正在匯入 Deck…", "Importing Deck..."), Toast.LENGTH_SHORT).show();
             org.json.JSONObject res = DeckRepository.importDeckTree(this, data.getData());

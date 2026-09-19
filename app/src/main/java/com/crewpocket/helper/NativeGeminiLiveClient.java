@@ -935,6 +935,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         deckRuntimeController.configureStartup(mode, deckId);
     }
 
+    void configureDeckStartup(String mode, String deckId, String workspaceId) {
+        deckRuntimeController.configureStartup(mode, deckId, workspaceId);
+    }
+
 
 
 
@@ -1671,7 +1675,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 LiveToolCatalog.build(
                         deckRuntimeController.isSessionMode(),
                         deckRuntimeController.isCreateStartup(),
-                        deckRuntimeController.isPresentStartup()))));
+                        deckRuntimeController.isPresentStartup(),
+                        deckRuntimeController.hasWorkspaceStartup()))));
         String customPrompt = this.customPrompt;
         String deckInstruction = "";
         if (deckRuntimeController.isSessionMode()) {

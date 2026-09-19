@@ -128,8 +128,26 @@ public class DeckActivity extends Activity {
         if ("timeline".equals(type)) addItems(surface, card.optJSONArray("items"), true);
         if ("compare".equals(type)) addItems(surface, card.optJSONArray("items"), false);
         addFacts(surface, card.optJSONArray("facts"));
+        addSources(surface, card.optJSONArray("sources"));
         // speakerNotes are presenter-only guidance for Gemini and must not be
         // rendered on the audience-facing slide.
+    }
+
+    private void addSources(LinearLayout host, JSONArray sources) {
+        if (sources == null || sources.length() == 0) return;
+        StringBuilder text = new StringBuilder(I18n.get(this, "來源：", "Sources: "));
+        for (int i = 0; i < sources.length(); i++) {
+            String source = sources.optString(i, "").trim();
+            if (source.isEmpty()) continue;
+            if (text.length() > (I18n.get(this, "來源：", "Sources: ")).length()) {
+                text.append(" · ");
+            }
+            text.append(source);
+        }
+        if (text.length() == (I18n.get(this, "來源：", "Sources: ")).length()) return;
+        TextView sourceView = text(text.toString(), 10, CrewTheme.TEXT_MUTED, false);
+        sourceView.setPadding(0, dp(18), 0, 0);
+        host.addView(sourceView);
     }
 
     private void addImageIfPresent(LinearLayout host, DeckRepository.Deck deck, final String relativeOrUrl, String caption) {
