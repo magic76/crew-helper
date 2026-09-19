@@ -2395,28 +2395,41 @@ public class MainActivity extends Activity
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == 742 && resultCode == RESULT_OK && data != null && data.getData() != null) {
+            final Uri workspaceUri = data.getData();
             Toast.makeText(
                     this,
                     I18n.get(this, "正在建立簡報資料索引…", "Indexing presentation sources..."),
                     Toast.LENGTH_SHORT).show();
-            org.json.JSONObject res =
-                    DeckWorkspaceRepository.importWorkspaceTree(this, data.getData());
-            if (res.optBoolean("success", false)) {
-                Toast.makeText(
-                        this,
-                        I18n.get(
-                                this,
-                                "已索引 " + res.optInt("files", 0) + " 個檔案，開始規劃簡報",
-                                "Indexed " + res.optInt("files", 0) + " files. Starting deck planning."),
-                        Toast.LENGTH_LONG).show();
-                startWorkspaceDeckCreation(res.optString("workspaceId"));
-            } else {
-                Toast.makeText(
-                        this,
-                        "❌ " + res.optString("error"),
-                        Toast.LENGTH_LONG).show();
-                if (activeTab == 1) renderDecksPage();
-            }
+            new Thread(new Runnable() {
+                @Override public void run() {
+                    final org.json.JSONObject res =
+                            DeckWorkspaceRepository.importWorkspaceTree(
+                                    MainActivity.this,
+                                    workspaceUri);
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() {
+                            if (isFinishing()) return;
+                            if (res.optBoolean("success", false)) {
+                                Toast.makeText(
+                                        MainActivity.this,
+                                        I18n.get(
+                                                MainActivity.this,
+                                                "已索引 " + res.optInt("files", 0) + " 個檔案，開始規劃簡報",
+                                                "Indexed " + res.optInt("files", 0) + " files. Starting deck planning."),
+                                        Toast.LENGTH_LONG).show();
+                                startWorkspaceDeckCreation(
+                                        res.optString("workspaceId"));
+                            } else {
+                                Toast.makeText(
+                                        MainActivity.this,
+                                        "❌ " + res.optString("error"),
+                                        Toast.LENGTH_LONG).show();
+                                if (activeTab == 1) renderDecksPage();
+                            }
+                        }
+                    });
+                }
+            }, "crew-deck-workspace-index").start();
             return;
         }
 
