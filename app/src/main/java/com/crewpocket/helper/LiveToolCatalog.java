@@ -141,6 +141,19 @@ final class LiveToolCatalog {
         tools.put(new JSONObject().put("name", "get_deck_card").put("description", "Read concise, structured information for one card in the currently open Deck. Use its facts, speakerNotes, and allowedNext to decide the next presentation action.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("card_id", new JSONObject().put("type", "STRING").put("description", "Card ID from allowedNext; omit only to reread the visible card")))));
         tools.put(new JSONObject().put("name", "present_deck_card").put("description", "Show a selected card from the currently open Deck full-screen. Only use a card ID supplied by get_deck_card or list_decks results.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("card_id", new JSONObject().put("type", "STRING").put("description", "Card ID to display; omit to refresh current card")))));
         tools.put(new JSONObject().put("name", "advance_deck").put("description", "Advance to the next card in the currently open Deck after the current card has been explained. Read the returned card data before speaking about it."));
+        tools.put(new JSONObject()
+                .put("name", "list_deck_workspace_sources")
+                .put("description", "List the indexed files in the currently selected Deck Workspace. Returns source IDs, paths, types, short previews, and local image assetIds. Use this before planning a source-backed presentation."));
+        tools.put(new JSONObject()
+                .put("name", "read_deck_workspace_source")
+                .put("description", "Read the extracted text for one Deck Workspace source by sourceId. Read only sources relevant to the planned slides; do not request every file by default.")
+                .put("parameters", new JSONObject()
+                        .put("type", "OBJECT")
+                        .put("properties", new JSONObject()
+                                .put("source_id", new JSONObject()
+                                        .put("type", "STRING")
+                                        .put("description", "sourceId returned by list_deck_workspace_sources")))
+                        .put("required", new JSONArray().put("source_id"))));
         JSONObject metricProperties = new JSONObject().put("label", new JSONObject().put("type", "STRING"))
                 .put("value", new JSONObject().put("type", "STRING"));
         JSONObject cardProperties = new JSONObject()
@@ -153,6 +166,9 @@ final class LiveToolCatalog {
                 .put("speakerNotes", new JSONObject().put("type", "STRING"))
                 .put("facts", new JSONObject().put("type", "ARRAY").put("items", new JSONObject().put("type", "STRING")))
                 .put("items", new JSONObject().put("type", "ARRAY").put("items", new JSONObject().put("type", "STRING")))
+                .put("sources", new JSONObject().put("type", "ARRAY")
+                        .put("description", "Visible source labels/paths supporting this slide. For Workspace decks, cite only files actually read.")
+                        .put("items", new JSONObject().put("type", "STRING")))
                 .put("metrics", new JSONObject().put("type", "ARRAY").put("items", new JSONObject().put("type", "OBJECT").put("properties", metricProperties)));
         JSONObject ephemeralProperties = new JSONObject().put("title", new JSONObject().put("type", "STRING").put("description", "Presentation title"))
                 .put("cards", new JSONObject().put("type", "ARRAY").put("description", "3–8 cards in speaking order with optional HTTPS images")
@@ -197,6 +213,8 @@ final class LiveToolCatalog {
                 allow = isNormalPhoneModelTool(name);
             } else if (createMode) {
                 allow = "create_ephemeral_deck".equals(name)
+                        || "list_deck_workspace_sources".equals(name)
+                        || "read_deck_workspace_source".equals(name)
                         || "end_voice_session".equals(name);
             } else if (presentMode) {
                 allow = "end_voice_session".equals(name)
@@ -252,6 +270,8 @@ final class LiveToolCatalog {
                 || "present_deck_card".equals(name)
                 || "advance_deck".equals(name)
                 || "create_ephemeral_deck".equals(name)
+                || "list_deck_workspace_sources".equals(name)
+                || "read_deck_workspace_source".equals(name)
                 || "list_deck_images".equals(name)
                 || "attach_deck_image".equals(name)
                 || "update_deck_card".equals(name)
