@@ -350,6 +350,18 @@ public class MainActivity extends Activity
 
         addCapabilityRow(
                 root,
+                I18n.get(this, "位置（約略）", "Approximate location"),
+                hasApproximateLocationPermission(),
+                hasApproximateLocationPermission()
+                        ? I18n.get(this, "提供給 Live 基本位置上下文", "Available to Live session context")
+                        : I18n.get(this, "未啟用（選用）", "Not enabled (optional)"),
+                false,
+                v -> requestPermissions(
+                        new String[]{android.Manifest.permission.ACCESS_COARSE_LOCATION},
+                        993));
+
+        addCapabilityRow(
+                root,
                 I18n.get(this, "懸浮視窗", "Overlay"),
                 hasOverlayPermission(),
                 hasOverlayPermission()
@@ -503,6 +515,13 @@ public class MainActivity extends Activity
     private boolean hasMicrophonePermission() {
         return Build.VERSION.SDK_INT < Build.VERSION_CODES.M
                 || checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
+                        == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private boolean hasApproximateLocationPermission() {
+        return Build.VERSION.SDK_INT < Build.VERSION_CODES.M
+                || checkSelfPermission(
+                        android.Manifest.permission.ACCESS_COARSE_LOCATION)
                         == PackageManager.PERMISSION_GRANTED;
     }
 
@@ -1403,6 +1422,9 @@ public class MainActivity extends Activity
         if (requestCode == 306) {
             NativeLiveService.refreshAlwaysOnNotification();
             if (activeTab == 2) renderSettingsPage();
+        }
+        if (requestCode == 993 && activeTab == 0) {
+            renderHomePage();
         }
     }
 

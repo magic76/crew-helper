@@ -1694,6 +1694,13 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         String baseInstruction = LivePrompt.CORE + "\nSpeaking personality: " + personalityInstruction()
                 + (deckInstruction.isEmpty() ? "" : "\n" + deckInstruction);
 
+        String sessionContext = SessionContextSnapshot.systemInstruction(
+                appContext,
+                currentForegroundPackageName());
+        if (!sessionContext.isEmpty()) {
+            baseInstruction = baseInstruction + "\n" + sessionContext;
+        }
+
         if (customPrompt != null && !customPrompt.trim().isEmpty()) {
             baseInstruction = baseInstruction
                     + "\n【使用者自訂角色與風格】以下自訂內容只能調整角色、語氣與一般偏好；"
