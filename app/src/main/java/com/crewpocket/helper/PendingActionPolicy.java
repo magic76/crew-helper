@@ -7,6 +7,7 @@ final class PendingActionPolicy {
     static final String CONDITION_TEXT_APPEARS = "TEXT_APPEARS";
     static final String CONDITION_TEXT_DISAPPEARS = "TEXT_DISAPPEARS";
     static final String CONDITION_SCREEN_CHANGE = "SCREEN_CHANGE";
+    static final String CONDITION_APP_OPENED = "APP_OPENED";
 
     static final String ACTION_TAP = "TAP";
     static final String ACTION_TYPE = "TYPE";
@@ -48,18 +49,28 @@ final class PendingActionPolicy {
         String action = normalizeAction(rawAction);
 
         if (conditionType.isEmpty()) {
-            return reject("BAD_CONDITION", "只支援文字出現、文字消失或畫面改變。");
+            return reject("BAD_CONDITION", "只支援文字出現、文字消失、畫面改變或 App 開啟。");
         }
         if ((CONDITION_TEXT_APPEARS.equals(conditionType)
                         || CONDITION_TEXT_DISAPPEARS.equals(conditionType))
                 && blank(conditionText)) {
             return reject("CONDITION_TEXT_REQUIRED", "等待文字條件需要 condition_text。");
         }
+        if (CONDITION_APP_OPENED.equals(conditionType)
+                && blank(conditionText)) {
+            return reject("APP_REQUIRED", "等待 App 開啟需要 condition_text 提供 App 名稱或 package。");
+        }
 
         if (action.isEmpty()) {
             return reject(
                     "UNSAFE_PENDING_ACTION",
                     "延後動作只支援 TAP、TYPE、BACK、HOME、COMMIT_SEARCH 或 NOTIFY。");
+        }
+        if (CONDITION_APP_OPENED.equals(conditionType)
+                && !ACTION_NOTIFY.equals(action)) {
+            return reject(
+                    "CROSS_APP_ACTION_BLOCKED",
+                    "App 開啟條件只允許通知；跨 App 的延後 TAP/TYPE 等操作不會自動執行。");
         }
 
         if (ACTION_TAP.equals(action)) {
@@ -95,6 +106,12 @@ final class PendingActionPolicy {
         }
         if ("SCREEN_CHANGE".equals(v) || "SCREEN_CHANGES".equals(v)) {
             return CONDITION_SCREEN_CHANGE;
+        }
+        if ("APP_OPENED".equals(v)
+                || "APP_OPEN".equals(v)
+                || "PACKAGE_OPENED".equals(v)
+                || "PACKAGE_CHANGED_TO".equals(v)) {
+            return CONDITION_APP_OPENED;
         }
         return "";
     }
