@@ -13,6 +13,8 @@ import java.util.Locale;
  *   status = DONE | WAIT | NEED_USER | FAILED
  *   message = one short instruction/result
  *   screen = small current-screen projection when useful
+ *   step = authoritative effect/reason/next hint for this Runtime step
+ *   progress = compact goal continuity without debug/authorization state
  *
  * Deck tools are deliberately left untouched because their structured card data
  * is presentation content, not phone-control debug metadata.
@@ -95,7 +97,6 @@ final class ModelToolResponseAdapter {
             copyClipped(source, out, "goal", MAX_GOAL);
             copyClipped(source, out, "rootGoal", MAX_GOAL);
             copyClipped(source, out, "currentApp", MAX_LABEL);
-            copyClipped(source, out, "lastResult", MAX_LABEL);
             copyClipped(source, out, "pendingTask", MAX_LABEL);
 
             JSONArray sourceActions = source.optJSONArray("recentActions");
