@@ -7,6 +7,7 @@ public final class PendingActionPolicyTest {
         allow("element_appears", "完成", "TAP", "下一步", "");
         allow("text_disappears", "載入中", "BACK", "", "");
         allow("screen_change", "", "NOTIFY", "", "");
+        allow("app_opened", "Google Maps", "NOTIFY", "", "");
         allow("text_appears", "搜尋完成", "TYPE", "", "hello");
         allow("text_appears", "結果", "COMMIT_SEARCH", "", "");
 
@@ -17,6 +18,8 @@ public final class PendingActionPolicyTest {
         deny("text_appears", "完成", "TAP", "立即付款", "", "HIGH_RISK_PENDING_ACTION_BLOCKED");
         deny("text_appears", "完成", "TAP", "Buy now", "", "HIGH_RISK_PENDING_ACTION_BLOCKED");
         deny("text_appears", "完成", "SEND", "", "", "UNSAFE_PENDING_ACTION");
+        deny("app_opened", "", "NOTIFY", "", "", "APP_REQUIRED");
+        deny("app_opened", "Google Maps", "TAP", "下一步", "", "CROSS_APP_ACTION_BLOCKED");
 
         check(PendingActionPolicy.CONDITION_TEXT_APPEARS.equals(
                 PendingActionPolicy.normalizeCondition("element_appears")),
@@ -24,6 +27,9 @@ public final class PendingActionPolicyTest {
         check(PendingActionPolicy.ACTION_NOTIFY.equals(
                 PendingActionPolicy.normalizeAction(" notify ")),
                 "action should normalize");
+        check(PendingActionPolicy.CONDITION_APP_OPENED.equals(
+                PendingActionPolicy.normalizeCondition("package_opened")),
+                "package_opened alias should normalize");
         check(PendingActionPolicy.looksLikeGenericCommitTarget("下一步"),
                 "next should be treated as a generic commit target");
         check(!PendingActionPolicy.looksLikeGenericCommitTarget("播放"),

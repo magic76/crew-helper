@@ -2665,31 +2665,42 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
         ScheduledTaskManager manager =
                 ScheduledTaskManager.getInstance(appContext);
-        ScheduledTaskManager.ScheduledTask task =
-                manager.startPendingAction(
-                        label,
-                        validation.conditionType,
-                        conditionText,
-                        validation.action,
-                        target,
-                        text,
-                        interval,
-                        timeout,
-                        PendingActionPolicy.ACTION_NOTIFY.equals(
-                                validation.action)
-                                ? null
-                                : new ScheduledTaskManager.PendingActionExecutor() {
-                                    @Override public JSONObject execute(
-                                            String scheduledAction,
-                                            String scheduledTarget,
-                                            String scheduledText)
-                                            throws Exception {
-                                        return executePendingActionDeterministically(
-                                                scheduledAction,
-                                                scheduledTarget,
-                                                scheduledText);
-                                    }
-                                });
+        final ScheduledTaskManager.ScheduledTask task;
+        try {
+            task = manager.startPendingAction(
+                    label,
+                    validation.conditionType,
+                    conditionText,
+                    validation.action,
+                    target,
+                    text,
+                    interval,
+                    timeout,
+                    PendingActionPolicy.ACTION_NOTIFY.equals(
+                            validation.action)
+                            ? null
+                            : new ScheduledTaskManager.PendingActionExecutor() {
+                                @Override public JSONObject execute(
+                                        String scheduledAction,
+                                        String scheduledTarget,
+                                        String scheduledText)
+                                        throws Exception {
+                                    return executePendingActionDeterministically(
+                                            scheduledAction,
+                                            scheduledTarget,
+                                            scheduledText);
+                                }
+                            });
+        } catch (Exception error) {
+            return new JSONObject()
+                    .put("success", false)
+                    .put("error", "PENDING_WAIT_SETUP_FAILED")
+                    .put(
+                            "instruction",
+                            error.getMessage() == null
+                                    ? "無法建立等待任務"
+                                    : error.getMessage());
+        }
 
         return new JSONObject()
                 .put("success", true)
@@ -2697,7 +2708,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 .put("taskState", "WAITING_BACKGROUND")
                 .put(
                         "message",
-                        "已建立等待後續操作；Runtime 會在同一 App 內自行監控，不需要 Gemini 持續等待。")
+                        PendingActionPolicy.CONDITION_APP_OPENED.equals(
+                                validation.conditionType)
+                                ? "已建立 App 開啟監控；Runtime 會用 Accessibility 事件即時偵測，5 秒輪詢只作為 fallback。"
+                                : "已建立等待後續操作；Runtime 會用 Accessibility 事件優先監控，不需要 Gemini 持續等待。")
                 .put(
                         "instruction",
                         "等待任務已交給 Runtime。不要輪詢畫面、不要重複建立相同任務；直接告知使用者已開始等待。");

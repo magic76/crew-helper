@@ -248,6 +248,12 @@ public class CrewAccessibilityService extends AccessibilityService {
                 || type == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) {
             uiChangeSignal.markChanged();
             NativeLiveService.markScreenDirtyFromAccessibility();
+
+            CharSequence pkg = event.getPackageName();
+            ScheduledTaskManager.notifyAccessibilityChanged(
+                    pkg == null ? "" : pkg.toString(),
+                    type,
+                    System.currentTimeMillis());
         }
     }
 

@@ -20,7 +20,8 @@ import java.util.concurrent.atomic.AtomicLong;
  * wait-then-action tasks.
  *
  * Pending actions are deterministic Runtime work. They do not call Gemini while
- * waiting and are scoped to the foreground package captured at creation time.
+ * waiting. Mutating follow-ups stay scoped to the foreground package captured
+ * at creation time; notification-only APP_OPENED waits may observe another app.
  */
 public class ScheduledTaskManager {
     interface PendingActionExecutor {
@@ -28,10 +29,14 @@ public class ScheduledTaskManager {
                 throws Exception;
     }
 
+    private static final long EVENT_CHECK_DEBOUNCE_MS = 80L;
     private static ScheduledTaskManager instance;
     private final Context context;
     private final Handler mainHandler;
     private final Vibrator vibrator;
+    private final AppCatalog appCatalog;
+    private volatile String pendingEventPackage = "";
+    private volatile long pendingEventAtMs = 0L;
     private TextToSpeech tts;
     private boolean ttsReady = false;
 
@@ -50,9 +55,14 @@ public class ScheduledTaskManager {
         public String actionTarget;
         public String actionText;
         public String packageName;
+        public String conditionPackage;
         public String baselineFingerprint;
         public boolean reportSpeech;
         public int checkCount;
+        public int eventCheckCount;
+        public int pollCheckCount;
+        public long triggerLatencyMs;
+        public String lastCheckReason;
         public boolean cancelled;
         public Runnable runnable;
         PendingActionExecutor pendingActionExecutor;
@@ -73,6 +83,10 @@ public class ScheduledTaskManager {
                 obj.put("conditionType", conditionType);
                 obj.put("conditionText", conditionText);
                 obj.put("checkCount", checkCount);
+                obj.put("eventCheckCount", eventCheckCount);
+                obj.put("pollCheckCount", pollCheckCount);
+                obj.put("lastCheckReason", lastCheckReason == null ? "" : lastCheckReason);
+                if (triggerLatencyMs > 0L) obj.put("triggerLatencyMs", triggerLatencyMs);
                 if ("pending_action".equals(type)) {
                     obj.put("action", action);
                     obj.put("actionTarget", actionTarget);
@@ -80,6 +94,9 @@ public class ScheduledTaskManager {
                             "actionTextLength",
                             actionText == null ? 0 : actionText.length());
                     obj.put("package", packageName);
+                    if (conditionPackage != null && !conditionPackage.isEmpty()) {
+                        obj.put("conditionPackage", conditionPackage);
+                    }
                 }
             } catch (Exception ignored) {}
             return obj;
@@ -89,6 +106,27 @@ public class ScheduledTaskManager {
     private final ConcurrentHashMap<String, ScheduledTask> activeTasks =
             new ConcurrentHashMap<String, ScheduledTask>();
     private final AtomicLong idCounter = new AtomicLong(1);
+    private final Runnable accessibilityEventCheck = new Runnable() {
+        @Override public void run() {
+            String eventPackage = pendingEventPackage;
+            long eventAtMs = pendingEventAtMs;
+            for (ScheduledTask task : activeTasks.values()) {
+                if (task == null || task.cancelled) continue;
+                if (System.currentTimeMillis() >= task.targetTime) continue;
+                if ("pending_action".equals(task.type)) {
+                    task.checkCount++;
+                    task.eventCheckCount++;
+                    task.lastCheckReason = "ACCESSIBILITY_EVENT";
+                    performPendingActionCheck(task, eventPackage, eventAtMs);
+                } else if ("condition_wait".equals(task.type)) {
+                    task.checkCount++;
+                    task.eventCheckCount++;
+                    task.lastCheckReason = "ACCESSIBILITY_EVENT";
+                    performScreenCheck(task);
+                }
+            }
+        }
+    };
 
     public static synchronized ScheduledTaskManager getInstance(Context context) {
         if (instance == null) {
@@ -102,11 +140,60 @@ public class ScheduledTaskManager {
         return instance;
     }
 
+    static void notifyAccessibilityChanged(
+            String packageName,
+            int eventType,
+            long eventAtMs) {
+        ScheduledTaskManager manager;
+        synchronized (ScheduledTaskManager.class) {
+            manager = instance;
+        }
+        if (manager == null || manager.activeTasks.isEmpty()) return;
+        final String eventPackage =
+                packageName == null ? "" : packageName.trim();
+        final long receivedAtMs =
+                eventAtMs > 0L ? eventAtMs : System.currentTimeMillis();
+
+        // App-open notifications are cheap and packageName is already present
+        // on the AccessibilityEvent, so do not debounce them behind tree work.
+        if (!eventPackage.isEmpty()) {
+            manager.mainHandler.post(new Runnable() {
+                @Override public void run() {
+                    for (ScheduledTask task : manager.activeTasks.values()) {
+                        if (task == null || task.cancelled) continue;
+                        if (!"pending_action".equals(task.type)) continue;
+                        if (PendingWaitEventPolicy.matchesAppOpenedNotification(
+                                task.conditionType,
+                                task.action,
+                                task.conditionPackage,
+                                eventPackage)) {
+                            task.checkCount++;
+                            task.eventCheckCount++;
+                            task.lastCheckReason = "APP_EVENT_FAST_PATH";
+                            manager.completeNotificationTask(
+                                    task,
+                                    receivedAtMs);
+                        }
+                    }
+                }
+            });
+        }
+
+        manager.pendingEventPackage = eventPackage;
+        manager.pendingEventAtMs = receivedAtMs;
+        manager.mainHandler.removeCallbacks(manager.accessibilityEventCheck);
+        manager.mainHandler.postDelayed(
+                manager.accessibilityEventCheck,
+                EVENT_CHECK_DEBOUNCE_MS);
+    }
+
     private ScheduledTaskManager(Context context) {
         this.context = context;
         this.mainHandler = new Handler(Looper.getMainLooper());
         this.vibrator =
                 (Vibrator) context.getSystemService(Context.VIBRATOR_SERVICE);
+        this.appCatalog = new AppCatalog(context);
+        this.appCatalog.prewarm();
         try {
             this.tts = new TextToSpeech(
                     context,
@@ -176,6 +263,10 @@ public class ScheduledTaskManager {
         task.targetTime =
                 task.createdAt + (task.durationMinutes * 60 * 1000L);
         task.checkCount = 0;
+        task.eventCheckCount = 0;
+        task.pollCheckCount = 0;
+        task.triggerLatencyMs = 0L;
+        task.lastCheckReason = "";
         task.cancelled = false;
 
         task.runnable = new Runnable() {
@@ -187,6 +278,8 @@ public class ScheduledTaskManager {
                 }
 
                 task.checkCount++;
+                task.pollCheckCount++;
+                task.lastCheckReason = "POLL_FALLBACK";
                 performScreenCheck(task);
 
                 if (!task.cancelled) {
@@ -198,8 +291,7 @@ public class ScheduledTaskManager {
         };
 
         activeTasks.put(task.id, task);
-        mainHandler.postDelayed(
-                task.runnable, task.intervalSeconds * 1000L);
+        mainHandler.post(task.runnable);
         return task;
     }
 
@@ -249,6 +341,22 @@ public class ScheduledTaskManager {
         task.conditionType = conditionType;
         task.conditionText =
                 conditionText == null ? "" : conditionText.trim();
+        if (PendingActionPolicy.CONDITION_APP_OPENED.equals(conditionType)) {
+            AppCatalog.Resolution resolution =
+                    appCatalog.resolve(task.conditionText);
+            if (!AppCatalog.Resolution.FOUND.equals(resolution.status)
+                    || resolution.chosen == null
+                    || resolution.chosen.packageName.isEmpty()) {
+                throw new Exception(
+                        AppCatalog.Resolution.MULTIPLE.equals(resolution.status)
+                                ? "App 名稱有多個可能結果，請說更完整的 App 名稱"
+                                : "找不到要監控開啟狀態的 App：" + task.conditionText);
+            }
+            task.conditionPackage = resolution.chosen.packageName;
+            if (task.label == null || task.label.trim().isEmpty()) {
+                task.label = "等 " + resolution.chosen.label + " 開啟";
+            }
+        }
         task.action = action;
         task.actionTarget =
                 actionTarget == null ? "" : actionTarget.trim();
@@ -260,6 +368,10 @@ public class ScheduledTaskManager {
         task.targetTime =
                 task.createdAt + (task.durationMinutes * 60 * 1000L);
         task.checkCount = 0;
+        task.eventCheckCount = 0;
+        task.pollCheckCount = 0;
+        task.triggerLatencyMs = 0L;
+        task.lastCheckReason = "";
         task.cancelled = false;
         task.pendingActionExecutor = executor;
 
@@ -276,7 +388,9 @@ public class ScheduledTaskManager {
                 }
 
                 task.checkCount++;
-                performPendingActionCheck(task);
+                task.pollCheckCount++;
+                task.lastCheckReason = "POLL_FALLBACK";
+                performPendingActionCheck(task, "", 0L);
 
                 if (!task.cancelled) {
                     mainHandler.postDelayed(
@@ -287,8 +401,7 @@ public class ScheduledTaskManager {
         };
 
         activeTasks.put(task.id, task);
-        mainHandler.postDelayed(
-                task.runnable, task.intervalSeconds * 1000L);
+        mainHandler.post(task.runnable);
         return task;
     }
 
@@ -323,8 +436,23 @@ public class ScheduledTaskManager {
         } catch (Exception ignored) {}
     }
 
-    private void performPendingActionCheck(final ScheduledTask task) {
+    private void performPendingActionCheck(
+            final ScheduledTask task,
+            String eventPackage,
+            long eventAtMs) {
         try {
+            // Fast path: APP_OPENED + NOTIFY can be satisfied directly from
+            // AccessibilityEvent.packageName without waiting for the active
+            // root window to settle.
+            if (PendingWaitEventPolicy.matchesAppOpenedNotification(
+                    task.conditionType,
+                    task.action,
+                    task.conditionPackage,
+                    eventPackage)) {
+                completeNotificationTask(task, eventAtMs);
+                return;
+            }
+
             CrewAccessibilityService service =
                     CrewAccessibilityService.getInstance();
             if (service == null) return;
@@ -337,11 +465,30 @@ public class ScheduledTaskManager {
                 String currentPackage =
                         pkg == null ? "" : pkg.toString().trim();
 
-                // Same-app scope is mandatory. A task may keep waiting while
-                // another app is foreground, but it can never act there.
-                if (!task.packageName.equals(currentPackage)) return;
+                // Mutating delayed actions remain same-app only. The one
+                // cross-app exception is APP_OPENED + NOTIFY, which performs
+                // no phone mutation.
+                if (!PendingWaitEventPolicy.canInspectCurrentPackage(
+                        task.conditionType,
+                        task.action,
+                        task.packageName,
+                        currentPackage)) {
+                    return;
+                }
 
-                if (!isConditionMet(task, root)) return;
+                if (!isConditionMet(task, root, currentPackage)) return;
+
+                if (PendingActionPolicy.ACTION_NOTIFY.equals(task.action)) {
+                    task.cancelled = true;
+                    activeTasks.remove(task.id);
+                    if (eventAtMs > 0L) {
+                        task.triggerLatencyMs = Math.max(
+                                0L,
+                                System.currentTimeMillis() - eventAtMs);
+                    }
+                    triggerAlarm("目標條件已達成", task.label);
+                    return;
+                }
 
                 String guard = pendingActionGuard(task, root);
                 if (!guard.isEmpty()) {
@@ -360,11 +507,6 @@ public class ScheduledTaskManager {
                 root.recycle();
             }
 
-            if (PendingActionPolicy.ACTION_NOTIFY.equals(task.action)) {
-                triggerAlarm("目標條件已達成", task.label);
-                return;
-            }
-
             final String fingerprintBeforeAction = beforeFingerprint;
             new Thread(
                     new Runnable() {
@@ -376,6 +518,20 @@ public class ScheduledTaskManager {
                     },
                     "crew-pending-" + task.id).start();
         } catch (Exception ignored) {}
+    }
+
+    private void completeNotificationTask(
+            ScheduledTask task,
+            long eventAtMs) {
+        if (task == null || task.cancelled) return;
+        task.cancelled = true;
+        activeTasks.remove(task.id);
+        if (eventAtMs > 0L) {
+            task.triggerLatencyMs = Math.max(
+                    0L,
+                    System.currentTimeMillis() - eventAtMs);
+        }
+        triggerAlarm("目標條件已達成", task.label);
     }
 
     private void executePendingAction(
@@ -433,7 +589,13 @@ public class ScheduledTaskManager {
 
     private boolean isConditionMet(
             ScheduledTask task,
-            AccessibilityNodeInfo root) {
+            AccessibilityNodeInfo root,
+            String currentPackage) {
+        if (PendingActionPolicy.CONDITION_APP_OPENED.equals(
+                task.conditionType)) {
+            return nonEmpty(task.conditionPackage)
+                    && task.conditionPackage.equals(currentPackage);
+        }
         if (PendingActionPolicy.CONDITION_SCREEN_CHANGE.equals(
                 task.conditionType)) {
             String current = fingerprint(root);
