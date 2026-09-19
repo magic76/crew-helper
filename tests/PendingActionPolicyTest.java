@@ -24,6 +24,10 @@ public final class PendingActionPolicyTest {
         check(PendingActionPolicy.ACTION_NOTIFY.equals(
                 PendingActionPolicy.normalizeAction(" notify ")),
                 "action should normalize");
+        check(PendingActionPolicy.looksLikeGenericCommitTarget("下一步"),
+                "next should be treated as a generic commit target");
+        check(!PendingActionPolicy.looksLikeGenericCommitTarget("播放"),
+                "play should not be a generic commit target");
 
         System.out.println("PendingActionPolicyTest passed " + checks + " checks");
     }
