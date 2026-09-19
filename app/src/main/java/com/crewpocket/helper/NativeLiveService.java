@@ -121,6 +121,8 @@ public class NativeLiveService extends Service {
     private static final long SCREEN_DIRTY_DEBOUNCE_MS = 180L;
     private static final long SCREEN_HEARTBEAT_MS = 8000L;
     private static final long SCREEN_NO_ACCESSIBILITY_POLL_MS = 2000L;
+    private static final long CAMERA_WARMUP_RETRY_MS = 250L;
+    private static final long CAMERA_FRAME_INTERVAL_MS = 2000L;
     private volatile boolean screenVisualDirty = true;
     private long lastScreenVisualSentAtMs;
     private int reconnectAttempts;
@@ -1449,29 +1451,37 @@ public class NativeLiveService extends Service {
             if (!active || client == null) return;
 
             if (!client.canSendVisualFrame()) {
-                if (sharingCamera) visualHandler.postDelayed(this, 2000L);
-                else if (sharingScreen) visualHandler.postDelayed(this, 500L);
+                if (sharingCamera) {
+                    visualHandler.postDelayed(this, CAMERA_WARMUP_RETRY_MS);
+                } else if (sharingScreen) {
+                    visualHandler.postDelayed(this, 500L);
+                }
                 return;
             }
 
             if (sharingCamera) {
-                if (CameraPreviewOverlay.getInstance(NativeLiveService.this).isShowing()) {
-                    byte[] liveFrame = CameraPreviewOverlay.getInstance(NativeLiveService.this).getLatestJpegFrame();
-                    if (liveFrame != null && liveFrame.length > 0) {
-                        if (active && sharingCamera && client != null) client.sendCameraBytes(liveFrame);
-                    } else {
-                        CameraCaptureManager.capturePhoto(NativeLiveService.this, false, new CameraCaptureManager.CaptureCallback() {
-                            @Override public void onSuccess(String path) { if (active && sharingCamera && client != null) client.sendCameraFrame(path); }
-                            @Override public void onError(String error) { updateStatus("相機影格失敗：" + error, true); }
-                        });
-                    }
-                } else {
-                    CameraCaptureManager.capturePhoto(NativeLiveService.this, false, new CameraCaptureManager.CaptureCallback() {
-                        @Override public void onSuccess(String path) { if (active && sharingCamera && client != null) client.sendCameraFrame(path); }
-                        @Override public void onError(String error) { updateStatus("相機影格失敗：" + error, true); }
-                    });
+                CameraPreviewOverlay preview =
+                        CameraPreviewOverlay.getInstance(NativeLiveService.this);
+
+                // The overlay owns the live Camera. During startup/switching,
+                // wait for its first preview callback instead of opening a
+                // second Camera via CameraCaptureManager, which can race with
+                // and steal the hardware from the preview session.
+                if (!preview.isShowing()) {
+                    visualHandler.postDelayed(this, CAMERA_WARMUP_RETRY_MS);
+                    return;
                 }
-                visualHandler.postDelayed(this, 2000L);
+
+                byte[] liveFrame = preview.getLatestJpegFrame();
+                if (liveFrame == null || liveFrame.length == 0) {
+                    visualHandler.postDelayed(this, CAMERA_WARMUP_RETRY_MS);
+                    return;
+                }
+
+                if (active && sharingCamera && client != null) {
+                    client.sendCameraBytes(liveFrame);
+                }
+                visualHandler.postDelayed(this, CAMERA_FRAME_INTERVAL_MS);
                 return;
             }
 
