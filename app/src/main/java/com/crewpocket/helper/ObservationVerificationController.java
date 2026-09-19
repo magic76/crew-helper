@@ -70,6 +70,15 @@ final class ObservationVerificationController {
         return semanticObserveRequired;
     }
 
+    void setSemanticObserveRequired(boolean required) {
+        semanticObserveRequired = required;
+    }
+
+    void setLatestFingerprint(String fingerprint) {
+        latestSemanticFingerprint =
+                fingerprint == null ? "" : fingerprint;
+    }
+
     String lastObservedScreenFingerprint() {
         return lastObservedScreenFingerprint;
     }
