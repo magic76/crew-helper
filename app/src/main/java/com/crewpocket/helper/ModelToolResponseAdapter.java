@@ -27,10 +27,19 @@ final class ModelToolResponseAdapter {
     private static final int MAX_CHOICES = 24;
     private static final int MAX_MESSAGE = 220;
     private static final int MAX_LABEL = 96;
+    private static final int MAX_GOAL = 320;
+    private static final int MAX_PROGRESS_ACTIONS = 3;
 
     private ModelToolResponseAdapter() {}
 
     static JSONObject forModel(String toolName, JSONObject internal) {
+        return forModel(toolName, internal, null);
+    }
+
+    static JSONObject forModel(
+            String toolName,
+            JSONObject internal,
+            JSONObject progressContext) {
         if (!shouldCompact(toolName)) {
             return internal == null ? new JSONObject() : internal;
         }
@@ -46,6 +55,60 @@ final class ModelToolResponseAdapter {
 
             JSONObject screen = screen(source);
             if (screen.length() > 0) out.put("screen", screen);
+
+            ModelStepGuidance.Guidance guidance = ModelStepGuidance.from(
+                    toolName,
+                    status,
+                    source.optString("semanticAction", ""),
+                    source.optString("resolvedByRuntime", ""),
+                    source.optString("error", ""),
+                    source.optString("taskState", ""),
+                    source.optString("searchTransaction", ""),
+                    isVerifiedSend(source));
+            JSONObject step = step(guidance);
+            if (step.length() > 0) out.put("step", step);
+
+            JSONObject progress = progress(progressContext, status);
+            if (progress.length() > 0) out.put("progress", progress);
+        } catch (Exception ignored) {}
+        return out;
+    }
+
+    private static JSONObject step(ModelStepGuidance.Guidance guidance) {
+        JSONObject out = new JSONObject();
+        if (guidance == null) return out;
+        try {
+            if (!guidance.action.isEmpty()) out.put("action", guidance.action);
+            out.put("outcome", guidance.effect.isEmpty() ? "UNKNOWN" : guidance.effect);
+            if (!guidance.reason.isEmpty()) out.put("reason", guidance.reason);
+            if (!guidance.next.isEmpty()) out.put("next", guidance.next);
+        } catch (Exception ignored) {}
+        return out;
+    }
+
+    private static JSONObject progress(JSONObject source, String status) {
+        JSONObject out = new JSONObject();
+        try {
+            out.put("state", ModelStepGuidance.progressState(status));
+            if (source == null) return out;
+
+            copyClipped(source, out, "goal", MAX_GOAL);
+            copyClipped(source, out, "rootGoal", MAX_GOAL);
+            copyClipped(source, out, "currentApp", MAX_LABEL);
+            copyClipped(source, out, "lastResult", MAX_LABEL);
+            copyClipped(source, out, "pendingTask", MAX_LABEL);
+
+            JSONArray sourceActions = source.optJSONArray("recentActions");
+            if (sourceActions == null) sourceActions = source.optJSONArray("lastActions");
+            if (sourceActions != null && sourceActions.length() > 0) {
+                JSONArray actions = new JSONArray();
+                int start = Math.max(0, sourceActions.length() - MAX_PROGRESS_ACTIONS);
+                for (int i = start; i < sourceActions.length(); i++) {
+                    String value = clip(sourceActions.optString(i, ""), MAX_LABEL);
+                    if (!value.isEmpty()) actions.put(value);
+                }
+                if (actions.length() > 0) out.put("recentActions", actions);
+            }
         } catch (Exception ignored) {}
         return out;
     }
@@ -313,6 +376,14 @@ final class ModelToolResponseAdapter {
             copyClippedString(source, out, "can");
         } catch (Exception ignored) {}
         return out;
+    }
+
+    private static void copyClipped(
+            JSONObject from, JSONObject to, String key, int max) {
+        String value = clip(from.optString(key, ""), max);
+        if (!value.isEmpty()) {
+            try { to.put(key, value); } catch (Exception ignored) {}
+        }
     }
 
     private static void copyString(JSONObject from, JSONObject to, String key) {
