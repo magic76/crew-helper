@@ -486,7 +486,7 @@ final class DeckWorkspaceRepository {
 
     private static String normalizeText(String value, int max) {
         String text = value == null ? "" : value
-                .replace('\u0000', ' ')
+                .replace((char) 0, ' ')
                 .replaceAll("[\\t\\x0B\\f\\r]+", " ")
                 .replaceAll(" +", " ")
                 .replaceAll("\\n{3,}", "\n\n")
