@@ -56,6 +56,7 @@ final class ModelToolResponseAdapter {
                 || "send_text".equals(toolName)
                 || "end_voice_session".equals(toolName)
                 || "wait".equals(toolName)
+                || "wait_then_action".equals(toolName)
                 || "take_screenshot".equals(toolName);
     }
 
@@ -187,6 +188,9 @@ final class ModelToolResponseAdapter {
         }
         if ("wait".equals(toolName)) {
             return "等待的畫面已出現。";
+        }
+        if ("wait_then_action".equals(toolName)) {
+            return "等待任務已交給 Runtime；不需要持續輪詢或保持 Gemini 在線。";
         }
         if ("inspect_ui".equals(toolName)) {
             if (result.optBoolean("visualSent", false)) {
