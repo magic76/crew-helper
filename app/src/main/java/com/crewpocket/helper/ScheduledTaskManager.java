@@ -466,6 +466,12 @@ public class ScheduledTaskManager {
                         + task.actionTarget
                         + "」，已取消以避免點錯。";
             }
+            if (PendingActionPolicy.looksLikeGenericCommitTarget(
+                            task.actionTarget)
+                    && screenContainsHighRiskCommit(root)) {
+                return "目前畫面涉及付款、購買、下單或刪除等高風險流程，"
+                        + "延後自動點擊已被阻擋。";
+            }
         }
 
         if (PendingActionPolicy.ACTION_TYPE.equals(task.action)) {
@@ -519,6 +525,32 @@ public class ScheduledTaskManager {
             if (child == null) continue;
             try {
                 if (searchConditionInTree(child, query)) return true;
+            } finally {
+                child.recycle();
+            }
+        }
+        return false;
+    }
+
+    private boolean screenContainsHighRiskCommit(
+            AccessibilityNodeInfo node) {
+        if (node == null) return false;
+        String metadata =
+                (node.getText() == null ? "" : node.getText())
+                        + " "
+                        + (node.getContentDescription() == null
+                                ? ""
+                                : node.getContentDescription());
+        if (PendingActionPolicy.looksLikeHighRiskCommit(metadata)) {
+            return true;
+        }
+
+        int count = node.getChildCount();
+        for (int i = 0; i < count; i++) {
+            AccessibilityNodeInfo child = node.getChild(i);
+            if (child == null) continue;
+            try {
+                if (screenContainsHighRiskCommit(child)) return true;
             } finally {
                 child.recycle();
             }
