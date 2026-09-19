@@ -137,7 +137,6 @@ final class WorkingContext {
                 out.put("lastActions", actions);
             }
 
-            if (!lastResult.isEmpty()) out.put("lastResult", lastResult);
             if (!pendingTask.isEmpty()) out.put("pendingTask", pendingTask);
         } catch (Exception ignored) {}
         return out;
