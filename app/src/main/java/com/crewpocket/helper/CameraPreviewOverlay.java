@@ -561,6 +561,7 @@ public class CameraPreviewOverlay implements TextureView.SurfaceTextureListener,
 
     private synchronized void startCamera(SurfaceTexture surface) {
         if (camera != null) return;
+        clearLatestFrame();
         try {
             currentCameraId = 0;
             int numCameras = Camera.getNumberOfCameras();
@@ -645,11 +646,21 @@ public class CameraPreviewOverlay implements TextureView.SurfaceTextureListener,
             } catch (Exception ignored) {}
             camera = null;
         }
+        clearLatestFrame();
+    }
+
+    private void clearLatestFrame() {
+        synchronized (frameLock) {
+            latestJpegBytes = null;
+        }
     }
 
     @Override
     public void onPreviewFrame(byte[] data, Camera camera) {
         if (data == null || data.length == 0) return;
+        synchronized (this) {
+            if (!isPreviewing || camera == null || camera != this.camera) return;
+        }
         try {
             YuvImage yuvImage = new YuvImage(data, ImageFormat.NV21, previewWidth, previewHeight, null);
             ByteArrayOutputStream os = new ByteArrayOutputStream();
