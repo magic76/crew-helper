@@ -205,7 +205,12 @@ final class LiveToolCatalog {
                 allow = isNormalPhoneModelTool(name) || isDeckModelTool(name);
             }
 
-            if (allow) exposed.put(tool);
+            if (allow) {
+                // Gemini 3.8 Live defaults function calls to NON_BLOCKING.
+                // Crew's phone Runtime intentionally preserves the proven
+                // request -> tool result -> next model step ordering.
+                exposed.put(tool.put("behavior", "BLOCKING"));
+            }
         }
 
         Log.i(TAG, "0082 model tool surface: "
