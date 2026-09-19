@@ -137,6 +137,38 @@ final class WorkingContext {
                 out.put("lastActions", actions);
             }
 
+            if (!pendingTask.isEmpty()) out.put("pendingTask", pendingTask);
+        } catch (Exception ignored) {}
+        return out;
+    }
+
+    /**
+     * Small progress projection for Gemini tool responses.
+     *
+     * Deliberately excludes fingerprints, stable screen keys, selected raw text
+     * and any authorization/debug state. Gemini already has the user utterance;
+     * this only reminds it of the active goal and recent verified Runtime flow.
+     */
+    synchronized JSONObject toProgressJson() {
+        JSONObject out = new JSONObject();
+        try {
+            if (!latestUserTurn.isEmpty()) out.put("goal", latestUserTurn);
+            if (!rootGoal.isEmpty() && !rootGoal.equals(latestUserTurn)) {
+                out.put("rootGoal", rootGoal);
+            }
+            if (!currentApp.isEmpty()) out.put("currentApp", currentApp);
+
+            if (!lastActions.isEmpty()) {
+                JSONArray actions = new JSONArray();
+                int skip = Math.max(0, lastActions.size() - 3);
+                int index = 0;
+                for (String action : lastActions) {
+                    if (index++ < skip) continue;
+                    actions.put(progressAction(action));
+                }
+                out.put("recentActions", actions);
+            }
+
             if (!lastResult.isEmpty()) out.put("lastResult", lastResult);
             if (!pendingTask.isEmpty()) out.put("pendingTask", pendingTask);
         } catch (Exception ignored) {}
@@ -166,6 +198,14 @@ final class WorkingContext {
         selectedSourcePackage = "";
         selectedReference = "";
         lastActions.clear();
+    }
+
+    private static String progressAction(String value) {
+        String action = clip(value, MAX_FIELD_CHARS);
+        if (action.startsWith("tap:")) return "tap_element";
+        if (action.startsWith("swipe:")) return action;
+        if (action.startsWith("launch_app:")) return "launch_app";
+        return action;
     }
 
     private static String clip(String value, int max) {
