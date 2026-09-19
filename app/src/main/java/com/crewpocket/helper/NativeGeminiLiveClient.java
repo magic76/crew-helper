@@ -63,6 +63,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private final PhoneRuntimeExecutor phoneRuntimeExecutor;
     private final RuntimeToolExecutor runtimeToolExecutor;
     private final LiveAudioController liveAudioController;
+    private final DeckRuntimeController deckRuntimeController;
+    private final MemoryRuleController memoryRuleController;
+    private final ToolExecutionCoordinator toolExecutionCoordinator;
     private final java.util.HashSet<String> injectedAppPlaybooks = new java.util.HashSet<String>();
     // 0117: one-shot App teaching is Runtime-owned, never inferred from a model tool choice.
     private static final long APP_TEACH_MODE_TTL_MS = 45_000L;
@@ -122,14 +125,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     // 0100 latency trace + stale same-intent tool guard.
     private long lastFinishedIntentGeneration = -1L;
     private String lastFinishedTaskId = "";
-    private MemoryRuleIndex memoryRuleIndex;
-    private String lastMemoryDispatchKey = "";
-    private long lastMemoryDispatchAt = 0L;
-    // 0033 deterministic recorded shortcuts own their physical execution.
-    private volatile boolean runtimeShortcutExecuting = false;
-    private volatile long runtimeShortcutGuardUntil = 0L;
     // 0052: standalone "送出/發送/send" is owned directly by Runtime.
     private volatile boolean runtimeSendCurrentExecuting = false;
+    private volatile long runtimeSendGuardUntil = 0L;
     // Finalized user turns are coordinated separately from model/tool frames.
     // Tool calls never grant authority; only finalized user input advances this.
     private final LiveTurnCoordinator liveTurnCoordinator = new LiveTurnCoordinator();
@@ -224,8 +222,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 this.notebookToolHandler,
                 this.visionController,
                 this.phoneRuntimeExecutor);
-        this.memoryRuleIndex = this.appContext == null
-                ? null : new MemoryRuleIndex(this.appContext);
         this.audioIncidentRecorder = this.appContext == null
                 ? null : new AudioIncidentRecorder(this.appContext);
         this.liveAudioController = new LiveAudioController(
@@ -302,6 +298,163 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                             String message,
                             Throwable error) {
                         NativeGeminiLiveClient.this.fail(message, error);
+                    }
+                });
+
+        this.deckRuntimeController = new DeckRuntimeController(
+                new DeckRuntimeController.Host() {
+                    @Override public boolean isRunning() {
+                        return NativeGeminiLiveClient.this.running;
+                    }
+
+                    @Override public boolean hasLiveSession() {
+                        return NativeGeminiLiveClient.this.webSocket != null;
+                    }
+
+                    @Override public boolean isInterruptedCurrentTurn() {
+                        return NativeGeminiLiveClient.this.interruptedCurrentTurn;
+                    }
+
+                    @Override public boolean isAgentMuted() {
+                        return NativeGeminiLiveClient.this.agentMuted;
+                    }
+
+                    @Override public long lastPlaybackActiveAt() {
+                        return NativeGeminiLiveClient.this.liveAudioController
+                                .getLastPlaybackActiveAt();
+                    }
+
+                    @Override public void resetModelTurnState() {
+                        NativeGeminiLiveClient.this.resetCurrentModelTurnState();
+                    }
+
+                    @Override public void sendInternalDirective(String text) {
+                        NativeGeminiLiveClient.this.sendInternalAgentDirective(text);
+                    }
+
+                    @Override public void reportStage(String text) {
+                        NativeGeminiLiveClient.this.reportStage(text);
+                    }
+                });
+
+        this.memoryRuleController = new MemoryRuleController(
+                this.appContext,
+                new MemoryRuleController.Host() {
+                    @Override public void reportStage(String text) {
+                        NativeGeminiLiveClient.this.reportStage(text);
+                    }
+
+                    @Override public void sendInternalDirective(String text) {
+                        NativeGeminiLiveClient.this.sendInternalAgentDirective(text);
+                    }
+
+                    @Override public void updateTrustedAction(String action) {
+                        NativeGeminiLiveClient.this.userActionScope
+                                .updateFromTrustedAction(action);
+                    }
+                });
+
+        this.toolExecutionCoordinator = new ToolExecutionCoordinator(
+                this.runtimeToolExecutor,
+                this.deckRuntimeController,
+                new ToolExecutionCoordinator.Host() {
+                    @Override public JSONObject getSelectedRegionForTool()
+                            throws Exception {
+                        SelectedRegionContext selected =
+                                NativeGeminiLiveClient.this.latestSelectedRegion;
+                        if (selected != null
+                                && selected.isFresh()
+                                && !selected.hardSensitive) {
+                            PerformanceMetrics
+                                    .recordSelectedRegionMetadataFallback();
+                        }
+                        return NativeGeminiLiveClient.this
+                                .getSelectedRegionContext();
+                    }
+
+                    @Override public JSONObject rememberAppGuidance(
+                            JSONObject args) throws Exception {
+                        return NativeGeminiLiveClient.this
+                                .rememberCurrentAppGuidance(args);
+                    }
+
+                    @Override public JSONObject listAppGuidance()
+                            throws Exception {
+                        return NativeGeminiLiveClient.this
+                                .listCurrentAppGuidance();
+                    }
+
+                    @Override public JSONObject inspectUiForTool(
+                            JSONObject args) throws Exception {
+                        SelectedRegionContext selected =
+                                NativeGeminiLiveClient.this.latestSelectedRegion;
+                        if (selected != null
+                                && selected.isFresh()
+                                && !selected.hardSensitive) {
+                            PerformanceMetrics
+                                    .recordSelectedRegionFullScreenInspect();
+                        }
+                        return NativeGeminiLiveClient.this.inspectUi(args);
+                    }
+
+                    @Override public JSONObject tapElement(JSONObject args)
+                            throws Exception {
+                        return NativeGeminiLiveClient.this
+                                .tapSemanticElement(args);
+                    }
+
+                    @Override public JSONObject waitForCondition(
+                            JSONObject args) throws Exception {
+                        return NativeGeminiLiveClient.this
+                                .waitForCondition(args);
+                    }
+
+                    @Override public JSONObject launchApp(JSONObject args)
+                            throws Exception {
+                        return NativeGeminiLiveClient.this.launchApp(args);
+                    }
+
+                    @Override public JSONObject swipe(JSONObject args)
+                            throws Exception {
+                        return NativeGeminiLiveClient.this.swipe(args);
+                    }
+
+                    @Override public JSONObject tap(JSONObject args)
+                            throws Exception {
+                        return NativeGeminiLiveClient.this.tap(args);
+                    }
+
+                    @Override public JSONObject typeText(JSONObject args)
+                            throws Exception {
+                        return NativeGeminiLiveClient.this.typeText(args);
+                    }
+
+                    @Override public JSONObject searchCurrentApp(
+                            JSONObject args) throws Exception {
+                        return NativeGeminiLiveClient.this
+                                .searchCurrentApp(args);
+                    }
+
+                    @Override public JSONObject commitSearch()
+                            throws Exception {
+                        return NativeGeminiLiveClient.this.commitSearch();
+                    }
+
+                    @Override public JSONObject sendText(JSONObject args)
+                            throws Exception {
+                        return NativeGeminiLiveClient.this
+                                .sendTextToPhone(args);
+                    }
+
+                    @Override public JSONObject pressKey(JSONObject args)
+                            throws Exception {
+                        return NativeGeminiLiveClient.this.pressKey(args);
+                    }
+
+                    @Override public JSONObject startScreenMonitor(
+                            JSONObject args) throws Exception {
+                        return NativeGeminiLiveClient.this
+                                .startScreenMonitor(args);
                     }
                 });
 
@@ -793,76 +946,20 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         }
     };
     private volatile boolean allowVoiceInterruption = true; // 🎙️ 語音插話：預設開啟（隨時自由說話打斷 AI；若關閉則為防插話保護模式）
-    private final Handler deckAdvanceHandler = new Handler(Looper.getMainLooper());
-    private volatile boolean deckAutoAdvanceActive = false;
-    // 0082: UI-selected presentation entry is explicit. Creation no longer
-    // needs a fake welcome Deck merely to expose deck tools.
-    private volatile String deckStartupMode = "";
-    private volatile String deckStartupDeckId = "";
-    private volatile boolean deckStartupDispatched = false;
-    // 0054: the scheduled page turn is bound to the card that was actually narrated.
-    // A stale callback may never advance a newer card.
-    private volatile int deckAdvanceExpectedIndex = -1;
-    private final Runnable deckAdvanceRunnable = new Runnable() {
-        @Override public void run() {
-            triggerDeckAutoAdvance();
-        }
-    };
-
-    boolean isDeckAutoAdvanceActive() { return deckAutoAdvanceActive; }
-    void setDeckAutoAdvanceActive(boolean active) { this.deckAutoAdvanceActive = active; if (!active) cancelDeckAutoAdvance(); }
+    boolean isDeckAutoAdvanceActive() {
+        return deckRuntimeController.isAutoAdvanceActive();
+    }
+    void setDeckAutoAdvanceActive(boolean active) {
+        deckRuntimeController.setAutoAdvanceActive(active);
+    }
 
     void configureDeckStartup(String mode, String deckId) {
-        String normalized = mode == null ? "" : mode.trim();
-        if (!"create".equals(normalized) && !"present".equals(normalized)) {
-            normalized = "";
-        }
-        deckStartupMode = normalized;
-        deckStartupDeckId = deckId == null ? "" : deckId.trim();
-        deckStartupDispatched = false;
+        deckRuntimeController.configureStartup(mode, deckId);
     }
 
-    private boolean isDeckSessionMode() {
-        return "create".equals(deckStartupMode)
-                || "present".equals(deckStartupMode)
-                || DeckRepository.hasActiveDeck();
-    }
 
-    private void dispatchDeckStartupIfNeeded() {
-        if (!setupReady || deckStartupDispatched || deckStartupMode.isEmpty()) return;
 
-        if ("create".equals(deckStartupMode)) {
-            deckStartupDispatched = true;
-            sendInternalAgentDirective(
-                    "【AI 簡報建立入口】使用者剛剛主動選擇『AI 建立新簡報』。"
-                    + "如果使用者還沒說主題，現在只用一句話問：想做什麼主題的簡報？"
-                    + "不要要求 deck.json、檔案、資料夾或任何技術設定。"
-                    + "使用者提供主題後，呼叫 create_ephemeral_deck 一次建立 3–8 頁，"
-                    + "建立完成後直接以 Gemini 主講人的身分開始介紹第一頁。");
-            return;
-        }
 
-        if ("present".equals(deckStartupMode)) {
-            JSONObject card = DeckRepository.presentCard("");
-            if (!card.optBoolean("success", false)) {
-                deckStartupDispatched = true;
-                sendInternalAgentDirective(
-                        "【AI 簡報啟動失敗】無法取得目前簡報第一頁。"
-                        + "請簡短告訴使用者簡報無法載入，不要猜測內容。");
-                return;
-            }
-
-            deckStartupDispatched = true;
-            deckAutoAdvanceActive = true;
-            resetCurrentModelTurnState();
-            sendInternalAgentDirective(
-                    "【AI 簡報開始】使用者已選好簡報，第一頁現在已顯示。"
-                    + "你是這場簡報的主講人。直接自然地開始介紹目前第一頁，"
-                    + "不要再問要不要開始、不要呼叫 open_deck/advance_deck。"
-                    + "Runtime 會在你的語音真正播放完畢後自動翻頁。"
-                    + "目前第一頁完整資料：" + card.toString());
-        }
-    }
 
     boolean isAgentMuted() { return agentMuted; }
 
@@ -951,8 +1048,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
     private void markCurrentTurnInterrupted() {
         interruptedCurrentTurn = true;
-        deckAdvanceHandler.removeCallbacks(deckAdvanceRunnable);
-        deckAdvanceExpectedIndex = -1;
+        deckRuntimeController.onTurnInterrupted();
         interruptionHandler.removeCallbacks(clearInterruptedFallback);
         interruptionHandler.postDelayed(clearInterruptedFallback, 1800);
     }
@@ -970,7 +1066,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         latestSemanticFingerprint = "";
         workingContext.clear();
         cancelAgentTask("通話已結束");
-        cancelDeckAutoAdvance();
+        deckRuntimeController.cancelAutoAdvance();
         resetCurrentModelTurnState();
         running = false;
         setupReady = false;
@@ -1045,7 +1141,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             setupReady = true;
             reportStage("🎙️ 已連線，直接說話");
             liveAudioController.start();
-            dispatchDeckStartupIfNeeded();
+            deckRuntimeController.dispatchStartupIfNeeded(setupReady);
             return;
         }
 
@@ -1088,8 +1184,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             if (tryHandleRuntimeAppTeaching(completeUserInput)) return;
             if (tryHandleRuntimeSendCurrent(completeUserInput)) return;
             if (isStopAgentTaskPhrase(completeUserInput)) {
-                cancelDeckAutoAdvance();
+                deckRuntimeController.cancelAutoAdvance();
                 cancelAgentTask("使用者語音停止任務");
+            } else if (memoryRuleController.processInput(completeUserInput)) {
+                return;
             }
         }
 
@@ -1210,13 +1308,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             if (shouldEvaluateAgentTaskAtTurnComplete()) {
                 finishAgentTaskIfAwaitingModel();
             }
-            if (deckNarrationTurn
-                    && deckAutoAdvanceActive
-                    && DeckRepository.hasActiveDeck()
-                    && !deckTurnWasInterrupted
-                    && !agentMuted) {
-                scheduleDeckAutoAdvance();
-            }
+            deckRuntimeController.onNarrationTurnComplete(
+                    deckNarrationTurn, deckTurnWasInterrupted);
 
             // 0054: model-turn state is per turn, not per Live session.
             // Tool-only turns after a narration must not inherit "audio seen"
@@ -1314,7 +1407,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
         runtimeSendCurrentHandledGeneration = generation;
         runtimeSendCurrentExecuting = true;
-        runtimeShortcutGuardUntil = Long.MAX_VALUE;
+        runtimeSendGuardUntil = Long.MAX_VALUE;
 
         new Thread(new Runnable() {
             @Override public void run() {
@@ -1333,7 +1426,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 }
 
                 runtimeSendCurrentExecuting = false;
-                runtimeShortcutGuardUntil = System.currentTimeMillis() + 1200L;
+                runtimeSendGuardUntil = System.currentTimeMillis() + 1200L;
 
                 if (!isCurrentUserIntent(generation)) {
                     return;
@@ -1381,169 +1474,13 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     }
 
     /** 0033: Runtime matches; recorded plans execute without Gemini phone tools. */
-    private boolean processMemoryRuleInput(String inputText) {
-        try {
-            if (appContext == null) return false;
-            MemoryRuleStore store = new MemoryRuleStore(appContext);
 
-            if (isMemoryRuleRequest(inputText)) {
-                try {
-                    FloatingBubbleManager.getInstance(appContext).showCompactStatus(
-                            "快捷指令由 Runtime 管理",
-                            "請點懸浮泡泡 → 紅色錄製按鈕，實際操作後再按一次完成");
-                } catch (Exception ignored) {}
-                sendInternalAgentDirective(
-                        "【0033 Shortcut UI】使用者想建立/記住快捷指令。"
-                        + "不要呼叫任何建立規則或儲存工具，也不要聲稱已儲存。"
-                        + "只簡短告訴使用者：從懸浮泡泡按『錄製快捷指令』，完成操作後再按一次即可設定觸發句。");
-                return true;
-            }
 
-            if (memoryRuleIndex != null) memoryRuleIndex.refresh();
-            MemoryRuleIndex.Match matched = memoryRuleIndex == null
-                    ? null : memoryRuleIndex.findBest(inputText);
-            if (matched == null && memoryRuleIndex == null) {
-                MemoryRuleStore.Rule exact = store.findExact(inputText);
-                if (exact != null) {
-                    matched = new MemoryRuleIndex.Match(exact, "EXACT", 1.0, exact.trigger);
-                }
-            }
-            if (matched == null || matched.rule == null) {
-                // Do not log or retain spoken content in release builds.  The
-                // visible state makes a short shortcut miss diagnosable without
-                // exposing a transcript in logcat.
-                if (MemoryRuleIndex.looksLikeRecordedShortcut(inputText)) {
-                    reportStage("已收到開啟指令，但未命中已學習快捷操作");
-                    try {
-                        FloatingBubbleManager.getInstance(appContext).showCompactStatus(
-                                "快捷指令未命中",
-                                "請確認觸發句；可在『已學習操作』查看或重新錄製");
-                    } catch (Exception ignored) {}
-                }
-                return false;
-            }
 
-            MemoryRuleStore.Rule rule = matched.rule;
-            String dispatchKey = TextMatch.caseFold(rule.id + "|" + matched.mode);
-            long now = System.currentTimeMillis();
-            if (dispatchKey.equals(lastMemoryDispatchKey)
-                    && now - lastMemoryDispatchAt < 2500L) return true;
-            lastMemoryDispatchKey = dispatchKey;
-            lastMemoryDispatchAt = now;
 
-            store.recordMatch(rule.id, matched.mode);
-            if (memoryRuleIndex != null) memoryRuleIndex.refresh();
 
-            if (ShortcutPlanStore.isPlanAction(rule.action)) {
-                if (runtimeShortcutExecuting || ShortcutExecutionRuntime.isRunning()) {
-                    reportStage("Shortcut 已在執行中，忽略重複觸發");
-                    return true;
-                }
 
-                final String planId = ShortcutPlanStore.planIdFromAction(rule.action);
-                runtimeShortcutExecuting = true;
-                runtimeShortcutGuardUntil = Long.MAX_VALUE;
-                reportStage("Runtime Shortcut 命中：「" + rule.trigger + "」 · " + matched.mode);
-                try {
-                    FloatingBubbleManager.getInstance(appContext).showCompactStatus(
-                            "✓ Shortcut HIT",
-                            rule.trigger + " · " + matched.mode);
-                } catch (Exception ignored) {}
-                sendInternalAgentDirective(
-                        "【Runtime Shortcut】已由 Android Runtime 接管執行。"
-                        + "你不得呼叫任何手機 mutation tool、不得重新規劃或重複操作；"
-                        + "保持簡短並等待手機畫面結果。");
 
-                ShortcutExecutionRuntime.executePlanAsync(
-                        appContext,
-                        planId,
-                        new ShortcutExecutionRuntime.Callback() {
-                            @Override public void onComplete(boolean success, String detail) {
-                                runtimeShortcutExecuting = false;
-                                runtimeShortcutGuardUntil = System.currentTimeMillis() + 1800L;
-                                reportStage((success ? "Runtime Shortcut 完成：" : "Runtime Shortcut 失敗：")
-                                        + detail);
-                                try {
-                                    FloatingBubbleManager.getInstance(appContext).showCompactStatus(
-                                            success ? "✓ 快捷指令完成" : "✕ 快捷指令失敗",
-                                            detail);
-                                } catch (Exception ignored) {}
-                            }
-                        });
-                return true;
-            }
-
-            // Simple App shortcuts deliberately bypass Gemini and accessibility
-            // recording.  Own the same-frame tool calls before launching.
-            if (AppLaunchShortcut.isAction(rule.action)) {
-                runtimeShortcutExecuting = true;
-                runtimeShortcutGuardUntil = Long.MAX_VALUE;
-                reportStage("App 指令命中：「" + rule.trigger + "」 · " + matched.mode);
-                try {
-                    FloatingBubbleManager.getInstance(appContext).showCompactStatus(
-                            "✓ App 指令命中", rule.trigger + " · " + matched.mode);
-                } catch (Exception ignored) {}
-                try {
-                    String detail = AppLaunchShortcut.launch(appContext,
-                            AppLaunchShortcut.packageNameFromAction(rule.action));
-                    reportStage("App 指令完成：" + detail);
-                    try {
-                        FloatingBubbleManager.getInstance(appContext).showCompactStatus(
-                                "✓ App 指令完成", detail);
-                    } catch (Exception ignored) {}
-                } catch (Exception error) {
-                    String detail = error.getMessage() == null ? "無法開啟 App" : error.getMessage();
-                    reportStage("App 指令失敗：" + detail);
-                    try {
-                        FloatingBubbleManager.getInstance(appContext).showCompactStatus(
-                                "✕ App 指令失敗", detail);
-                    } catch (Exception ignored) {}
-                } finally {
-                    runtimeShortcutExecuting = false;
-                    runtimeShortcutGuardUntil = System.currentTimeMillis() + 1800L;
-                }
-                return true;
-            }
-
-            if (!MemoryRuleStore.containsProhibitedShortcutAction(rule.action)) {
-                userActionScope.updateFromTrustedAction(rule.action);
-            }
-            reportStage("Legacy Shortcut 命中：「" + rule.trigger + "」 · " + matched.mode);
-            sendInternalAgentDirective(
-                    "【Legacy Shortcut 命中】Runtime 已確認觸發。現在要完成的任務是：「"
-                    + rule.action + "」。依正常 Observe→Action→Verify 執行，仍遵守全部安全政策。");
-            return false;
-        } catch (Exception error) {
-            Log.w(TAG, "Shortcut 處理失敗：" + error.getMessage());
-            return false;
-        }
-    }
-
-    private MemoryRuleStore memoryRuleStore() throws Exception {
-        if (appContext == null) throw new Exception("App Context 不可用，無法保存 Memory Rule");
-        return new MemoryRuleStore(appContext);
-    }
-
-    private JSONObject listMemoryRules() throws Exception {
-        JSONArray rules = new JSONArray();
-        for (MemoryRuleStore.Rule rule : memoryRuleStore().list()) {
-            rules.put(new JSONObject().put("id", rule.id).put("trigger", rule.trigger)
-                    .put("aliases", new JSONArray(rule.aliases)).put("action", rule.action)
-                    .put("enabled", rule.enabled).put("triggerCount", rule.triggerCount)
-                    .put("lastUsedAt", rule.lastUsedAt).put("lastMatchMode", rule.lastMatchMode));
-        }
-        return new JSONObject().put("success", true).put("shortcuts", rules).put("rules", rules).put("count", rules.length());
-    }
-
-    private boolean isMemoryRuleRequest(String text) {
-        String clean = text == null ? "" : text.replaceAll("\\s+", "");
-        String lower = clean.toLowerCase(Locale.ROOT);
-        return lower.contains("memoryrule") || lower.contains("shortcut")
-                || clean.contains("建立規則") || clean.contains("新增規則") || clean.contains("建立快捷指令") || clean.contains("新增快捷指令")
-                || clean.contains("建立快捷命令") || clean.contains("設定口令") || clean.contains("設一個口令")
-                || clean.contains("記住一條規則") || clean.contains("記憶一條規則") || clean.contains("幫我記住一條規則")
-                || clean.contains("幫我建立一個規則") || clean.contains("幫我建立一個快捷指令");
-    }
 
     private static String mapToSupportedVoice(String name) {
         if (name == null || name.trim().isEmpty()) return "Kore";
@@ -1603,13 +1540,13 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         setup.put("tools", new JSONArray().put(new JSONObject().put(
                 "functionDeclarations",
                 LiveToolCatalog.build(
-                        isDeckSessionMode(),
-                        "create".equals(deckStartupMode),
-                        "present".equals(deckStartupMode)))));
+                        deckRuntimeController.isSessionMode(),
+                        deckRuntimeController.isCreateStartup(),
+                        deckRuntimeController.isPresentStartup()))));
         String customPrompt = this.customPrompt;
         String deckInstruction = "";
-        if (isDeckSessionMode()) {
-            deckInstruction = "create".equals(deckStartupMode)
+        if (deckRuntimeController.isSessionMode()) {
+            deckInstruction = deckRuntimeController.isCreateStartup()
                     ? LivePrompt.DECK_CREATE
                     : LivePrompt.DECK;
         }
@@ -1769,12 +1706,20 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         }
 
 
-        if ((runtimeShortcutExecuting
-                || runtimeSendCurrentExecuting
-                || System.currentTimeMillis() < runtimeShortcutGuardUntil)
+        long executionGuardNow = System.currentTimeMillis();
+        boolean runtimeSendOwnsExecution =
+                runtimeSendCurrentExecuting
+                        || executionGuardNow < runtimeSendGuardUntil;
+        boolean runtimeShortcutOwnsExecution =
+                memoryRuleController.isShortcutExecuting()
+                        || executionGuardNow
+                                < memoryRuleController.shortcutGuardUntil();
+        if ((runtimeSendOwnsExecution || runtimeShortcutOwnsExecution)
                 && isMutationTool(name)) {
-            sendBlockedToolResponse(id, requestedName,
-                    runtimeSendCurrentExecuting
+            sendBlockedToolResponse(
+                    id,
+                    requestedName,
+                    runtimeSendOwnsExecution
                             ? "RUNTIME_SEND_OWNS_EXECUTION：Runtime 正在送出目前輸入框，禁止 Gemini 重複操作。"
                             : "RUNTIME_SHORTCUT_OWNS_EXECUTION：Runtime 正在執行確定性手機操作，禁止 Gemini 重複操作。");
             return;
@@ -1859,96 +1804,31 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         long toolStartedAt = android.os.SystemClock.elapsedRealtime();
         try {
             shadowAgentRuntime.onActionExecuted(id);
-            if (SemanticPhoneAction.ERROR_TOOL.equals(name)) result = args;
-            else if ("get_selected_region".equals(name)) {
-                SelectedRegionContext selected = latestSelectedRegion;
-                if (selected != null && selected.isFresh() && !selected.hardSensitive) {
-                    PerformanceMetrics.recordSelectedRegionMetadataFallback();
-                }
-                result = getSelectedRegionContext();
-            }
-            else if ("remember_app_guidance".equals(name)) {
-                result = rememberCurrentAppGuidance(args);
-            }
-            else if ("list_app_guidance".equals(name)) {
-                result = listCurrentAppGuidance();
-            }
-            else if (runtimeToolExecutor.handles(name)) {
-                if ("create_note".equals(name) || "update_note".equals(name)) {
-                    PerformanceMetrics.recordTextRouteNotebook();
-                }
-                result = runtimeToolExecutor.execute(name, args);
-            }
-            else if ("inspect_ui".equals(name)) {
-                SelectedRegionContext selected = latestSelectedRegion;
-                if (selected != null && selected.isFresh() && !selected.hardSensitive) {
-                    PerformanceMetrics.recordSelectedRegionFullScreenInspect();
-                }
-                result = inspectUi(args);
-            }
-            else if ("tap_element".equals(name)) result = tapSemanticElement(args);
-            else if ("wait".equals(name)) result = waitForCondition(args);
-            else if ("launch_app".equals(name)) result = launchApp(args);
-            else if ("swipe_screen".equals(name)) result = swipe(args);
-            else if ("tap_screen".equals(name)) result = tap(args);
-            else if ("type_text".equals(name)) result = typeText(args);
-            else if ("search_current_app".equals(name)) result = searchCurrentApp(args);
-            else if ("commit_search".equals(name)) result = commitSearch();
-            else if ("send_text".equals(name)) result = sendTextToPhone(args);
-            else if ("press_key".equals(name)) result = pressKey(args);
-            else if ("start_screen_monitor".equals(name)) result = startScreenMonitor(args);
-            else if ("end_voice_session".equals(name)) {
+            if ("end_voice_session".equals(name)) {
                 if (!userActionScope.consumeEndCallAuthorization()) {
-                    JSONObject blocked = runtimeBlocked("END_CALL_NOT_AUTHORIZED", "請使用者明確說結束通話；關閉視窗或再見不代表掛斷。");
+                    JSONObject blocked = runtimeBlocked(
+                            "END_CALL_NOT_AUTHORIZED",
+                            "請使用者明確說結束通話；關閉視窗或再見不代表掛斷。");
                     task.addStep(name, blocked);
                     sendToolResponse(id, requestedName, blocked);
                     task.awaitingModel = true;
                     scheduleAgentResponseWatchdog(task);
                     return;
                 }
-                result.put("success", true).put("message", "語音通話即將結束");
+                result.put("success", true)
+                        .put("message", "語音通話即將結束");
                 sendToolResponse(id, requestedName, result);
                 finishAgentTask(task, "通話結束", "");
-                new Handler(Looper.getMainLooper()).postDelayed(new Runnable() { @Override public void run() { stop(); } }, 1200);
+                new Handler(Looper.getMainLooper()).postDelayed(
+                        new Runnable() {
+                            @Override public void run() {
+                                stop();
+                            }
+                        },
+                        1200);
                 return;
             }
-            else if ("list_decks".equals(name)) result = DeckRepository.listDecks();
-            else if ("open_deck".equals(name)) {
-                result = DeckRepository.openDeck(args.optString("deck_id"));
-                if (result.optBoolean("success", false)) deckAutoAdvanceActive = true;
-            }
-            else if ("get_deck_card".equals(name)) result = DeckRepository.getCard(args.optString("card_id"));
-            else if ("present_deck_card".equals(name)) {
-                result = DeckRepository.presentCard(args.optString("card_id"));
-                if (result.optBoolean("success", false)) deckAutoAdvanceActive = true;
-            }
-            else if ("advance_deck".equals(name)) {
-                if (deckAutoAdvanceActive) {
-                    // 0054: while automatic narration is active, page timing is
-                    // Runtime-owned. Treat stray model advance calls as a safe no-op.
-                    result = new JSONObject()
-                            .put("success", true)
-                            .put("noOp", true)
-                            .put("runtimeOwned", true)
-                            .put("currentIndex", DeckRepository.activeIndex())
-                            .put("instruction",
-                                    "自動簡報翻頁由 Runtime 控制。不要再次呼叫 advance_deck；"
-                                    + "請只講解目前顯示的卡片，Runtime 會在音訊播放完畢後翻頁。");
-                } else {
-                    result = DeckRepository.advance();
-                    if (result.optBoolean("success", false)) deckAutoAdvanceActive = true;
-                }
-            }
-            else if ("create_ephemeral_deck".equals(name)) {
-                result = DeckRepository.createEphemeralDeck(args.optString("title"), args.optJSONArray("cards"));
-                if (result.optBoolean("success", false)) deckAutoAdvanceActive = true;
-            }
-            else if ("list_deck_images".equals(name)) result = DeckRepository.listDeckImages();
-            else if ("attach_deck_image".equals(name)) result = DeckRepository.attachImageToFutureCard(args.optString("card_id"), args.optString("asset_id"), args.optString("caption"));
-            else if ("update_deck_card".equals(name)) result = DeckRepository.updateFutureCard(args.optString("card_id"), args.optJSONObject("patch"));
-            else if ("insert_deck_card".equals(name)) result = DeckRepository.insertFutureCard(args.optString("after_card_id"), args.optJSONObject("card"));
-            else if ("remove_future_deck_card".equals(name)) result = DeckRepository.removeFutureCard(args.optString("card_id"));
-            else result.put("success", false).put("error", "不支援的原生工具：" + name);
+            result = toolExecutionCoordinator.execute(name, args);
         } catch (Exception error) {
             try { result.put("success", false).put("error", error.getMessage() == null ? "工具執行失敗" : error.getMessage()); } catch (Exception ignored) {}
         } finally {
@@ -2250,7 +2130,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
     private String buildAgentSignature(String name, JSONObject args) {
         // Each advance has a different logical position, so it is not a model loop.
-        if ("advance_deck".equals(name)) return name + ":" + args.toString() + ":at=" + DeckRepository.activeIndex();
+        if ("advance_deck".equals(name)) {
+            return name + ":" + args.toString()
+                    + ":at=" + deckRuntimeController.activeIndex();
+        }
         return name + ":" + args.toString();
     }
 
@@ -2375,107 +2258,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         } catch (Exception error) { Log.w(TAG, "Agent 結論指令傳送失敗：" + error.getMessage()); }
     }
 
-    private void scheduleDeckAutoAdvance() {
-        if (!running || webSocket == null || !deckAutoAdvanceActive
-                || interruptedCurrentTurn || agentMuted) return;
-        if (!DeckRepository.hasActiveDeck()) {
-            deckAutoAdvanceActive = false;
-            deckAdvanceExpectedIndex = -1;
-            return;
-        }
 
-        // Bind this page turn to the card whose narration just completed.
-        deckAdvanceExpectedIndex = DeckRepository.activeIndex();
 
-        long remaining = Math.max(
-                0,
-                liveAudioController.getLastPlaybackActiveAt()
-                        - System.currentTimeMillis());
-        long delay = remaining + 650; // wait for the real audio queue to drain + natural pause
-        deckAdvanceHandler.removeCallbacks(deckAdvanceRunnable);
-        deckAdvanceHandler.postDelayed(deckAdvanceRunnable, delay);
-        Log.d(TAG, "0054 排程簡報翻頁：cardIndex="
-                + deckAdvanceExpectedIndex + " delay=" + delay + "ms");
-    }
 
-    private void triggerDeckAutoAdvance() {
-        if (!running || webSocket == null || !deckAutoAdvanceActive
-                || interruptedCurrentTurn || agentMuted) return;
-        if (!DeckRepository.hasActiveDeck()) {
-            deckAutoAdvanceActive = false;
-            deckAdvanceExpectedIndex = -1;
-            return;
-        }
 
-        int expectedIndex = deckAdvanceExpectedIndex;
-        if (expectedIndex < 0) return;
 
-        int actualIndex = DeckRepository.activeIndex();
-        if (actualIndex != expectedIndex) {
-            // A user action, tool call, or stale callback already changed the page.
-            // Never advance a page based on narration for an older card.
-            Log.w(TAG, "0054 忽略過期簡報翻頁：expected="
-                    + expectedIndex + " actual=" + actualIndex);
-            deckAdvanceExpectedIndex = -1;
-            return;
-        }
-
-        long remaining = liveAudioController.getLastPlaybackActiveAt()
-                - System.currentTimeMillis();
-        if (remaining > 100) {
-            deckAdvanceHandler.removeCallbacks(deckAdvanceRunnable);
-            deckAdvanceHandler.postDelayed(deckAdvanceRunnable, remaining + 450);
-            return;
-        }
-
-        if (DeckRepository.hasNext()) {
-            JSONObject advanced = DeckRepository.advanceFromIndex(expectedIndex);
-            if (!advanced.optBoolean("success", false)) {
-                Log.w(TAG, "0054 Runtime 翻頁未執行："
-                        + advanced.optString("error", "UNKNOWN"));
-                deckAdvanceExpectedIndex = -1;
-                return;
-            }
-
-            int currentIndex = DeckRepository.activeIndex();
-            int currentCardNum = currentIndex + 1;
-            int total = DeckRepository.totalCards();
-            deckAdvanceExpectedIndex = -1;
-
-            String cardData = advanced.toString();
-            if (cardData.length() > 7000) {
-                cardData = cardData.substring(0, 7000);
-            }
-
-            Log.d(TAG, "0054 Runtime 已翻至第 " + currentCardNum + "/" + total + " 頁");
-            reportStage("簡報導播：進入第 " + currentCardNum + "/" + total + " 頁…");
-
-            // Start the next narration from a clean turn. Runtime already changed
-            // the visible card, so Gemini only needs to narrate the supplied card.
-            resetCurrentModelTurnState();
-            sendInternalAgentDirective(
-                    "【簡報 Runtime 已翻頁】目前畫面已由 Runtime 切到第 "
-                    + currentCardNum + "/" + total + " 頁。"
-                    + "以下是目前卡片資料：" + cardData
-                    + "。只講解目前這一頁，不要呼叫 advance_deck 或 present_deck_card，"
-                    + "不要提前切換畫面。自動翻頁由 Runtime 在這頁語音真正播放完畢後處理。");
-        } else {
-            deckAdvanceExpectedIndex = -1;
-            deckAutoAdvanceActive = false;
-            Log.d(TAG, "0054 自動簡報已抵達最後一張卡片");
-            reportStage("簡報導播：全部卡片播報完畢，進行總結…");
-            resetCurrentModelTurnState();
-            sendInternalAgentDirective(
-                    "【簡報導播系統】目前已在最後一張卡片，所有頁面都已播報完成。"
-                    + "請不要再呼叫任何翻頁工具，只做一段簡短總結並作結。");
-        }
-    }
-
-    private void cancelDeckAutoAdvance() {
-        deckAdvanceHandler.removeCallbacks(deckAdvanceRunnable);
-        deckAdvanceExpectedIndex = -1;
-        deckAutoAdvanceActive = false;
-    }
 
     private void appendAgentFinalText(String text) {
         synchronized (agentLock) {
@@ -3595,7 +3382,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     }
 
     private String currentAppPlaybookInstruction() {
-        if (appPlaybookStore == null || (deckStartupMode != null && !deckStartupMode.isEmpty())) {
+        if (appPlaybookStore == null
+                || deckRuntimeController.hasStartupMode()) {
             return "";
         }
         try {
@@ -4408,7 +4196,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         String shadowFingerprint = result == null ? "" : result.optString("fingerprint", "");
         shadowAgentRuntime.onToolResult(
                 id, name, shadowSuccess, shadowCode, shadowFingerprint);
-        if (DeckRepository.hasActiveDeck() && (name.contains("deck"))) {
+        if (deckRuntimeController.hasActiveDeck()
+                && name.contains("deck")) {
             result.put("modeInstructions", LivePrompt.DECK);
         }
 
