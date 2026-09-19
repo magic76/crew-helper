@@ -23,7 +23,7 @@ import okio.ByteString;
 /** A short Gemini Live session used only to audition the exact selected voice. */
 final class GeminiVoicePreviewClient {
     private static final String TAG = "CrewVoicePreview";
-    private static final String MODEL = "models/gemini-3.1-flash-live-preview";
+    private static final String MODEL = "models/gemini-3.8-live";
     private static final String URL = "wss://generativelanguage.googleapis.com/ws/"
             + "google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=";
     private static final Object LOCK = new Object();

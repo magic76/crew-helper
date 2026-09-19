@@ -1635,7 +1635,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
     private String buildSetup() throws Exception {
         JSONObject root = new JSONObject(); JSONObject setup = new JSONObject();
-        setup.put("model", "models/gemini-3.1-flash-live-preview");
+        setup.put("model", "models/gemini-3.8-live");
         JSONObject generation = new JSONObject(); generation.put("responseModalities", new JSONArray().put("AUDIO"));
         String safeVoice = mapToSupportedVoice(voiceName);
         generation.put("speechConfig", new JSONObject().put("voiceConfig", new JSONObject().put("prebuiltVoiceConfig", new JSONObject().put("voiceName", safeVoice))));
