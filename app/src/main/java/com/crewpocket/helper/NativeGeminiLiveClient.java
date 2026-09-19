@@ -63,6 +63,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private final PhoneRuntimeExecutor phoneRuntimeExecutor;
     private final RuntimeToolExecutor runtimeToolExecutor;
     private final LiveAudioController liveAudioController;
+    private final GeminiLiveTurnHandler geminiLiveTurnHandler;
+    private final ObservationVerificationController observationVerificationController;
     private final DeckRuntimeController deckRuntimeController;
     private final MemoryRuleController memoryRuleController;
     private final ToolExecutionCoordinator toolExecutionCoordinator;
@@ -106,17 +108,12 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private Runnable agentResponseWatchdog;
     private String customPrompt = "";
     private final java.util.concurrent.atomic.AtomicBoolean screenCaptureInProgress = new java.util.concurrent.atomic.AtomicBoolean(false);
-    private volatile String lastObservedScreenFingerprint = "";
-    private volatile int consecutiveNoProgress = 0;
-    private volatile boolean semanticObserveRequired = false;
-    private volatile String latestSemanticFingerprint = "";
     private final WorkingContext workingContext = new WorkingContext();
     private final UserActionScope userActionScope = new UserActionScope();
     // 0070: observational-only state projection. It must never gate execution.
     private final ShadowAgentRuntime shadowAgentRuntime = new ShadowAgentRuntime();
     // 0071: authoritative v2 action transaction runtime.
     private final AgentRuntimeV2 agentRuntimeV2 = new AgentRuntimeV2();
-    private volatile ActionObservation latestActionObservation = ActionObservation.unavailable();
     private String authorizationTranscript = "";
     // Incremented for every finalized user utterance (and typed instruction).
     // Tool calls retain the generation that created them, preventing an old
@@ -223,6 +220,13 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 this.notebookToolHandler,
                 this.visionController,
                 this.phoneRuntimeExecutor);
+        this.geminiLiveTurnHandler = new GeminiLiveTurnHandler();
+        this.observationVerificationController =
+                new ObservationVerificationController(
+                        this.phoneRuntimeExecutor,
+                        this.agentRuntimeV2,
+                        this.shadowAgentRuntime,
+                        this.workingContext);
         this.audioIncidentRecorder = this.appContext == null
                 ? null : new AudioIncidentRecorder(this.appContext);
         this.liveAudioController = new LiveAudioController(
@@ -471,34 +475,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         });
     }
 
-    private ActionObservation toActionObservation(JSONObject screen) {
-        if (screen == null || !screen.optBoolean("success", false)) {
-            return ActionObservation.unavailable();
-        }
-        String focusedKey = "";
-        String focusedRole = "";
-        JSONArray elements = screen.optJSONArray("elements");
-        if (elements != null) {
-            for (int i = 0; i < elements.length(); i++) {
-                JSONObject element = elements.optJSONObject(i);
-                if (element == null || !element.optBoolean("focused", false)) continue;
-                focusedKey = element.optString("viewId", "") + "|"
-                        + element.optString("semanticHint", "") + "|"
-                        + element.optString("role", "");
-                focusedRole = element.optString("role", "");
-                break;
-            }
-        }
-        return new ActionObservation(
-                true,
-                screen.optString("package", ""),
-                screen.optString("fingerprint", ""),
-                screen.optString("stableScreenKey", ""),
-                focusedKey,
-                focusedRole,
-                elements == null ? 0 : elements.length(),
-                System.currentTimeMillis());
-    }
+
     boolean isRunning() { return running; }
     String getStage() { return stage; }
     String getAudioOutputBackend() {
@@ -607,7 +584,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             conversationGoalTaskIndex = 0;
             conversationGoalHint = "";
             workingContext.resetTransientForNewGoal();
-            consecutiveNoProgress = 0;
+            observationVerificationController.resetNoProgress();
             pendingCondition = null;
             phoneRuntimeExecutor.resetTransientState();
         }
@@ -680,7 +657,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             conversationGoalHint = "";
             conversationGoalTouchedAt = now;
             workingContext.startNewGoal(userText);
-            consecutiveNoProgress = 0;
+            observationVerificationController.resetNoProgress();
             pendingCondition = null;
             phoneRuntimeExecutor.resetTransientState();
         } else {
@@ -1063,8 +1040,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         correctionContextPendingInjection = false;
         resetConversationGoal();
         pendingCondition = null;
-        semanticObserveRequired = false;
-        latestSemanticFingerprint = "";
+        observationVerificationController.clearSemanticTransient();
         workingContext.clear();
         cancelAgentTask("通話已結束");
         deckRuntimeController.cancelAutoAdvance();
@@ -1117,207 +1093,244 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     }
 
     private void handleJson(String raw) throws Exception {
-        JSONObject response = new JSONObject(raw);
-        JSONObject error = response.optJSONObject("error");
-        if (error != null) throw new Exception(error.optString("message", error.toString()));
-        JSONObject resume = response.optJSONObject("sessionResumptionUpdate");
-        if (resume == null) resume = response.optJSONObject("session_resumption_update");
-        if (resume != null && resume.optBoolean("resumable")) {
-            String handle = resume.optString("newHandle", resume.optString("new_handle", ""));
-            if (!handle.isEmpty()) resumptionHandle = handle;
+        GeminiLiveTurnHandler.Frame frame =
+                geminiLiveTurnHandler.parse(raw);
+
+        if (frame.resumable && !frame.resumptionHandle.isEmpty()) {
+            resumptionHandle = frame.resumptionHandle;
         }
-        if (response.has("goAway") || response.has("go_away")) {
-            if (resumptionHandle == null || resumptionHandle.isEmpty()) {
-                throw new Exception("Gemini 要求結束通話，但未提供可續接 session");
+
+        if (frame.goAway) {
+            if (resumptionHandle == null
+                    || resumptionHandle.isEmpty()) {
+                throw new Exception(
+                        "Gemini 要求結束通話，但未提供可續接 session");
             }
             reportStage("🔄 正在延續長通話…");
             reconnecting = true;
-            try { if (webSocket != null) webSocket.close(1000, "Resuming Gemini Live session"); } catch (Exception ignored) {}
-            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(new Runnable() {
-                @Override public void run() { connect(); }
-            }, 120);
+            try {
+                if (webSocket != null) {
+                    webSocket.close(
+                            1000,
+                            "Resuming Gemini Live session");
+                }
+            } catch (Exception ignored) {}
+            new Handler(Looper.getMainLooper()).postDelayed(
+                    new Runnable() {
+                        @Override public void run() {
+                            connect();
+                        }
+                    },
+                    120);
             return;
         }
-        if (response.has("setupComplete") || response.has("setup_complete")) {
+
+        if (frame.setupComplete) {
             setupReady = true;
             reportStage("🎙️ 已連線，直接說話");
             liveAudioController.start();
-            deckRuntimeController.dispatchStartupIfNeeded(setupReady);
+            deckRuntimeController.dispatchStartupIfNeeded(
+                    setupReady);
             return;
         }
 
-        // 0033-hotfix1:
-        // Current Gemini Live API defines inputTranscription as the finalized,
-        // authoritative transcript. interimInputTranscription is the speculative
-        // streaming field. Do not concatenate finalized transcripts as fragments.
-        //
-        // Process Runtime shortcuts BEFORE same-frame tool calls. Transcription and
-        // tool/model events have no guaranteed ordering; Runtime-owned shortcuts
-        // must establish execution ownership before Gemini can mutate the phone.
-        JSONObject server = response.optJSONObject("serverContent");
-        if (server == null) server = response.optJSONObject("server_content");
-        JSONObject inputTranscript = server == null ? null : server.optJSONObject("inputTranscription");
-        if (inputTranscript == null && server != null) inputTranscript = server.optJSONObject("input_transcription");
-        String completeUserInput = "";
-        if (inputTranscript != null && !inputTranscript.optString("text").trim().isEmpty()) {
-            completeUserInput = inputTranscript.optString("text").trim();
-
+        // Finalized authoritative input is handled before same-frame tools so
+        // Runtime-owned SEND/Shortcut state wins protocol ordering races.
+        String completeUserInput = frame.inputText;
+        if (!completeUserInput.isEmpty()) {
             if (audioIncidentRecorder != null) {
-                audioIncidentRecorder.onVoiceTranscript(completeUserInput);
+                audioIncidentRecorder.onVoiceTranscript(
+                        completeUserInput);
             }
-            listener.onTranscript("你", completeUserInput);
+            listener.onTranscript(
+                    "你", completeUserInput);
 
-            // A pending human choice continues the ORIGINAL user intent.
-            if (consumePendingUiChoiceInput(completeUserInput)) return;
+            if (consumePendingUiChoiceInput(
+                    completeUserInput)) {
+                return;
+            }
 
-            // Any other utterance replaces the pending choice/task.
-            if (hasPendingUiChoice()) clearPendingUiChoiceSilently();
+            if (hasPendingUiChoice()) {
+                clearPendingUiChoiceSilently();
+            }
 
             beginNewUserIntent(completeUserInput);
 
-            authorizationTranscript = completeUserInput;
+            authorizationTranscript =
+                    completeUserInput;
             if (authorizationTranscript.length() > 4096) {
-                authorizationTranscript = authorizationTranscript.substring(0, 4096);
+                authorizationTranscript =
+                        authorizationTranscript.substring(
+                                0, 4096);
             }
 
-            userActionScope.updateFromUserText(completeUserInput);
-            recordFinalizedSendAuthorization(completeUserInput);
-            if (tryHandleRuntimeAppTeaching(completeUserInput)) return;
-            if (tryHandleRuntimeSendCurrent(completeUserInput)) return;
-            if (isStopAgentTaskPhrase(completeUserInput)) {
+            userActionScope.updateFromUserText(
+                    completeUserInput);
+            recordFinalizedSendAuthorization(
+                    completeUserInput);
+            if (tryHandleRuntimeAppTeaching(
+                    completeUserInput)) {
+                return;
+            }
+            if (tryHandleRuntimeSendCurrent(
+                    completeUserInput)) {
+                return;
+            }
+            if (isStopAgentTaskPhrase(
+                    completeUserInput)) {
                 deckRuntimeController.cancelAutoAdvance();
-                cancelAgentTask("使用者語音停止任務");
-            } else if (memoryRuleController.processInput(completeUserInput)) {
+                cancelAgentTask(
+                        "使用者語音停止任務");
+            } else if (memoryRuleController.processInput(
+                    completeUserInput)) {
                 return;
             }
         }
 
-        boolean responseHasToolCall = false;
-        JSONObject toolCall = response.optJSONObject("toolCall");
-        if (toolCall == null) toolCall = response.optJSONObject("tool_call");
-        if (toolCall != null) {
+        boolean responseHasToolCall =
+                frame.hasToolCalls();
+        if (responseHasToolCall) {
             authorizationTranscript = "";
-            JSONArray calls = toolCall.optJSONArray("functionCalls");
-            if (calls == null) calls = toolCall.optJSONArray("function_calls");
-            if (calls != null && calls.length() > 0) {
-                responseHasToolCall = true;
-                markCurrentModelTurnToolCall(
-                        toolCallsAllowDeckNarrationAdvance(calls));
-                clearAgentResponseWatchdog();
-                for (int i = 0; i < calls.length(); i++) {
-                    executeToolAsync(calls.getJSONObject(i));
+            markCurrentModelTurnToolCall(
+                    toolCallsAllowDeckNarrationAdvance(
+                            frame.toolCalls));
+            clearAgentResponseWatchdog();
+            for (int i = 0;
+                    i < frame.toolCalls.length();
+                    i++) {
+                JSONObject call =
+                        frame.toolCalls.optJSONObject(i);
+                if (call != null) {
+                    executeToolAsync(call);
                 }
             }
         }
-        if (server == null) return;
-        if (server.optBoolean("interrupted", false)) {
-            long interruptedIndex = ++serverInterruptedCount;
+
+        if (!frame.serverPresent) return;
+
+        if (frame.interrupted) {
+            long interruptedIndex =
+                    ++serverInterruptedCount;
             long lastBargeInAdmissionAt =
-                    liveAudioController.getLastBargeInAdmissionAt();
-            long sinceBargeInMs = lastBargeInAdmissionAt <= 0L
-                    ? -1L : Math.max(0L,
-                        System.currentTimeMillis() - lastBargeInAdmissionAt);
-            Log.w(TAG, "0120 serverContent.interrupted #" + interruptedIndex
-                    + " aiSpeaking=" + aiSpeaking
-                    + " allowVoiceInterruption=" + allowVoiceInterruption
-                    + " sinceBargeInAdmitMs=" + sinceBargeInMs
-                    + " outputState="
-                    + liveAudioController.getLastAudioOutputState());
+                    liveAudioController
+                            .getLastBargeInAdmissionAt();
+            long sinceBargeInMs =
+                    lastBargeInAdmissionAt <= 0L
+                            ? -1L
+                            : Math.max(
+                                    0L,
+                                    System.currentTimeMillis()
+                                            - lastBargeInAdmissionAt);
+            Log.w(
+                    TAG,
+                    "0120 serverContent.interrupted #"
+                            + interruptedIndex
+                            + " aiSpeaking="
+                            + aiSpeaking
+                            + " allowVoiceInterruption="
+                            + allowVoiceInterruption
+                            + " sinceBargeInAdmitMs="
+                            + sinceBargeInMs
+                            + " outputState="
+                            + liveAudioController
+                                    .getLastAudioOutputState());
             liveAudioController.stopPlayback();
             if (aiSpeaking) {
                 aiSpeaking = false;
                 listener.onSpeakingChanged(false);
             }
-            // This is Gemini's acknowledgement that the old response has
-            // stopped.  The next model turn is safe to play immediately.
-            interruptionHandler.removeCallbacks(clearInterruptedFallback);
+            interruptionHandler.removeCallbacks(
+                    clearInterruptedFallback);
             interruptedCurrentTurn = false;
             resetCurrentModelTurnState();
             return;
         }
-        // Finalized input was already processed before tool calls above.
-        JSONObject outputTranscript = server.optJSONObject("outputTranscription");
-        if (outputTranscript == null) outputTranscript = server.optJSONObject("output_transcription");
-        if (outputTranscript != null && !outputTranscript.optString("text").isEmpty()
+
+        if (!frame.outputText.isEmpty()
                 && !runtimeSendCurrentExecuting
                 && !shouldWithholdUnverifiedAgentReply()) {
-            // Bubble text may arrive even when no PCM is played. Keep showing
-            // it, but do not let text satisfy the final-speech contract.
             if (!responseHasToolCall) {
-                Log.d(TAG, "0047 transcript received; waiting for Gemini PCM");
+                Log.d(
+                        TAG,
+                        "0047 transcript received; waiting for Gemini PCM");
             }
-            listener.onTranscript("Gemini", outputTranscript.optString("text"));
+            listener.onTranscript(
+                    "Gemini", frame.outputText);
         }
-        JSONObject turn = server.optJSONObject("modelTurn");
-        if (turn == null) turn = server.optJSONObject("model_turn");
-        if (turn != null) {
+
+        if (frame.modelTurnPresent) {
             authorizationTranscript = "";
             markAgentModelResponse();
-            // Continuous camera/screen frames must not arrive while Gemini is
-            // producing this answer, otherwise they can trigger a duplicate turn.
-            visualHoldUntil = System.currentTimeMillis() + 1800;
-            // A model sometimes treats an accepted click/type as the end of a
-            // task.  Do not play that premature conclusion: Runtime needs one
-            // explicit post-action screen observation before an agent answer.
+            visualHoldUntil =
+                    System.currentTimeMillis() + 1800;
+
             boolean withholdForVerification =
-                    shouldWithholdUnverifiedAgentReply() || runtimeSendCurrentExecuting;
-            if (!interruptedCurrentTurn && !withholdForVerification) {
+                    shouldWithholdUnverifiedAgentReply()
+                            || runtimeSendCurrentExecuting;
+            if (!interruptedCurrentTurn
+                    && !withholdForVerification) {
                 if (!aiSpeaking) {
                     aiSpeaking = true;
                     listener.onSpeakingChanged(true);
                 }
-                JSONArray parts = turn.optJSONArray("parts");
-                if (parts != null) for (int i = 0; i < parts.length(); i++) {
-                    JSONObject part = parts.getJSONObject(i);
-                    JSONObject inline = part.optJSONObject("inlineData");
-                    if (inline == null) inline = part.optJSONObject("inline_data");
-                    if (inline != null && inline.optString("data").length() > 0) {
-                        byte[] responsePcm = Base64.decode(inline.getString("data"), Base64.DEFAULT);
-                        noteCurrentModelTurnAudioReceived(responsePcm.length);
+
+                for (GeminiLiveTurnHandler.ModelPart part
+                        : frame.modelParts) {
+                    if (part.hasAudio()) {
+                        byte[] responsePcm =
+                                Base64.decode(
+                                        part.audioBase64,
+                                        Base64.DEFAULT);
+                        noteCurrentModelTurnAudioReceived(
+                                responsePcm.length);
                         boolean audioAccepted =
-                                liveAudioController.enqueueAudio(responsePcm);
-                        if (!responseHasToolCall && audioAccepted) {
+                                liveAudioController.enqueueAudio(
+                                        responsePcm);
+                        if (!responseHasToolCall
+                                && audioAccepted) {
                             markCurrentModelTurnSpeech();
                             markAgentUserVisibleReplyProduced();
                         }
                     }
-                    if (part.optString("text").length() > 0) {
-                        String modelText = part.optString("text");
+
+                    if (part.hasText()) {
                         if (!responseHasToolCall) {
-                            appendAgentFinalText(modelText);
+                            appendAgentFinalText(part.text);
                         }
-                        listener.onTranscript("Gemini", modelText);
+                        listener.onTranscript(
+                                "Gemini", part.text);
                     }
                 }
             } else if (withholdForVerification) {
-                Log.d(TAG, "暫緩未驗證的 Agent 回覆，等待 inspect_ui 證據");
+                Log.d(
+                        TAG,
+                        "暫緩未驗證的 Agent 回覆，等待 inspect_ui 證據");
             }
         }
-        if (server.optBoolean("turnComplete", server.optBoolean("turn_complete", false))) {
-            // Capture whole-turn truth before consuming/resetting it. Only a
-            // pure, audible narration turn is allowed to schedule Deck advance.
-            boolean deckNarrationTurn = shouldAutoAdvanceDeckAfterCurrentTurn();
-            boolean deckTurnWasInterrupted = interruptedCurrentTurn;
 
-            // Match agy-web AudioWorklet's `turn-complete`: a final short
-            // PCM phrase must not remain below the normal pre-roll threshold.
+        if (frame.turnComplete) {
+            boolean deckNarrationTurn =
+                    shouldAutoAdvanceDeckAfterCurrentTurn();
+            boolean deckTurnWasInterrupted =
+                    interruptedCurrentTurn;
+
             liveAudioController.finishTurn();
-            visualHoldUntil = System.currentTimeMillis() + 1000;
+            visualHoldUntil =
+                    System.currentTimeMillis() + 1000;
             interruptedCurrentTurn = false;
-            interruptionHandler.removeCallbacks(clearInterruptedFallback);
+            interruptionHandler.removeCallbacks(
+                    clearInterruptedFallback);
             if (aiSpeaking) {
                 aiSpeaking = false;
                 listener.onSpeakingChanged(false);
             }
+
             if (shouldEvaluateAgentTaskAtTurnComplete()) {
                 finishAgentTaskIfAwaitingModel();
             }
             deckRuntimeController.onNarrationTurnComplete(
-                    deckNarrationTurn, deckTurnWasInterrupted);
-
-            // 0054: model-turn state is per turn, not per Live session.
-            // Tool-only turns after a narration must not inherit "audio seen"
-            // and accidentally schedule extra page turns.
+                    deckNarrationTurn,
+                    deckTurnWasInterrupted);
             resetCurrentModelTurnState();
         }
     }
@@ -1794,7 +1807,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         final JSONObject args = semantic.runtimeArgs;
         final boolean runtimeV2Enforced =
                 isMutationTool(name)
-                && AgentRuntimeRollout.shouldEnforce(name, latestActionObservation);
+                && AgentRuntimeRollout.shouldEnforce(name, observationVerificationController.latestObservation());
 
         AgentRuntimeV2.PreflightResult runtimePreflight = null;
         if (runtimeV2Enforced) {
@@ -1804,7 +1817,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                     id,
                     name,
                     buildAgentSignature(name, args),
-                    latestActionObservation);
+                    observationVerificationController.latestObservation());
             if (!runtimePreflight.allowed()) {
                 String code = runtimePreflight.code;
                 if (runtimePreflight.decision == AgentRuntimeV2.PreflightDecision.REQUIRE_OBSERVE) {
@@ -1906,7 +1919,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 task.taskId,
                 requestedName,
                 name,
-                lastObservedScreenFingerprint,
+                observationVerificationController.lastObservedScreenFingerprint(),
                 ActionTransaction.ExpectedEffect.ANY_OBSERVABLE_CHANGE);
         if (runtimeV2Enforced) {
             agentRuntimeV2.onActionStarted(
@@ -1914,7 +1927,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                     requestedName, name,
                     runtimePreflight == null ? "" : runtimePreflight.actionHash,
                     ActionExpectation.forRuntimeAction(name),
-                    latestActionObservation);
+                    observationVerificationController.latestObservation());
         }
         PerformanceMetrics.markAgentToolStarted(
                 task.taskId, task.intentGeneration, name);
@@ -1971,7 +1984,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             if (isMutationTool(name)) {
                 result.put("runtimeV2Enforced", runtimeV2Enforced)
                         .put("runtimeV2Rollout",
-                                AgentRuntimeRollout.rolloutLabel(name, latestActionObservation));
+                                AgentRuntimeRollout.rolloutLabel(name, observationVerificationController.latestObservation()));
             }
             if (semantic.semantic) {
                 result.put("semanticAction", semantic.semanticAction)
@@ -1981,7 +1994,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 ExecutionEvidence evidence = executionEvidenceFromResult(name, result);
                 agentRuntimeV2.onActionExecuted(id, evidence);
                 ActionVerificationResult verification = agentRuntimeV2.verifyAndRecord(
-                        id, evidence, latestActionObservation);
+                        id, evidence, observationVerificationController.latestObservation());
                 applyV2VerificationContract(result, verification);
             }
             if (isPhoneContextTool(name)) attachCurrentAppPlaybook(result);
@@ -2158,11 +2171,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                             task.cancelled,
                             name,
                             task.requireObservationAfterFailure,
-                            semanticObserveRequired,
+                            observationVerificationController.semanticObserveRequired(),
                             buildAgentSignature(name, args),
                             task.lastFailedMutationSignature,
                             task.failedMutationScreenFingerprint,
-                            latestSemanticFingerprint);
+                            observationVerificationController.latestFingerprint());
             if (!decision.blocked) return null;
 
             task.stabilityBlocks++;
@@ -2203,7 +2216,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             if ("inspect_ui".equals(name) && result.optBoolean("success", false)) {
                 task.requireObservationAfterFailure = false;
                 task.stabilityBlocks = 0;
-                String observed = result.optString("fingerprint", latestSemanticFingerprint);
+                String observed = result.optString("fingerprint", observationVerificationController.latestFingerprint());
                 if (!task.failedMutationScreenFingerprint.isEmpty()
                         && !observed.isEmpty()
                         && !task.failedMutationScreenFingerprint.equals(observed)) {
@@ -2235,10 +2248,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             }
 
             task.lastFailedMutationSignature = buildAgentSignature(name, args);
-            task.failedMutationScreenFingerprint = latestSemanticFingerprint;
+            task.failedMutationScreenFingerprint = observationVerificationController.latestFingerprint();
             task.consecutiveMutationFailures++;
 
-            if (!blocksOutcomeReconciliation(result)) {
+            if (!observationVerificationController.blocksOutcomeReconciliation(result)) {
                 task.requireObservationAfterFailure = true;
             }
 
@@ -2283,7 +2296,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if ("launch_app".equals(name) && result != null) {
             String launchedPackage = result.optString("package", "").trim();
             if (!launchedPackage.isEmpty()
-                    && launchedPackage.equals(latestActionObservation.packageName)) {
+                    && launchedPackage.equals(observationVerificationController.latestObservation().packageName)) {
                 runtimeVerified = true;
             }
         }
@@ -2294,7 +2307,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         }
         boolean delayed = "launch_app".equals(name)
                 || (("tap_screen".equals(name) || "tap_element".equals(name))
-                    && GoogleMapsRuntimeAdapter.PACKAGE_NAME.equals(latestActionObservation.packageName));
+                    && GoogleMapsRuntimeAdapter.PACKAGE_NAME.equals(observationVerificationController.latestObservation().packageName));
         return new ExecutionEvidence(
                 result != null && result.optBoolean("success", false),
                 runtimeVerified,
@@ -2625,7 +2638,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 "swipe:" + reply.optString("direction", "up"),
                 reply.optBoolean("success", false)
                         ? "submitted" : "failed");
-        return autoObserveAfterMutation(reply, "swipe_screen");
+        return observationVerificationController.autoObserveAfterMutation(reply, "swipe_screen");
     }
 
 
@@ -2672,7 +2685,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 "tap_screen",
                 reply.optBoolean("success", false)
                         ? "submitted" : "failed");
-        return autoObserveAfterMutation(reply, "tap_screen");
+        return observationVerificationController.autoObserveAfterMutation(reply, "tap_screen");
     }
 
     /**
@@ -2750,7 +2763,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
             String elementId = only.optString("elementId", "");
             String label = only.optString("label", "");
-            JSONObject beforeSelection = readSemanticScreenQuietly();
+            JSONObject beforeSelection = observationVerificationController.readSemanticScreenQuietly();
             String beforeFingerprint = beforeSelection == null
                     ? "" : beforeSelection.optString("fingerprint", "");
 
@@ -2807,7 +2820,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 GoogleMapsRuntimeAdapter.PACKAGE_NAME);
         String fingerprint = "";
         try {
-            JSONObject screen = readSemanticScreenQuietly();
+            JSONObject screen = observationVerificationController.readSemanticScreenQuietly();
             if (screen != null) fingerprint = screen.optString("fingerprint", "");
         } catch (Exception ignored) {}
 
@@ -2860,7 +2873,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             }
         }
 
-        JSONObject latest = readSemanticScreenQuietly();
+        JSONObject latest = observationVerificationController.readSemanticScreenQuietly();
         if (latest == null || !latest.optBoolean("success", false)) return false;
         if (!GoogleMapsRuntimeAdapter.PACKAGE_NAME.equals(
                 latest.optString("package", ""))) return false;
@@ -2893,7 +2906,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             }
         } catch (Exception ignored) {}
 
-        latestSemanticFingerprint = latestFingerprint;
+        observationVerificationController.setLatestFingerprint(
+                latestFingerprint);
         workingContext.observe(
                 latest.optString("package", ""),
                 latestFingerprint,
@@ -2978,7 +2992,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                         return;
                     }
 
-                    JSONObject screen = readSemanticScreenQuietly();
+                    JSONObject screen = observationVerificationController.readSemanticScreenQuietly();
                     String currentPackage =
                             screen == null ? "" : screen.optString("package", "");
                     if (!pending.packageName.isEmpty()
@@ -3104,7 +3118,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 reply.optBoolean("success", false)
                         ? "submitted"
                         : reply.optString("error", "failed"));
-        return autoObserveAfterMutation(reply, "tap_element");
+        return observationVerificationController.autoObserveAfterMutation(reply, "tap_element");
     }
 
     private JSONObject waitForCondition(JSONObject args) throws Exception {
@@ -3116,7 +3130,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if ("element_appears".equals(condition)) type = PendingCondition.Type.ELEMENT_APPEARS;
         else if ("element_disappears".equals(condition)) type = PendingCondition.Type.ELEMENT_DISAPPEARS;
 
-        pendingCondition = new PendingCondition(type, elementId, latestSemanticFingerprint, timeoutMs);
+        pendingCondition = new PendingCondition(type, elementId, observationVerificationController.latestFingerprint(), timeoutMs);
         workingContext.setPendingTask("WAIT_" + type.name());
 
         long deadline = System.currentTimeMillis() + pendingCondition.timeoutMs;
@@ -3144,10 +3158,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             }
 
             if (met) {
-                latestSemanticFingerprint = fp;
-                semanticObserveRequired = false;
-                workingContext.observe(last.optString("package", ""), fp,
-                        last.optString("stableScreenKey", ""));
+                observationVerificationController
+                        .recordFingerprintOnly(last);
                 workingContext.setPendingTask("");
                 pendingCondition = null;
 
@@ -3176,7 +3188,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
     private String semanticElementMeta(String elementId) {
         if (elementId == null || elementId.isEmpty()) return "";
-        JSONObject screen = readSemanticScreenQuietly();
+        JSONObject screen = observationVerificationController.readSemanticScreenQuietly();
         if (screen == null) return "";
         JSONArray elements = screen.optJSONArray("elements");
         if (elements == null) return "";
@@ -3214,15 +3226,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         return false;
     }
 
-    private long mutationSettleDelayMs(String actionName) {
-        if ("launch_app".equals(actionName)) return 650L;
-        if ("commit_search".equals(actionName)) return 700L;
-        if ("search_current_app".equals(actionName)) return 520L;
-        if ("press_key".equals(actionName)) return 320L;
-        if ("type_text".equals(actionName)) return 260L;
-        if ("swipe_screen".equals(actionName)) return 220L;
-        return 220L;
-    }
+
 
     /**
      * Some Android Accessibility / gesture APIs can report false even though the
@@ -3235,7 +3239,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
      * - raw failure is upgraded only when a real post-action screen change is seen;
      * - validation/policy/not-found/cancelled failures are never upgraded.
      */
-    private boolean blocksOutcomeReconciliation(JSONObject result) {
+    private boolean observationVerificationController.blocksOutcomeReconciliation(JSONObject result) {
         if (result == null) return false;
         if (result.optBoolean("cancelled", false) || result.optBoolean("agentStopped", false)) return true;
         String error = result.optString("error", "").trim().toUpperCase(Locale.ROOT);
@@ -3255,7 +3259,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 || error.contains("使用者已停止");
     }
 
-    private JSONObject readSemanticScreenQuietly() {
+    private JSONObject observationVerificationController.readSemanticScreenQuietly() {
         try {
             return phoneRuntimeExecutor.get("/semantic_screen");
         } catch (Exception ignored) {
@@ -3263,20 +3267,14 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         }
     }
 
-    private boolean semanticScreenChanged(JSONObject after, String beforeFingerprint) {
-        if (after == null || !after.optBoolean("success", false)) return false;
-        String afterFingerprint = after.optString("fingerprint", "");
-        return !beforeFingerprint.isEmpty()
-                && !afterFingerprint.isEmpty()
-                && !beforeFingerprint.equals(afterFingerprint);
-    }
 
-    private JSONObject autoObserveAfterMutation(JSONObject actionResult, String actionName) {
+
+    private JSONObject observationVerificationController.autoObserveAfterMutation(JSONObject actionResult, String actionName) {
         if (actionResult == null) actionResult = new JSONObject();
 
         final boolean executionSuccess = actionResult.optBoolean("success", false);
-        final boolean reconciliationBlocked = blocksOutcomeReconciliation(actionResult);
-        final String beforeFingerprint = latestSemanticFingerprint;
+        final boolean reconciliationBlocked = observationVerificationController.blocksOutcomeReconciliation(actionResult);
+        final String beforeFingerprint = observationVerificationController.latestFingerprint();
 
         try {
             Thread.sleep(mutationSettleDelayMs(actionName));
@@ -3284,7 +3282,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             Thread.currentThread().interrupt();
         }
 
-        JSONObject after = readSemanticScreenQuietly();
+        JSONObject after = observationVerificationController.readSemanticScreenQuietly();
         boolean changed = semanticScreenChanged(after, beforeFingerprint);
 
         // A false-negative Android result can race the actual UI transition.
@@ -3295,7 +3293,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
-            JSONObject retry = readSemanticScreenQuietly();
+            JSONObject retry = observationVerificationController.readSemanticScreenQuietly();
             if (retry != null && retry.optBoolean("success", false)) {
                 after = retry;
                 changed = semanticScreenChanged(after, beforeFingerprint);
@@ -3326,22 +3324,22 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
             if (after != null && after.optBoolean("success", false)) {
                 String fp = after.optString("fingerprint", "");
-                latestSemanticFingerprint = fp;
-                latestActionObservation = toActionObservation(after);
-                agentRuntimeV2.onScreenObserved(latestActionObservation);
-                agentRuntimeV2.reverifyPending(latestActionObservation);
+                observationVerificationController.latestFingerprint() = fp;
+                observationVerificationController.latestObservation() = toActionObservation(after);
+                agentRuntimeV2.onScreenObserved(observationVerificationController.latestObservation());
+                agentRuntimeV2.reverifyPending(observationVerificationController.latestObservation());
                 shadowAgentRuntime.onScreenObserved(
                         fp,
                         after.optString("stableScreenKey", ""),
                         after.optString("package", ""));
-                semanticObserveRequired = false;
+                observationVerificationController.semanticObserveRequired() = false;
                 workingContext.observe(after.optString("package", ""), fp, after.optString("stableScreenKey", ""));
             } else if (!executionSuccess) {
                 // A successful Android action must not be blocked merely
                 // because the target app is between accessibility frames.
-                semanticObserveRequired = true;
+                observationVerificationController.setSemanticObserveRequired(true);
             } else {
-                semanticObserveRequired = false;
+                observationVerificationController.semanticObserveRequired() = false;
         }
 
         // Keep the model-facing contract deliberately small and authoritative.
@@ -3510,10 +3508,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         // App learning must bind to the app that is actually foreground NOW.
         // Prefer a fresh local semantic read; only fall back to the last action
         // observation if Accessibility is temporarily unavailable.
-        JSONObject screen = readSemanticScreenQuietly();
+        JSONObject screen = observationVerificationController.readSemanticScreenQuietly();
         String current = screen == null ? "" : screen.optString("package", "").trim();
         if (!current.isEmpty()) return current;
-        ActionObservation observation = latestActionObservation;
+        ActionObservation observation = observationVerificationController.latestObservation();
         if (observation != null && observation.packageName != null
                 && !observation.packageName.trim().isEmpty()) {
             return observation.packageName.trim();
@@ -3625,19 +3623,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if (semantic == null) semantic = new JSONObject();
 
         if (semantic.optBoolean("success", false)) {
-            latestSemanticFingerprint = semantic.optString("fingerprint", "");
-            latestActionObservation = toActionObservation(semantic);
-            agentRuntimeV2.onScreenObserved(latestActionObservation);
-            agentRuntimeV2.reverifyPending(latestActionObservation);
-            shadowAgentRuntime.onScreenObserved(
-                    latestSemanticFingerprint,
-                    semantic.optString("stableScreenKey", ""),
-                    semantic.optString("package", ""));
-            semanticObserveRequired = false;
-            workingContext.observe(
-                    semantic.optString("package", ""),
-                    latestSemanticFingerprint,
-                    semantic.optString("stableScreenKey", ""));
+            observationVerificationController
+                    .recordSemanticObservation(semantic);
         }
 
         JSONObject out = new JSONObject();
@@ -3712,8 +3699,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if (!raw.optBoolean("success")) return raw;
         String fingerprint = raw.optString("fingerprint", "");
         if (!fingerprint.isEmpty()) {
-            lastObservedScreenFingerprint = fingerprint;
-            shadowAgentRuntime.onScreenObserved(fingerprint, "", raw.optString("package", ""));
+            observationVerificationController.recordLegacyScreen(
+                    fingerprint,
+                    raw.optString("package", ""));
         }
         JSONArray nodes = raw.optJSONArray("nodes");
         JSONArray actions = raw.optJSONArray("actions");
@@ -3743,62 +3731,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
      * embedding actual visible nodes and package name into the tool response.
      * This physically eliminates premature hallucination by giving Gemini the ground-truth result.
      */
-    private void autoVerifyUiSnapshot(JSONObject response, int waitDelayMs) {
-        if (response == null || !response.optBoolean("success", false)) return;
-        try {
-            String beforeFingerprint = lastObservedScreenFingerprint;
-            if (waitDelayMs > 0) Thread.sleep(waitDelayMs);
-            JSONObject raw = phoneRuntimeExecutor.get("/screen_state");
-            if (raw.optBoolean("success")) {
-                String currentPkg = raw.optString("package", "");
-                String afterFingerprint = raw.optString("fingerprint", "");
-                String progress = "UNKNOWN";
-                if (!beforeFingerprint.isEmpty() && !afterFingerprint.isEmpty()) {
-                    progress = beforeFingerprint.equals(afterFingerprint) ? "UNCHANGED" : "PROGRESSED";
-                    if ("UNCHANGED".equals(progress)) {
-                        consecutiveNoProgress++;
-                    } else {
-                        consecutiveNoProgress = 0;
-                    }
-                }
-                if (!afterFingerprint.isEmpty()) {
-                    lastObservedScreenFingerprint = afterFingerprint;
-                    latestActionObservation = toActionObservation(raw);
-                    agentRuntimeV2.onScreenObserved(latestActionObservation);
-                    shadowAgentRuntime.onScreenObserved(afterFingerprint, "", currentPkg);
-                }
-                response.put("progress", progress);
-                response.put("noProgressCount", consecutiveNoProgress);
-                response.put("fingerprint", afterFingerprint);
-                if ("UNCHANGED".equals(progress)) {
-                    response.put("recoveryHint",
-                            consecutiveNoProgress >= 2
-                                    ? "畫面連續沒有進展：停止重複同一動作，改用返回、重新聚焦、另一個 semantic action，或向使用者說明卡點。"
-                                    : "畫面沒有改變：重新 inspect_ui，下一步不可原樣重複剛才動作。");
-                }
-                JSONArray nodes = raw.optJSONArray("nodes");
-                JSONArray actions = raw.optJSONArray("actions");
-                JSONArray visible = new JSONArray();
-                if (nodes != null) {
-                    for (int i = 0; i < nodes.length() && visible.length() < 30; i++) {
-                        JSONObject node = nodes.optJSONObject(i);
-                        if (node == null) continue;
-                        String text = node.optString("text", "").trim();
-                        String desc = node.optString("desc", "").trim();
-                        if (text.isEmpty() && desc.isEmpty()) continue;
-                        visible.put(new JSONObject().put("text", text).put("desc", desc).put("clickable", node.optBoolean("clickable")));
-                    }
-                }
-                JSONObject verification = new JSONObject();
-                verification.put("currentPackage", currentPkg);
-                verification.put("verifiedNodeCount", nodes == null ? 0 : nodes.length());
-                verification.put("actualVisibleContent", visible);
-                if (actions != null) verification.put("verifiedActions", actions);
-                verification.put("instruction", "【系統真實校驗結果】以上為動作執行後的真實畫面內容。請直接根據 actualVisibleContent 向使用者報告實際看見的狀態，絕對不可捏造尚未出現的內容！");
-                response.put("autoVerification", verification);
-            }
-        } catch (Exception ignored) {}
-    }
+
 
     private JSONObject launchApp(JSONObject args) throws Exception {
         PhoneRuntimeExecutor.MutationResult execution =
@@ -3811,7 +3744,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                             ? "submitted" : "failed");
         }
         return execution.observeAfter
-                ? autoObserveAfterMutation(reply, "launch_app")
+                ? observationVerificationController.autoObserveAfterMutation(reply, "launch_app")
                 : reply;
     }
 
@@ -3873,8 +3806,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         // actually SEARCH, Runtime commits the focused search field itself so
         // a weak model does not need another tool call for the keyboard Search.
         if (reply.optBoolean("success", false) && userActionScope.shouldAutoCommitSearch()) {
-            String transactionPackage = latestActionObservation == null
-                    ? "" : latestActionObservation.packageName;
+            String transactionPackage = observationVerificationController.latestObservation() == null
+                    ? "" : observationVerificationController.latestObservation().packageName;
             userActionScope.markSearchQueryEntered(
                     text, transactionPackage, userIntentGeneration);
 
@@ -3889,7 +3822,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
             if (commit.optBoolean("success", false)) {
                 workingContext.recordAction("search_commit", "submitted");
-                JSONObject observed = autoObserveAfterMutation(commit, "search_commit");
+                JSONObject observed = observationVerificationController.autoObserveAfterMutation(commit, "search_commit");
                 boolean searchOnlyBoundary = userActionScope.markSearchCommitted();
 
                 observed.put("searchTransaction", "COMMITTED")
@@ -3913,7 +3846,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             // Text entry succeeded but the search itself did not. Keep the task
             // explicitly IN_PROGRESS instead of treating TYPE as whole-task completion.
             workingContext.recordAction("search_commit", "failed");
-            JSONObject observed = autoObserveAfterMutation(reply, "type_text");
+            JSONObject observed = observationVerificationController.autoObserveAfterMutation(reply, "type_text");
             observed.put("searchTransaction", "PENDING_COMMIT")
                     .put("searchCommitError",
                             commit.optString("error", "SEARCH_COMMIT_FAILED"))
@@ -3926,7 +3859,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             return observed;
         }
 
-        return autoObserveAfterMutation(reply, "type_text");
+        return observationVerificationController.autoObserveAfterMutation(reply, "type_text");
     }
 
     private JSONObject searchCurrentApp(JSONObject args) throws Exception {
@@ -3962,10 +3895,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                             + "禁止重新 SEARCH/TYPE；請依目前畫面確認或繼續觀察。");
         }
 
-        String currentSearchPackage = latestActionObservation == null
-                ? "" : latestActionObservation.packageName;
+        String currentSearchPackage = observationVerificationController.latestObservation() == null
+                ? "" : observationVerificationController.latestObservation().packageName;
         if (currentSearchPackage.isEmpty()) {
-            JSONObject screen = readSemanticScreenQuietly();
+            JSONObject screen = observationVerificationController.readSemanticScreenQuietly();
             if (screen != null) {
                 currentSearchPackage = screen.optString("package", "");
             }
@@ -3991,7 +3924,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         JSONObject reply = phoneRuntimeExecutor.post("/search_in_app", new JSONObject().put("query", text));
         workingContext.recordAction("app_search",
                 reply.optBoolean("success", false) ? "submitted" : "failed");
-        JSONObject observed = autoObserveAfterMutation(reply, "search_current_app");
+        JSONObject observed = observationVerificationController.autoObserveAfterMutation(reply, "search_current_app");
         if (!reply.optBoolean("success", false)) {
             observed.put("instruction",
                     "Runtime 沒有確認文字輸入成功；請依 after 最新畫面改用不同方法，不要宣稱已搜尋。");
@@ -4001,8 +3934,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         // Only now can Runtime truthfully say the query entered a proven
         // search field. Completion requires query-excluding result-surface
         // evidence from AppSearchRuntime.
-        String observedSearchPackage = latestActionObservation == null
-                ? currentSearchPackage : latestActionObservation.packageName;
+        String observedSearchPackage = observationVerificationController.latestObservation() == null
+                ? currentSearchPackage : observationVerificationController.latestObservation().packageName;
         if (observedSearchPackage == null || observedSearchPackage.isEmpty()) {
             observedSearchPackage = currentSearchPackage;
         }
@@ -4302,7 +4235,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 "key:" + key,
                 reply.optBoolean("success", false)
                         ? "submitted" : "failed");
-        return autoObserveAfterMutation(reply, "press_key");
+        return observationVerificationController.autoObserveAfterMutation(reply, "press_key");
     }
 
     /** Explicitly commits the currently focused search field via the IME key. */
@@ -4323,7 +4256,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                     .put("instruction",
                             "Search/Enter 已送出，但結果尚未被 Runtime 觀察到。請等待畫面變化；不要再次提交搜尋。");
         }
-        return autoObserveAfterMutation(reply, "commit_search");
+        return observationVerificationController.autoObserveAfterMutation(reply, "commit_search");
     }
 
 
