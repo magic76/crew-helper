@@ -1323,8 +1323,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     }
 
     /**
-     * 0054: auto-advance only after one pure narration turn whose PCM was
-     * actually accepted for playback. Tool turns must never inherit this state.
+     * 0054: auto-advance after audible narration. A Deck-only tool call may
+     * precede that narration in the same model turn; unrelated tools still block it.
      */
     private boolean shouldAutoAdvanceDeckAfterCurrentTurn() {
         synchronized (agentLock) {
@@ -2458,6 +2458,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private void resetCurrentModelTurnState() {
         synchronized (agentLock) {
             currentModelTurnHadToolCall = false;
+            currentModelTurnBlocksDeckAutoAdvance = false;
             currentModelTurnProducedSpeech = false;
             currentModelTurnReceivedAudio = false;
         }
@@ -4214,14 +4215,16 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private JSONObject sendTextToPhone(JSONObject args) throws Exception {
         String text = args == null ? "" : args.optString("text", "");
 
-        if (userActionScope.blocksNamedRecipientMessagingAction()) {
-            return runtimeBlocked("RECIPIENT_TARGET_UNKNOWN",
-                    "這一輪看起來要傳給特定對象，但 Runtime 無法從原始指令抽出可驗證的收件人。不要猜收件人；請使用者用『跟 X 說…』或『傳給 X：「…」』明確指定。");
-        }
-        if (!userActionScope.canSend()) {
+        if (!userActionScope.canSend()
+                || userActionScope.blocksNamedRecipientMessagingAction()) {
             LiveTurnCoordinator.FinalizedTurn finalized =
                     liveTurnCoordinator.latest();
             ensureSendAuthorizationFromFinalized(finalized, args);
+        }
+        if (userActionScope.blocksNamedRecipientMessagingAction()) {
+            return runtimeBlocked(
+                    "RECIPIENT_TARGET_UNKNOWN",
+                    "這一輪看起來要傳給特定對象，但 Runtime 無法從原始指令抽出可驗證的收件人。不要猜收件人；請使用者用『跟 X 說…』或『傳給 X：「…」』明確指定。");
         }
         if (!userActionScope.canSend()) {
             return runtimeBlocked(
