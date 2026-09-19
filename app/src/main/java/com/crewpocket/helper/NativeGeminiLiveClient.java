@@ -217,6 +217,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         this.phoneRuntimeExecutor = new PhoneRuntimeExecutor(
                 this.appContext, this.visionController);
         this.runtimeToolExecutor = new RuntimeToolExecutor(
+                this.appContext,
                 this.notebookToolHandler,
                 this.visionController,
                 this.phoneRuntimeExecutor);
@@ -460,6 +461,12 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                             JSONObject args) throws Exception {
                         return NativeGeminiLiveClient.this
                                 .startScreenMonitor(args);
+                    }
+
+                    @Override public JSONObject waitThenAction(
+                            JSONObject args) throws Exception {
+                        return NativeGeminiLiveClient.this
+                                .waitThenAction(args);
                     }
                 });
 
@@ -2609,11 +2616,136 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
 
     private JSONObject startScreenMonitor(JSONObject args) throws Exception {
-        int interval = (int) args.optDouble("interval_seconds", 60), duration = (int) args.optDouble("duration_minutes", 10);
-        String cond = args.optString("target_condition", ""), lbl = args.optString("label", "畫面巡檢");
-        ScheduledTaskManager mgr = ScheduledTaskManager.getInstance(CrewAccessibilityService.getInstance() != null ? CrewAccessibilityService.getInstance() : MainActivity.class.cast(null));
-        ScheduledTaskManager.ScheduledTask task = mgr.startScreenMonitor(lbl, interval, duration, cond, true);
-        return new JSONObject().put("success", true).put("task", task.toJson()).put("message", "已啟動畫面監控：" + lbl);
+        int interval = (int) args.optDouble("interval_seconds", 60);
+        int duration = (int) args.optDouble("duration_minutes", 10);
+        String cond = args.optString("target_condition", "");
+        String lbl = args.optString("label", "畫面巡檢");
+        ScheduledTaskManager mgr =
+                ScheduledTaskManager.getInstance(appContext);
+        ScheduledTaskManager.ScheduledTask task =
+                mgr.startScreenMonitor(
+                        lbl, interval, duration, cond, true);
+        return new JSONObject()
+                .put("success", true)
+                .put("task", task.toJson())
+                .put("message", "已啟動畫面監控：" + lbl);
+    }
+
+    private JSONObject waitThenAction(JSONObject args) throws Exception {
+        String condition = args.optString("condition", "");
+        String conditionText = args.optString("condition_text", "");
+        String action = args.optString("action", "");
+        String target = args.optString("target", "");
+        String text = args.optString("text", "");
+        String label = args.optString("label", "");
+        int interval = args.optInt("interval_seconds", 5);
+        int timeout = args.optInt("timeout_minutes", 10);
+
+        PendingActionPolicy.Validation validation =
+                PendingActionPolicy.validate(
+                        condition,
+                        conditionText,
+                        action,
+                        target,
+                        text);
+        if (!validation.allowed) {
+            return new JSONObject()
+                    .put("success", false)
+                    .put("blockedByRuntime", true)
+                    .put("error", validation.code)
+                    .put("instruction", validation.message);
+        }
+
+        ScheduledTaskManager manager =
+                ScheduledTaskManager.getInstance(appContext);
+        ScheduledTaskManager.ScheduledTask task =
+                manager.startPendingAction(
+                        label,
+                        validation.conditionType,
+                        conditionText,
+                        validation.action,
+                        target,
+                        text,
+                        interval,
+                        timeout,
+                        PendingActionPolicy.ACTION_NOTIFY.equals(
+                                validation.action)
+                                ? null
+                                : new ScheduledTaskManager.PendingActionExecutor() {
+                                    @Override public JSONObject execute(
+                                            String scheduledAction,
+                                            String scheduledTarget,
+                                            String scheduledText)
+                                            throws Exception {
+                                        return executePendingActionDeterministically(
+                                                scheduledAction,
+                                                scheduledTarget,
+                                                scheduledText);
+                                    }
+                                });
+
+        return new JSONObject()
+                .put("success", true)
+                .put("task", task.toJson())
+                .put("taskState", "WAITING_BACKGROUND")
+                .put(
+                        "message",
+                        "已建立等待後續操作；Runtime 會在同一 App 內自行監控，不需要 Gemini 持續等待。")
+                .put(
+                        "instruction",
+                        "等待任務已交給 Runtime。不要輪詢畫面、不要重複建立相同任務；直接告知使用者已開始等待。");
+    }
+
+    private JSONObject executePendingActionDeterministically(
+            String action,
+            String target,
+            String text) throws Exception {
+        JSONObject result;
+
+        if (PendingActionPolicy.ACTION_TAP.equals(action)) {
+            if (UserActionScope.looksLikeSendTarget(target)
+                    || PendingActionPolicy.looksLikeHighRiskCommit(target)) {
+                return new JSONObject()
+                        .put("success", false)
+                        .put("blockedByRuntime", true)
+                        .put("error", "HIGH_RISK_PENDING_ACTION_BLOCKED");
+            }
+            result = phoneRuntimeExecutor.tap(
+                    new JSONObject().put("label", target));
+            return observationVerificationController
+                    .autoObserveAfterMutation(
+                            result,
+                            "pending_tap");
+        }
+
+        if (PendingActionPolicy.ACTION_TYPE.equals(action)) {
+            result = phoneRuntimeExecutor.typeText(text);
+            return observationVerificationController
+                    .autoObserveAfterMutation(
+                            result,
+                            "pending_type");
+        }
+
+        if (PendingActionPolicy.ACTION_COMMIT_SEARCH.equals(action)) {
+            result = phoneRuntimeExecutor.commitSearch();
+            return observationVerificationController
+                    .autoObserveAfterMutation(
+                            result,
+                            "pending_commit_search");
+        }
+
+        if (PendingActionPolicy.ACTION_BACK.equals(action)
+                || PendingActionPolicy.ACTION_HOME.equals(action)) {
+            result = phoneRuntimeExecutor.pressKey(action);
+            return observationVerificationController
+                    .autoObserveAfterMutation(
+                            result,
+                            "pending_" + action.toLowerCase(Locale.ROOT));
+        }
+
+        return new JSONObject()
+                .put("success", false)
+                .put("error", "UNSUPPORTED_PENDING_ACTION");
     }
 
 

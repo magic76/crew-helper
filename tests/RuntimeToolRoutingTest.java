@@ -26,6 +26,7 @@ public final class RuntimeToolRoutingTest {
         checkNotHandled("inspect_ui");
         checkNotHandled("tap_element");
         checkNotHandled("start_screen_monitor");
+        checkNotHandled("wait_then_action");
         checkNotHandled("end_voice_session");
         checkNotHandled("list_decks");
         checkNotHandled("advance_deck");

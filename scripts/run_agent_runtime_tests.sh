@@ -32,6 +32,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/RuntimeUiState.java" \
   "$SRC/LearnedUiScopePolicy.java" \
   "$SRC/UserActionScope.java" \
+  "$SRC/PendingActionPolicy.java" \
   "$SRC/SearchTransactionPolicy.java" \
   "$SRC/ScrollDirectionPolicy.java" \
   "$SRC/VisionCoordinateMapper.java" \
@@ -57,6 +58,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/RuntimeUiStateTest.java" \
   "$ROOT/tests/LearnedUiScopePolicyTest.java" \
   "$ROOT/tests/SendOnlyPolicyTest.java" \
+  "$ROOT/tests/PendingActionPolicyTest.java" \
   "$ROOT/tests/SearchTransactionPolicyTest.java" \
   "$ROOT/tests/ScrollDirectionPolicyTest.java" \
   "$ROOT/tests/ActionVerifierV2Test.java" \
@@ -89,6 +91,7 @@ java -cp "$OUT" com.crewpocket.helper.UiChangeSignalTest
 java -cp "$OUT" com.crewpocket.helper.RuntimeUiStateTest
 java -cp "$OUT" com.crewpocket.helper.LearnedUiScopePolicyTest
 java -cp "$OUT" com.crewpocket.helper.SendOnlyPolicyTest
+java -cp "$OUT" com.crewpocket.helper.PendingActionPolicyTest
 java -cp "$OUT" com.crewpocket.helper.SearchTransactionPolicyTest
 java -cp "$OUT" com.crewpocket.helper.ScrollDirectionPolicyTest
 java -cp "$OUT" com.crewpocket.helper.ActionVerifierV2Test

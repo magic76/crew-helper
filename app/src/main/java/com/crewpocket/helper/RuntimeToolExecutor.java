@@ -1,5 +1,7 @@
 package com.crewpocket.helper;
 
+import android.content.Context;
+
 import org.json.JSONObject;
 
 /**
@@ -9,14 +11,20 @@ import org.json.JSONObject;
  * a tool may run, own a user generation, complete a task, or authorize SEND.
  */
 final class RuntimeToolExecutor {
+    private final Context appContext;
     private final NotebookToolHandler notebookToolHandler;
     private final LiveVisionController visionController;
     private final PhoneRuntimeExecutor phoneRuntimeExecutor;
 
     RuntimeToolExecutor(
+            Context appContext,
             NotebookToolHandler notebookToolHandler,
             LiveVisionController visionController,
             PhoneRuntimeExecutor phoneRuntimeExecutor) {
+        if (appContext == null) {
+            throw new IllegalArgumentException("appContext required");
+        }
+        this.appContext = appContext.getApplicationContext();
         this.notebookToolHandler = notebookToolHandler;
         this.visionController = visionController;
         this.phoneRuntimeExecutor = phoneRuntimeExecutor;
@@ -108,8 +116,6 @@ final class RuntimeToolExecutor {
     }
 
     private ScheduledTaskManager scheduledTaskManager() {
-        CrewAccessibilityService service = CrewAccessibilityService.getInstance();
-        return ScheduledTaskManager.getInstance(
-                service != null ? service : MainActivity.class.cast(null));
+        return ScheduledTaskManager.getInstance(appContext);
     }
 }
