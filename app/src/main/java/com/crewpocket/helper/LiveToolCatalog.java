@@ -17,7 +17,11 @@ final class LiveToolCatalog {
 
     private LiveToolCatalog() {}
 
-    static JSONArray build(boolean deckMode, boolean createMode, boolean presentMode) throws Exception {
+    static JSONArray build(
+            boolean deckMode,
+            boolean createMode,
+            boolean presentMode,
+            boolean workspaceMode) throws Exception {
         JSONArray tools = new JSONArray();
         JSONObject phoneActionProperties = new JSONObject()
                 .put("action", new JSONObject().put("type", "STRING")
@@ -173,7 +177,7 @@ final class LiveToolCatalog {
         JSONObject ephemeralProperties = new JSONObject().put("title", new JSONObject().put("type", "STRING").put("description", "Presentation title"))
                 .put("cards", new JSONObject().put("type", "ARRAY").put("description", "3–8 cards in speaking order with optional HTTPS images")
                         .put("items", new JSONObject().put("type", "OBJECT").put("properties", cardProperties)));
-        tools.put(new JSONObject().put("name", "create_ephemeral_deck").put("description", "Create a temporary, session-only Deck for explaining a general topic when the user did not select an imported Deck. Use 3–8 concise cards with optional HTTPS web image URLs based on known information. The first card is displayed immediately.")
+        tools.put(new JSONObject().put("name", "create_ephemeral_deck").put("description", "Create a temporary, session-only Deck after the content plan is ready. Use 3–8 concise cards. Images may be HTTPS URLs or Workspace image assetIds. The first card is displayed immediately.")
                 .put("parameters", new JSONObject().put("type", "OBJECT").put("properties", ephemeralProperties).put("required", new JSONArray().put("title").put("cards"))));
         tools.put(new JSONObject().put("name", "list_deck_images").put("description", "List images bundled inside the currently imported Deck. Returns safe assetId values; call before attaching an image. Session-only decks can directly use HTTPS image URLs."));
         tools.put(new JSONObject().put("name", "attach_deck_image").put("description", "Attach a listed imported image to a future Deck card. Current and already presented cards are locked to avoid visual disruption.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject()
@@ -193,14 +197,21 @@ final class LiveToolCatalog {
                 .put("facts", stringArraySchema).put("items", stringArraySchema);
         tools.put(new JSONObject().put("name", "insert_deck_card").put("description", "Insert one supplementary card after the current or another future card when the user asks for a missing explanation. The inserted card becomes part of the remaining presentation.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("after_card_id", new JSONObject().put("type", "STRING")).put("card", new JSONObject().put("type", "OBJECT").put("properties", insertedCardProperties))).put("required", new JSONArray().put("after_card_id").put("card"))));
         tools.put(new JSONObject().put("name", "remove_future_deck_card").put("description", "Remove a not-yet-presented card that is now redundant. Current and already presented cards are locked.").put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject().put("card_id", new JSONObject().put("type", "STRING"))).put("required", new JSONArray().put("card_id"))));
-        return filterModelFacingTools(tools, deckMode, createMode, presentMode);
+        return filterModelFacingTools(
+                tools,
+                deckMode,
+                createMode,
+                presentMode,
+                workspaceMode);
     }
 
     /** 0082: keep the Live model surface small and mode-specific. */
-    private static JSONArray filterModelFacingTools(JSONArray declared,
-                                                     boolean deckMode,
-                                                     boolean createMode,
-                                                     boolean presentMode) throws Exception {
+    private static JSONArray filterModelFacingTools(
+            JSONArray declared,
+            boolean deckMode,
+            boolean createMode,
+            boolean presentMode,
+            boolean workspaceMode) throws Exception {
         JSONArray exposed = new JSONArray();
 
         for (int i = 0; i < declared.length(); i++) {
@@ -213,8 +224,9 @@ final class LiveToolCatalog {
                 allow = isNormalPhoneModelTool(name);
             } else if (createMode) {
                 allow = "create_ephemeral_deck".equals(name)
-                        || "list_deck_workspace_sources".equals(name)
-                        || "read_deck_workspace_source".equals(name)
+                        || (workspaceMode
+                                && ("list_deck_workspace_sources".equals(name)
+                                    || "read_deck_workspace_source".equals(name)))
                         || "end_voice_session".equals(name);
             } else if (presentMode) {
                 allow = "end_voice_session".equals(name)
