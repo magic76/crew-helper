@@ -4303,10 +4303,13 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             result.put("modeInstructions", LivePrompt.DECK);
         }
 
-        // 0079: keep the complete Runtime result for logs/task history, but give
-        // the weak Live model a tiny, stable phone-control contract.
+        // Keep the complete Runtime result for logs/task history, but give Live
+        // only a stable phone-control contract plus a compact goal-progress
+        // projection. Fingerprints, authorization state and other debug fields
+        // remain Runtime-internal.
         final JSONObject modelResult =
-                ModelToolResponseAdapter.forModel(name, result);
+                ModelToolResponseAdapter.forModel(
+                        name, result, workingContext.toProgressJson());
         JSONObject appPlaybook = result == null ? null : result.optJSONObject("appPlaybook");
         if (appPlaybook != null && appPlaybook.length() > 0) {
             modelResult.put("appPlaybook", appPlaybook);
