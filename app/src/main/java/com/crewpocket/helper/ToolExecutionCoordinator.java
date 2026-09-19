@@ -26,6 +26,7 @@ final class ToolExecutionCoordinator {
         JSONObject sendText(JSONObject args) throws Exception;
         JSONObject pressKey(JSONObject args) throws Exception;
         JSONObject startScreenMonitor(JSONObject args) throws Exception;
+        JSONObject waitThenAction(JSONObject args) throws Exception;
     }
 
     private final RuntimeToolExecutor runtimeToolExecutor;
@@ -109,6 +110,9 @@ final class ToolExecutionCoordinator {
         }
         if ("start_screen_monitor".equals(name)) {
             return host.startScreenMonitor(safeArgs);
+        }
+        if ("wait_then_action".equals(name)) {
+            return host.waitThenAction(safeArgs);
         }
         if (deckRuntimeController.handles(name)) {
             return deckRuntimeController.execute(name, safeArgs);
