@@ -165,7 +165,7 @@ final class WorkingContext {
                 int index = 0;
                 for (String action : lastActions) {
                     if (index++ < skip) continue;
-                    actions.put(action);
+                    actions.put(progressAction(action));
                 }
                 out.put("recentActions", actions);
             }
@@ -199,6 +199,14 @@ final class WorkingContext {
         selectedSourcePackage = "";
         selectedReference = "";
         lastActions.clear();
+    }
+
+    private static String progressAction(String value) {
+        String action = clip(value, MAX_FIELD_CHARS);
+        if (action.startsWith("tap:")) return "tap_element";
+        if (action.startsWith("swipe:")) return action;
+        if (action.startsWith("launch_app:")) return "launch_app";
+        return action;
     }
 
     private static String clip(String value, int max) {
