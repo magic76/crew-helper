@@ -1395,6 +1395,71 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         return finalized.generation;
     }
 
+    private long awaitFinalizedLiteralTypeGeneration(
+            String requestedName,
+            JSONObject requestedArgs,
+            long queuedGeneration) {
+        String text = literalTypeText(requestedName, requestedArgs);
+        if (text.isEmpty() || text.length() > 64) {
+            return queuedGeneration;
+        }
+
+        LiveTurnCoordinator.FinalizedTurn latest =
+                liveTurnCoordinator.latest();
+        if (latest.generation == queuedGeneration
+                && typeToolMatchesFinalizedIntent(text, latest.text)) {
+            return queuedGeneration;
+        }
+
+        LiveTurnCoordinator.FinalizedTurn finalized =
+                liveTurnCoordinator.awaitNextAfter(
+                        queuedGeneration, 900L);
+        if (finalized.generation != queuedGeneration + 1L
+                || !typeToolMatchesFinalizedIntent(
+                        text, finalized.text)) {
+            return queuedGeneration;
+        }
+
+        Log.i(
+                TAG,
+                "TYPE reconciled to finalized turn generation="
+                        + finalized.generation);
+        return finalized.generation;
+    }
+
+    private String literalTypeText(
+            String requestedName,
+            JSONObject requestedArgs) {
+        JSONObject args = requestedArgs == null
+                ? new JSONObject() : requestedArgs;
+        if ("type_text".equals(requestedName)) {
+            return args.optString("text", "").trim();
+        }
+        if (SemanticPhoneAction.TOOL_NAME.equals(requestedName)
+                && "TYPE".equalsIgnoreCase(
+                        args.optString("action", "").trim())) {
+            return args.optString("text", "").trim();
+        }
+        return "";
+    }
+
+    private boolean typeToolMatchesFinalizedIntent(
+            String toolText,
+            String finalizedText) {
+        if (toolText == null
+                || toolText.trim().isEmpty()
+                || finalizedText == null
+                || finalizedText.trim().isEmpty()) {
+            return false;
+        }
+        String normalizedTool = TextMatch.caseFold(toolText)
+                .replaceAll("[\\s，,。！？!「」『』\\\"'：:；;（）()]", "");
+        String normalizedFinal = TextMatch.caseFold(finalizedText)
+                .replaceAll("[\\s，,。！？!「」『』\\\"'：:；;（）()]", "");
+        return !normalizedTool.isEmpty()
+                && normalizedFinal.contains(normalizedTool);
+    }
+
     private boolean sendToolMatchesFinalizedUserIntent(
             JSONObject requestedArgs,
             String finalizedText) {
@@ -1651,15 +1716,19 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 ? new JSONObject() : call.optJSONObject("args");
         long callIntentGeneration = call.optLong("_crew_intent_generation", -1L);
 
-        // send_text is the only mutation with a known Gemini Live ordering race:
-        // toolCall can arrive just before the finalized user transcription.
-        // Wait briefly for user authority, never for model authority.
-        long reconciledSendGeneration = awaitFinalizedSendAuthorization(
+        // Gemini Live may emit the tool frame before the authoritative
+        // finalized user transcript. Reconcile only operations whose payload
+        // can be matched deterministically to that finalized turn.
+        long reconciledGeneration = awaitFinalizedSendAuthorization(
                 requestedName, requestedArgs, callIntentGeneration);
-        if (reconciledSendGeneration != callIntentGeneration) {
-            callIntentGeneration = reconciledSendGeneration;
-            try { call.put("_crew_intent_generation", callIntentGeneration); }
-            catch (Exception ignored) {}
+        reconciledGeneration = awaitFinalizedLiteralTypeGeneration(
+                requestedName, requestedArgs, reconciledGeneration);
+
+        if (reconciledGeneration != callIntentGeneration) {
+            callIntentGeneration = reconciledGeneration;
+            try {
+                call.put("_crew_intent_generation", callIntentGeneration);
+            } catch (Exception ignored) {}
 
             LiveTurnCoordinator.FinalizedTurn finalizedTurn =
                     liveTurnCoordinator.latest();
@@ -1672,7 +1741,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                     runtimeOwned.put("success", true)
                             .put("taskState", "IN_PROGRESS")
                             .put("runtimeHandled", "SEND_CURRENT")
-                            .put("message",
+                            .put(
+                                    "message",
                                     "Runtime 已接管這次送出；不要再呼叫 send_text 或其他 mutation。");
                     sendToolResponse(id, requestedName, runtimeOwned);
                 } catch (Exception ignored) {}
