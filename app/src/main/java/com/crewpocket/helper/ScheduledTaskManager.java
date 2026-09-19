@@ -162,11 +162,11 @@ public class ScheduledTaskManager {
                     for (ScheduledTask task : manager.activeTasks.values()) {
                         if (task == null || task.cancelled) continue;
                         if (!"pending_action".equals(task.type)) continue;
-                        if (!PendingActionPolicy.CONDITION_APP_OPENED.equals(
-                                task.conditionType)) continue;
-                        if (!PendingActionPolicy.ACTION_NOTIFY.equals(
-                                task.action)) continue;
-                        if (eventPackage.equals(task.conditionPackage)) {
+                        if (PendingWaitEventPolicy.matchesAppOpenedNotification(
+                                task.conditionType,
+                                task.action,
+                                task.conditionPackage,
+                                eventPackage)) {
                             task.checkCount++;
                             task.eventCheckCount++;
                             task.lastCheckReason = "APP_EVENT_FAST_PATH";
@@ -444,11 +444,11 @@ public class ScheduledTaskManager {
             // Fast path: APP_OPENED + NOTIFY can be satisfied directly from
             // AccessibilityEvent.packageName without waiting for the active
             // root window to settle.
-            if (PendingActionPolicy.CONDITION_APP_OPENED.equals(
-                            task.conditionType)
-                    && PendingActionPolicy.ACTION_NOTIFY.equals(task.action)
-                    && nonEmpty(task.conditionPackage)
-                    && task.conditionPackage.equals(eventPackage)) {
+            if (PendingWaitEventPolicy.matchesAppOpenedNotification(
+                    task.conditionType,
+                    task.action,
+                    task.conditionPackage,
+                    eventPackage)) {
                 completeNotificationTask(task, eventAtMs);
                 return;
             }
@@ -465,17 +465,14 @@ public class ScheduledTaskManager {
                 String currentPackage =
                         pkg == null ? "" : pkg.toString().trim();
 
-                boolean appOpenedNotify =
-                        PendingActionPolicy.CONDITION_APP_OPENED.equals(
-                                task.conditionType)
-                                && PendingActionPolicy.ACTION_NOTIFY.equals(
-                                        task.action);
-
                 // Mutating delayed actions remain same-app only. The one
                 // cross-app exception is APP_OPENED + NOTIFY, which performs
                 // no phone mutation.
-                if (!appOpenedNotify
-                        && !task.packageName.equals(currentPackage)) {
+                if (!PendingWaitEventPolicy.canInspectCurrentPackage(
+                        task.conditionType,
+                        task.action,
+                        task.packageName,
+                        currentPackage)) {
                     return;
                 }
 
