@@ -503,7 +503,36 @@ final class PhoneRuntimeExecutor {
     }
 
     JSONObject typeText(String text) throws Exception {
-        return post("/type", new JSONObject().put("text", text));
+        JSONObject first = post(
+                "/type", new JSONObject().put("text", text));
+        if (first.optBoolean("success", false)) {
+            return first;
+        }
+
+        String error = first.optString("error", "");
+        if (!isRecoverableTypeFailure(error)) {
+            return first;
+        }
+
+        try {
+            Thread.sleep(220L);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            return first;
+        }
+
+        JSONObject retry = post(
+                "/type", new JSONObject().put("text", text));
+        retry.put("retried", true);
+        retry.put("firstError", error);
+        return retry;
+    }
+
+    private boolean isRecoverableTypeFailure(String error) {
+        String code = error == null ? "" : error.trim();
+        return "NO_ACTIVE_WINDOW".equals(code)
+                || "NO_EDITABLE_TARGET".equals(code)
+                || "SET_TEXT_AND_PASTE_REJECTED".equals(code);
     }
 
     JSONObject pressKey(String key) throws Exception {
