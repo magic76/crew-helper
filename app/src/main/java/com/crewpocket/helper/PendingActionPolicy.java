@@ -112,6 +112,14 @@ final class PendingActionPolicy {
         return "";
     }
 
+    static boolean looksLikeGenericCommitTarget(String value) {
+        String v = compact(value);
+        return containsAny(
+                v,
+                "確認", "确定", "確定", "继续", "繼續", "下一步", "下一步驟",
+                "confirm", "continue", "next", "ok", "proceed");
+    }
+
     static boolean looksLikeHighRiskCommit(String value) {
         String v = compact(value);
         if (v.isEmpty()) return false;
