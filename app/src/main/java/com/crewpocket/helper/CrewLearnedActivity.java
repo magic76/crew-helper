@@ -134,6 +134,42 @@ public class CrewLearnedActivity extends Activity {
                                 ? " · " + disabled + " " + I18n.get(this, "停用", "disabled")
                                 : ""));
 
+        LinearLayout manageCard = card();
+        manageCard.addView(text(
+                I18n.get(this,
+                        "可以查看全部 mapping、編輯 role、停用/啟用、刪除，並整理結構完全相同的重複項。",
+                        "View all mappings, edit roles, enable/disable, delete, and clean structurally identical duplicates."),
+                11, CrewTheme.TEXT_SECONDARY, false));
+
+        int duplicateCount = actionMemory.exactDuplicateCount();
+        if (duplicateCount > 0) {
+            TextView duplicateHint = text(
+                    I18n.get(this,
+                            "目前偵測到 " + duplicateCount + " 條可安全整理的重複 mapping",
+                            duplicateCount + " safely cleanable duplicate mappings detected"),
+                    10, CrewTheme.ROSE_400, true);
+            duplicateHint.setPadding(0, dp(7), 0, 0);
+            manageCard.addView(duplicateHint);
+        }
+
+        Button manage = new Button(this);
+        manage.setAllCaps(false);
+        manage.setText(I18n.get(this,
+                "管理 App Action Memory",
+                "Manage App Action Memory"));
+        manage.setTextColor(Color.WHITE);
+        manage.setTextSize(12);
+        manage.setTypeface(Typeface.DEFAULT_BOLD);
+        manage.setBackground(CrewTheme.createGradientButton(
+                this, CrewTheme.TEAL_500, CrewTheme.INDIGO_500, 12));
+        manage.setOnClickListener(v -> startActivity(
+                new Intent(CrewLearnedActivity.this, ActionMemoryActivity.class)));
+        LinearLayout.LayoutParams manageLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(44));
+        manageLp.topMargin = dp(10);
+        manageCard.addView(manage, manageLp);
+        content.addView(manageCard, cardParams());
+
         if (rules.length() == 0) {
             content.addView(emptyCard(I18n.get(
                     this,
