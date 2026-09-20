@@ -42,6 +42,7 @@ final class LearnedUiMappingStore {
         String screenSignature = "";
         String stableScreenKey = "";
         String role = "";
+        String userLabel = "";
         String viewId = "";
         String className = "";
         String contentDescription = "";
@@ -87,6 +88,7 @@ final class LearnedUiMappingStore {
                 o.put("screenSignature", screenSignature);
                 o.put("stableScreenKey", stableScreenKey);
                 o.put("role", role);
+                o.put("userLabel", userLabel);
                 o.put("viewId", viewId);
                 o.put("className", className);
                 o.put("contentDescription", contentDescription);
@@ -122,6 +124,7 @@ final class LearnedUiMappingStore {
             r.screenSignature = o.optString("screenSignature", "");
             r.stableScreenKey = o.optString("stableScreenKey", "");
             r.role = o.optString("role", "");
+            r.userLabel = sanitizeUserLabel(o.optString("userLabel", ""));
             r.viewId = o.optString("viewId", "");
             r.className = o.optString("className", "");
             r.contentDescription = o.optString("contentDescription", "");
@@ -328,13 +331,13 @@ final class LearnedUiMappingStore {
 
     synchronized JSONObject updateRule(
             String id,
-            String role,
+            String userLabel,
             boolean enabled) {
         JSONObject out = new JSONObject();
         try {
             String targetId = safe(id).trim();
-            String nextRole = normalizeRole(role);
-            if (targetId.isEmpty() || nextRole.isEmpty()) {
+            String nextLabel = sanitizeUserLabel(userLabel);
+            if (targetId.isEmpty()) {
                 return out.put("success", false).put("error", "INVALID_ACTION_MEMORY_RULE");
             }
 
@@ -350,7 +353,7 @@ final class LearnedUiMappingStore {
                 return out.put("success", false).put("error", "ACTION_MEMORY_NOT_FOUND");
             }
 
-            target.role = nextRole;
+            target.userLabel = nextLabel;
             target.enabled = enabled;
             saveRules(rules);
             return out.put("success", true);
@@ -605,6 +608,11 @@ final class LearnedUiMappingStore {
 
     private static String normalizeRole(String role) {
         return safe(role).trim().toUpperCase(Locale.ROOT);
+    }
+
+    private static String sanitizeUserLabel(String value) {
+        String text = value == null ? "" : value.replaceAll("\\s+", " ").trim();
+        return text.length() <= 60 ? text : text.substring(0, 60);
     }
 
     private static String sanitizeDescription(CharSequence value) {
