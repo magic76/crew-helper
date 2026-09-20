@@ -5,6 +5,7 @@ public final class TaskRecipePolicyTest {
         matchesPoliteVariants();
         keepsDifferentQueriesDistinct();
         blocksUnsafeTapTargets();
+        requiresStableScreenTransitionForTap();
         allowsLowRiskToolsOnly();
         rejectsSensitiveSearch();
         System.out.println("TaskRecipePolicyTest passed");
@@ -26,6 +27,15 @@ public final class TaskRecipePolicyTest {
         check(TaskRecipePolicy.isUnsafeTapTarget("確認付款"));
         check(TaskRecipePolicy.isUnsafeTapTarget("Delete account"));
         check(!TaskRecipePolicy.isUnsafeTapTarget("藍牙"));
+    }
+
+    private static void requiresStableScreenTransitionForTap() {
+        check(TaskRecipePolicy.isProvenNavigationTap(
+                "settings_root", "bluetooth_page"));
+        check(!TaskRecipePolicy.isProvenNavigationTap(
+                "bluetooth_page", "bluetooth_page"));
+        check(!TaskRecipePolicy.isProvenNavigationTap(
+                "", "bluetooth_page"));
     }
 
     private static void allowsLowRiskToolsOnly() {
