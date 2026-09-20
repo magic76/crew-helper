@@ -60,6 +60,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private final Context appContext;
     private final NotebookToolHandler notebookToolHandler;
     private final AppPlaybookStore appPlaybookStore;
+    private final TaskRecipeStore taskRecipeStore;
+    private volatile long taskRecipeCandidateGeneration = -1L;
+    private volatile String taskRecipeCandidateId = "";
     private final PhoneRuntimeExecutor phoneRuntimeExecutor;
     private final RuntimeToolExecutor runtimeToolExecutor;
     private final LiveAudioController liveAudioController;
@@ -177,6 +180,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
         this.notebookToolHandler = new NotebookToolHandler(this.appContext);
         this.appPlaybookStore = new AppPlaybookStore(this.appContext);
+        this.taskRecipeStore = new TaskRecipeStore(this.appContext);
         this.toolCallDispatcher = new ToolCallDispatcher(
                 new ToolCallDispatcher.Host() {
                     @Override public void executeTool(JSONObject call) {
@@ -701,6 +705,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             toolCallDispatcher.resetForNewIntent();
             if (activeAgentTask != null) shadowTaskId = activeAgentTask.taskId;
         }
+
+        taskRecipeCandidateGeneration = -1L;
+        taskRecipeCandidateId = "";
 
         shadowAgentRuntime.onUserIntent(
                 userIntentGeneration, conversationGoalId, shadowTaskId, startNewCapsule);
@@ -1368,6 +1375,24 @@ final class NativeGeminiLiveClient extends WebSocketListener {
      */
     private void recordFinalizedSendAuthorization(String text) {
         liveTurnCoordinator.onFinalizedUserTurn(userIntentGeneration, text);
+
+        taskRecipeCandidateGeneration = -1L;
+        taskRecipeCandidateId = "";
+        if (userActionScope.canSend()
+                || userActionScope.blocksNamedRecipientMessagingAction()) {
+            return;
+        }
+
+        JSONObject progress = workingContext.toProgressJson();
+        String currentPackage = progress.optString("currentApp", "");
+        TaskRecipeStore.Match match =
+                taskRecipeStore.findMatching(text, currentPackage);
+        if (match != null && !match.id.isEmpty()) {
+            taskRecipeCandidateGeneration = userIntentGeneration;
+            taskRecipeCandidateId = match.id;
+            Log.i(TAG, "TaskRecipe candidate generation="
+                    + userIntentGeneration + " steps=" + match.stepCount);
+        }
     }
 
     /**
@@ -1812,6 +1837,17 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             } catch (Exception ignored) {}
             return;
         }
+        // A matching learned recipe may replace the model's first semantic
+        // phone mutation with one deterministic Runtime run. The user turn
+        // itself selected the recipe; the model never grants extra authority.
+        if (tryExecuteTaskRecipeFastPath(
+                id,
+                requestedName,
+                requestedArgs,
+                callIntentGeneration)) {
+            return;
+        }
+
         // 0034: model-facing semantic action -> existing trusted Runtime tool.
         final SemanticPhoneAction.Resolution semantic;
         try {
@@ -1956,6 +1992,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         if (isMutationTool(name) && audioIncidentRecorder != null) {
             audioIncidentRecorder.captureBeforeFirstMutation(task.taskId, name, args);
         }
+        final JSONObject recipeBeforeContext = workingContext.toJson();
         JSONObject result = new JSONObject();
         long toolStartedAt = android.os.SystemClock.elapsedRealtime();
         try {
@@ -2022,6 +2059,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             if (isPhoneContextTool(name)) attachCurrentAppPlaybook(result);
             updateTaskCompletionContract(task, name, result);
             updateAgentStabilityAfterResult(task, name, args, result);
+            task.captureRecipeStep(name, args, result, recipeBeforeContext);
             task.addStep(name, result);
             sendToolResponse(id, requestedName, result);
             PerformanceMetrics.markAgentToolResultSent(
@@ -2042,6 +2080,112 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 reportStage("Agent 第 " + task.steps + " / " + agentMaxSteps + " 步：已取得「" + name + "」結果，正在決定下一步");
             }
         } catch (Exception error) { reportStage("Agent 工具結果回灌失敗：" + error.getMessage()); }
+    }
+
+    private boolean tryExecuteTaskRecipeFastPath(
+            String id,
+            String requestedName,
+            JSONObject requestedArgs,
+            long callIntentGeneration) {
+        if (!SemanticPhoneAction.TOOL_NAME.equals(requestedName)
+                || callIntentGeneration != taskRecipeCandidateGeneration
+                || taskRecipeCandidateId == null
+                || taskRecipeCandidateId.isEmpty()
+                || userActionScope.canSend()
+                || userActionScope.blocksNamedRecipientMessagingAction()) {
+            return false;
+        }
+
+        final String recipeId = taskRecipeCandidateId;
+        taskRecipeCandidateGeneration = -1L;
+        taskRecipeCandidateId = "";
+
+        final JSONObject recipe = taskRecipeStore.getRecipe(recipeId);
+        if (recipe == null) return false;
+
+        final AgentTaskRecord task = beginAgentStep(
+                "task_recipe",
+                new JSONObject());
+        if (task == null || task.cancelled || task.finished) {
+            return false;
+        }
+
+        final long generation = callIntentGeneration;
+        JSONObject result;
+        try {
+            reportStage("⚡ Crew 熟悉流程：Runtime 連續執行");
+            result = TaskRecipeRuntime.run(
+                    recipe,
+                    new TaskRecipeRuntime.Host() {
+                        @Override public boolean isCurrentIntent() {
+                            return isCurrentUserIntent(generation)
+                                    && !task.cancelled
+                                    && !task.finished;
+                        }
+
+                        @Override public JSONObject observeCurrentScreen()
+                                throws Exception {
+                            JSONObject screen =
+                                    observationVerificationController
+                                            .readSemanticScreenQuietly();
+                            if (screen != null
+                                    && screen.optBoolean("success", false)) {
+                                workingContext.observe(
+                                        screen.optString("package", ""),
+                                        screen.optString("fingerprint", ""),
+                                        screen.optString("stableScreenKey", ""));
+                            }
+                            return screen == null
+                                    ? new JSONObject()
+                                    : screen;
+                        }
+
+                        @Override public JSONObject executeStep(
+                                String tool,
+                                JSONObject args) throws Exception {
+                            if ("launch_app".equals(tool)) return launchApp(args);
+                            if ("tap_screen".equals(tool)) return tap(args);
+                            if ("search_current_app".equals(tool)) {
+                                return searchCurrentApp(args);
+                            }
+                            if ("commit_search".equals(tool)) {
+                                return commitSearch();
+                            }
+                            if ("swipe_screen".equals(tool)) return swipe(args);
+                            if ("press_key".equals(tool)) return pressKey(args);
+                            return new JSONObject()
+                                    .put("success", false)
+                                    .put("error", "TASK_RECIPE_UNSUPPORTED_STEP");
+                        }
+                    });
+        } catch (Exception error) {
+            result = new JSONObject();
+            try {
+                result.put("success", false)
+                        .put("fastPath", true)
+                        .put("fastPathState", "FALLBACK")
+                        .put("error", "TASK_RECIPE_RUNTIME_ERROR")
+                        .put("message",
+                                "熟悉流程執行失敗；改回一般方式繼續。");
+            } catch (Exception ignored) {}
+        }
+
+        boolean success = result.optBoolean("success", false);
+        taskRecipeStore.recordRun(recipeId, success);
+        try {
+            task.addStep("task_recipe", result);
+            sendToolResponse(id, requestedName, result);
+            task.awaitingModel = true;
+            scheduleAgentResponseWatchdog(task);
+            PerformanceMetrics.markAgentToolResultSent(
+                    task.taskId, task.intentGeneration, "task_recipe");
+            reportStage(success
+                    ? "⚡ 熟悉流程完成，等待 Gemini 簡短回覆"
+                    : "熟悉流程不符合目前畫面，已交回 Gemini");
+        } catch (Exception error) {
+            reportStage("Task Recipe 結果回灌失敗：" + error.getMessage());
+        }
+        return true;
     }
 
     private boolean shouldSuspendAgentForUser(JSONObject result) {
@@ -2081,6 +2225,13 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 activeAgentTask.intentGeneration = userIntentGeneration;
                 activeAgentTask.goalId = conversationGoalId;
                 activeAgentTask.goalTaskIndex = conversationGoalTaskIndex;
+                JSONObject recipeContext = workingContext.toJson();
+                String recipeGoal = recipeContext.optString(
+                        "latestUserTurn",
+                        recipeContext.optString("rootGoal", ""));
+                activeAgentTask.setRecipeContext(
+                        recipeGoal,
+                        recipeContext.optString("currentApp", ""));
                 reportStage("Agent 任務開始：" + activeAgentTask.taskId);
             }
             AgentTaskRecord task = activeAgentTask;
@@ -2595,6 +2746,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     }
 
     private void finishAgentTask(AgentTaskRecord task, String reason, String finalReply) {
+        boolean shouldLearnRecipe =
+                "任務完成".equals(reason)
+                        && task != null
+                        && task.blockedReason == null
+                        && task.canSaveRecipe();
         synchronized (agentLock) {
             if (task.finished) return;
             task.finished = true;
@@ -2609,6 +2765,18 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             if (activeAgentTask == task) activeAgentTask = null;
             conversationGoalTouchedAt = System.currentTimeMillis();
         }
+        if (shouldLearnRecipe) {
+            JSONObject saved = taskRecipeStore.rememberSuccessful(
+                    task.recipeGoal,
+                    task.recipeStartPackage,
+                    task.recipeStepsJson());
+            if (saved.optBoolean("success", false)) {
+                Log.i(TAG, "TaskRecipe learned steps="
+                        + saved.optInt("stepCount", 0)
+                        + " total=" + saved.optInt("recipeCount", 0));
+            }
+        }
+
         PerformanceMetrics.markAgentTaskFinished(
                 task.taskId, task.intentGeneration, "FINISHED");
         PerformanceMetrics.recordAgentTask(
