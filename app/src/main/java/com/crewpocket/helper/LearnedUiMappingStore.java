@@ -11,6 +11,8 @@ import org.json.JSONObject;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.HashMap;
+import java.util.UUID;
 
 /**
  * Persistent per-app UI mapping learned from the user.
@@ -35,10 +37,12 @@ final class LearnedUiMappingStore {
     private static final int MAX_RULES = 300;
 
     static final class Rule {
+        String id = "";
         String packageName = "";
         String screenSignature = "";
         String stableScreenKey = "";
         String role = "";
+        String userLabel = "";
         String viewId = "";
         String className = "";
         String contentDescription = "";
@@ -79,10 +83,12 @@ final class LearnedUiMappingStore {
         JSONObject toJson() {
             JSONObject o = new JSONObject();
             try {
+                o.put("id", id);
                 o.put("packageName", packageName);
                 o.put("screenSignature", screenSignature);
                 o.put("stableScreenKey", stableScreenKey);
                 o.put("role", role);
+                o.put("userLabel", userLabel);
                 o.put("viewId", viewId);
                 o.put("className", className);
                 o.put("contentDescription", contentDescription);
@@ -113,10 +119,12 @@ final class LearnedUiMappingStore {
         static Rule fromJson(JSONObject o) {
             Rule r = new Rule();
             if (o == null) return r;
+            r.id = o.optString("id", "");
             r.packageName = o.optString("packageName", "");
             r.screenSignature = o.optString("screenSignature", "");
             r.stableScreenKey = o.optString("stableScreenKey", "");
             r.role = o.optString("role", "");
+            r.userLabel = sanitizeUserLabel(o.optString("userLabel", ""));
             r.viewId = o.optString("viewId", "");
             r.className = o.optString("className", "");
             r.contentDescription = o.optString("contentDescription", "");
@@ -150,6 +158,7 @@ final class LearnedUiMappingStore {
 
     LearnedUiMappingStore(Context context) {
         prefs = context.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        migrateMissingIds();
     }
 
     synchronized void clearAll() {
@@ -171,6 +180,7 @@ final class LearnedUiMappingStore {
         if (node == null) return null;
 
         Rule rule = new Rule();
+        rule.id = UUID.randomUUID().toString();
         rule.packageName = safe(packageName);
         rule.screenSignature = safe(screenSignature);
         rule.stableScreenKey = safe(stableScreenKey);
@@ -319,6 +329,101 @@ final class LearnedUiMappingStore {
         if (invalidated) incrementCounter(KEY_ACTION_MEMORY_INVALIDATIONS);
     }
 
+    synchronized JSONObject updateRule(
+            String id,
+            String userLabel,
+            boolean enabled) {
+        JSONObject out = new JSONObject();
+        try {
+            String targetId = safe(id).trim();
+            String nextLabel = sanitizeUserLabel(userLabel);
+            if (targetId.isEmpty()) {
+                return out.put("success", false).put("error", "INVALID_ACTION_MEMORY_RULE");
+            }
+
+            List<Rule> rules = loadRules();
+            Rule target = null;
+            for (Rule rule : rules) {
+                if (targetId.equals(rule.id)) {
+                    target = rule;
+                    break;
+                }
+            }
+            if (target == null) {
+                return out.put("success", false).put("error", "ACTION_MEMORY_NOT_FOUND");
+            }
+
+            target.userLabel = nextLabel;
+            target.enabled = enabled;
+            saveRules(rules);
+            return out.put("success", true);
+        } catch (Exception error) {
+            try {
+                return out.put("success", false).put("error", "ACTION_MEMORY_UPDATE_FAILED");
+            } catch (Exception ignored) {
+                return new JSONObject();
+            }
+        }
+    }
+
+    synchronized boolean deleteRule(String id) {
+        String targetId = safe(id).trim();
+        if (targetId.isEmpty()) return false;
+
+        List<Rule> rules = loadRules();
+        boolean removed = false;
+        for (int i = rules.size() - 1; i >= 0; i--) {
+            if (targetId.equals(rules.get(i).id)) {
+                rules.remove(i);
+                removed = true;
+                break;
+            }
+        }
+        if (removed) saveRules(rules);
+        return removed;
+    }
+
+    synchronized int exactDuplicateCount() {
+        List<Rule> rules = loadRules();
+        HashMap<String, Integer> counts = new HashMap<String, Integer>();
+        int duplicates = 0;
+        for (Rule rule : rules) {
+            String key = exactDuplicateKey(rule);
+            int count = counts.containsKey(key) ? counts.get(key) : 0;
+            if (count >= 1) duplicates++;
+            counts.put(key, count + 1);
+        }
+        return duplicates;
+    }
+
+    /**
+     * Conservative cleanup: merges only mappings with the same app, role and
+     * structural selector. Screen signatures/stable keys may differ; those are
+     * treated as observations of the same control, not separate controls.
+     */
+    synchronized int deduplicateExact() {
+        List<Rule> rules = loadRules();
+        HashMap<String, Rule> kept = new HashMap<String, Rule>();
+        ArrayList<Rule> next = new ArrayList<Rule>();
+        int removed = 0;
+
+        for (Rule rule : rules) {
+            String key = exactDuplicateKey(rule);
+            Rule existing = kept.get(key);
+            if (existing == null) {
+                kept.put(key, rule);
+                next.add(rule);
+                continue;
+            }
+
+            mergeEvidence(existing, rule);
+            removed++;
+        }
+
+        if (removed > 0) saveRules(next);
+        return removed;
+    }
+
     synchronized JSONArray dumpForDebug(String packageName) {
         JSONArray arr = new JSONArray();
         for (Rule r : loadRules()) {
@@ -354,6 +459,77 @@ final class LearnedUiMappingStore {
         out.append("Policy: first failed verified execution disables the mapping until re-taught.\n");
         out.append("Privacy: structural selector metadata and counters only; no typed or message text.");
         return out.toString();
+    }
+
+    private void migrateMissingIds() {
+        synchronized (this) {
+            List<Rule> rules = loadRules();
+            boolean changed = false;
+            for (Rule rule : rules) {
+                if (rule.id == null || rule.id.trim().isEmpty()) {
+                    rule.id = UUID.randomUUID().toString();
+                    changed = true;
+                }
+            }
+            if (changed) saveRules(rules);
+        }
+    }
+
+    private static String exactDuplicateKey(Rule rule) {
+        if (rule == null) return "";
+        String key = safe(rule.packageName) + "|"
+                + normalizeRole(rule.role) + "|"
+                + safe(rule.viewId) + "|"
+                + safe(rule.className) + "|"
+                + safe(rule.contentDescription) + "|"
+                + safe(rule.parentClassName) + "|"
+                + safe(rule.relativePosition) + "|"
+                + safe(rule.composerState) + "|"
+                + safe(rule.composerClassName) + "|"
+                + safe(rule.composerViewId) + "|"
+                + safe(rule.anchorViewId) + "|"
+                + safe(rule.anchorClassName) + "|"
+                + safe(rule.anchorContentDescription) + "|"
+                + rule.anchored + "|"
+                + rule.targetOffsetX + "|"
+                + rule.targetOffsetY;
+
+        boolean hasStableSelector = !safe(rule.viewId).isEmpty()
+                || !safe(rule.contentDescription).isEmpty()
+                || !safe(rule.anchorViewId).isEmpty()
+                || (!safe(rule.className).isEmpty()
+                    && !safe(rule.parentClassName).isEmpty()
+                    && !safe(rule.relativePosition).isEmpty());
+        if (!hasStableSelector) {
+            key += "|xy=" + rule.centerX + "," + rule.centerY;
+        }
+        return key;
+    }
+
+    private static void mergeEvidence(Rule keep, Rule duplicate) {
+        if (keep == null || duplicate == null) return;
+        keep.successCount += Math.max(0, duplicate.successCount);
+        keep.failureCount += Math.max(0, duplicate.failureCount);
+        keep.lastVerifiedAt = Math.max(keep.lastVerifiedAt, duplicate.lastVerifiedAt);
+        keep.learnedAt = Math.max(keep.learnedAt, duplicate.learnedAt);
+        keep.enabled = keep.enabled || duplicate.enabled;
+
+        if (keep.screenSignature.isEmpty()) keep.screenSignature = duplicate.screenSignature;
+        if (keep.stableScreenKey.isEmpty()) keep.stableScreenKey = duplicate.stableScreenKey;
+        if (!keep.hasCoordinate() && duplicate.hasCoordinate()) {
+            keep.centerX = duplicate.centerX;
+            keep.centerY = duplicate.centerY;
+        }
+        if (!keep.anchored && duplicate.anchored) {
+            keep.anchorViewId = duplicate.anchorViewId;
+            keep.anchorClassName = duplicate.anchorClassName;
+            keep.anchorContentDescription = duplicate.anchorContentDescription;
+            keep.anchorCenterX = duplicate.anchorCenterX;
+            keep.anchorCenterY = duplicate.anchorCenterY;
+            keep.targetOffsetX = duplicate.targetOffsetX;
+            keep.targetOffsetY = duplicate.targetOffsetY;
+            keep.anchored = true;
+        }
     }
 
     private List<Rule> loadRules() {
@@ -397,6 +573,10 @@ final class LearnedUiMappingStore {
     }
 
     private static boolean sameIdentity(Rule a, Rule b) {
+        if (a == null || b == null) return false;
+        if (!safe(a.id).isEmpty() && !safe(b.id).isEmpty()) {
+            return a.id.equals(b.id);
+        }
         return a.packageName.equals(b.packageName)
                 && a.screenSignature.equals(b.screenSignature)
                 && a.stableScreenKey.equals(b.stableScreenKey)
@@ -428,6 +608,11 @@ final class LearnedUiMappingStore {
 
     private static String normalizeRole(String role) {
         return safe(role).trim().toUpperCase(Locale.ROOT);
+    }
+
+    private static String sanitizeUserLabel(String value) {
+        String text = value == null ? "" : value.replaceAll("\\s+", " ").trim();
+        return text.length() <= 60 ? text : text.substring(0, 60);
     }
 
     private static String sanitizeDescription(CharSequence value) {
