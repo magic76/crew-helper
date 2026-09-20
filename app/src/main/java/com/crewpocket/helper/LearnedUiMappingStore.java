@@ -12,7 +12,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.HashMap;
-import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -475,7 +474,7 @@ final class LearnedUiMappingStore {
 
     private static String exactDuplicateKey(Rule rule) {
         if (rule == null) return "";
-        return safe(rule.packageName) + "|"
+        String key = safe(rule.packageName) + "|"
                 + normalizeRole(rule.role) + "|"
                 + safe(rule.viewId) + "|"
                 + safe(rule.className) + "|"
@@ -491,6 +490,17 @@ final class LearnedUiMappingStore {
                 + rule.anchored + "|"
                 + rule.targetOffsetX + "|"
                 + rule.targetOffsetY;
+
+        boolean hasStableSelector = !safe(rule.viewId).isEmpty()
+                || !safe(rule.contentDescription).isEmpty()
+                || !safe(rule.anchorViewId).isEmpty()
+                || (!safe(rule.className).isEmpty()
+                    && !safe(rule.parentClassName).isEmpty()
+                    && !safe(rule.relativePosition).isEmpty());
+        if (!hasStableSelector) {
+            key += "|xy=" + rule.centerX + "," + rule.centerY;
+        }
+        return key;
     }
 
     private static void mergeEvidence(Rule keep, Rule duplicate) {
