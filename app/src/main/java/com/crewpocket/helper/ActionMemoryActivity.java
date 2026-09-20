@@ -96,8 +96,8 @@ public class ActionMemoryActivity extends Activity {
 
         TextView intro = text(
                 I18n.get(this,
-                        "可以改 role、停用/啟用或刪除 mapping。Selector 結構保持唯讀，避免手動修改後指到錯的 UI。重複整理只會合併同 App、同 role、同結構 selector 的 mapping。",
-                        "You can edit the role, enable/disable, or delete a mapping. Structural selectors stay read-only to avoid pointing at the wrong UI. Duplicate cleanup only merges mappings with the same app, role, and structural selector."),
+                        "可以改自訂名稱、停用/啟用或刪除 mapping。Runtime role 與 Selector 結構保持唯讀，避免手動修改後指到錯的 UI。重複整理只會合併同 App、同 role、同結構 selector 的 mapping。",
+                        "You can edit a custom name, enable/disable, or delete a mapping. Runtime roles and structural selectors stay read-only to avoid pointing at the wrong UI. Duplicate cleanup only merges mappings with the same app, role, and structural selector."),
                 11, CrewTheme.TEXT_SECONDARY, false);
         intro.setLineSpacing(dp(2), 1.08f);
         intro.setPadding(0, dp(14), 0, dp(12));
@@ -186,8 +186,12 @@ public class ActionMemoryActivity extends Activity {
         top.setOrientation(LinearLayout.HORIZONTAL);
         top.setGravity(Gravity.CENTER_VERTICAL);
 
-        String role = friendlyRole(rule.optString("role", ""));
-        top.addView(text(role, 13, CrewTheme.TEXT_PRIMARY, true),
+        String runtimeRole = rule.optString("role", "");
+        String userLabel = rule.optString("userLabel", "").trim();
+        String titleText = userLabel.isEmpty()
+                ? friendlyRole(runtimeRole)
+                : userLabel;
+        top.addView(text(titleText, 13, CrewTheme.TEXT_PRIMARY, true),
                 new LinearLayout.LayoutParams(
                         0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
@@ -204,6 +208,15 @@ public class ActionMemoryActivity extends Activity {
                 10));
         top.addView(status);
         card.addView(top);
+
+        if (!userLabel.isEmpty()) {
+            TextView roleLine = text(
+                    I18n.get(this, "Runtime role: ", "Runtime role: ")
+                            + friendlyRole(runtimeRole),
+                    9.5f, CrewTheme.TEXT_MUTED, false);
+            roleLine.setPadding(0, dp(3), 0, 0);
+            card.addView(roleLine);
+        }
 
         String pkg = rule.optString("packageName", "");
         String app = AppRuntimeRegistry.displayName(this, pkg);
@@ -251,19 +264,34 @@ public class ActionMemoryActivity extends Activity {
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(18), dp(8), dp(18), dp(4));
 
-        final EditText role = new EditText(this);
-        role.setText(rule.optString("role", ""));
-        role.setHint(I18n.get(this, "Role，例如 COMPOSER_SEND", "Role, e.g. COMPOSER_SEND"));
-        role.setTextSize(12);
-        role.setTextColor(CrewTheme.TEXT_PRIMARY);
-        role.setHintTextColor(CrewTheme.TEXT_MUTED);
-        role.setSingleLine(true);
-        role.setInputType(InputType.TYPE_CLASS_TEXT
-                | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS);
-        role.setBackground(CrewTheme.createCard(
+        TextView runtimeRole = text(
+                I18n.get(this, "Runtime role（唯讀）: ", "Runtime role (read-only): ")
+                        + friendlyRole(rule.optString("role", "")),
+                10.5f, CrewTheme.TEXT_SECONDARY, false);
+        runtimeRole.setPadding(dp(11), dp(9), dp(11), dp(9));
+        runtimeRole.setBackground(CrewTheme.createCard(
                 this, CrewTheme.BG_SURFACE, CrewTheme.BORDER_SUBTLE, 10));
-        role.setPadding(dp(11), dp(9), dp(11), dp(9));
-        root.addView(role);
+        root.addView(runtimeRole);
+
+        final EditText label = new EditText(this);
+        label.setText(rule.optString("userLabel", ""));
+        label.setHint(I18n.get(this,
+                "自訂名稱（選填，例如：LINE 送出按鈕）",
+                "Custom name (optional, e.g. LINE send button)"));
+        label.setTextSize(12);
+        label.setTextColor(CrewTheme.TEXT_PRIMARY);
+        label.setHintTextColor(CrewTheme.TEXT_MUTED);
+        label.setSingleLine(true);
+        label.setInputType(InputType.TYPE_CLASS_TEXT
+                | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        label.setBackground(CrewTheme.createCard(
+                this, CrewTheme.BG_SURFACE, CrewTheme.BORDER_SUBTLE, 10));
+        label.setPadding(dp(11), dp(9), dp(11), dp(9));
+        LinearLayout.LayoutParams labelLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        labelLp.setMargins(0, dp(8), 0, 0);
+        root.addView(label, labelLp);
 
         final CheckBox enabled = new CheckBox(this);
         enabled.setText(I18n.get(this, "啟用這條 mapping", "Enable this mapping"));
@@ -300,17 +328,9 @@ public class ActionMemoryActivity extends Activity {
         dialog.setOnShowListener(unused -> {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE)
                     .setOnClickListener(v -> {
-                        String nextRole = role.getText().toString().trim();
-                        if (nextRole.isEmpty()) {
-                            role.setError(I18n.get(this,
-                                    "Role 不能為空",
-                                    "Role cannot be empty"));
-                            return;
-                        }
-
                         JSONObject result = store.updateRule(
                                 rule.optString("id", ""),
-                                nextRole,
+                                label.getText().toString(),
                                 enabled.isChecked());
                         if (!result.optBoolean("success", false)) {
                             Toast.makeText(this,
