@@ -15,6 +15,11 @@ final class AgentTaskRecord {
     final long startedAt = System.currentTimeMillis();
     final ArrayList<String> stepsSummary = new ArrayList<String>();
     final ArrayList<JSONObject> stepDiagnostics = new ArrayList<JSONObject>();
+    final ArrayList<JSONObject> recipeSteps = new ArrayList<JSONObject>();
+    String recipeGoal = "";
+    String recipeStartPackage = "";
+    boolean recipeEligible = true;
+    String recipeIneligibleReason = "";
     final HashMap<String, Integer> toolCounts = new HashMap<String, Integer>();
     int steps;
     int mutationActions;
@@ -48,6 +53,126 @@ final class AgentTaskRecord {
         toolCounts.put(name, getToolCount(name) + 1);
     }
 
+    void setRecipeContext(String goal, String startPackage) {
+        recipeGoal = safe(goal);
+        recipeStartPackage = safe(startPackage);
+    }
+
+    void captureRecipeStep(
+            String name,
+            JSONObject args,
+            JSONObject result,
+            JSONObject beforeContext) {
+        if (!recipeEligible) return;
+        if ("task_recipe".equals(name)) {
+            recipeEligible = false;
+            recipeIneligibleReason = "FAST_PATH_REPLAY";
+            recipeSteps.clear();
+            return;
+        }
+        if (TaskRecipePolicy.isIgnorableObservation(name)) return;
+        if (!TaskRecipePolicy.isAllowedTool(name)) {
+            recipeEligible = false;
+            recipeIneligibleReason = "UNSUPPORTED_TOOL:" + safe(name);
+            recipeSteps.clear();
+            return;
+        }
+        if (result == null || !result.optBoolean("success", false)) {
+            recipeEligible = false;
+            recipeIneligibleReason = "FAILED_STEP";
+            recipeSteps.clear();
+            return;
+        }
+        String taskState = result.optString("taskState", "");
+        if ("WAITING_USER".equals(taskState) || "BLOCKED".equals(taskState)) {
+            recipeEligible = false;
+            recipeIneligibleReason = "INTERACTIVE_STEP";
+            recipeSteps.clear();
+            return;
+        }
+        if (recipeSteps.size() >= TaskRecipePolicy.MAX_STEPS) {
+            recipeEligible = false;
+            recipeIneligibleReason = "TOO_MANY_STEPS";
+            recipeSteps.clear();
+            return;
+        }
+
+        JSONObject safeArgs = new JSONObject();
+        JSONObject source = args == null ? new JSONObject() : args;
+        try {
+            if ("launch_app".equals(name)) {
+                copyString(source, safeArgs, "app");
+                copyString(source, safeArgs, "package_name");
+            } else if ("tap_screen".equals(name)) {
+                String label = source.optString(
+                        "label",
+                        source.optString("text", source.optString("name", ""))).trim();
+                String id = source.optString("id", "").trim();
+                String target = label.isEmpty() ? id : label;
+                if (TaskRecipePolicy.isUnsafeTapTarget(target)) {
+                    recipeEligible = false;
+                    recipeIneligibleReason = "UNSAFE_TAP";
+                    recipeSteps.clear();
+                    return;
+                }
+                if (!label.isEmpty()) safeArgs.put("label", label);
+                if (!id.isEmpty()) safeArgs.put("id", id);
+            } else if ("search_current_app".equals(name)) {
+                String text = source.optString("text", "").trim();
+                if (!TaskRecipePolicy.canPersistSearch(text)) {
+                    recipeEligible = false;
+                    recipeIneligibleReason = "UNSAFE_SEARCH";
+                    recipeSteps.clear();
+                    return;
+                }
+                safeArgs.put("text", text);
+            } else if ("swipe_screen".equals(name)) {
+                copyString(source, safeArgs, "direction");
+                copyString(source, safeArgs, "distance");
+            } else if ("press_key".equals(name)) {
+                String key = source.optString("key", "").trim().toUpperCase();
+                if (!"BACK".equals(key) && !"HOME".equals(key)) {
+                    recipeEligible = false;
+                    recipeIneligibleReason = "UNSAFE_KEY";
+                    recipeSteps.clear();
+                    return;
+                }
+                safeArgs.put("key", key);
+            }
+
+            JSONObject step = new JSONObject()
+                    .put("tool", name)
+                    .put("args", safeArgs);
+            if (beforeContext != null) {
+                String pkg = beforeContext.optString("currentApp", "").trim();
+                String stable = beforeContext.optString("stableScreen", "").trim();
+                if (!pkg.isEmpty()) step.put("expectedPackage", pkg);
+                if (!stable.isEmpty()) step.put("expectedStableScreen", stable);
+            }
+            recipeSteps.add(step);
+        } catch (Exception error) {
+            recipeEligible = false;
+            recipeIneligibleReason = "SANITIZE_FAILED";
+            recipeSteps.clear();
+        }
+    }
+
+    boolean canSaveRecipe() {
+        return recipeEligible
+                && recipeGoal.length() >= 3
+                && recipeSteps.size() >= 2
+                && recipeSteps.size() <= TaskRecipePolicy.MAX_STEPS;
+    }
+
+    JSONArray recipeStepsJson() {
+        JSONArray out = new JSONArray();
+        for (JSONObject step : recipeSteps) {
+            try { out.put(new JSONObject(step.toString())); }
+            catch (Exception ignored) {}
+        }
+        return out;
+    }
+
     void addStep(String name, JSONObject result) {
         String outcome = result.optBoolean("success")
                 ? "成功"
@@ -76,6 +201,18 @@ final class AgentTaskRecord {
         stepDiagnostics.add(diagnostic);
     }
 
+    private static void copyString(
+            JSONObject from,
+            JSONObject to,
+            String key) throws Exception {
+        String value = from.optString(key, "").trim();
+        if (!value.isEmpty()) to.put(key, value);
+    }
+
+    private static String safe(String value) {
+        return value == null ? "" : value.trim();
+    }
+
     JSONObject toJson() {
         JSONObject json = new JSONObject();
         try {
@@ -94,7 +231,9 @@ final class AgentTaskRecord {
                     .put("cancelled", cancelled)
                     .put("finished", finished)
                     .put("userVisibleReplyProduced", userVisibleReplyProducedSinceLastAction)
-                    .put("finalSpeechRetryCount", finalSpeechRetryCount);
+                    .put("finalSpeechRetryCount", finalSpeechRetryCount)
+                    .put("recipeEligible", recipeEligible)
+                    .put("recipeStepCount", recipeSteps.size());
         } catch (Exception ignored) {}
         return json;
     }
