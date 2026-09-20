@@ -50,6 +50,16 @@ final class TaskRecipePolicy {
         return out;
     }
 
+    static boolean isProvenNavigationTap(
+            String beforeStableScreen,
+            String afterStableScreen) {
+        String before = safe(beforeStableScreen);
+        String after = safe(afterStableScreen);
+        return !before.isEmpty()
+                && !after.isEmpty()
+                && !before.equals(after);
+    }
+
     static boolean canPersistSearch(String query) {
         String value = safe(query);
         if (value.isEmpty() || value.length() > MAX_SEARCH_CHARS) return false;
