@@ -53,6 +53,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/AgentTapDiagnostic.java" \
   "$SRC/ModelStepGuidance.java" \
   "$SRC/AppPlaybookRelevance.java" \
+  "$SRC/TaskRecipePolicy.java" \
   "$ROOT/tests/SendAuthorizationTest.java" \
   "$ROOT/tests/LiveTurnCoordinatorTest.java" \
   "$ROOT/tests/ToolCallDispatchLedgerTest.java" \
@@ -88,6 +89,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/AgentTapDiagnosticTest.java" \
   "$ROOT/tests/ModelStepGuidanceTest.java" \
   "$ROOT/tests/AppPlaybookRelevanceTest.java" \
+  "$ROOT/tests/TaskRecipePolicyTest.java" \
   "$ROOT/tests/AgentReplayRunner.java"
 
 java -cp "$OUT" com.crewpocket.helper.SendAuthorizationTest
@@ -125,4 +127,5 @@ java -cp "$OUT" com.crewpocket.helper.GoogleMapsSemanticContractTest
 java -cp "$OUT" com.crewpocket.helper.AgentTapDiagnosticTest
 java -cp "$OUT" com.crewpocket.helper.ModelStepGuidanceTest
 java -cp "$OUT" com.crewpocket.helper.AppPlaybookRelevanceTest
+java -cp "$OUT" com.crewpocket.helper.TaskRecipePolicyTest
 java -cp "$OUT" com.crewpocket.helper.AgentReplayRunner "$ROOT/tests/replay"
