@@ -88,6 +88,11 @@
             android:screenOrientation="portrait"
             android:exported="false" />
 
+        <activity
+            android:name=".CrewExperienceActivity"
+            android:screenOrientation="portrait"
+            android:exported="false" />
+
         <service
             android:name=".NativeLiveService"
             android:exported="false"
