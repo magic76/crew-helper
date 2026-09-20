@@ -1104,6 +1104,420 @@ public class MainActivity extends Activity
     }
 
 
+    private View makeSettingsOverviewRow(
+            int iconId,
+            String titleText,
+            String detailText,
+            int accentColor,
+            View.OnClickListener listener) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(14), dp(11), dp(10), dp(11));
+        row.setBackground(CrewTheme.createCard(
+                this,
+                CrewTheme.BG_SURFACE,
+                CrewTheme.BORDER_SUBTLE,
+                15));
+        row.setClickable(true);
+        row.setFocusable(true);
+        row.setOnClickListener(listener);
+
+        CrewIconView icon = new CrewIconView(this);
+        icon.setIcon(iconId, accentColor);
+        icon.setIconScale(0.58f);
+        icon.setBackground(CrewTheme.createIconBadge(
+                this, accentColor, 11));
+        LinearLayout.LayoutParams iconLp =
+                new LinearLayout.LayoutParams(dp(38), dp(38));
+        iconLp.setMargins(0, 0, dp(12), 0);
+        row.addView(icon, iconLp);
+
+        LinearLayout textCol = new LinearLayout(this);
+        textCol.setOrientation(LinearLayout.VERTICAL);
+
+        TextView title = new TextView(this);
+        title.setText(titleText);
+        title.setTextSize(13);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        title.setTextColor(CrewTheme.TEXT_PRIMARY);
+        textCol.addView(title);
+
+        TextView detail = new TextView(this);
+        detail.setText(detailText == null ? "" : detailText);
+        detail.setTextSize(10.5f);
+        detail.setTextColor(CrewTheme.TEXT_SECONDARY);
+        detail.setPadding(0, dp(2), 0, 0);
+        detail.setSingleLine(true);
+        detail.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        textCol.addView(detail);
+
+        row.addView(
+                textCol,
+                new LinearLayout.LayoutParams(
+                        0,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        1f));
+
+        TextView chevron = new TextView(this);
+        chevron.setText("›");
+        chevron.setTextSize(20);
+        chevron.setTextColor(CrewTheme.TEXT_MUTED);
+        chevron.setGravity(Gravity.CENTER);
+        row.addView(
+                chevron,
+                new LinearLayout.LayoutParams(dp(22), dp(42)));
+
+        LinearLayout outer = new LinearLayout(this);
+        outer.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.setMargins(0, 0, 0, dp(7));
+        outer.addView(row, lp);
+        return outer;
+    }
+
+    private void addSettingsAttentionCardIfNeeded() {
+        int count = 0;
+        StringBuilder detail = new StringBuilder();
+
+        if (!hasGeminiKey()) {
+            count++;
+            appendIssue(detail, I18n.get(this, "Gemini API Key", "Gemini API key"));
+        }
+        if (!hasMicrophonePermission()) {
+            count++;
+            appendIssue(detail, I18n.get(this, "麥克風權限", "Microphone permission"));
+        }
+        boolean notificationReady =
+                notificationPermissionGranted() && notificationsEnabled();
+        if (AppConfig.isAlwaysOnEnabled(this) && !notificationReady) {
+            count++;
+            appendIssue(detail, I18n.get(this, "通知", "Notifications"));
+        }
+
+        if (count <= 0) return;
+
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.HORIZONTAL);
+        card.setGravity(Gravity.CENTER_VERTICAL);
+        card.setPadding(dp(14), dp(11), dp(12), dp(11));
+        card.setBackground(CrewTheme.createCard(
+                this,
+                Color.argb(26, 245, 158, 11),
+                CrewTheme.AMBER_400,
+                14));
+
+        LinearLayout textCol = new LinearLayout(this);
+        textCol.setOrientation(LinearLayout.VERTICAL);
+
+        TextView title = new TextView(this);
+        title.setText(I18n.get(
+                this,
+                "需要處理 " + count,
+                count + " need attention"));
+        title.setTextSize(12.5f);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        title.setTextColor(CrewTheme.AMBER_400);
+        textCol.addView(title);
+
+        TextView desc = new TextView(this);
+        desc.setText(detail.toString());
+        desc.setTextSize(10.5f);
+        desc.setTextColor(CrewTheme.TEXT_SECONDARY);
+        desc.setPadding(0, dp(2), 0, 0);
+        textCol.addView(desc);
+
+        card.addView(
+                textCol,
+                new LinearLayout.LayoutParams(
+                        0,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        1f));
+
+        TextView action = new TextView(this);
+        action.setText(I18n.get(this, "修正", "Fix"));
+        action.setTextSize(11);
+        action.setTypeface(Typeface.DEFAULT_BOLD);
+        action.setTextColor(CrewTheme.AMBER_400);
+        action.setPadding(dp(8), dp(5), dp(8), dp(5));
+        card.addView(action);
+
+        card.setOnClickListener(v -> openFirstSettingsIssue());
+
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.setMargins(0, 0, 0, dp(12));
+        pageContent.addView(card, lp);
+    }
+
+    private void appendIssue(StringBuilder out, String value) {
+        if (value == null || value.trim().isEmpty()) return;
+        if (out.length() > 0) out.append(" · ");
+        out.append(value.trim());
+    }
+
+    private void openFirstSettingsIssue() {
+        if (!hasGeminiKey()) {
+            showSettingsDialog();
+            return;
+        }
+        if (!hasMicrophonePermission()) {
+            requestPermissions(
+                    new String[]{android.Manifest.permission.RECORD_AUDIO},
+                    991);
+            return;
+        }
+        if (AppConfig.isAlwaysOnEnabled(this)
+                && (!notificationPermissionGranted()
+                    || !notificationsEnabled())) {
+            openNotificationSettings();
+        }
+    }
+
+    private String phoneCapabilitiesSummary() {
+        int ready = 0;
+        int total = 4;
+
+        if (CrewAccessibilityService.isServiceRunning()) ready++;
+        if (hasOverlayPermission()) ready++;
+        if (hasMicrophonePermission()) ready++;
+
+        boolean cameraReady =
+                Build.VERSION.SDK_INT < Build.VERSION_CODES.M
+                        || checkSelfPermission(android.Manifest.permission.CAMERA)
+                                == PackageManager.PERMISSION_GRANTED;
+        if (cameraReady) ready++;
+
+        String summary = ready + "/" + total + " "
+                + I18n.get(this, "已就緒", "ready");
+        if (FloatingBubbleManager.isKeepAwakeActive()) {
+            summary += " · " + I18n.get(
+                    this,
+                    "螢幕常亮 ON",
+                    "Keep awake ON");
+        }
+        return summary;
+    }
+
+    private String languageSummary() {
+        String language = AppConfig.getLanguage(this);
+        if ("en".equals(language)) return "English";
+        if ("zh".equals(language)) return "中文";
+        return I18n.get(this, "跟隨系統", "System default");
+    }
+
+    private void showVoiceAndPersonalitySettings() {
+        showSettingsGroupDialog(
+                I18n.get(this, "語音與個性", "Voice & Personality"),
+                new int[]{CrewIcons.VOICE, CrewIcons.PERSONALITY},
+                new String[]{
+                        I18n.get(this, "音色", "Voice"),
+                        I18n.get(this, "說話個性", "Speaking Personality")
+                },
+                new String[]{
+                        AppConfig.getVoiceName(this),
+                        personalitySummary()
+                },
+                new int[]{CrewTheme.TEAL_300, CrewTheme.INDIGO_400},
+                new Runnable[]{
+                        () -> showVoicePersonaDialog(),
+                        () -> startActivity(new Intent(
+                                MainActivity.this,
+                                PersonalitySettingsActivity.class))
+                });
+    }
+
+    private void showConversationExperienceSettings() {
+        showSettingsGroupDialog(
+                I18n.get(this, "對話體驗", "Conversation Experience"),
+                new int[]{
+                        CrewIcons.INTERRUPT,
+                        CrewIcons.AUDIO,
+                        CrewIcons.CLOCK
+                },
+                new String[]{
+                        I18n.get(this, "插話靈敏度", "Interruption Sensitivity"),
+                        I18n.get(this, "音訊輸出", "Audio Output"),
+                        I18n.get(this, "閒置自動結束", "Live Idle Auto-End")
+                },
+                new String[]{
+                        interruptionSummary(
+                                AppConfig.getInterruptionSensitivity(this)),
+                        audioOutputSummary(),
+                        liveIdleTimeoutSummary(
+                                AppConfig.getLiveIdleTimeoutSeconds(this))
+                },
+                new int[]{
+                        CrewTheme.EMERALD_400,
+                        CrewTheme.CYAN_400,
+                        CrewTheme.CYAN_400
+                },
+                new Runnable[]{
+                        () -> showInterruptionSensitivityDialog(),
+                        () -> showAudioOutputDialog(),
+                        () -> showLiveIdleTimeoutDialog()
+                });
+    }
+
+    private void showWakeStandbySettings() {
+        boolean alwaysOn = AppConfig.isAlwaysOnEnabled(this);
+        boolean notificationReady =
+                notificationPermissionGranted() && notificationsEnabled();
+
+        showSettingsGroupDialog(
+                I18n.get(this, "喚醒與待命", "Wake & Standby"),
+                new int[]{CrewIcons.WAKE, CrewIcons.BELL},
+                new String[]{
+                        I18n.get(this, "喚醒設定", "Wake Settings"),
+                        I18n.get(this, "通知", "Notifications")
+                },
+                new String[]{
+                        "「" + AppConfig.getWakePhrase(this) + "」 · "
+                                + wakeSensitivitySummary(
+                                        AppConfig.getWakeSensitivity(this))
+                                + " · "
+                                + (alwaysOn
+                                        ? I18n.get(this, "ON", "ON")
+                                        : I18n.get(this, "OFF", "OFF")),
+                        notificationReady
+                                ? I18n.get(this, "已允許", "Allowed")
+                                : I18n.get(this, "需要處理", "Needs attention")
+                },
+                new int[]{
+                        alwaysOn ? CrewTheme.EMERALD_400 : CrewTheme.TEAL_300,
+                        notificationReady
+                                ? CrewTheme.EMERALD_400
+                                : CrewTheme.AMBER_400
+                },
+                new Runnable[]{
+                        () -> showAlwaysOnDialog(),
+                        () -> openNotificationSettings()
+                });
+    }
+
+    private void showPhoneCapabilitiesSettings() {
+        boolean accessibility = CrewAccessibilityService.isServiceRunning();
+        boolean overlay = hasOverlayPermission();
+        boolean microphone = hasMicrophonePermission();
+        boolean cameraReady =
+                Build.VERSION.SDK_INT < Build.VERSION_CODES.M
+                        || checkSelfPermission(android.Manifest.permission.CAMERA)
+                                == PackageManager.PERMISSION_GRANTED;
+        boolean keepAwake = FloatingBubbleManager.isKeepAwakeActive();
+
+        showSettingsGroupDialog(
+                I18n.get(this, "手機能力", "Phone Capabilities"),
+                new int[]{
+                        CrewIcons.PHONE_ACTIONS,
+                        CrewIcons.BUBBLE,
+                        CrewIcons.AUDIO,
+                        CrewIcons.CAMERA,
+                        CrewIcons.SUN
+                },
+                new String[]{
+                        I18n.get(this, "螢幕操作", "Screen Actions"),
+                        I18n.get(this, "懸浮球權限", "Floating Bubble Permission"),
+                        I18n.get(this, "麥克風", "Microphone"),
+                        I18n.get(this, "相機", "Camera"),
+                        I18n.get(this, "螢幕常亮", "Keep Screen Awake")
+                },
+                new String[]{
+                        accessibility
+                                ? I18n.get(this, "已啟用", "Enabled")
+                                : I18n.get(this, "未啟用", "Not enabled"),
+                        overlay
+                                ? I18n.get(this, "已允許", "Allowed")
+                                : I18n.get(this, "未允許", "Not allowed"),
+                        microphone
+                                ? I18n.get(this, "已允許", "Allowed")
+                                : I18n.get(this, "需要權限", "Permission required"),
+                        cameraReady
+                                ? I18n.get(this, "已允許", "Allowed")
+                                : I18n.get(this, "未允許", "Not allowed"),
+                        keepAwake
+                                ? I18n.get(this, "開啟", "On")
+                                : I18n.get(this, "關閉", "Off")
+                },
+                new int[]{
+                        accessibility ? CrewTheme.EMERALD_400 : CrewTheme.TEXT_MUTED,
+                        overlay ? CrewTheme.EMERALD_400 : CrewTheme.TEXT_MUTED,
+                        microphone ? CrewTheme.EMERALD_400 : CrewTheme.AMBER_400,
+                        cameraReady ? CrewTheme.EMERALD_400 : CrewTheme.TEXT_MUTED,
+                        keepAwake ? CrewTheme.AMBER_400 : CrewTheme.TEXT_MUTED
+                },
+                new Runnable[]{
+                        () -> showAccessibilityDisclosureDialog(),
+                        () -> openOverlaySettings(),
+                        () -> requestPermissions(
+                                new String[]{android.Manifest.permission.RECORD_AUDIO},
+                                991),
+                        () -> requestCameraPermission(),
+                        () -> {
+                            boolean active =
+                                    FloatingBubbleManager.toggleKeepAwake(
+                                            MainActivity.this);
+                            Toast.makeText(
+                                    MainActivity.this,
+                                    active
+                                            ? I18n.get(
+                                                    MainActivity.this,
+                                                    "螢幕常亮已開啟",
+                                                    "Keep Screen Awake ON")
+                                            : I18n.get(
+                                                    MainActivity.this,
+                                                    "螢幕常亮已關閉",
+                                                    "Keep Screen Awake OFF"),
+                                    Toast.LENGTH_SHORT).show();
+                            renderSettingsPage();
+                        }
+                });
+    }
+
+    private void showSettingsGroupDialog(
+            String title,
+            int[] icons,
+            String[] labels,
+            String[] values,
+            int[] colors,
+            Runnable[] actions) {
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(16), dp(6), dp(16), dp(4));
+        scroll.addView(root);
+
+        final android.app.AlertDialog[] dialogRef =
+                new android.app.AlertDialog[1];
+
+        int count = Math.min(
+                Math.min(icons.length, labels.length),
+                Math.min(
+                        Math.min(values.length, colors.length),
+                        actions.length));
+        for (int i = 0; i < count; i++) {
+            final int index = i;
+            root.addView(makeSettingsRow(
+                    icons[i],
+                    labels[i],
+                    values[i],
+                    colors[i],
+                    v -> {
+                        if (dialogRef[0] != null) dialogRef[0].dismiss();
+                        actions[index].run();
+                    }));
+        }
+
+        dialogRef[0] = new android.app.AlertDialog.Builder(this)
+                .setTitle(title)
+                .setView(scroll)
+                .setNegativeButton(I18n.get(this, "關閉", "Close"), null)
+                .create();
+        dialogRef[0].show();
+    }
+
     private View makeSettingsRow(
             int iconId,
             String titleText,
