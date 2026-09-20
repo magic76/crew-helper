@@ -366,7 +366,7 @@ public class ActionMemoryActivity extends Activity {
 
     private String duplicateKey(JSONObject rule) {
         if (rule == null) return "";
-        return rule.optString("packageName", "") + "|"
+        String key = rule.optString("packageName", "") + "|"
                 + rule.optString("role", "") + "|"
                 + rule.optString("viewId", "") + "|"
                 + rule.optString("className", "") + "|"
@@ -382,6 +382,18 @@ public class ActionMemoryActivity extends Activity {
                 + rule.optBoolean("anchored", false) + "|"
                 + rule.optInt("targetOffsetX", 0) + "|"
                 + rule.optInt("targetOffsetY", 0);
+
+        boolean hasStableSelector = !rule.optString("viewId", "").isEmpty()
+                || !rule.optString("contentDescription", "").isEmpty()
+                || !rule.optString("anchorViewId", "").isEmpty()
+                || (!rule.optString("className", "").isEmpty()
+                    && !rule.optString("parentClassName", "").isEmpty()
+                    && !rule.optString("relativePosition", "").isEmpty());
+        if (!hasStableSelector) {
+            key += "|xy=" + rule.optInt("centerX", -1)
+                    + "," + rule.optInt("centerY", -1);
+        }
+        return key;
     }
 
     private String selectorSummary(JSONObject rule) {
