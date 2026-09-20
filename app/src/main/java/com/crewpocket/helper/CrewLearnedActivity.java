@@ -32,6 +32,7 @@ public class CrewLearnedActivity extends Activity {
     private LinearLayout content;
     private LearnedUiMappingStore actionMemory;
     private AppPlaybookStore playbooks;
+    private ReflectionLessonStore experiences;
 
     private int dp(float value) {
         return CrewTheme.dp(this, value);
@@ -41,6 +42,7 @@ public class CrewLearnedActivity extends Activity {
         super.onCreate(state);
         actionMemory = new LearnedUiMappingStore(this);
         playbooks = new AppPlaybookStore(this);
+        experiences = new ReflectionLessonStore(this);
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             getWindow().setStatusBarColor(CrewTheme.BG_PRIMARY);
@@ -258,28 +260,50 @@ public class CrewLearnedActivity extends Activity {
     }
 
     private void renderExperience() {
+        int learnedCount = experiences == null ? 0 : experiences.count();
+
         addSectionHeader(
                 I18n.get(this, "Crew Experience", "Crew Experience"),
                 I18n.get(this,
-                        "EVIDENCE · 摩擦、重試與修正證據",
-                        "EVIDENCE · friction, retries, and correction evidence"),
-                "");
+                        "LESSONS · 從摩擦、重試與修正中學到的經驗",
+                        "LESSONS · reusable experience from friction and correction"),
+                learnedCount + " " + I18n.get(this, "條 lesson", "lessons"));
 
         LinearLayout card = card();
-        TextView report = text(
-                ExperienceEvidenceStore.buildReport(this),
-                10.5f, CrewTheme.TEXT_SECONDARY, false);
-        report.setTypeface(Typeface.MONOSPACE);
-        report.setLineSpacing(dp(2), 1.08f);
-        card.addView(report);
+        card.addView(text(
+                learnedCount == 0
+                        ? I18n.get(this,
+                                "目前還沒有 learned Experience。一般成功不會產生 Experience；只有明顯摩擦或重複中度摩擦才會進入學習。",
+                                "No learned Experience yet. Plain success stays quiet; only strong or repeated medium friction enters learning.")
+                        : I18n.get(this,
+                                "Experience 會先成為候選，經相容證據確認後才升級到 App Playbook。你可以查看、編輯 Crew 最終記住的 lesson，或刪除它。",
+                                "Experience starts as a candidate and is promoted to App Playbook only after compatible evidence. You can inspect, edit, or delete the learned lesson."),
+                11, CrewTheme.TEXT_SECONDARY, false));
 
-        TextView note = text(
-                I18n.get(this,
-                        "一般成功永遠不觸發 Experience；只有明顯摩擦，或同一個中度摩擦重複出現，才會進入 review。",
-                        "Plain success never triggers Experience; only strong friction or repeated medium friction enters review."),
-                10, CrewTheme.TEXT_MUTED, false);
-        note.setPadding(0, dp(9), 0, 0);
-        card.addView(note);
+        Button manage = new Button(this);
+        manage.setAllCaps(false);
+        manage.setText(I18n.get(this,
+                "管理 Crew Experience",
+                "Manage Crew Experience"));
+        manage.setTextColor(Color.WHITE);
+        manage.setTextSize(12);
+        manage.setTypeface(Typeface.DEFAULT_BOLD);
+        manage.setBackground(CrewTheme.createGradientButton(
+                this, CrewTheme.TEAL_500, CrewTheme.INDIGO_500, 12));
+        manage.setOnClickListener(v -> startActivity(
+                new Intent(CrewLearnedActivity.this, CrewExperienceActivity.class)));
+        LinearLayout.LayoutParams buttonLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(44));
+        buttonLp.topMargin = dp(10);
+        card.addView(manage, buttonLp);
+
+        TextView evidence = text(
+                ExperienceEvidenceStore.buildReport(this),
+                9.5f, CrewTheme.TEXT_MUTED, false);
+        evidence.setTypeface(Typeface.MONOSPACE);
+        evidence.setLineSpacing(dp(1), 1.05f);
+        evidence.setPadding(0, dp(10), 0, 0);
+        card.addView(evidence);
 
         content.addView(card, cardParams());
     }
