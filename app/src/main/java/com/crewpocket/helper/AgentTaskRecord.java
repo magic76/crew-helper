@@ -163,9 +163,8 @@ final class AgentTaskRecord {
             // switch/toggle/settings mutation. Stable-screen transition is a
             // deliberately conservative first-version boundary.
             if ("tap_screen".equals(name)
-                    && (beforeStable.isEmpty()
-                        || afterStable.isEmpty()
-                        || beforeStable.equals(afterStable))) {
+                    && !TaskRecipePolicy.isProvenNavigationTap(
+                            beforeStable, afterStable)) {
                 recipeEligible = false;
                 recipeIneligibleReason = "TAP_NOT_PROVEN_NAVIGATION";
                 recipeSteps.clear();
