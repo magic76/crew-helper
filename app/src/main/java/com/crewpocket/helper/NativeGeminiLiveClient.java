@@ -653,6 +653,9 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         // A finalized user instruction supersedes any incomplete model-turn
         // bookkeeping from the previous interaction.
         resetCurrentModelTurnState();
+        synchronized (injectedAppPlaybooks) {
+            injectedAppPlaybooks.clear();
+        }
         long now = System.currentTimeMillis();
         boolean startNewCapsule = conversationGoalId.isEmpty()
                 || now - conversationGoalTouchedAt < 0L
@@ -3550,9 +3553,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         try {
             String packageName = currentForegroundPackageName();
             if (packageName.isEmpty()) return "";
-            String instruction = appPlaybookStore.systemInstructionFor(packageName);
+            String instruction = appPlaybookStore.systemInstructionForStartup(packageName);
             if (!instruction.isEmpty()) {
-                synchronized (injectedAppPlaybooks) { injectedAppPlaybooks.add(packageName); }
+                synchronized (injectedAppPlaybooks) {
+                    injectedAppPlaybooks.add(packageName + "|builtin");
+                }
             }
             return instruction;
         } catch (Exception ignored) {
@@ -3588,14 +3593,25 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         }
         if (packageName.isEmpty()) packageName = currentForegroundPackageName();
         if (packageName.isEmpty()) return;
-        synchronized (injectedAppPlaybooks) {
-            if (injectedAppPlaybooks.contains(packageName)) return;
-        }
-        JSONObject context = appPlaybookStore.modelContext(packageName);
+
+        JSONObject context = appPlaybookStore.modelContextForTask(
+                packageName,
+                workingContext.toProgressJson(),
+                result);
         if (context.length() == 0) return;
+
+        String retrievalKey = context.optString("retrievalKey", "builtin");
+        String injectedKey = packageName + "|" + retrievalKey;
+        synchronized (injectedAppPlaybooks) {
+            if (injectedAppPlaybooks.contains(injectedKey)) return;
+        }
+
         try {
+            context.remove("retrievalKey");
             result.put("appPlaybook", context);
-            synchronized (injectedAppPlaybooks) { injectedAppPlaybooks.add(packageName); }
+            synchronized (injectedAppPlaybooks) {
+                injectedAppPlaybooks.add(injectedKey);
+            }
         } catch (Exception ignored) {}
     }
 
