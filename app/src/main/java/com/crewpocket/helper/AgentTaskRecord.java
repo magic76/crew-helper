@@ -143,11 +143,40 @@ final class AgentTaskRecord {
             JSONObject step = new JSONObject()
                     .put("tool", name)
                     .put("args", safeArgs);
+            String beforeStable = "";
             if (beforeContext != null) {
                 String pkg = beforeContext.optString("currentApp", "").trim();
-                String stable = beforeContext.optString("stableScreen", "").trim();
+                beforeStable = beforeContext.optString("stableScreen", "").trim();
                 if (!pkg.isEmpty()) step.put("expectedPackage", pkg);
-                if (!stable.isEmpty()) step.put("expectedStableScreen", stable);
+                if (!beforeStable.isEmpty()) {
+                    step.put("expectedStableScreen", beforeStable);
+                }
+            }
+
+            JSONObject after = result.optJSONObject("after");
+            String afterStable = after == null
+                    ? "" : after.optString("stableScreenKey", "").trim();
+            String afterPackage = after == null
+                    ? "" : after.optString("package", "").trim();
+
+            // A replayable TAP must be proven navigation, not a same-screen
+            // switch/toggle/settings mutation. Stable-screen transition is a
+            // deliberately conservative first-version boundary.
+            if ("tap_screen".equals(name)
+                    && (beforeStable.isEmpty()
+                        || afterStable.isEmpty()
+                        || beforeStable.equals(afterStable))) {
+                recipeEligible = false;
+                recipeIneligibleReason = "TAP_NOT_PROVEN_NAVIGATION";
+                recipeSteps.clear();
+                return;
+            }
+
+            if (!afterPackage.isEmpty()) {
+                step.put("expectedAfterPackage", afterPackage);
+            }
+            if (!afterStable.isEmpty()) {
+                step.put("expectedAfterStableScreen", afterStable);
             }
             recipeSteps.add(step);
         } catch (Exception error) {
