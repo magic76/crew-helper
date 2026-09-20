@@ -87,6 +87,31 @@ final class TaskRecipeRuntime {
                     || "PENDING".equals(verification)) {
                 return fallback("TASK_RECIPE_NEEDS_MODEL", i, recipeId);
             }
+
+            String expectedAfterPackage =
+                    step.optString("expectedAfterPackage", "");
+            String expectedAfterStable =
+                    step.optString("expectedAfterStableScreen", "");
+            if (!expectedAfterPackage.isEmpty()
+                    || !expectedAfterStable.isEmpty()) {
+                JSONObject after = result.optJSONObject("after");
+                String actualAfterPackage = after == null
+                        ? "" : after.optString("package", "");
+                String actualAfterStable = after == null
+                        ? "" : after.optString("stableScreenKey", "");
+
+                if ((!expectedAfterPackage.isEmpty()
+                                && !expectedAfterPackage.equals(
+                                        actualAfterPackage))
+                        || (!expectedAfterStable.isEmpty()
+                                && !expectedAfterStable.equals(
+                                        actualAfterStable))) {
+                    return fallback(
+                            "TASK_RECIPE_AFTER_STATE_MISMATCH",
+                            i,
+                            recipeId);
+                }
+            }
         }
 
         return new JSONObject()
