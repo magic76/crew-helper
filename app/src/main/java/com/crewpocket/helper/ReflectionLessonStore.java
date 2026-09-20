@@ -157,6 +157,8 @@ final class ReflectionLessonStore {
             int contradictions = Math.max(0, existing.optInt("contradictions", 0));
             double average = existing.optDouble("avgConfidence", confidence);
             String effectiveLesson = existing.optString("lesson", "");
+            boolean manualOverride = existing.optBoolean("manualOverride", false);
+            String manualLesson = manualOverride ? effectiveLesson : "";
             String ruleId = existing.optString("playbookRuleId", "");
             boolean compatible = ReflectionLearningPolicy.lessonsCompatible(
                     effectiveLesson, lesson);
@@ -202,6 +204,9 @@ final class ReflectionLessonStore {
                     .put("avgConfidence", average)
                     .put("state", state)
                     .put("updatedAt", now);
+            if (manualOverride && !manualLesson.isEmpty()) {
+                existing.put("lesson", manualLesson);
+            }
             if (ruleId.isEmpty()) existing.remove("playbookRuleId");
         }
 
@@ -227,6 +232,117 @@ final class ReflectionLessonStore {
             }
         }
         return existing;
+    }
+
+    JSONArray list() {
+        synchronized (LOCK) {
+            try { return new JSONArray(load().toString()); }
+            catch (Exception ignored) { return new JSONArray(); }
+        }
+    }
+
+    int count() {
+        synchronized (LOCK) {
+            return load().length();
+        }
+    }
+
+    JSONObject updateLesson(String id, String newLesson) {
+        synchronized (LOCK) {
+            JSONObject out = new JSONObject();
+            try {
+                String cleanId = collapse(id);
+                String lesson = collapse(newLesson);
+                if (prefs == null || cleanId.isEmpty()) {
+                    return out.put("success", false).put("error", "EXPERIENCE_NOT_FOUND");
+                }
+
+                JSONArray items = load();
+                JSONObject item = findById(items, cleanId);
+                if (item == null) {
+                    return out.put("success", false).put("error", "EXPERIENCE_NOT_FOUND");
+                }
+
+                double confidence = Math.max(
+                        ReflectionLearningPolicy.MIN_CANDIDATE_CONFIDENCE,
+                        item.optDouble("avgConfidence",
+                                ReflectionLearningPolicy.MIN_CANDIDATE_CONFIDENCE));
+                if (!ReflectionLearningPolicy.isSafeRuleLesson(lesson, confidence)) {
+                    return out.put("success", false).put("error", "EXPERIENCE_POLICY_REJECTED");
+                }
+
+                String pkg = cleanPackage(item.optString("package", ""));
+                String playbookRuleId = item.optString("playbookRuleId", "");
+                if (!playbookRuleId.isEmpty()) {
+                    String title = playbookTitle(
+                            pkg,
+                            playbookRuleId,
+                            item);
+                    JSONObject updated = playbookStore.update(
+                            pkg, playbookRuleId, title, lesson);
+                    if (!updated.optBoolean("success", false)) {
+                        return out.put("success", false)
+                                .put("error", "PROMOTED_PLAYBOOK_UPDATE_FAILED");
+                    }
+                }
+
+                item.put("lesson", lesson)
+                        .put("manualOverride", true)
+                        .put("updatedAt", System.currentTimeMillis());
+                save(items);
+                return out.put("success", true)
+                        .put("state", item.optString("state", STATE_CANDIDATE));
+            } catch (Exception error) {
+                try {
+                    return out.put("success", false).put("error", "EXPERIENCE_UPDATE_FAILED");
+                } catch (Exception ignored) {
+                    return new JSONObject();
+                }
+            }
+        }
+    }
+
+    JSONObject deleteLesson(String id) {
+        synchronized (LOCK) {
+            JSONObject out = new JSONObject();
+            try {
+                String cleanId = collapse(id);
+                if (prefs == null || cleanId.isEmpty()) {
+                    return out.put("success", false).put("error", "EXPERIENCE_NOT_FOUND");
+                }
+
+                JSONArray items = load();
+                JSONArray next = new JSONArray();
+                JSONObject removed = null;
+                for (int i = 0; i < items.length(); i++) {
+                    JSONObject item = items.optJSONObject(i);
+                    if (item == null) continue;
+                    if (cleanId.equals(item.optString("id", ""))) {
+                        removed = item;
+                    } else {
+                        next.put(item);
+                    }
+                }
+                if (removed == null) {
+                    return out.put("success", false).put("error", "EXPERIENCE_NOT_FOUND");
+                }
+
+                String pkg = cleanPackage(removed.optString("package", ""));
+                String playbookRuleId = removed.optString("playbookRuleId", "");
+                if (!playbookRuleId.isEmpty()) {
+                    playbookStore.delete(pkg, playbookRuleId);
+                }
+
+                save(next);
+                return out.put("success", true);
+            } catch (Exception error) {
+                try {
+                    return out.put("success", false).put("error", "EXPERIENCE_DELETE_FAILED");
+                } catch (Exception ignored) {
+                    return new JSONObject();
+                }
+            }
+        }
     }
 
     /** Human-readable local-only view of sanitized Crew Experience rules. */
@@ -320,6 +436,37 @@ final class ReflectionLessonStore {
             }
         }
         return null;
+    }
+
+    private static JSONObject findById(JSONArray items, String id) {
+        if (items == null || id == null || id.isEmpty()) return null;
+        for (int i = items.length() - 1; i >= 0; i--) {
+            JSONObject item = items.optJSONObject(i);
+            if (item != null && id.equals(item.optString("id", ""))) {
+                return item;
+            }
+        }
+        return null;
+    }
+
+    private String playbookTitle(
+            String packageName,
+            String ruleId,
+            JSONObject experience) {
+        JSONArray rules = playbookStore.rulesFor(packageName);
+        for (int i = 0; i < rules.length(); i++) {
+            JSONObject rule = rules.optJSONObject(i);
+            if (rule != null && ruleId.equals(rule.optString("id", ""))) {
+                String title = rule.optString("title", "");
+                if (!title.trim().isEmpty()) return title;
+            }
+        }
+        return "Crew Experience · "
+                + collapse(experience == null ? "" : experience.optString("scope", ""))
+                + " · "
+                + collapse(experience == null ? "" : experience.optString("condition", ""))
+                + " -> "
+                + collapse(experience == null ? "" : experience.optString("response", ""));
     }
 
     private static String aggregateState(String current, String next) {
