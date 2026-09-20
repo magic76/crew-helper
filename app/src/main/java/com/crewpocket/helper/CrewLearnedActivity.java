@@ -137,8 +137,8 @@ public class CrewLearnedActivity extends Activity {
         LinearLayout manageCard = card();
         manageCard.addView(text(
                 I18n.get(this,
-                        "可以查看全部 mapping、編輯 role、停用/啟用、刪除，並整理結構完全相同的重複項。",
-                        "View all mappings, edit roles, enable/disable, delete, and clean structurally identical duplicates."),
+                        "可以查看全部 mapping、改自訂名稱、停用/啟用、刪除，並整理結構完全相同的重複項。",
+                        "View all mappings, edit custom names, enable/disable, delete, and clean structurally identical duplicates."),
                 11, CrewTheme.TEXT_SECONDARY, false));
 
         int duplicateCount = actionMemory.exactDuplicateCount();
