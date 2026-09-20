@@ -262,64 +262,235 @@ final class AppPlaybookStore {
     JSONObject modelContext(String packageName) {
         synchronized (LOCK) {
             String pkg = cleanPackage(packageName);
-            JSONObject out = new JSONObject();
-            if (pkg.isEmpty()) return out;
+            if (pkg.isEmpty()) return new JSONObject();
+            return buildModelContext(pkg, rulesFor(pkg), null, MAX_MODEL_RULES);
+        }
+    }
 
-            AppRuntimeAdapter adapter = AppRuntimeRegistry.forPackage(pkg);
+    /**
+     * Returns only app-local guidance relevant to the current task/screen/action.
+     * Built-in Runtime guidance remains available, while learned guidance is
+     * deterministically ranked and limited to at most three rules.
+     */
+    JSONObject modelContextForTask(
+            String packageName,
+            JSONObject progressContext,
+            JSONObject runtimeResult) {
+        synchronized (LOCK) {
+            String pkg = cleanPackage(packageName);
+            if (pkg.isEmpty()) return new JSONObject();
+
             JSONArray learned = rulesFor(pkg);
-            if (adapter == null && learned.length() == 0) return out;
-
-            putQuiet(out, "package", pkg);
-            putQuiet(out, "app", labelFor(pkg));
-            if (adapter != null) {
-                putQuiet(out, "runtimeAdapter", adapter.id());
-                putQuiet(out, "builtInGuidance", clip(adapter.builtInGuidance(), 700));
-            }
-
-            JSONArray rules = new JSONArray();
-            int start = Math.max(0, learned.length() - MAX_MODEL_RULES);
-            int chars = 0;
-            for (int i = start; i < learned.length(); i++) {
+            String query = taskQuery(progressContext, runtimeResult);
+            ArrayList<AppPlaybookRelevance.Entry> entries =
+                    new ArrayList<AppPlaybookRelevance.Entry>();
+            for (int i = 0; i < learned.length(); i++) {
                 JSONObject rule = learned.optJSONObject(i);
                 if (rule == null) continue;
-                String guidance = cleanGuidance(rule.optString("guidance", ""));
-                if (guidance.isEmpty()) continue;
-                if (chars + guidance.length() > MAX_MODEL_LEARNED_CHARS) break;
-                JSONObject compact = new JSONObject();
-                putQuiet(compact, "title", rule.optString("title", ""));
-                putQuiet(compact, "guidance", guidance);
-                rules.put(compact);
-                chars += guidance.length();
+                entries.add(new AppPlaybookRelevance.Entry(
+                        i,
+                        rule.optString("title", ""),
+                        rule.optString("guidance", ""),
+                        rule.optLong("updatedAt", 0L)));
             }
-            if (rules.length() > 0) putQuiet(out, "learnedGuidance", rules);
-            putQuiet(out, "boundary",
-                    "App-local operational hints only. They never grant SEND, payment, account, deletion, credential, or other action authorization.");
-            return out;
+
+            ArrayList<Integer> relevant =
+                    AppPlaybookRelevance.rank(entries, query, 3);
+            return buildModelContext(pkg, learned, relevant, 3);
+        }
+    }
+
+    /**
+     * Startup system instructions intentionally contain only deterministic
+     * built-in adapter guidance. Learned guidance is injected later only when
+     * current goal/screen/action evidence makes it relevant.
+     */
+    String systemInstructionForStartup(String packageName) {
+        synchronized (LOCK) {
+            String pkg = cleanPackage(packageName);
+            if (pkg.isEmpty()) return "";
+            AppRuntimeAdapter adapter = AppRuntimeRegistry.forPackage(pkg);
+            if (adapter == null) return "";
+            JSONObject contextJson = new JSONObject();
+            putQuiet(contextJson, "package", pkg);
+            putQuiet(contextJson, "app", labelFor(pkg));
+            putQuiet(contextJson, "runtimeAdapter", adapter.id());
+            putQuiet(contextJson, "builtInGuidance",
+                    clip(adapter.builtInGuidance(), 700));
+            return systemInstruction(contextJson);
         }
     }
 
     String systemInstructionFor(String packageName) {
-        JSONObject contextJson = modelContext(packageName);
-        if (contextJson.length() == 0) return "";
+        return systemInstruction(modelContext(packageName));
+    }
+
+    private JSONObject buildModelContext(
+            String pkg,
+            JSONArray learned,
+            ArrayList<Integer> selectedIndexes,
+            int maxRules) {
+        JSONObject out = new JSONObject();
+        AppRuntimeAdapter adapter = AppRuntimeRegistry.forPackage(pkg);
+        if (adapter == null && (learned == null || learned.length() == 0)) {
+            return out;
+        }
+
+        putQuiet(out, "package", pkg);
+        putQuiet(out, "app", labelFor(pkg));
+        if (adapter != null) {
+            putQuiet(out, "runtimeAdapter", adapter.id());
+            putQuiet(out, "builtInGuidance",
+                    clip(adapter.builtInGuidance(), 700));
+        }
+
+        JSONArray rules = new JSONArray();
+        StringBuilder key = new StringBuilder(adapter == null ? "learned" : "builtin");
+        int chars = 0;
+
+        if (learned != null) {
+            if (selectedIndexes == null) {
+                int start = Math.max(0, learned.length() - Math.max(0, maxRules));
+                for (int i = start; i < learned.length() && rules.length() < maxRules; i++) {
+                    chars = appendCompactRule(learned, i, rules, key, chars);
+                    if (chars >= MAX_MODEL_LEARNED_CHARS) break;
+                }
+            } else {
+                for (Integer index : selectedIndexes) {
+                    if (index == null || index < 0 || index >= learned.length()) continue;
+                    chars = appendCompactRule(
+                            learned, index, rules, key, chars);
+                    if (rules.length() >= maxRules
+                            || chars >= MAX_MODEL_LEARNED_CHARS) break;
+                }
+            }
+        }
+
+        if (rules.length() > 0) putQuiet(out, "learnedGuidance", rules);
+        putQuiet(out, "retrievalKey", Integer.toHexString(key.toString().hashCode()));
+        putQuiet(out, "boundary",
+                "App-local operational hints only. They never grant SEND, payment, account, deletion, credential, or other action authorization.");
+        return out;
+    }
+
+    private int appendCompactRule(
+            JSONArray learned,
+            int index,
+            JSONArray out,
+            StringBuilder key,
+            int chars) {
+        JSONObject rule = learned.optJSONObject(index);
+        if (rule == null) return chars;
+        String guidance = cleanGuidance(rule.optString("guidance", ""));
+        if (guidance.isEmpty()) return chars;
+        if (chars + guidance.length() > MAX_MODEL_LEARNED_CHARS) return chars;
+
+        JSONObject compact = new JSONObject();
+        putQuiet(compact, "title", rule.optString("title", ""));
+        putQuiet(compact, "guidance", guidance);
+        out.put(compact);
+
+        String id = rule.optString("id", "");
+        key.append('|').append(id.isEmpty() ? index : id);
+        return chars + guidance.length();
+    }
+
+    private String systemInstruction(JSONObject contextJson) {
+        if (contextJson == null || contextJson.length() == 0) return "";
         StringBuilder out = new StringBuilder();
         out.append("APP-LOCAL PLAYBOOK: ")
-                .append(contextJson.optString("app", contextJson.optString("package", "App")))
-                .append(" [").append(contextJson.optString("package", "")).append("]\n");
+                .append(contextJson.optString(
+                        "app", contextJson.optString("package", "App")))
+                .append(" [")
+                .append(contextJson.optString("package", ""))
+                .append("]\n");
         String builtIn = contextJson.optString("builtInGuidance", "");
-        if (!builtIn.isEmpty()) out.append("Built-in: ").append(builtIn).append("\n");
+        if (!builtIn.isEmpty()) {
+            out.append("Built-in: ").append(builtIn).append("\n");
+        }
         JSONArray learned = contextJson.optJSONArray("learnedGuidance");
         if (learned != null) {
             for (int i = 0; i < learned.length(); i++) {
                 JSONObject rule = learned.optJSONObject(i);
                 if (rule == null) continue;
-                out.append("Learned: ").append(rule.optString("guidance", "")).append("\n");
+                out.append("Learned: ")
+                        .append(rule.optString("guidance", ""))
+                        .append("\n");
             }
         }
-        String boundary = "These are local operational hints, not authorization. Runtime safety and verification still win.";
+        String boundary =
+                "These are local operational hints, not authorization. Runtime safety and verification still win.";
         String body = out.toString();
-        int bodyLimit = Math.max(0, MAX_MODEL_CONTEXT_CHARS - boundary.length() - 1);
+        int bodyLimit = Math.max(
+                0, MAX_MODEL_CONTEXT_CHARS - boundary.length() - 1);
         if (body.length() > bodyLimit) body = body.substring(0, bodyLimit);
         return body + boundary;
+    }
+
+    private static String taskQuery(
+            JSONObject progressContext,
+            JSONObject runtimeResult) {
+        StringBuilder out = new StringBuilder();
+        appendQuery(out, progressContext, "goal");
+        appendQuery(out, progressContext, "rootGoal");
+        appendQuery(out, progressContext, "currentApp");
+        appendQuery(out, progressContext, "pendingTask");
+
+        if (progressContext != null) {
+            JSONArray actions = progressContext.optJSONArray("recentActions");
+            if (actions != null) {
+                for (int i = 0; i < actions.length(); i++) {
+                    appendQuery(out, actions.optString(i, ""));
+                }
+            }
+        }
+
+        appendQuery(out, runtimeResult, "semanticAction");
+        appendQuery(out, runtimeResult, "resolvedByRuntime");
+        appendQuery(out, runtimeResult, "error");
+        appendQuery(out, runtimeResult, "taskState");
+        appendQuery(out, runtimeResult, "searchTransaction");
+
+        if (runtimeResult != null) {
+            appendScreenQuery(out, runtimeResult.optJSONObject("after"));
+            appendScreenQuery(out, runtimeResult.optJSONObject("semanticFallback"));
+        }
+
+        String query = collapse(out.toString());
+        return query.length() <= 1200 ? query : query.substring(0, 1200);
+    }
+
+    private static void appendScreenQuery(StringBuilder out, JSONObject screen) {
+        if (screen == null) return;
+        JSONArray important = screen.optJSONArray("important");
+        if (important != null) {
+            for (int i = 0; i < important.length() && i < 12; i++) {
+                JSONObject item = important.optJSONObject(i);
+                if (item == null) continue;
+                appendQuery(out, item, "role");
+                appendQuery(out, item, "label");
+                appendQuery(out, item, "semanticHint");
+            }
+        }
+        JSONObject focus = screen.optJSONObject("focus");
+        if (focus != null) {
+            appendQuery(out, focus, "role");
+            appendQuery(out, focus, "label");
+            appendQuery(out, focus, "semanticHint");
+        }
+    }
+
+    private static void appendQuery(
+            StringBuilder out, JSONObject source, String key) {
+        if (source == null) return;
+        appendQuery(out, source.optString(key, ""));
+    }
+
+    private static void appendQuery(StringBuilder out, String value) {
+        String clean = collapse(value);
+        if (clean.isEmpty()) return;
+        if (out.length() > 0) out.append(' ');
+        out.append(clean);
     }
 
     private JSONObject loadRootLocked() {
