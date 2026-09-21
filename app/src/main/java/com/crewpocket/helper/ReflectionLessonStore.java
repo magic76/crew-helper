@@ -347,14 +347,9 @@ final class ReflectionLessonStore {
 
     /** Human-readable local-only view of sanitized Crew Experience rules. */
     static String buildReport(Context context) {
-        JSONArray items = new JSONArray();
-        if (context != null) {
-            try {
-                SharedPreferences prefs = context.getApplicationContext()
-                        .getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-                items = new JSONArray(prefs.getString(KEY_ITEMS, "[]"));
-            } catch (Exception ignored) {}
-        }
+        JSONArray items = context == null
+                ? new JSONArray()
+                : new ReflectionLessonStore(context).list();
 
         StringBuilder out = new StringBuilder();
         out.append("Crew Experience\n");
@@ -416,8 +411,30 @@ final class ReflectionLessonStore {
 
     private JSONArray load() {
         if (prefs == null) return new JSONArray();
-        try { return new JSONArray(prefs.getString(KEY_ITEMS, "[]")); }
-        catch (Exception ignored) { return new JSONArray(); }
+        try {
+            JSONArray source = new JSONArray(prefs.getString(KEY_ITEMS, "[]"));
+            JSONArray kept = new JSONArray();
+            boolean pruned = false;
+            for (int i = 0; i < source.length(); i++) {
+                JSONObject item = source.optJSONObject(i);
+                if (item == null) continue;
+                String condition = collapse(item.optString("condition", ""));
+                if (ReflectionRuleEvidence.isRuntimeInternalFailure(condition)) {
+                    pruned = true;
+                    String pkg = cleanPackage(item.optString("package", ""));
+                    String playbookRuleId = item.optString("playbookRuleId", "");
+                    if (!pkg.isEmpty() && !playbookRuleId.isEmpty()) {
+                        playbookStore.delete(pkg, playbookRuleId);
+                    }
+                    continue;
+                }
+                kept.put(item);
+            }
+            if (pruned) save(kept);
+            return kept;
+        } catch (Exception ignored) {
+            return new JSONArray();
+        }
     }
 
     private void save(JSONArray items) {
