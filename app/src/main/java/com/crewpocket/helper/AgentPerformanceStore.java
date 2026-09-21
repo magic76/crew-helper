@@ -13,7 +13,7 @@ import org.json.JSONObject;
  */
 final class AgentPerformanceStore {
     private static final String PREFS = "crew_agent_performance";
-    private static final String KEY_TASKS = "tasks_v1";
+    private static final String KEY_TASKS = "tasks_v2";
     private static final int MAX_TASKS = 50;
     private static final Object LOCK = new Object();
 
@@ -34,9 +34,25 @@ final class AgentPerformanceStore {
                 JSONArray tasks = readArray(prefs.getString(KEY_TASKS, "[]"));
                 if (containsTask(tasks, taskId)) return;
 
-                boolean success = AgentInspectorStore.isSuccessfulTaskEnd(status);
                 boolean cancelled = status.contains("停止") || status.contains("取消");
-                boolean recovered = success && hasFailureThenSuccess(task.optJSONArray("steps"));
+                boolean partial = task.optBoolean("partialOutcome", false)
+                        || !task.optString("blockCategory", "").isEmpty()
+                        || task.optBoolean("modelRefusal", false);
+                boolean terminalSuccess =
+                        AgentInspectorStore.isSuccessfulTaskEnd(status)
+                                && !cancelled
+                                && !partial;
+                boolean recovered = terminalSuccess
+                        && hasFailureThenSuccess(task.optJSONArray("steps"));
+                String outcome = cancelled
+                        ? "CANCELLED"
+                        : partial
+                                ? "PARTIAL"
+                                : recovered
+                                        ? "RECOVERED_SUCCESS"
+                                        : terminalSuccess
+                                                ? "SUCCESS"
+                                                : "HARD_FAILURE";
 
                 JSONObject perf = PerformanceMetrics.latestFinishedTaskSnapshot(taskId);
                 long taskMs = perf.optLong("taskMs", -1L);
@@ -50,8 +66,10 @@ final class AgentPerformanceStore {
                 JSONObject item = new JSONObject()
                         .put("taskId", taskId)
                         .put("at", System.currentTimeMillis())
-                        .put("success", success)
+                        .put("outcome", outcome)
+                        .put("success", terminalSuccess)
                         .put("cancelled", cancelled)
+                        .put("partial", partial)
                         .put("recovered", recovered)
                         .put("steps", task.optInt("stepCount", 0))
                         .put("taskMs", taskMs)
@@ -83,6 +101,7 @@ final class AgentPerformanceStore {
         int total = 0;
         int success = 0;
         int recovered = 0;
+        int partial = 0;
         int cancelled = 0;
         int hardFailure = 0;
         long taskTotal = 0L;
@@ -96,12 +115,12 @@ final class AgentPerformanceStore {
             JSONObject item = tasks.optJSONObject(i);
             if (item == null) continue;
             total++;
-            boolean ok = item.optBoolean("success", false);
-            boolean stopped = item.optBoolean("cancelled", false);
-            if (ok) success++;
-            if (item.optBoolean("recovered", false)) recovered++;
-            if (stopped) cancelled++;
-            if (!ok && !stopped) hardFailure++;
+            String outcome = normalizedOutcome(item);
+            if ("SUCCESS".equals(outcome)) success++;
+            else if ("RECOVERED_SUCCESS".equals(outcome)) recovered++;
+            else if ("PARTIAL".equals(outcome)) partial++;
+            else if ("CANCELLED".equals(outcome)) cancelled++;
+            else hardFailure++;
 
             long taskMs = item.optLong("taskMs", -1L);
             if (taskMs >= 0L) { taskTotal += taskMs; taskSamples++; }
@@ -117,11 +136,14 @@ final class AgentPerformanceStore {
             out.append("No persistent task samples yet.");
             return out.toString();
         }
-        out.append("Completed successfully: ").append(success)
-                .append(" (").append(Math.round(success * 100.0 / total)).append("%)\n")
-                .append("Recovered after friction: ").append(recovered).append("\n")
+        int fullSuccess = success + recovered;
+        out.append("Success: ").append(success).append("\n")
+                .append("Recovered success: ").append(recovered).append("\n")
+                .append("Partial: ").append(partial).append("\n")
                 .append("Hard failures: ").append(hardFailure).append("\n")
-                .append("Cancelled / superseded: ").append(cancelled).append("\n");
+                .append("Cancelled / superseded: ").append(cancelled).append("\n")
+                .append("Full-success rate: ")
+                .append(Math.round(fullSuccess * 100.0 / total)).append("%\n");
         if (taskSamples > 0) out.append("Avg task time: ").append(taskTotal / taskSamples).append(" ms\n");
         if (toolSamples > 0) out.append("Avg Runtime tool time: ").append(toolTotal / toolSamples).append(" ms\n");
         if (geminiSamples > 0) out.append("Avg Gemini wait between tools: ").append(geminiTotal / geminiSamples).append(" ms\n");
@@ -134,6 +156,18 @@ final class AgentPerformanceStore {
         context.getApplicationContext()
                 .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .edit().clear().apply();
+    }
+
+    private static String normalizedOutcome(JSONObject item) {
+        if (item == null) return "HARD_FAILURE";
+        String explicit = item.optString("outcome", "").trim();
+        if (!explicit.isEmpty()) return explicit;
+        // Backward compatibility for samples written before outcome categories.
+        if (item.optBoolean("cancelled", false)) return "CANCELLED";
+        if (item.optBoolean("partial", false)) return "PARTIAL";
+        if (item.optBoolean("recovered", false)) return "RECOVERED_SUCCESS";
+        if (item.optBoolean("success", false)) return "SUCCESS";
+        return "HARD_FAILURE";
     }
 
     private static boolean containsTask(JSONArray tasks, String taskId) {

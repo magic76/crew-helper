@@ -43,7 +43,7 @@ final class ExperienceEvidenceStore {
         synchronized (LOCK) {
             SharedPreferences prefs = context.getApplicationContext()
                     .getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-            JSONArray items = readArray(prefs.getString(KEY_FRICTION, "[]"));
+            JSONArray items = readPrunedArray(prefs);
             long now = System.currentTimeMillis();
             boolean changed = false;
 
@@ -108,7 +108,7 @@ final class ExperienceEvidenceStore {
             try {
                 SharedPreferences prefs = context.getApplicationContext()
                         .getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-                JSONArray items = readArray(prefs.getString(KEY_FRICTION, "[]"));
+                JSONArray items = readPrunedArray(prefs);
                 tracked = items.length();
                 for (int i = 0; i < items.length(); i++) {
                     JSONObject item = items.optJSONObject(i);
@@ -137,8 +137,7 @@ final class ExperienceEvidenceStore {
             try {
                 SharedPreferences prefs = context.getApplicationContext()
                         .getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-                JSONArray items = readArray(
-                        prefs.getString(KEY_FRICTION, "[]"));
+                JSONArray items = readPrunedArray(prefs);
                 tracked = items.length();
 
                 for (int i = 0; i < items.length(); i++) {
@@ -197,6 +196,37 @@ final class ExperienceEvidenceStore {
             if (value != null) out.put(value);
         }
         return out;
+    }
+
+    private static JSONArray readPrunedArray(SharedPreferences prefs) {
+        JSONArray source = readArray(prefs == null
+                ? "[]" : prefs.getString(KEY_FRICTION, "[]"));
+        JSONArray kept = new JSONArray();
+        boolean pruned = false;
+        for (int i = 0; i < source.length(); i++) {
+            JSONObject item = source.optJSONObject(i);
+            if (item == null) continue;
+            String condition = conditionFromRuleKey(item.optString("ruleKey", ""));
+            if (ReflectionRuleEvidence.isRuntimeInternalFailure(condition)) {
+                pruned = true;
+                continue;
+            }
+            kept.put(item);
+        }
+        if (pruned && prefs != null) {
+            prefs.edit().putString(KEY_FRICTION, kept.toString()).apply();
+        }
+        return kept;
+    }
+
+    private static String conditionFromRuleKey(String ruleKey) {
+        if (ruleKey == null) return "";
+        int start = ruleKey.indexOf("|when=");
+        if (start < 0) return "";
+        start += 6;
+        int end = ruleKey.indexOf("|do=", start);
+        if (end < 0) end = ruleKey.length();
+        return ruleKey.substring(start, end).trim();
     }
 
     private static JSONArray readArray(String raw) {
