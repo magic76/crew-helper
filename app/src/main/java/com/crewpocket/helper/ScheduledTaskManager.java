@@ -1,6 +1,11 @@
 package com.crewpocket.helper;
 
+import android.app.Notification;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.content.Context;
+import android.content.Intent;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Vibrator;
@@ -29,7 +34,10 @@ public class ScheduledTaskManager {
                 throws Exception;
     }
 
-    private static final long EVENT_CHECK_DEBOUNCE_MS = 80L;
+    // Accessibility often emits several events for one visual transition.
+    // Coalesce the burst and inspect the semantic tree once.
+    private static final long EVENT_CHECK_DEBOUNCE_MS = 180L;
+    private static final String WATCH_NOTIFICATION_CHANNEL = "crew_watcher";
     private static ScheduledTaskManager instance;
     private final Context context;
     private final Handler mainHandler;
@@ -106,6 +114,7 @@ public class ScheduledTaskManager {
     private final ConcurrentHashMap<String, ScheduledTask> activeTasks =
             new ConcurrentHashMap<String, ScheduledTask>();
     private final AtomicLong idCounter = new AtomicLong(1);
+    private final AtomicLong notificationIdCounter = new AtomicLong(9100);
     private final Runnable accessibilityEventCheck = new Runnable() {
         @Override public void run() {
             String eventPackage = pendingEventPackage;
@@ -603,16 +612,83 @@ public class ScheduledTaskManager {
                     && !current.equals(task.baselineFingerprint);
         }
 
-        boolean found = searchConditionInTree(
-                root,
-                task.conditionText
-                        .trim()
-                        .toLowerCase(Locale.ROOT));
+        String query = task.conditionText
+                .trim()
+                .toLowerCase(Locale.ROOT);
+        if (PendingActionPolicy.CONDITION_BUTTON_APPEARS.equals(
+                task.conditionType)) {
+            return searchInteractiveElementInTree(
+                    root, query, false);
+        }
+        if (PendingActionPolicy.CONDITION_ELEMENT_ENABLED.equals(
+                task.conditionType)) {
+            return searchInteractiveElementInTree(
+                    root, query, true);
+        }
+
+        boolean found = searchConditionInTree(root, query);
         if (PendingActionPolicy.CONDITION_TEXT_DISAPPEARS.equals(
                 task.conditionType)) {
             return !found;
         }
         return found;
+    }
+
+    private boolean searchInteractiveElementInTree(
+            AccessibilityNodeInfo node,
+            String query,
+            boolean requireEnabled) {
+        if (node == null) return false;
+
+        String text = node.getText() == null
+                ? ""
+                : node.getText().toString().toLowerCase(Locale.ROOT);
+        String desc = node.getContentDescription() == null
+                ? ""
+                : node.getContentDescription().toString().toLowerCase(Locale.ROOT);
+        String id = node.getViewIdResourceName() == null
+                ? ""
+                : node.getViewIdResourceName().toLowerCase(Locale.ROOT);
+        String cls = node.getClassName() == null
+                ? ""
+                : node.getClassName().toString().toLowerCase(Locale.ROOT);
+
+        boolean matches = text.contains(query)
+                || desc.contains(query)
+                || id.contains(query);
+        boolean interactive = node.isClickable()
+                || cls.contains("button")
+                || cls.contains("switch")
+                || cls.contains("checkbox")
+                || cls.contains("radiobutton");
+        boolean visible;
+        try {
+            visible = node.isVisibleToUser();
+        } catch (Exception ignored) {
+            visible = true;
+        }
+
+        if (matches
+                && visible
+                && interactive
+                && (!requireEnabled || node.isEnabled())) {
+            return true;
+        }
+
+        int count = node.getChildCount();
+        for (int i = 0; i < count; i++) {
+            AccessibilityNodeInfo child = node.getChild(i);
+            if (child == null) continue;
+            try {
+                if (searchInteractiveElementInTree(
+                        child, query, requireEnabled)) {
+                    return true;
+                }
+            } finally {
+                child.recycle();
+            }
+        }
+        return false;
     }
 
     private String pendingActionGuard(
@@ -854,6 +930,7 @@ public class ScheduledTaskManager {
     }
 
     private void triggerAlarm(String title, String message) {
+        postSystemNotification(title, message);
         try {
             if (vibrator != null) {
                 vibrator.vibrate(
@@ -862,6 +939,60 @@ public class ScheduledTaskManager {
             }
         } catch (Exception ignored) {}
         speak(title + "。" + message);
+    }
+
+    private void postSystemNotification(String title, String message) {
+        try {
+            NotificationManager manager =
+                    (NotificationManager) context.getSystemService(
+                            Context.NOTIFICATION_SERVICE);
+            if (manager == null) return;
+
+            if (Build.VERSION.SDK_INT >= 26) {
+                android.app.NotificationChannel channel =
+                        new android.app.NotificationChannel(
+                                WATCH_NOTIFICATION_CHANNEL,
+                                "Crew Watcher",
+                                NotificationManager.IMPORTANCE_DEFAULT);
+                channel.setDescription(
+                        "Crew Helper 背景等待與條件達成通知");
+                manager.createNotificationChannel(channel);
+            }
+
+            Intent openIntent = new Intent(context, MainActivity.class);
+            int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+            if (Build.VERSION.SDK_INT >= 23) {
+                flags |= PendingIntent.FLAG_IMMUTABLE;
+            }
+            PendingIntent openPending = PendingIntent.getActivity(
+                    context,
+                    (int) notificationIdCounter.get(),
+                    openIntent,
+                    flags);
+
+            Notification.Builder builder = new Notification.Builder(context)
+                    .setSmallIcon(android.R.drawable.ic_dialog_info)
+                    .setContentTitle(nonEmpty(title) ? title : "Crew Watcher")
+                    .setContentText(message == null ? "" : message)
+                    .setContentIntent(openPending)
+                    .setAutoCancel(true)
+                    .setOnlyAlertOnce(false)
+                    .setShowWhen(true);
+            if (Build.VERSION.SDK_INT >= 26) {
+                builder.setChannelId(WATCH_NOTIFICATION_CHANNEL);
+            }
+            if (nonEmpty(message)) {
+                builder.setStyle(
+                        new Notification.BigTextStyle().bigText(message));
+            }
+
+            manager.notify(
+                    (int) notificationIdCounter.getAndIncrement(),
+                    builder.build());
+        } catch (Exception ignored) {
+            // Android 13+ may deny notifications when POST_NOTIFICATIONS
+            // has not been granted. Vibration/TTS remain as fallback.
+        }
     }
 
     public void speak(String text) {
