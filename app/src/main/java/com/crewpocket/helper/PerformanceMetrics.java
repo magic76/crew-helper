@@ -166,6 +166,15 @@ final class PerformanceMetrics {
         if (step != null && step.tool.equals(safeName(tool))) step.resultSentAt = now;
     }
 
+    static synchronized void markAgentAnswerReady(
+            String taskId, long generation) {
+        AgentTrace trace = activeTrace;
+        if (!matches(trace, taskId, generation)) return;
+        if (trace.answerReadyAt <= 0L) {
+            trace.answerReadyAt = SystemClock.elapsedRealtime();
+        }
+    }
+
     static synchronized void markAgentFinalSpeech(
             String taskId, long generation) {
         AgentTrace trace = activeTrace;
@@ -266,6 +275,8 @@ final class PerformanceMetrics {
             out.put("toolRuntimeMs", trace.toolRuntimeTotalMs);
             out.put("geminiWaitMs", trace.geminiBetweenToolsMs);
             out.put("resultToSpeechMs", duration(trace.lastToolResultAt, trace.finalSpeechAt));
+            out.put("answerReadyToSpeechMs",
+                    duration(trace.answerReadyAt, trace.finalSpeechAt));
             out.put("toolCount", trace.steps.size());
         } catch (Exception ignored) {}
         return out;
@@ -332,6 +343,7 @@ final class PerformanceMetrics {
         }
         long intentToFirstTool = duration(trace.intentAt, trace.firstToolAt);
         long resultToSpeech = duration(trace.lastToolResultAt, trace.finalSpeechAt);
+        long answerReadyToSpeech = duration(trace.answerReadyAt, trace.finalSpeechAt);
         long speechTail = duration(trace.finalSpeechAt, trace.finishedAt);
 
         out.append("Outcome: ").append(trace.outcome).append("\n");
@@ -343,6 +355,13 @@ final class PerformanceMetrics {
                 .append(trace.geminiBetweenToolsMs).append(" ms\n");
         out.append("Last tool result -> final speech: ")
                 .append(resultToSpeech).append(" ms\n");
+        if (trace.answerReadyAt > 0L) {
+            out.append("Answer-ready -> final speech: ")
+                    .append(answerReadyToSpeech >= 0L
+                            ? answerReadyToSpeech + " ms"
+                            : "not reached")
+                    .append("\n");
+        }
         out.append("Final speech start -> task finish: ")
                 .append(speechTail)
                 .append(" ms (includes remaining speech / turn completion)\n");
@@ -526,6 +545,7 @@ final class PerformanceMetrics {
         long firstToolAt;
         long lastToolResultAt;
         long finalSpeechAt;
+        long answerReadyAt;
         long finishedAt;
         long toolRuntimeTotalMs;
         long geminiBetweenToolsMs;
@@ -544,6 +564,7 @@ final class PerformanceMetrics {
             out.firstToolAt = firstToolAt;
             out.lastToolResultAt = lastToolResultAt;
             out.finalSpeechAt = finalSpeechAt;
+            out.answerReadyAt = answerReadyAt;
             out.finishedAt = finishedAt;
             out.toolRuntimeTotalMs = toolRuntimeTotalMs;
             out.geminiBetweenToolsMs = geminiBetweenToolsMs;
