@@ -334,7 +334,9 @@ public class CrewLearnedActivity extends Activity {
         card.addView(manage, buttonLp);
 
         TextView evidence = text(
-                ExperienceEvidenceStore.buildReport(this),
+                ExperienceEvidenceStore.buildSummary(this)
+                        + "\n"
+                        + ReflectionHistoryStore.buildSummary(this),
                 9.5f, CrewTheme.TEXT_MUTED, false);
         evidence.setTypeface(Typeface.MONOSPACE);
         evidence.setLineSpacing(dp(1), 1.05f);
