@@ -189,6 +189,7 @@ final class AgentInspectorStore {
         // Raw user/model text, TYPE/SEARCH content, blocked reasons and arbitrary
         // tool arguments never leave this method.
         if (task != null) {
+            AgentPerformanceStore.recordTerminalTask(context, rawStatus, task);
             TaskReflectionCoordinator.maybeReflect(context, rawStatus, task, activeTask);
         }
     }
@@ -255,6 +256,8 @@ final class AgentInspectorStore {
         }
 
         out.append("\n\n")
+                .append(AgentPerformanceStore.buildReport(context))
+                .append("\n\n")
                 .append(PerformanceMetrics.buildReportForTask(task.optString("taskId", "")))
                 .append("\n");
         if (events.length() > 0) {
@@ -318,6 +321,7 @@ final class AgentInspectorStore {
         context.getApplicationContext()
                 .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .edit().clear().apply();
+        AgentPerformanceStore.clear(context);
         PerformanceMetrics.reset();
     }
 
