@@ -8,6 +8,8 @@ final class PendingActionPolicy {
     static final String CONDITION_TEXT_DISAPPEARS = "TEXT_DISAPPEARS";
     static final String CONDITION_SCREEN_CHANGE = "SCREEN_CHANGE";
     static final String CONDITION_APP_OPENED = "APP_OPENED";
+    static final String CONDITION_BUTTON_APPEARS = "BUTTON_APPEARS";
+    static final String CONDITION_ELEMENT_ENABLED = "ELEMENT_ENABLED";
 
     static final String ACTION_TAP = "TAP";
     static final String ACTION_TYPE = "TYPE";
@@ -49,10 +51,14 @@ final class PendingActionPolicy {
         String action = normalizeAction(rawAction);
 
         if (conditionType.isEmpty()) {
-            return reject("BAD_CONDITION", "只支援文字出現、文字消失、畫面改變或 App 開啟。");
+            return reject(
+                    "BAD_CONDITION",
+                    "只支援文字出現/消失、按鈕出現、元件可用、畫面改變或 App 開啟。");
         }
         if ((CONDITION_TEXT_APPEARS.equals(conditionType)
-                        || CONDITION_TEXT_DISAPPEARS.equals(conditionType))
+                        || CONDITION_TEXT_DISAPPEARS.equals(conditionType)
+                        || CONDITION_BUTTON_APPEARS.equals(conditionType)
+                        || CONDITION_ELEMENT_ENABLED.equals(conditionType))
                 && blank(conditionText)) {
             return reject("CONDITION_TEXT_REQUIRED", "等待文字條件需要 condition_text。");
         }
@@ -104,7 +110,19 @@ final class PendingActionPolicy {
                 || "DISAPPEARS".equals(v)) {
             return CONDITION_TEXT_DISAPPEARS;
         }
-        if ("SCREEN_CHANGE".equals(v) || "SCREEN_CHANGES".equals(v)) {
+        if ("BUTTON_APPEARS".equals(v)
+                || "BUTTON_VISIBLE".equals(v)
+                || "CONTROL_APPEARS".equals(v)) {
+            return CONDITION_BUTTON_APPEARS;
+        }
+        if ("ELEMENT_ENABLED".equals(v)
+                || "BUTTON_ENABLED".equals(v)
+                || "CONTROL_ENABLED".equals(v)) {
+            return CONDITION_ELEMENT_ENABLED;
+        }
+        if ("SCREEN_CHANGE".equals(v)
+                || "SCREEN_CHANGES".equals(v)
+                || "SCREEN_CHANGED".equals(v)) {
             return CONDITION_SCREEN_CHANGE;
         }
         if ("APP_OPENED".equals(v)
