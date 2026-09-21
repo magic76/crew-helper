@@ -70,6 +70,34 @@ public final class ReflectionRuleEvidenceTest {
                         "app:MAPS", "UI_TARGET_NOT_FOUND", "OPEN_APP"),
                 "unrelated successful mutation must not be treated as retry evidence");
 
+        List<ReflectionRuleEvidence.Step> runtimeGuard =
+                new ArrayList<ReflectionRuleEvidence.Step>();
+        runtimeGuard.add(step(
+                "tap_screen", "FAILED",
+                "OBSERVE_REQUIRED_AFTER_FAILURE", "", "TAP"));
+        runtimeGuard.add(step("inspect_ui", "SUCCESS", "", "", ""));
+        runtimeGuard.add(step(
+                "tap_screen", "SUCCESS", "", "navigation:START", "TAP"));
+        check(ReflectionRuleEvidence.derive(null, runtimeGuard).isEmpty(),
+                "Runtime observe/stability guards must never become Experience friction");
+
+        List<ReflectionRuleEvidence.Step> staleGuard =
+                new ArrayList<ReflectionRuleEvidence.Step>();
+        staleGuard.add(step(
+                "tap_screen", "FAILED",
+                "STALE_ACTION_REJECTED", "", "TAP"));
+        staleGuard.add(step(
+                "tap_screen", "SUCCESS", "", "navigation:START", "TAP"));
+        check(ReflectionRuleEvidence.derive(null, staleGuard).isEmpty(),
+                "stale Runtime guard failures must not become retry evidence");
+
+        check(ReflectionRuleEvidence.isRuntimeInternalFailure(
+                        "TASK_ALREADY_FINISHED"),
+                "finished-task Runtime guard should be internal");
+        check(!ReflectionRuleEvidence.isRuntimeInternalFailure(
+                        "UI_TARGET_NOT_FOUND"),
+                "real UI target failure must remain learnable friction");
+
         List<ReflectionRuleEvidence.Step> plainSuccess =
                 new ArrayList<ReflectionRuleEvidence.Step>();
         plainSuccess.add(step(
