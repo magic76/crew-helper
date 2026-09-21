@@ -2077,7 +2077,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             } else {
                 task.awaitingModel = true;
                 scheduleAgentResponseWatchdog(task);
-                reportStage("Agent 第 " + task.steps + " / " + agentMaxSteps + " 步：已取得「" + name + "」結果，正在決定下一步");
+                reportStage(result.optBoolean("answerFastPath", false)
+                        ? "畫面已有搜尋結果，等待 Gemini 直接回答…"
+                        : "Agent 第 " + task.steps + " / " + agentMaxSteps
+                                + " 步：已取得「" + name + "」結果，正在決定下一步");
             }
         } catch (Exception error) { reportStage("Agent 工具結果回灌失敗：" + error.getMessage()); }
     }
@@ -2312,13 +2315,44 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                                 ? "Use the fresh compact after state to choose the next action; STEP_OK is not whole-task completion."
                                 : "Call inspect_ui once and use the actual post-action screen before concluding.");
                     }
-                } else if ("inspect_ui".equals(name) && succeeded
-                        && task.requiresPostActionInspection) {
-                    task.requiresPostActionInspection = false;
-                    task.postActionInspectionPrompted = false;
-                    if (!result.has("taskState")) result.put("taskState", "EVIDENCE_AVAILABLE");
-                    if (!result.has("completionEvidence")) {
-                        result.put("completionEvidence", "CURRENT_SCREEN_INSPECTED");
+                }
+
+                if (("inspect_ui".equals(name) || "take_screenshot".equals(name))
+                        && succeeded) {
+                    if (task.requiresPostActionInspection) {
+                        task.requiresPostActionInspection = false;
+                        task.postActionInspectionPrompted = false;
+                    }
+
+                    String domainState = result.optString("taskState", "").trim();
+                    boolean waitingUser = "WAITING_USER".equals(domainState);
+                    boolean blocked = task.blockedReason != null
+                            || "BLOCKED".equals(domainState);
+                    boolean answerFastPath =
+                            InformationAnswerFastPathPolicy.shouldOffer(
+                                    name,
+                                    true,
+                                    task.getToolCount("search_current_app"),
+                                    task.getToolCount("commit_search"),
+                                    blocked,
+                                    waitingUser);
+
+                    if (answerFastPath) {
+                        result.put("answerFastPath", true)
+                                .put("taskState", "ANSWER_READY")
+                                .put("completionEvidence", "SEARCH_RESULT_SCREEN_INSPECTED")
+                                .put("nextRequirement", "ANSWER_IF_SUFFICIENT")
+                                .put("instruction",
+                                        InformationAnswerFastPathPolicy.instruction());
+                        PerformanceMetrics.markAgentAnswerReady(
+                                task.taskId, task.intentGeneration);
+                    } else {
+                        if (!result.has("taskState")) {
+                            result.put("taskState", "EVIDENCE_AVAILABLE");
+                        }
+                        if (!result.has("completionEvidence")) {
+                            result.put("completionEvidence", "CURRENT_SCREEN_INSPECTED");
+                        }
                     }
                 }
             } catch (Exception ignored) {}
