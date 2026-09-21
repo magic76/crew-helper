@@ -74,7 +74,9 @@ final class AgentPerformanceStore {
                         .put("steps", task.optInt("stepCount", 0))
                         .put("taskMs", taskMs)
                         .put("toolRuntimeMs", perf.optLong("toolRuntimeMs", -1L))
-                        .put("geminiWaitMs", perf.optLong("geminiWaitMs", -1L));
+                        .put("geminiWaitMs", perf.optLong("geminiWaitMs", -1L))
+                        .put("answerReadyToSpeechMs",
+                                perf.optLong("answerReadyToSpeechMs", -1L));
                 tasks.put(item);
 
                 JSONArray trimmed = new JSONArray();
@@ -110,6 +112,8 @@ final class AgentPerformanceStore {
         int toolSamples = 0;
         long geminiTotal = 0L;
         int geminiSamples = 0;
+        long answerReadyTotal = 0L;
+        int answerReadySamples = 0;
 
         for (int i = 0; i < tasks.length(); i++) {
             JSONObject item = tasks.optJSONObject(i);
@@ -128,6 +132,11 @@ final class AgentPerformanceStore {
             if (toolMs >= 0L) { toolTotal += toolMs; toolSamples++; }
             long geminiMs = item.optLong("geminiWaitMs", -1L);
             if (geminiMs >= 0L) { geminiTotal += geminiMs; geminiSamples++; }
+            long answerReadyMs = item.optLong("answerReadyToSpeechMs", -1L);
+            if (answerReadyMs >= 0L) {
+                answerReadyTotal += answerReadyMs;
+                answerReadySamples++;
+            }
         }
 
         StringBuilder out = new StringBuilder();
@@ -147,6 +156,10 @@ final class AgentPerformanceStore {
         if (taskSamples > 0) out.append("Avg task time: ").append(taskTotal / taskSamples).append(" ms\n");
         if (toolSamples > 0) out.append("Avg Runtime tool time: ").append(toolTotal / toolSamples).append(" ms\n");
         if (geminiSamples > 0) out.append("Avg Gemini wait between tools: ").append(geminiTotal / geminiSamples).append(" ms\n");
+        if (answerReadySamples > 0) {
+            out.append("Avg answer-ready -> final speech: ")
+                    .append(answerReadyTotal / answerReadySamples).append(" ms\n");
+        }
         out.append("Persistent across Runtime/process restarts.");
         return out.toString();
     }
