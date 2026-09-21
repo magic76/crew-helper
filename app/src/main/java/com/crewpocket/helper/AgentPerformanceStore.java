@@ -13,7 +13,7 @@ import org.json.JSONObject;
  */
 final class AgentPerformanceStore {
     private static final String PREFS = "crew_agent_performance";
-    private static final String KEY_TASKS = "tasks_v1";
+    private static final String KEY_TASKS = "tasks_v2";
     private static final int MAX_TASKS = 50;
     private static final Object LOCK = new Object();
 
