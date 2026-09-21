@@ -100,6 +100,44 @@ final class ReflectionHistoryStore {
         }
     }
 
+    static String buildSummary(Context context) {
+        JSONArray events = new JSONArray();
+        JSONObject diagnostic = null;
+        if (context != null) {
+            try {
+                SharedPreferences prefs = context.getApplicationContext()
+                        .getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+                events = readArray(prefs.getString(KEY_EVENTS, "[]"));
+                diagnostic = readObject(prefs.getString(KEY_DIAGNOSTIC, ""));
+            } catch (Exception ignored) {}
+        }
+
+        int actualCalls = 0;
+        JSONObject latestActual = null;
+        for (int i = events.length() - 1; i >= 0; i--) {
+            JSONObject event = events.optJSONObject(i);
+            if (event == null || !isActualCall(event)) continue;
+            actualCalls++;
+            if (latestActual == null) latestActual = event;
+        }
+
+        String health = diagnostic == null || diagnostic.length() == 0
+                ? "Not tested"
+                : (diagnostic.optBoolean("success", false) ? "Healthy" : "Needs attention");
+        StringBuilder out = new StringBuilder();
+        out.append("Model health: ").append(health)
+                .append("\nModel calls: ").append(actualCalls);
+        if (latestActual != null) {
+            out.append("\nLast call: ")
+                    .append(latestActual.optString("result", "UNKNOWN"))
+                    .append(" · ")
+                    .append(formatTime(latestActual.optLong("at", 0L)));
+        } else {
+            out.append("\nLast call: never");
+        }
+        return out.toString();
+    }
+
     static String buildReport(Context context) {
         JSONArray events = new JSONArray();
         JSONObject diagnostic = null;

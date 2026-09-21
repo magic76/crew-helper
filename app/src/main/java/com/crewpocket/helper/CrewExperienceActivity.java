@@ -29,6 +29,7 @@ import java.util.Locale;
 public class CrewExperienceActivity extends Activity {
     private ReflectionLessonStore store;
     private LinearLayout content;
+    private boolean diagnosticsExpanded;
 
     private int dp(float value) {
         return CrewTheme.dp(this, value);
@@ -129,19 +130,57 @@ public class CrewExperienceActivity extends Activity {
         content.addView(stats);
 
         TextView evidenceTitle = text(
-                I18n.get(this, "學習觸發狀態", "LEARNING EVIDENCE"),
+                I18n.get(this, "學習狀態", "LEARNING STATUS"),
                 10.5f, CrewTheme.INDIGO_400, true);
         evidenceTitle.setPadding(dp(4), dp(14), 0, dp(6));
         content.addView(evidenceTitle);
 
         TextView evidence = text(
-                ExperienceEvidenceStore.buildReport(this),
-                9.5f, CrewTheme.TEXT_MUTED, false);
+                ExperienceEvidenceStore.buildSummary(this)
+                        + "\n"
+                        + ReflectionHistoryStore.buildSummary(this),
+                9.8f, CrewTheme.TEXT_MUTED, false);
         evidence.setTypeface(Typeface.MONOSPACE);
         evidence.setPadding(dp(12), dp(10), dp(12), dp(10));
         evidence.setBackground(CrewTheme.createCard(
                 this, CrewTheme.BG_SURFACE, CrewTheme.BORDER_SUBTLE, 12));
         content.addView(evidence);
+
+        Button diagnostics = new Button(this);
+        diagnostics.setAllCaps(false);
+        diagnostics.setText(I18n.get(this,
+                diagnosticsExpanded ? "收起診斷" : "顯示診斷",
+                diagnosticsExpanded ? "Hide diagnostics" : "Show diagnostics"));
+        diagnostics.setTextColor(CrewTheme.TEXT_SECONDARY);
+        diagnostics.setTextSize(11);
+        diagnostics.setBackground(CrewTheme.createCard(
+                this, CrewTheme.BG_SURFACE, CrewTheme.BORDER_SUBTLE, 10));
+        diagnostics.setOnClickListener(v -> {
+            diagnosticsExpanded = !diagnosticsExpanded;
+            render();
+        });
+        LinearLayout.LayoutParams diagnosticButtonLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(40));
+        diagnosticButtonLp.topMargin = dp(8);
+        content.addView(diagnostics, diagnosticButtonLp);
+
+        if (diagnosticsExpanded) {
+            TextView detail = text(
+                    ExperienceEvidenceStore.buildReport(this)
+                            + "\n\n"
+                            + ReflectionHistoryStore.buildReport(this),
+                    9.2f, CrewTheme.TEXT_MUTED, false);
+            detail.setTypeface(Typeface.MONOSPACE);
+            detail.setLineSpacing(dp(1), 1.04f);
+            detail.setPadding(dp(12), dp(10), dp(12), dp(10));
+            detail.setBackground(CrewTheme.createCard(
+                    this, CrewTheme.BG_SURFACE, CrewTheme.BORDER_SUBTLE, 12));
+            LinearLayout.LayoutParams detailLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT);
+            detailLp.topMargin = dp(8);
+            content.addView(detail, detailLp);
+        }
 
         TextView section = text(
                 I18n.get(this, "已學到的 Experience", "LEARNED EXPERIENCE"),
