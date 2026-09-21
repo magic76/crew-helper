@@ -1,6 +1,7 @@
 package com.crewpocket.helper;
 
 import android.os.SystemClock;
+import org.json.JSONObject;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -252,9 +253,28 @@ final class PerformanceMetrics {
         return buildReportForTask("");
     }
 
+    static synchronized JSONObject latestFinishedTaskSnapshot(String inspectorTaskId) {
+        JSONObject out = new JSONObject();
+        AgentTrace trace = lastFinishedTrace;
+        if (trace == null || trace.finishedAt <= 0L) return out;
+        if (!InspectorTraceScope.matches(inspectorTaskId, trace.taskId)) return out;
+        try {
+            out.put("taskId", trace.taskId);
+            out.put("outcome", trace.outcome);
+            out.put("taskMs", duration(trace.intentAt, trace.finishedAt));
+            out.put("intentToFirstToolMs", duration(trace.intentAt, trace.firstToolAt));
+            out.put("toolRuntimeMs", trace.toolRuntimeTotalMs);
+            out.put("geminiWaitMs", trace.geminiBetweenToolsMs);
+            out.put("resultToSpeechMs", duration(trace.lastToolResultAt, trace.finalSpeechAt));
+            out.put("toolCount", trace.steps.size());
+        } catch (Exception ignored) {}
+        return out;
+    }
+
     static synchronized String buildReportForTask(String inspectorTaskId) {
         StringBuilder out = new StringBuilder();
-        out.append("Performance (rolling up to ").append(MAX_SAMPLES).append(" samples)\n");
+        out.append("Session performance (resets when Runtime restarts; rolling up to ")
+                .append(MAX_SAMPLES).append(" samples)\n");
         appendSeries(out, "Live connect", liveConnectMs, lastLiveConnectMs);
         appendSeries(out, "User transcript -> AI speech", userToAiSpeechMs, lastUserToAiSpeechMs);
         appendSeries(out, "Tool runtime", toolRuntimeMs, lastToolMs);
