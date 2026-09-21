@@ -37,6 +37,7 @@ public class ScheduledTaskManager {
     // Accessibility often emits several events for one visual transition.
     // Coalesce the burst and inspect the semantic tree once.
     private static final long EVENT_CHECK_DEBOUNCE_MS = 180L;
+    private static final float SCHEDULED_TTS_RATE = 1.3f;
     private static final String WATCH_NOTIFICATION_CHANNEL = "crew_watcher";
     private static ScheduledTaskManager instance;
     private final Context context;
@@ -212,6 +213,7 @@ public class ScheduledTaskManager {
                                 try {
                                     tts.setLanguage(
                                             Locale.TRADITIONAL_CHINESE);
+                                    tts.setSpeechRate(SCHEDULED_TTS_RATE);
                                     ttsReady = true;
                                 } catch (Exception ignored) {}
                             }
