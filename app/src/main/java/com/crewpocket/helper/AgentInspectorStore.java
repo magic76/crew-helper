@@ -223,7 +223,12 @@ final class AgentInspectorStore {
             if (!goalBoundary.isEmpty()) {
                 out.append("Goal continuity: NEW · ").append(goalBoundary).append("\n");
             }
-            out.append("Steps: ").append(task.optInt("stepCount", 0)).append("\n");
+            out.append("Executed steps: ").append(task.optInt("stepCount", 0)).append("\n");
+            int blockedAttempts = task.optInt("blockedAttempts", 0);
+            if (blockedAttempts > 0) {
+                out.append("Blocked / preflight attempts: ")
+                        .append(blockedAttempts).append("\n");
+            }
             out.append("Mutations: ").append(task.optInt("mutationActions", 0)).append("\n");
             out.append("Visual observations: ")
                     .append(task.optInt("visualObservations", 0)).append("\n");
@@ -245,7 +250,9 @@ final class AgentInspectorStore {
             if (previous != null && previous.length() > 0) {
                 out.append("\nPrevious same-goal task:\n");
                 out.append("Goal task index: ").append(previous.optInt("goalTaskIndex", 0)).append("\n");
-                out.append("Steps: ").append(previous.optInt("stepCount", 0))
+                out.append("Executed steps: ").append(previous.optInt("stepCount", 0))
+                        .append(" · blocked/preflight: ")
+                        .append(previous.optInt("blockedAttempts", 0))
                         .append(" · mutations: ").append(previous.optInt("mutationActions", 0))
                         .append(" · visual: ").append(previous.optInt("visualObservations", 0))
                         .append("\n");
@@ -405,6 +412,7 @@ final class AgentInspectorStore {
         try {
             out.put("goalTaskIndex", task.optInt("goalTaskIndex", 0));
             out.put("stepCount", task.optInt("stepCount", 0));
+            out.put("blockedAttempts", task.optInt("blockedAttempts", 0));
             out.put("mutationActions", task.optInt("mutationActions", 0));
             out.put("visualObservations", task.optInt("visualObservations", 0));
             out.put("steps", task.optJSONArray("steps") == null
@@ -513,6 +521,9 @@ final class AgentInspectorStore {
                 }
             }
             safe.put("steps", safeSteps);
+            safe.put("outcomeCount", safeSteps.length());
+            safe.put("blockedAttempts", Math.max(
+                    0, safeSteps.length() - safe.optInt("stepCount", 0)));
             safe.put("visualObservations", visualObservations);
         } catch (Exception ignored) {}
         return safe;
