@@ -100,6 +100,33 @@ final class ExperienceEvidenceStore {
         return qualified;
     }
 
+    static String buildSummary(Context context) {
+        int tracked = 0;
+        int repeated = 0;
+        int strongestScore = 0;
+        if (context != null) {
+            try {
+                SharedPreferences prefs = context.getApplicationContext()
+                        .getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+                JSONArray items = readArray(prefs.getString(KEY_FRICTION, "[]"));
+                tracked = items.length();
+                for (int i = 0; i < items.length(); i++) {
+                    JSONObject item = items.optJSONObject(i);
+                    if (item == null) continue;
+                    int occurrences = item.optInt("occurrences", 0);
+                    if (occurrences >= ExperienceTriggerPolicy.REPEATED_FRICTION_OCCURRENCES) {
+                        repeated++;
+                    }
+                    strongestScore = Math.max(strongestScore, item.optInt("maxScore", 0));
+                }
+            } catch (Exception ignored) {}
+        }
+        return "Status: Healthy"
+                + "\nFriction patterns: " + tracked
+                + "\nRepeated patterns: " + repeated
+                + "\nHighest friction score: " + strongestScore;
+    }
+
     static String buildReport(Context context) {
         int tracked = 0;
         int strongestScore = 0;
