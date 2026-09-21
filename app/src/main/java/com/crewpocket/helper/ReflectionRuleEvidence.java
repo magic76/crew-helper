@@ -128,7 +128,12 @@ final class ReflectionRuleEvidence {
         if (steps == null) return;
         for (int i = 0; i < steps.size(); i++) {
             Step failed = steps.get(i);
-            if (failed == null || !failed.failed() || failed.failureCode.isEmpty()) continue;
+            if (failed == null
+                    || !failed.failed()
+                    || failed.failureCode.isEmpty()
+                    || isRuntimeInternalFailure(failed.failureCode)) {
+                continue;
+            }
 
             int visualIndex = nextVisualObservation(steps, i + 1);
             if (visualIndex < 0) continue;
@@ -155,7 +160,12 @@ final class ReflectionRuleEvidence {
         if (steps == null) return;
         for (int i = 0; i < steps.size(); i++) {
             Step failed = steps.get(i);
-            if (failed == null || !failed.failed() || !isMutationTool(failed.tool)) continue;
+            if (failed == null
+                    || !failed.failed()
+                    || !isMutationTool(failed.tool)
+                    || isRuntimeInternalFailure(failed.failureCode)) {
+                continue;
+            }
 
             boolean sawVisualObservation = false;
             Step recovered = null;
@@ -201,6 +211,25 @@ final class ReflectionRuleEvidence {
             }
         }
         return !failed.tool.isEmpty() && failed.tool.equals(recovered.tool);
+    }
+
+    static boolean isRuntimeInternalFailure(String failureCode) {
+        String code = safeToken(failureCode, 80);
+        if (code.isEmpty()) return false;
+        if ("OBSERVE_REQUIRED_AFTER_FAILURE".equals(code)
+                || "OBSERVE_REQUIRED".equals(code)
+                || "STABILITY_BLOCK".equals(code)
+                || "TASK_ALREADY_FINISHED".equals(code)
+                || "MESSAGE_TRANSACTION_ALREADY_HANDLED".equals(code)
+                || "WAITING_USER_CHOICE".equals(code)
+                || "SEND_TEXT_REQUIRED".equals(code)) {
+            return true;
+        }
+        return code.startsWith("STALE_")
+                || code.startsWith("DUPLICATE_")
+                || code.startsWith("AUTHORIZATION_")
+                || code.endsWith("_NOT_AUTHORIZED")
+                || code.startsWith("RUNTIME_") && code.endsWith("_OWNS_EXECUTION");
     }
 
     private static String failureEvidence(Step failed) {
