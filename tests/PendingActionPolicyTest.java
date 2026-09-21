@@ -8,6 +8,9 @@ public final class PendingActionPolicyTest {
         allow("text_disappears", "載入中", "BACK", "", "");
         allow("screen_change", "", "NOTIFY", "", "");
         allow("app_opened", "Google Maps", "NOTIFY", "", "");
+        allow("button_appears", "下一步", "NOTIFY", "", "");
+        allow("element_enabled", "繼續", "NOTIFY", "", "");
+        allow("button_enabled", "確認", "NOTIFY", "", "");
         allow("text_appears", "搜尋完成", "TYPE", "", "hello");
         allow("text_appears", "結果", "COMMIT_SEARCH", "", "");
 
@@ -30,6 +33,15 @@ public final class PendingActionPolicyTest {
         check(PendingActionPolicy.CONDITION_APP_OPENED.equals(
                 PendingActionPolicy.normalizeCondition("package_opened")),
                 "package_opened alias should normalize");
+        check(PendingActionPolicy.CONDITION_BUTTON_APPEARS.equals(
+                PendingActionPolicy.normalizeCondition("button_visible")),
+                "button_visible alias should normalize");
+        check(PendingActionPolicy.CONDITION_ELEMENT_ENABLED.equals(
+                PendingActionPolicy.normalizeCondition("button_enabled")),
+                "button_enabled alias should normalize");
+        check(PendingActionPolicy.CONDITION_SCREEN_CHANGE.equals(
+                PendingActionPolicy.normalizeCondition("screen_changed")),
+                "screen_changed alias should normalize");
         check(PendingActionPolicy.looksLikeGenericCommitTarget("下一步"),
                 "next should be treated as a generic commit target");
         check(!PendingActionPolicy.looksLikeGenericCommitTarget("播放"),
