@@ -122,13 +122,14 @@ final class UserActionScope {
         return sendAuthorization.recipient();
     }
 
-    synchronized void markMessageTransactionHandled() {
-        sendAuthorization.markTransactionHandled();
+    synchronized void markMessageCommitDispatched() {
+        expireIfNeeded();
+        sendAuthorization.markCommitDispatched();
     }
 
-    synchronized boolean shouldBlockFurtherMessageMutation() {
+    synchronized boolean isMessageCommitDispatched() {
         expireIfNeeded();
-        return sendAuthorization.shouldBlockFurtherMessageMutation();
+        return sendAuthorization.isCommitDispatched();
     }
 
     synchronized boolean blocksNamedRecipientMessagingAction() {
