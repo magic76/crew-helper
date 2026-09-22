@@ -16,6 +16,18 @@ public final class ConversationLoopRecipeTest {
                 ConversationLoopPolicy.isStopIntent(
                         "停止跟他聊天"),
                 "explicit stop should stop loop");
+        check(
+                ConversationLoopPolicy.hasDelegatedSendAuthority(
+                        true, false),
+                "active loop authorizes a reply without fresh user turn");
+        check(
+                ConversationLoopPolicy.hasDelegatedSendAuthority(
+                        false, true),
+                "fresh explicit send still authorizes one-shot reply");
+        check(
+                !ConversationLoopPolicy.hasDelegatedSendAuthority(
+                        false, false),
+                "no loop and no fresh send has no send authority");
 
         ConversationLoopRecipe recipe =
                 new ConversationLoopRecipe();
