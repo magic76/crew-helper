@@ -52,6 +52,7 @@ final class NativeGeminiLiveClient {
     private final Context appContext;
     private final NotebookToolHandler notebookToolHandler;
     private final AppPlaybookStore appPlaybookStore;
+    private final AppAutonomyStore appAutonomyStore;
     private final TaskRecipeStore taskRecipeStore;
     private final ConversationLoopRecipe conversationLoopRecipe =
             new ConversationLoopRecipe();
@@ -220,6 +221,7 @@ final class NativeGeminiLiveClient {
 
         this.notebookToolHandler = new NotebookToolHandler(this.appContext);
         this.appPlaybookStore = new AppPlaybookStore(this.appContext);
+        this.appAutonomyStore = new AppAutonomyStore(this.appContext);
         this.taskRecipeStore = new TaskRecipeStore(this.appContext);
         this.toolCallDispatcher = new ToolCallDispatcher(
                 new ToolCallDispatcher.Host() {
@@ -2644,13 +2646,29 @@ final class NativeGeminiLiveClient {
     private JSONObject agentStabilityPreflight(AgentTaskRecord task, String name, JSONObject args) {
         if (task == null || task.finished || task.cancelled || !isMutationTool(name)) return null;
         synchronized (agentTaskCoordinator.monitor()) {
+            JSONObject progress = workingContext.toProgressJson();
+            String currentPackage =
+                    progress.optString("currentApp", "");
+            String recoveryMetadata =
+                    name + " " + (args == null ? "" : args.toString());
+            boolean trustedRecovery =
+                    AppAutonomyPolicy.mayRecoverWithoutObservation(
+                            appAutonomyStore.isTrusted(currentPackage),
+                            name,
+                            recoveryMetadata);
+
             AgentTaskLifecyclePolicy.StabilityDecision decision =
                     AgentTaskLifecyclePolicy.evaluateStability(
                             task.finished,
                             task.cancelled,
                             name,
-                            task.requireObservationAfterFailure,
-                            observationVerificationController.semanticObserveRequired(),
+                            trustedRecovery
+                                    ? false
+                                    : task.requireObservationAfterFailure,
+                            trustedRecovery
+                                    ? false
+                                    : observationVerificationController
+                                            .semanticObserveRequired(),
                             buildAgentSignature(name, args),
                             task.lastFailedMutationSignature,
                             task.failedMutationScreenFingerprint,
