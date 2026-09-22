@@ -40,6 +40,7 @@ final class GeminiLiveTurnHandler {
 
         boolean serverPresent;
         String inputText = "";
+        String interimInputText = "";
         String outputText = "";
         boolean interrupted;
         boolean turnComplete;
@@ -108,6 +109,15 @@ final class GeminiLiveTurnHandler {
         if (inputTranscript != null) {
             frame.inputText =
                     inputTranscript.optString("text", "").trim();
+        }
+
+        JSONObject interimInputTranscript = objectAlias(
+                server,
+                "interimInputTranscription",
+                "interim_input_transcription");
+        if (interimInputTranscript != null) {
+            frame.interimInputText =
+                    interimInputTranscript.optString("text", "").trim();
         }
 
         JSONObject outputTranscript = objectAlias(

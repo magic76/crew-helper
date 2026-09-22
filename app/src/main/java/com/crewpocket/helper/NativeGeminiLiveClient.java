@@ -116,6 +116,8 @@ final class NativeGeminiLiveClient {
     // Finalized user turns are coordinated separately from model/tool frames.
     // Tool calls never grant authority; only finalized user input advances this.
     private final LiveTurnCoordinator liveTurnCoordinator = new LiveTurnCoordinator();
+    private final VoiceExecutionGuard voiceExecutionGuard =
+            new VoiceExecutionGuard();
     private volatile long runtimeSendCurrentHandledGeneration = -1L;
     private AudioIncidentRecorder audioIncidentRecorder;
     private volatile PendingCondition pendingCondition = null;
@@ -714,6 +716,16 @@ final class NativeGeminiLiveClient {
      * inside the existing 45-second conversation-goal window.
      */
     private void beginNewUserIntent(String userText) {
+        beginUserIntent(userText, true);
+    }
+
+    private void beginContinuationUserIntent(String userText) {
+        beginUserIntent(userText, false);
+    }
+
+    private void beginUserIntent(
+            String userText,
+            boolean supersedeActiveTask) {
         // A finalized user instruction supersedes any incomplete model-turn
         // bookkeeping from the previous interaction.
         resetCurrentModelTurnState();
@@ -774,9 +786,12 @@ final class NativeGeminiLiveClient {
         agentRuntimeV2.onUserIntent(
                 userIntentGeneration, conversationGoalId, shadowTaskId, startNewCapsule);
 
-        supersedeActiveAgentTaskForNewUserInstruction();
+        if (supersedeActiveTask) {
+            supersedeActiveAgentTaskForNewUserInstruction();
+        }
         Log.d(TAG, "新的使用者意圖：generation=" + userIntentGeneration
-                + " capsule=" + (startNewCapsule ? "NEW" : "CONTINUE"));
+                + " capsule=" + (startNewCapsule ? "NEW" : "CONTINUE")
+                + " supersede=" + supersedeActiveTask);
     }
 
     private boolean isCurrentUserIntent(long generation) {
@@ -811,6 +826,8 @@ final class NativeGeminiLiveClient {
             if (hasPendingUiChoice()) clearPendingUiChoiceSilently();
 
             beginNewUserIntent(input);
+            voiceExecutionGuard.onFinalizedTypedTurn(
+                    userIntentGeneration, input);
             userActionScope.updateFromUserText(input);
             recordFinalizedSendAuthorization(input);
             if (tryHandleRuntimeAppTeaching(input)) {
@@ -1127,6 +1144,7 @@ final class NativeGeminiLiveClient {
         setupReady = false;
         interruptionHandler.removeCallbacks(clearInterruptedFallback);
         liveAudioController.stop();
+        voiceExecutionGuard.clear();
         liveConnection.stop();
         if (wasRunning) listener.onStopped("已結束");
     }
@@ -1142,6 +1160,11 @@ final class NativeGeminiLiveClient {
     private void handleJson(String raw) throws Exception {
         GeminiLiveTurnHandler.Frame frame =
                 geminiLiveTurnHandler.parse(raw);
+
+        if (!frame.interimInputText.isEmpty()) {
+            voiceExecutionGuard.onInterimVoice(
+                    frame.interimInputText);
+        }
 
         if (frame.resumable && !frame.resumptionHandle.isEmpty()) {
             resumptionHandle = frame.resumptionHandle;
@@ -1196,7 +1219,19 @@ final class NativeGeminiLiveClient {
                 clearPendingUiChoiceSilently();
             }
 
-            beginNewUserIntent(completeUserInput);
+            VoiceExecutionGuard.TurnDisposition voiceDisposition =
+                    voiceExecutionGuard.onFinalizedVoiceTurn(
+                            userIntentGeneration + 1L,
+                            completeUserInput);
+            boolean confirmationContinuation =
+                    voiceDisposition
+                            != VoiceExecutionGuard.TurnDisposition.NORMAL;
+
+            if (confirmationContinuation) {
+                beginContinuationUserIntent(completeUserInput);
+            } else {
+                beginNewUserIntent(completeUserInput);
+            }
 
             authorizationTranscript =
                     completeUserInput;
@@ -1206,8 +1241,19 @@ final class NativeGeminiLiveClient {
                                 0, 4096);
             }
 
-            userActionScope.updateFromUserText(
-                    completeUserInput);
+            if (voiceDisposition
+                    == VoiceExecutionGuard.TurnDisposition.CONFIRMATION_ACCEPTED) {
+                workingContext.setPendingTask("");
+                reportStage("語音確認完成，等待執行原動作");
+            } else {
+                userActionScope.updateFromUserText(
+                        completeUserInput);
+                if (voiceDisposition
+                        == VoiceExecutionGuard.TurnDisposition.CONFIRMATION_REJECTED) {
+                    workingContext.setPendingTask("");
+                    reportStage("已取消上一個語音確認");
+                }
+            }
             recordFinalizedSendAuthorization(
                     completeUserInput);
             if (tryHandleRuntimeAppTeaching(
@@ -1422,6 +1468,65 @@ final class NativeGeminiLiveClient {
      * authoritative user transcript can arrive. The model tool call itself
      * never grants permission.
      */
+    private long awaitFinalizedOperationalGeneration(
+            String requestedName,
+            JSONObject requestedArgs,
+            long queuedGeneration) {
+        if (!requiresFinalizedOperationalTurn(
+                requestedName, requestedArgs)) {
+            return queuedGeneration;
+        }
+
+        LiveTurnCoordinator.FinalizedTurn latest =
+                liveTurnCoordinator.latest();
+
+        // If a new utterance has begun but Gemini has only emitted interim
+        // transcription, the previous finalized generation must never grant
+        // authority to this tool call.
+        boolean pendingInterim =
+                voiceExecutionGuard.hasPendingInterim();
+        if (!pendingInterim
+                && latest.generation == queuedGeneration) {
+            return queuedGeneration;
+        }
+        if (latest.generation == queuedGeneration + 1L) {
+            return latest.generation;
+        }
+
+        LiveTurnCoordinator.FinalizedTurn finalized =
+                liveTurnCoordinator.awaitNextAfter(
+                        queuedGeneration, 1400L);
+        if (finalized.generation == queuedGeneration + 1L) {
+            Log.i(
+                    TAG,
+                    "Operational tool reconciled to finalized turn generation="
+                            + finalized.generation
+                            + " name="
+                            + requestedName);
+            return finalized.generation;
+        }
+
+        // Fail closed while a newer spoken fragment is still unfinalized.
+        // The sentinel can never equal userIntentGeneration, so normal stale
+        // generation protection blocks the tool.
+        if (pendingInterim) {
+            return Long.MIN_VALUE;
+        }
+        return queuedGeneration;
+    }
+
+    private boolean requiresFinalizedOperationalTurn(
+            String requestedName,
+            JSONObject requestedArgs) {
+        if (SemanticPhoneAction.TOOL_NAME.equals(requestedName)) {
+            return true;
+        }
+        return "send_text".equals(requestedName)
+                || "end_voice_session".equals(requestedName)
+                || "wait_then_action".equals(requestedName)
+                || "cancel_schedule".equals(requestedName);
+    }
+
     private long awaitFinalizedSendAuthorization(
             String requestedName,
             JSONObject requestedArgs,
@@ -1800,8 +1905,10 @@ final class NativeGeminiLiveClient {
         // Gemini Live may emit the tool frame before the authoritative
         // finalized user transcript. Reconcile only operations whose payload
         // can be matched deterministically to that finalized turn.
-        long reconciledGeneration = awaitFinalizedSendAuthorization(
+        long reconciledGeneration = awaitFinalizedOperationalGeneration(
                 requestedName, requestedArgs, callIntentGeneration);
+        reconciledGeneration = awaitFinalizedSendAuthorization(
+                requestedName, requestedArgs, reconciledGeneration);
         reconciledGeneration = awaitFinalizedLiteralTypeGeneration(
                 requestedName, requestedArgs, reconciledGeneration);
 
@@ -1884,6 +1991,32 @@ final class NativeGeminiLiveClient {
         }
         final String name = semantic.runtimeName;
         final JSONObject args = semantic.runtimeArgs;
+
+        VoiceExecutionGuard.Preflight voicePreflight =
+                voiceExecutionGuard.preflight(
+                        callIntentGeneration,
+                        name,
+                        args);
+        if (!voicePreflight.allowed) {
+            JSONObject blocked = new JSONObject();
+            try {
+                blocked.put("success", false)
+                        .put("blockedByRuntime", true)
+                        .put("stepResult", "STEP_FAILED")
+                        .put("taskState", "NEED_USER")
+                        .put("error", voicePreflight.code)
+                        .put("instruction", voicePreflight.instruction);
+                if (!voicePreflight.confirmationSummary.isEmpty()) {
+                    blocked.put(
+                            "confirmationSummary",
+                            voicePreflight.confirmationSummary);
+                    workingContext.setPendingTask("VOICE_CONFIRMATION");
+                }
+                sendToolResponse(id, requestedName, blocked);
+            } catch (Exception ignored) {}
+            return;
+        }
+
         final boolean runtimeV2Enforced =
                 isMutationTool(name)
                 && AgentRuntimeRollout.shouldEnforce(name, observationVerificationController.latestObservation());
