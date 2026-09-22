@@ -47,7 +47,7 @@ public final class AgentTaskLifecyclePolicyTest {
                 "inspect_ui is not mutation");
 
         check(step(1_000L, 0L, 0, 20,
-                        "inspect_ui", "same", "same", 4, 0, 0, 0).allowed,
+                        "inspect_ui", "same", "same", 4, 0, 0).allowed,
                 "repeated observation remains allowed");
         check(!step(1_000L, 0L, 0, 20,
                         "tap_screen", "same", "same", 0, 0, 0).allowed,
