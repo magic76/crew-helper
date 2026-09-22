@@ -230,6 +230,10 @@ final class AgentInspectorStore {
                         .append(blockedAttempts).append("\n");
             }
             out.append("Mutations: ").append(task.optInt("mutationActions", 0)).append("\n");
+            String cancelCategory = task.optString("cancelCategory", "");
+            if (!cancelCategory.isEmpty()) {
+                out.append("Cancel category: ").append(cancelCategory).append("\n");
+            }
             out.append("Visual observations: ")
                     .append(task.optInt("visualObservations", 0)).append("\n");
 
@@ -445,6 +449,10 @@ final class AgentInspectorStore {
             safe.put("startedAt", raw.optLong("startedAt", 0L));
             safe.put("stepCount", raw.optInt("stepCount", 0));
             safe.put("mutationActions", raw.optInt("mutationActions", 0));
+            String cancelCategory = raw.optString("cancelCategory", "").trim();
+            if (!cancelCategory.isEmpty()) {
+                safe.put("cancelCategory", cancelCategory);
+            }
 
             String blockCategory = classifyBlock(raw.optString("blockedReason", ""));
             if (!blockCategory.isEmpty()) safe.put("blockCategory", blockCategory);
