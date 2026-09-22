@@ -112,6 +112,25 @@ public final class SendAuthorizationTest {
         check(!englishNegatedNamed.canAttempt(),
                 "english negated named-recipient command grants no commit");
 
+        check(SendAuthorization.allowsPersistentMessageTrust(
+                        "幫我跟小明聊"),
+                "persistent trust may support delegated chat");
+        check(!SendAuthorization.allowsPersistentMessageTrust(
+                        "幫我輸入 hello"),
+                "persistent trust never upgrades draft-only typing");
+        check(!SendAuthorization.allowsPersistentMessageTrust(
+                        "輸入 hello 然後按下一步"),
+                "persistent trust never turns non-send compound typing into SEND");
+        check(!SendAuthorization.allowsPersistentMessageTrust(
+                        "不要送出"),
+                "persistent trust respects explicit no-send");
+        check(!SendAuthorization.allowsPersistentMessageTrust(
+                        "don't send"),
+                "persistent trust respects english no-send");
+        check(SendAuthorization.allowsPersistentMessageTrust(
+                        "輸入 hello 然後送出"),
+                "persistent trust allows explicit type-then-send");
+
         System.out.println("PASS SendAuthorizationTest: " + assertions + " checks");
     }
 }
