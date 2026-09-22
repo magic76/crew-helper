@@ -32,12 +32,12 @@ final class VoiceExecutionPolicy {
     static boolean requiresCriticalEntityConfirmation(
             String runtimeName,
             String metadata) {
-        // A one-shot explicit message send no longer needs an extra voice
-        // confirmation. Runtime still requires fresh SEND authorization and,
-        // for named recipients, Accessibility verification of the exact chat.
-        // Persistent delegated conversation loops remain confirmation-gated.
+        // Explicit one-shot SEND and explicit bounded conversation delegation
+        // do not need a second redundant "確認嗎". Runtime still requires the
+        // original user intent, a bound recipient, lease limits, and exact-chat
+        // Accessibility verification before every actual SEND.
         if ("start_conversation_loop".equals(runtimeName)) {
-            return true;
+            return false;
         }
         if (!"tap_screen".equals(runtimeName)
                 && !"tap_element".equals(runtimeName)) {
