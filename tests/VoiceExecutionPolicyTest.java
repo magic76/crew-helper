@@ -32,6 +32,26 @@ public final class VoiceExecutionPolicyTest {
                 !VoiceExecutionPolicy.requiresCriticalEntityConfirmation(
                         "search_current_app", "4486819"),
                 "search stays reversible");
+        check(
+                !VoiceExecutionPolicy.requiresReliableTranscript(
+                        "type_text", "message composer"),
+                "draft typing does not require high-confidence voice");
+        check(
+                !VoiceExecutionPolicy.requiresReliableTranscript(
+                        "search_current_app", "search"),
+                "search does not require high-confidence voice");
+        check(
+                VoiceExecutionPolicy.requiresReliableTranscript(
+                        "send_text", ""),
+                "message commit requires reliable transcript");
+        check(
+                VoiceExecutionPolicy.requiresReliableTranscript(
+                        "tap_screen", "Send message"),
+                "tap on send control requires reliable transcript");
+        check(
+                VoiceExecutionPolicy.requiresReliableTranscript(
+                        "tap_screen", "刪除"),
+                "sensitive tap requires reliable transcript");
 
         System.out.println(
                 "VoiceExecutionPolicyTest passed "
