@@ -1,0 +1,4 @@
+kind=context_budget
+source=send_text
+bytes=901
+expect.within=false
