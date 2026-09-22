@@ -32,7 +32,6 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
-import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
@@ -47,11 +46,8 @@ import java.lang.reflect.Proxy;
 
 public class CrewAccessibilityService extends AccessibilityService {
     private static final String TAG = "CrewAccessibilityService";
-    private static final int PORT = 8766;
-
     private static CrewAccessibilityService instance;
-    private ServerSocket serverSocket;
-    private boolean isRunning = false;
+    private AccessibilityBridgeServer bridgeServer;
     private Handler mainHandler;
     private LearnedUiMappingStore learnedUiMappingStore;
     private UiTeachOverlay uiTeachOverlay;
@@ -206,12 +202,18 @@ public class CrewAccessibilityService extends AccessibilityService {
         super.onCreate();
         instance = this;
         mainHandler = new Handler(Looper.getMainLooper());
-        isRunning = true;
         learnedUiMappingStore = new LearnedUiMappingStore(this);
         uiTeachOverlay = new UiTeachOverlay(this);
         appCatalog = new AppCatalog(this);
         appCatalog.prewarm();
-        startLocalServer();
+        bridgeServer = new AccessibilityBridgeServer(
+                this,
+                new AccessibilityBridgeServer.RequestHandler() {
+                    @Override public void handle(Socket socket) {
+                        handleSocketRequest(socket);
+                    }
+                });
+        bridgeServer.start();
 
         // 0025: Accessibility no longer owns microphone or Wake Word lifecycle.
         // Always-On is explicitly enabled from the app and owned by NativeLiveService.
@@ -307,51 +309,17 @@ public class CrewAccessibilityService extends AccessibilityService {
 
     @Override
     public void onDestroy() {
-        isRunning = false;
         setScreenKeepAwake(false);
-        try {
-            if (serverSocket != null && !serverSocket.isClosed()) {
-                serverSocket.close();
-            }
-        } catch (Exception e) {}
+        if (bridgeServer != null) {
+            bridgeServer.stop();
+            bridgeServer = null;
+        }
         try {
             FloatingBubbleManager manager = FloatingBubbleManager.getInstance(this);
             manager.hideBubble();
         } catch (Exception ignored) {}
         instance = null;
         super.onDestroy();
-    }
-
-    private void startLocalServer() {
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    if (!AppConfig.isLocalBridgeEnabled(CrewAccessibilityService.this)) {
-                        Log.i(TAG, "Local bridge is disabled in AppConfig, server not started");
-                        return;
-                    }
-                    if (serverSocket != null) {
-                        try { serverSocket.close(); } catch (Exception e) {}
-                    }
-                    // Bind explicitly to IPv4 loopback. getLoopbackAddress() can
-                    // resolve to ::1 on Samsung, while all in-app bridge clients
-                    // intentionally use 127.0.0.1:8766.
-                    serverSocket = new ServerSocket(PORT, 50, java.net.InetAddress.getByName("127.0.0.1"));
-                    while (isRunning && !serverSocket.isClosed()) {
-                        final Socket socket = serverSocket.accept();
-                        new Thread(new Runnable() {
-                            @Override
-                            public void run() {
-                                handleSocketRequest(socket);
-                            }
-                        }).start();
-                    }
-                } catch (Exception e) {
-                    e.printStackTrace();
-                }
-            }
-        }).start();
     }
 
     private static void copyFile(File src, File dst) throws Exception {
