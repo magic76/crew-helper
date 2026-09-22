@@ -121,6 +121,9 @@ final class ModelToolResponseAdapter {
                 || "end_voice_session".equals(toolName)
                 || "wait".equals(toolName)
                 || "wait_then_action".equals(toolName)
+                || "start_conversation_loop".equals(toolName)
+                || "continue_conversation_loop".equals(toolName)
+                || "stop_conversation_loop".equals(toolName)
                 || "take_screenshot".equals(toolName);
     }
 
@@ -135,6 +138,7 @@ final class ModelToolResponseAdapter {
             return NEED_USER;
         }
 
+        if ("WAITING_BACKGROUND".equals(taskState)) return WAIT;
         if (isVerifiedSend(result)) return DONE;
 
         String error = upper(result.optString("error", ""));
@@ -192,6 +196,13 @@ final class ModelToolResponseAdapter {
         }
 
         if (WAIT.equals(status)) {
+            if ("WAITING_BACKGROUND".equals(
+                    upper(result.optString("taskState", "")))) {
+                return "Runtime 已掛上背景 Accessibility event wait；不要輪詢或重複操作，等 Runtime 喚醒。";
+            }
+            if ("start_conversation_loop".equals(toolName)) {
+                return "持續對話租約已啟用；繼續完成指定收件人的聊天室定位與第一則送出，不要提前作結論。";
+            }
             if (containsAny(error, "OBSERVE_REQUIRED", "PENDING_VERIFICATION")) {
                 return "Runtime 已阻止重複操作；先重新觀察目前畫面一次，再決定下一步。";
             }
@@ -252,6 +263,9 @@ final class ModelToolResponseAdapter {
             return "這一步未完成；請依目前畫面改用其他方法，不要重複相同操作。";
         }
 
+        if ("stop_conversation_loop".equals(toolName)) {
+            return "持續對話模式已停止。";
+        }
         if (isVerifiedSend(result) || "send_text".equals(toolName)) {
             return "訊息已送出。";
         }

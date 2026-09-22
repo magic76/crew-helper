@@ -53,6 +53,8 @@ final class NativeGeminiLiveClient {
     private final NotebookToolHandler notebookToolHandler;
     private final AppPlaybookStore appPlaybookStore;
     private final TaskRecipeStore taskRecipeStore;
+    private final ConversationLoopRecipe conversationLoopRecipe =
+            new ConversationLoopRecipe();
     private volatile long taskRecipeCandidateGeneration = -1L;
     private volatile String taskRecipeCandidateId = "";
     private final PhoneRuntimeExecutor phoneRuntimeExecutor;
@@ -545,6 +547,24 @@ final class NativeGeminiLiveClient {
                             JSONObject args) throws Exception {
                         return NativeGeminiLiveClient.this
                                 .waitThenAction(args);
+                    }
+
+                    @Override public JSONObject startConversationLoop(
+                            JSONObject args) throws Exception {
+                        return NativeGeminiLiveClient.this
+                                .startConversationLoop(args);
+                    }
+
+                    @Override public JSONObject continueConversationLoop(
+                            JSONObject args) throws Exception {
+                        return NativeGeminiLiveClient.this
+                                .continueConversationLoop(args);
+                    }
+
+                    @Override public JSONObject stopConversationLoop(
+                            JSONObject args) throws Exception {
+                        return NativeGeminiLiveClient.this
+                                .stopConversationLoop(args);
                     }
                 });
 
@@ -1127,6 +1147,9 @@ final class NativeGeminiLiveClient {
     }
 
     void stop() {
+        conversationLoopRecipe.stop("LIVE_SESSION_STOPPED");
+        workingContext.setPendingTask("");
+
         boolean wasRunning = running;
         correctionHandler.removeCallbacks(clearCorrectionWindow);
         correctionWindowActive = false;
@@ -1265,7 +1288,15 @@ final class NativeGeminiLiveClient {
                     completeUserInput)) {
                 return;
             }
-            if (isStopAgentTaskPhrase(
+            if (conversationLoopRecipe.isActive()
+                    && ConversationLoopPolicy.isStopIntent(
+                            completeUserInput)) {
+                conversationLoopRecipe.stop(
+                        "使用者停止對話模式");
+                reportStage("✓ 已停止持續對話模式");
+                cancelAgentTask(
+                        "使用者停止對話模式");
+            } else if (isStopAgentTaskPhrase(
                     completeUserInput)) {
                 deckRuntimeController.cancelAutoAdvance();
                 cancelAgentTask(
@@ -1523,6 +1554,8 @@ final class NativeGeminiLiveClient {
             return true;
         }
         return "send_text".equals(requestedName)
+                || "start_conversation_loop".equals(requestedName)
+                || "stop_conversation_loop".equals(requestedName)
                 || "end_voice_session".equals(requestedName)
                 || "wait_then_action".equals(requestedName)
                 || "cancel_schedule".equals(requestedName);
@@ -1993,11 +2026,29 @@ final class NativeGeminiLiveClient {
         final String name = semantic.runtimeName;
         final JSONObject args = semantic.runtimeArgs;
 
+        if (conversationLoopRecipe.isActive()
+                && !conversationLoopRecipe.allowsTool(name)) {
+            try {
+                sendToolResponse(
+                        id,
+                        requestedName,
+                        runtimeBlocked(
+                                "CONVERSATION_LOOP_TOOL_BLOCKED",
+                                "持續對話租約進行中。Runtime 已縮小可用操作範圍；不要離開指定聊天室或做無關 mutation。若使用者要做其他任務，先停止 conversation loop。"));
+            } catch (Exception ignored) {}
+            return;
+        }
+
+        final boolean conversationLeaseSend =
+                "send_text".equals(name)
+                        && conversationLoopRecipe.canSend();
         VoiceExecutionGuard.Preflight voicePreflight =
-                voiceExecutionGuard.preflight(
-                        callIntentGeneration,
-                        name,
-                        args);
+                conversationLeaseSend
+                        ? VoiceExecutionGuard.Preflight.allow()
+                        : voiceExecutionGuard.preflight(
+                                callIntentGeneration,
+                                name,
+                                args);
         if (!voicePreflight.allowed) {
             JSONObject blocked = new JSONObject();
             try {
@@ -2088,7 +2139,9 @@ final class NativeGeminiLiveClient {
             return;
         }
 
-        if (userActionScope.shouldBlockFurtherMessageMutation() && isMutationTool(name)) {
+        if (userActionScope.shouldBlockFurtherMessageMutation()
+                && isMutationTool(name)
+                && !conversationLeaseSend) {
             sendBlockedToolResponse(id, requestedName,
                     "MESSAGE_TRANSACTION_ALREADY_HANDLED：本句明確傳送要求已完成一次原子送出交易；禁止再用 type/tap 重試。等待使用者的新指令。");
             return;
@@ -2226,7 +2279,10 @@ final class NativeGeminiLiveClient {
                     task.awaitingModel = false;
                     task.watchdogPrompted = false;
                     agentResponseCoordinator.clear();
-                    task.status = "等待使用者選擇搜尋結果";
+                    task.status = "WAITING_BACKGROUND".equals(
+                            result.optString("taskState", ""))
+                            ? "對話模式：背景等待新訊息"
+                            : "等待使用者選擇搜尋結果";
                 }
                 reportStage(task.status);
             } else {
@@ -2245,7 +2301,8 @@ final class NativeGeminiLiveClient {
             String requestedName,
             JSONObject requestedArgs,
             long callIntentGeneration) {
-        if (!SemanticPhoneAction.TOOL_NAME.equals(requestedName)
+        if (conversationLoopRecipe.isActive()
+                || !SemanticPhoneAction.TOOL_NAME.equals(requestedName)
                 || callIntentGeneration != taskRecipeCandidateGeneration
                 || taskRecipeCandidateId == null
                 || taskRecipeCandidateId.isEmpty()
@@ -2347,9 +2404,12 @@ final class NativeGeminiLiveClient {
     }
 
     private boolean shouldSuspendAgentForUser(JSONObject result) {
-        if (result != null && "WAITING_USER".equals(
-                result.optString("taskState", ""))) {
-            return true;
+        if (result != null) {
+            String state = result.optString("taskState", "");
+            if ("WAITING_USER".equals(state)
+                    || "WAITING_BACKGROUND".equals(state)) {
+                return true;
+            }
         }
         return hasPendingUiChoice();
     }
@@ -2393,17 +2453,21 @@ final class NativeGeminiLiveClient {
             if (task == null || task.cancelled) return null;
 
             int maxSteps = agentTaskCoordinator.maxSteps();
+            boolean loopOwnedTool =
+                    conversationLoopRecipe.isActive()
+                            && conversationLoopRecipe.allowsTool(name);
+            long nowMs = System.currentTimeMillis();
             AgentTaskLifecyclePolicy.StepDecision decision =
                     AgentTaskLifecyclePolicy.evaluateStep(
-                            System.currentTimeMillis(),
-                            task.startedAt,
-                            task.steps,
+                            nowMs,
+                            loopOwnedTool ? nowMs : task.startedAt,
+                            loopOwnedTool ? 0 : task.steps,
                             maxSteps,
                             name,
                             signature,
-                            task.lastSignature,
-                            task.getToolCount(name),
-                            task.mutationActions);
+                            loopOwnedTool ? "" : task.lastSignature,
+                            loopOwnedTool ? 0 : task.getToolCount(name),
+                            loopOwnedTool ? 0 : task.mutationActions);
             if (!decision.allowed) task.blockedReason = decision.blockedReason;
 
             if (task.blockedReason == null) {
@@ -2481,7 +2545,8 @@ final class NativeGeminiLiveClient {
                     boolean blocked = task.blockedReason != null
                             || "BLOCKED".equals(domainState);
                     boolean answerFastPath =
-                            InformationAnswerFastPathPolicy.shouldOffer(
+                            !conversationLoopRecipe.isActive()
+                                    && InformationAnswerFastPathPolicy.shouldOffer(
                                     name,
                                     true,
                                     task.getToolCount("search_current_app"),
@@ -2860,6 +2925,208 @@ final class NativeGeminiLiveClient {
                 .put("success", true)
                 .put("task", task.toJson())
                 .put("message", "已啟動畫面監控：" + lbl);
+    }
+
+    private JSONObject startConversationLoop(JSONObject args)
+            throws Exception {
+        JSONObject safe = args == null ? new JSONObject() : args;
+        String recipient = safe.optString("recipient", "").trim();
+        int maxReplies = safe.optInt("max_replies", 10);
+        int timeoutMinutes = safe.optInt("timeout_minutes", 15);
+
+        LiveTurnCoordinator.FinalizedTurn latest =
+                liveTurnCoordinator.latest();
+        JSONObject context = workingContext.toJson();
+        String rootGoal = context.optString(
+                "rootGoal",
+                context.optString("latestUserTurn", ""));
+        boolean explicit =
+                ConversationLoopPolicy.isExplicitStartIntent(latest.text)
+                        || ConversationLoopPolicy.isExplicitStartIntent(
+                                rootGoal);
+        boolean recipientBound =
+                ConversationLoopPolicy.mentionsRecipient(
+                        latest.text, recipient)
+                        || ConversationLoopPolicy.mentionsRecipient(
+                                rootGoal, recipient);
+        if (!explicit || !recipientBound) {
+            return runtimeBlocked(
+                    "CONVERSATION_LOOP_NOT_EXPLICIT",
+                    "持續代聊是長時間送訊息授權，只能來自使用者明確要求，且 recipient 必須出現在該要求中。不要從一般單次傳訊息推斷成對話模式。");
+        }
+
+        ConversationLoopRecipe.StartResult started =
+                conversationLoopRecipe.start(
+                        recipient,
+                        userIntentGeneration,
+                        maxReplies,
+                        timeoutMinutes);
+        if (!started.success) {
+            return runtimeBlocked(
+                    started.code,
+                    "無法建立持續對話模式；請確認收件人。");
+        }
+
+        workingContext.setPendingTask("CONVERSATION_LOOP");
+        return conversationLoopStatusJson()
+                .put("success", true)
+                .put("taskState", "IN_PROGRESS")
+                .put("conversationLoop", "READY_TO_SEND")
+                .put("instruction",
+                        "持續對話租約已啟用。先確認/開啟指定 recipient 的聊天室；可送出一則自然開場或使用者指定內容。每次 send_text 後 Runtime 會自動背景等待新訊息，不要輪詢。");
+    }
+
+    private JSONObject continueConversationLoop(JSONObject args)
+            throws Exception {
+        if (!conversationLoopRecipe.isActive()) {
+            return runtimeBlocked(
+                    "CONVERSATION_LOOP_NOT_ACTIVE",
+                    "目前沒有持續對話租約，不要自行建立背景送訊息循環。");
+        }
+
+        JSONObject semantic =
+                phoneRuntimeExecutor.get("/semantic_screen");
+        String fingerprint = semantic == null
+                ? "" : semantic.optString("fingerprint", "");
+        if (!conversationLoopRecipe.rearmWait(fingerprint)) {
+            return runtimeBlocked(
+                    "CONVERSATION_LOOP_CANNOT_WAIT",
+                    "對話租約已停止或到期。");
+        }
+
+        armConversationLoopWaitAsync();
+        return conversationLoopStatusJson()
+                .put("success", true)
+                .put("taskState", "WAITING_BACKGROUND")
+                .put("conversationLoop", "WAITING_FOR_MESSAGE")
+                .put("instruction",
+                        "Runtime 已重新掛上 Accessibility event wait。不要 poll/inspect，等 Runtime 喚醒。");
+    }
+
+    private JSONObject stopConversationLoop(JSONObject args)
+            throws Exception {
+        boolean wasActive = conversationLoopRecipe.isActive();
+        conversationLoopRecipe.stop("MODEL_OR_USER_STOP");
+        workingContext.setPendingTask("");
+        return conversationLoopStatusJson()
+                .put("success", true)
+                .put("taskState", "DONE")
+                .put("conversationLoop", "STOPPED")
+                .put("message",
+                        wasActive
+                                ? "已停止持續對話模式"
+                                : "目前沒有進行中的持續對話模式");
+    }
+
+    private JSONObject conversationLoopStatusJson() {
+        JSONObject out = new JSONObject();
+        try {
+            out.put(
+                            "state",
+                            conversationLoopRecipe.state().name())
+                    .put(
+                            "recipient",
+                            conversationLoopRecipe.recipient())
+                    .put(
+                            "sentReplies",
+                            conversationLoopRecipe.sentReplies())
+                    .put(
+                            "maxReplies",
+                            conversationLoopRecipe.maxReplies())
+                    .put(
+                            "expiresAtMs",
+                            conversationLoopRecipe.expiresAtMs());
+        } catch (Exception ignored) {}
+        return out;
+    }
+
+    private void armConversationLoopWaitAsync() {
+        final long epoch = conversationLoopRecipe.epoch();
+        new Thread(new Runnable() {
+            @Override public void run() {
+                long revision = 0L;
+                try {
+                    JSONObject initial =
+                            phoneRuntimeExecutor.post(
+                                    "/wait_ui_change",
+                                    new JSONObject()
+                                            .put("after_revision", -1L)
+                                            .put("timeout_ms", 0L),
+                                    2500);
+                    revision = initial.optLong("revision", 0L);
+                } catch (Exception ignored) {}
+
+                while (running
+                        && conversationLoopRecipe.isActive()
+                        && conversationLoopRecipe.isWaiting()
+                        && conversationLoopRecipe.epoch() == epoch) {
+                    JSONObject event = null;
+                    try {
+                        event = phoneRuntimeExecutor.post(
+                                "/wait_ui_change",
+                                new JSONObject()
+                                        .put("after_revision", revision)
+                                        .put("timeout_ms", 5000L),
+                                7000);
+                    } catch (Exception ignored) {}
+
+                    if (conversationLoopRecipe.epoch() != epoch
+                            || !conversationLoopRecipe.isWaiting()) {
+                        return;
+                    }
+                    if (event == null) continue;
+                    revision = event.optLong("revision", revision);
+                    if (!event.optBoolean("changed", false)) continue;
+
+                    try { Thread.sleep(350L); }
+                    catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+
+                    JSONObject semantic = null;
+                    try {
+                        semantic =
+                                phoneRuntimeExecutor.get(
+                                        "/semantic_screen");
+                    } catch (Exception ignored) {}
+                    if (semantic == null
+                            || !semantic.optBoolean("success", false)) {
+                        continue;
+                    }
+
+                    String fingerprint =
+                            semantic.optString("fingerprint", "");
+                    if (!conversationLoopRecipe
+                            .markMessagePending(fingerprint)) {
+                        continue;
+                    }
+
+                    final AgentTaskRecord task =
+                            agentTaskCoordinator.active();
+                    if (task != null) {
+                        synchronized (agentTaskCoordinator.monitor()) {
+                            if (!task.finished && !task.cancelled) {
+                                task.awaitingModel = true;
+                                task.watchdogPrompted = false;
+                                task.status =
+                                        "對話模式：偵測到聊天室變化，等待檢查新訊息";
+                            }
+                        }
+                        reportStage(task.status);
+                        sendInternalAgentDirective(
+                                "【CONVERSATION LOOP WAKE】Runtime 偵測到指定聊天室有新的 Accessibility 變化。"
+                                        + "現在只呼叫一次 inspect_ui 看 fresh screenshot。"
+                                        + "若確實有新的對方訊息，依使用者原本授權自然組一則簡短回覆並用 send_text 送出；"
+                                        + "若只是自己的訊息、typing indicator 或其他 UI noise，呼叫 continue_conversation_loop 重新等待。"
+                                        + "不要切到其他收件人，也不要輪詢。");
+                        agentResponseCoordinator
+                                .scheduleWatchdog(task);
+                    }
+                    return;
+                }
+            }
+        }, "crew-conversation-loop-wait").start();
     }
 
     private JSONObject waitThenAction(JSONObject args) throws Exception {
@@ -4310,8 +4577,14 @@ final class NativeGeminiLiveClient {
      * history, prior conversation memory, screenshots, or model inference can
      * satisfy the target check.
      */
-    private JSONObject verifyAuthorizedRecipientOnCurrentScreen() throws Exception {
-        String recipient = userActionScope.authorizedRecipient();
+    private JSONObject verifyAuthorizedRecipientOnCurrentScreen()
+            throws Exception {
+        return verifyRecipientOnCurrentScreen(
+                userActionScope.authorizedRecipient());
+    }
+
+    private JSONObject verifyRecipientOnCurrentScreen(String recipient)
+            throws Exception {
         if (recipient == null || recipient.trim().isEmpty()) {
             return runtimeBlocked("RECIPIENT_TARGET_UNKNOWN",
                     "缺少可驗證的收件人；不要猜測或直接送出。");
@@ -4455,34 +4728,51 @@ final class NativeGeminiLiveClient {
 
     private JSONObject sendTextToPhone(JSONObject args) throws Exception {
         String text = args == null ? "" : args.optString("text", "");
+        boolean loopSend = conversationLoopRecipe.canSend();
 
-        if (!userActionScope.canSend()
-                || userActionScope.blocksNamedRecipientMessagingAction()) {
+        if (!loopSend && (!userActionScope.canSend()
+                || userActionScope.blocksNamedRecipientMessagingAction())) {
             LiveTurnCoordinator.FinalizedTurn finalized =
                     liveTurnCoordinator.latest();
             ensureSendAuthorizationFromFinalized(finalized, args);
         }
-        if (userActionScope.blocksNamedRecipientMessagingAction()) {
+        if (!loopSend
+                && userActionScope.blocksNamedRecipientMessagingAction()) {
             return runtimeBlocked(
                     "RECIPIENT_TARGET_UNKNOWN",
                     "這一輪看起來要傳給特定對象，但 Runtime 無法從原始指令抽出可驗證的收件人。不要猜收件人；請使用者用『跟 X 說…』或『傳給 X：「…」』明確指定。");
         }
-        if (!userActionScope.canSend()) {
+        if (!loopSend && !userActionScope.canSend()) {
             return runtimeBlocked(
                     "CURRENT_SCREEN_SEND_NOT_AUTHORIZED",
                     "send_text 只用於最新一句明確要求送出訊息。若使用者只是要在目前可見欄位打字、填入或貼上內容（包含設定、system prompt、表單或聊天輸入框），請改用 phone_action(TYPE)；不要宣稱 Crew 無法一般打字。");
         }
 
-        if (userActionScope.requiresRecipientVerification()) {
-            JSONObject recipientVerification = verifyAuthorizedRecipientOnCurrentScreen();
+        if (loopSend) {
+            JSONObject recipientVerification =
+                    verifyRecipientOnCurrentScreen(
+                            conversationLoopRecipe.recipient());
+            if (!recipientVerification.optBoolean("success", false)) {
+                conversationLoopRecipe.stop(
+                        "RECIPIENT_VERIFICATION_FAILED");
+                return recipientVerification
+                        .put("conversationLoop", "STOPPED")
+                        .put("instruction",
+                                "Runtime 無法再證明目前仍是原本收件人的聊天室，已停止持續對話租約；不要換人或猜。");
+            }
+        } else if (userActionScope.requiresRecipientVerification()) {
+            JSONObject recipientVerification =
+                    verifyAuthorizedRecipientOnCurrentScreen();
             if (!recipientVerification.optBoolean("success", false)) {
                 return recipientVerification;
             }
         }
 
         PerformanceMetrics.recordTextRouteSend();
-        userActionScope.markMessageTransactionHandled();
-        userActionScope.consumeSendAuthorization();
+        if (!loopSend) {
+            userActionScope.markMessageTransactionHandled();
+            userActionScope.consumeSendAuthorization();
+        }
 
         // 0052 active messaging path is intentionally simple:
         // optional TYPE(text) -> SEND_CURRENT.
@@ -4501,6 +4791,13 @@ final class NativeGeminiLiveClient {
                         .put("textLength", text.length())
                         .put("sendMode", "TYPE_THEN_SEND_CURRENT");
                 workingContext.recordAction("send_current", "failed");
+                if (loopSend) {
+                    conversationLoopRecipe.stop("TYPE_FAILED");
+                    workingContext.setPendingTask("");
+                    failure.put("conversationLoop", "STOPPED")
+                            .put("instruction",
+                                    "持續對話輸入失敗，Runtime 已停止 loop；不要自動重試或重複送訊息。");
+                }
                 return failure;
             }
         }
@@ -4533,6 +4830,46 @@ final class NativeGeminiLiveClient {
         workingContext.recordAction(
                 "send_current",
                 reply.optBoolean("success", false) ? "submitted" : "failed");
+
+        if (loopSend) {
+            if (!reply.optBoolean("success", false)) {
+                conversationLoopRecipe.stop("SEND_FAILED");
+                workingContext.setPendingTask("");
+                reply.put("conversationLoop", "STOPPED")
+                        .put("instruction",
+                                "持續對話送出失敗，Runtime 已停止 loop，避免自動重試造成重複訊息。");
+                return reply;
+            }
+
+            String baseline = "";
+            try {
+                JSONObject semantic =
+                        phoneRuntimeExecutor.get("/semantic_screen");
+                if (semantic != null
+                        && semantic.optBoolean("success", false)) {
+                    baseline = semantic.optString("fingerprint", "");
+                }
+            } catch (Exception ignored) {}
+
+            boolean keepWaiting =
+                    conversationLoopRecipe.markSent(baseline);
+            if (keepWaiting) {
+                workingContext.setPendingTask("CONVERSATION_LOOP_WAIT");
+                reply.put("taskState", "WAITING_BACKGROUND")
+                        .put("conversationLoop", "WAITING_FOR_MESSAGE")
+                        .put("loopStatus", conversationLoopStatusJson())
+                        .put("instruction",
+                                "訊息已送出。Runtime 已接手等待下一個聊天室 Accessibility 事件；不要輪詢、不要再次 send_text，直到 Runtime 喚醒。");
+                armConversationLoopWaitAsync();
+            } else {
+                workingContext.setPendingTask("");
+                reply.put("conversationLoop", "STOPPED")
+                        .put("loopStatus", conversationLoopStatusJson())
+                        .put("message",
+                                "已達持續對話回覆上限，Runtime 自動停止。");
+            }
+        }
+
         return reply;
     }
 
@@ -4646,6 +4983,8 @@ final class NativeGeminiLiveClient {
     private void reportStage(String text) { stage = text; listener.onStatus(text); Log.d(TAG, text); }
     private synchronized void fail(String message, Throwable error) {
         if (!running) return;
+        conversationLoopRecipe.stop("LIVE_SESSION_FAILED");
+        workingContext.setPendingTask("");
         if (error != null) Log.e(TAG, message, error); else Log.e(TAG, message);
         running = false;
         interruptionHandler.removeCallbacks(clearInterruptedFallback);

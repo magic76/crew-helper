@@ -27,6 +27,9 @@ final class ToolExecutionCoordinator {
         JSONObject pressKey(JSONObject args) throws Exception;
         JSONObject startScreenMonitor(JSONObject args) throws Exception;
         JSONObject waitThenAction(JSONObject args) throws Exception;
+        JSONObject startConversationLoop(JSONObject args) throws Exception;
+        JSONObject continueConversationLoop(JSONObject args) throws Exception;
+        JSONObject stopConversationLoop(JSONObject args) throws Exception;
     }
 
     private final RuntimeToolExecutor runtimeToolExecutor;
@@ -113,6 +116,15 @@ final class ToolExecutionCoordinator {
         }
         if ("wait_then_action".equals(name)) {
             return host.waitThenAction(safeArgs);
+        }
+        if ("start_conversation_loop".equals(name)) {
+            return host.startConversationLoop(safeArgs);
+        }
+        if ("continue_conversation_loop".equals(name)) {
+            return host.continueConversationLoop(safeArgs);
+        }
+        if ("stop_conversation_loop".equals(name)) {
+            return host.stopConversationLoop(safeArgs);
         }
         if (deckRuntimeController.handles(name)) {
             return deckRuntimeController.execute(name, safeArgs);

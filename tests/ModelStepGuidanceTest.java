@@ -8,6 +8,7 @@ public final class ModelStepGuidanceTest {
         freeFormFailureIsNotLeaked();
         successfulTypeReturnsUsefulEffect();
         waitRequiresObservation();
+        backgroundWaitStopsPolling();
         System.out.println("ModelStepGuidanceTest passed");
     }
 
@@ -58,6 +59,14 @@ public final class ModelStepGuidanceTest {
         expect("OBSERVE_REQUIRED", g.reason);
         expect("OBSERVE", g.next);
         expect("WAITING", ModelStepGuidance.progressState("WAIT"));
+    }
+
+    private static void backgroundWaitStopsPolling() {
+        ModelStepGuidance.Guidance g = ModelStepGuidance.from(
+                "send_text", "WAIT", "", "send_text",
+                "", "WAITING_BACKGROUND", "", true);
+        expect("BACKGROUND_WAIT_ARMED", g.effect);
+        expect("WAIT_FOR_RUNTIME", g.next);
     }
 
     private static void expect(String expected, String actual) {
