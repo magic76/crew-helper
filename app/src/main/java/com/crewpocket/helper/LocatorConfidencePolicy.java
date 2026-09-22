@@ -31,8 +31,8 @@ final class LocatorConfidencePolicy {
     static final double AUTO_MIN_CONFIDENCE = 0.86;
     static final double RETRY_MIN_CONFIDENCE = 0.68;
     static final double FALLBACK_MIN_CONFIDENCE = 0.50;
-    static final double RUNNER_UP_RELEVANT_CONFIDENCE = 0.55;
-    static final double AUTO_MIN_MARGIN = 0.12;
+    static final double RUNNER_UP_RELEVANT_CONFIDENCE = 0.65;
+    static final double AUTO_MIN_MARGIN = 0.08;
 
     private LocatorConfidencePolicy() {}
 
