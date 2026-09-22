@@ -860,6 +860,8 @@ final class NativeGeminiLiveClient {
                 listener.onTranscript("你", input);
                 return true;
             }
+            String runtimeLoopRecipient =
+                    tryArmRuntimeConversationLoop(input);
             if (tryHandleRuntimeSendCurrent(input)) {
                 listener.onTranscript("你", input);
                 return true;
@@ -879,6 +881,10 @@ final class NativeGeminiLiveClient {
                         ContextPayloadBudget.utf8Bytes(text.trim()),
                         ContextPayloadBudget.utf8Bytes(payload));
                 listener.onTranscript("你", text.trim());
+                if (!runtimeLoopRecipient.isEmpty()) {
+                    sendRuntimeConversationLoopArmedDirective(
+                            runtimeLoopRecipient);
+                }
             }
             return sent;
         } catch (Exception error) {
@@ -1296,6 +1302,13 @@ final class NativeGeminiLiveClient {
             if (tryHandleRuntimeAppTeaching(
                     completeUserInput)) {
                 return;
+            }
+            String runtimeLoopRecipient =
+                    tryArmRuntimeConversationLoop(
+                            completeUserInput);
+            if (!runtimeLoopRecipient.isEmpty()) {
+                sendRuntimeConversationLoopArmedDirective(
+                        runtimeLoopRecipient);
             }
             if (tryHandleRuntimeSendCurrent(
                     completeUserInput)) {
@@ -1731,6 +1744,58 @@ final class NativeGeminiLiveClient {
                             + finalized.generation);
         }
         return restored;
+    }
+
+    private String tryArmRuntimeConversationLoop(
+            String inputText) {
+        if (!AppConfig.isMessageSendNoConfirmationEnabled(appContext)) {
+            return "";
+        }
+        if (conversationLoopRecipe.isActive()
+                || !ConversationLoopPolicy.isExplicitStartIntent(inputText)) {
+            return "";
+        }
+
+        String recipient =
+                ConversationLoopPolicy.extractRecipient(inputText);
+        if (recipient.isEmpty()) {
+            return "";
+        }
+
+        ConversationLoopRecipe.StartResult started =
+                conversationLoopRecipe.start(
+                        recipient,
+                        userIntentGeneration,
+                        10,
+                        15);
+        if (!started.success) {
+            return "";
+        }
+
+        workingContext.setPendingTask("CONVERSATION_LOOP");
+        reportStage("✓ 已啟動自動聊天：" + recipient);
+        try {
+            FloatingBubbleManager.getInstance(appContext)
+                    .showRuntimeUiState(
+                            RuntimeUiState.success(
+                                    "自動聊天已啟動",
+                                    recipient + " · 15 分鐘 / 最多 10 則"));
+        } catch (Exception ignored) {}
+        return recipient;
+    }
+
+    private void sendRuntimeConversationLoopArmedDirective(
+            String recipient) {
+        if (recipient == null || recipient.trim().isEmpty()) return;
+        try {
+            sendInternalAgentDirective(
+                    "【Runtime Conversation Loop 已啟動】"
+                            + "recipient=" + recipient.trim()
+                            + "。這不是待觸發條件，也不需要再呼叫 start_conversation_loop。"
+                            + "不要向使用者解釋 Runtime 條件或授權限制。"
+                            + "直接使用正常手機操作前往這個 recipient 的聊天室並開始自然對話；"
+                            + "ACTIVE lease 已授權後續回覆。每次真正 SEND 前 Runtime 仍會驗證聊天畫面。");
+        } catch (Exception ignored) {}
     }
 
     private boolean tryHandleRuntimeSendCurrent(String inputText) {
