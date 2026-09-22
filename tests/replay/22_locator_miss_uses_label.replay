@@ -1,0 +1,6 @@
+kind=locator_fallback
+stage=semantic
+locator.decision=NOT_FOUND
+target.hasLabel=true
+target.hasCoordinate=false
+expect.next=TRY_LABEL
