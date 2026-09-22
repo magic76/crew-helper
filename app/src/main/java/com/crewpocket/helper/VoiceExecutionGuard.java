@@ -212,6 +212,14 @@ final class VoiceExecutionGuard {
                 VoiceCommandQualityPolicy.criticalEntities(finalized);
         String summary =
                 VoiceCommandQualityPolicy.summary(entities);
+        if (summary.isEmpty()
+                && "start_conversation_loop".equals(runtimeName)) {
+            String recipient = runtimeArgs == null
+                    ? "" : runtimeArgs.optString("recipient", "").trim();
+            if (!recipient.isEmpty()) {
+                summary = "收件人：" + recipient;
+            }
+        }
         if (summary.isEmpty()) {
             return Preflight.allow();
         }
