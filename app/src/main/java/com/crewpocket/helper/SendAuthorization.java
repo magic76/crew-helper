@@ -18,7 +18,7 @@ import java.util.regex.Pattern;
 final class SendAuthorization {
     private boolean requested;
     private boolean consumed;
-    private boolean messageTransactionHandled;
+    private boolean commitDispatched;
     private boolean namedRecipientRequested;
     private String recipient = "";
 
@@ -33,15 +33,15 @@ final class SendAuthorization {
 
         requested = namedRecipientRequested
                 ? !recipient.isEmpty()
-                : hasCurrentScreenSendIntent(rawText);
+                : isExplicitSendRequest(rawText);
         consumed = false;
-        messageTransactionHandled = false;
+        commitDispatched = false;
     }
 
     synchronized void clear() {
         requested = false;
         consumed = false;
-        messageTransactionHandled = false;
+        commitDispatched = false;
         namedRecipientRequested = false;
         recipient = "";
     }
@@ -54,12 +54,13 @@ final class SendAuthorization {
         consumed = true;
     }
 
-    synchronized void markTransactionHandled() {
-        messageTransactionHandled = true;
+    synchronized void markCommitDispatched() {
+        commitDispatched = true;
+        consumed = true;
     }
 
-    synchronized boolean shouldBlockFurtherMessageMutation() {
-        return messageTransactionHandled;
+    synchronized boolean isCommitDispatched() {
+        return commitDispatched;
     }
 
     synchronized boolean requiresRecipientVerification() {
@@ -77,14 +78,24 @@ final class SendAuthorization {
     private static boolean isNonExecutingDiscussion(String rawText) {
         String folded = TextMatch.caseFold(rawText == null ? "" : rawText).trim();
         String value = normalize(rawText);
-        if (containsAny(value,
-                "不要", "別", "别", "不用", "取消", "停止",
-                "不是", "不能", "不可以", "先不要", "暫時不要", "暂时不要",
-                "怎麼", "怎么", "如何", "為什麼", "为什么", "如果", "假如", "能不能")) {
+        if (value.isEmpty()) return true;
+
+        // Only treat command-level negation/questions as non-executing.
+        // Message bodies may legitimately contain words such as "不要" or "如果".
+        if (value.matches(
+                "^(?:不要|別|别|不用|取消|停止|先不要|暫時不要|暂时不要)"
+                        + ".*(?:送出|傳送|传送|發送|发送|傳給|传给|發給|发给|告訴|告诉).*")) {
+            return true;
+        }
+        if (value.matches(
+                "^(?:怎麼|怎么|如何|為什麼|为什么|如果|假如|能不能)"
+                        + ".*(?:送出|傳送|传送|發送|发送|傳訊息|传讯息|發訊息|发讯息|send).*")) {
             return true;
         }
         return folded.matches(
-                ".*\\b(don't|dont|do not|never|cancel|stop|how|why|if|should)\\b.*");
+                "^\\s*(?:don't|dont|do not|never|cancel|stop)\\s+.*\\b(?:send|message|text)\\b.*")
+                || folded.matches(
+                "^\\s*(?:how|why|if|should)\\b.*\\b(?:send|message|text)\\b.*");
     }
 
     static boolean looksLikeSendTarget(String metadata) {
@@ -180,22 +191,16 @@ final class SendAuthorization {
 
         String folded = TextMatch.caseFold(rawText).trim();
         String value = normalize(rawText);
+        if (!hasTypeVerb(rawText)) return false;
 
-        boolean typing = containsAny(value,
-                "輸入", "输入", "打字", "寫入", "写入", "寫", "写",
-                "貼上", "贴上", "填入", "填上")
-                || folded.matches(".*\\b(type|input|enter|write|paste|fill)\\b.*");
-        if (!typing) return false;
-
-        // Questions/hypotheticals are not execution requests.
-        if (containsAny(value,
-                "怎麼", "怎么", "如何", "為什麼", "为什么", "如果", "假如", "能不能")
-                || folded.matches(".*\\b(how|why|if|should)\\b.*")) {
+        // Questions/hypotheticals about typing are not execution requests.
+        if (value.matches("^(?:怎麼|怎么|如何|為什麼|为什么|如果|假如|能不能).*")
+                || folded.matches("^\\s*(?:how|why|if|should)\\b.*")) {
             return false;
         }
 
-        // Negating the typing itself is not an executable TYPE request. A
-        // negated SEND such as "打字 X，不要送出" is intentionally allowed.
+        // Negating the typing itself is not executable. Negating SEND is fine:
+        // "打字 X，不要送出" remains a type-only request.
         if (containsAny(value,
                 "不要輸入", "不要输入", "別輸入", "别输入",
                 "不要打字", "別打字", "别打字",
@@ -206,19 +211,13 @@ final class SendAuthorization {
             return false;
         }
 
-        // Let the existing SEND parser decide whether the same utterance grants
-        // submission or named-recipient messaging. Negated SEND wording does
-        // not grant it, which is exactly what type-only needs.
-        SendAuthorization sendProbe = new SendAuthorization();
-        sendProbe.updateFromUserText(rawText);
-        if (sendProbe.canAttempt()
-                || sendProbe.hasAmbiguousNamedRecipient()) {
+        if (isNamedRecipientMessagingRequest(rawText)
+                || hasTypeThenSendIntent(rawText)) {
             return false;
         }
 
-        // Keep this helper deliberately narrow: a compound navigation/action
-        // request should stay model-driven instead of being prematurely marked
-        // complete after text entry.
+        // Keep pure TYPE completion narrow. Compound follow-up actions remain
+        // model-driven, but the TYPE itself is still allowed by Runtime.
         if (containsAny(value,
                 "然後", "然后", "接著", "接着",
                 "再按", "再點", "再点", "點擊", "点击", "按下",
@@ -234,12 +233,39 @@ final class SendAuthorization {
         return true;
     }
 
-    private static boolean hasCurrentScreenSendIntent(String rawText) {
-        String value = normalize(rawText == null ? "" : rawText);
+    static boolean isExplicitSendRequest(String rawText) {
+        if (rawText == null || rawText.trim().isEmpty()) return false;
+        if (isNonExecutingDiscussion(rawText)) return false;
+        if (isNamedRecipientMessagingRequest(rawText)) {
+            return !extractNamedRecipient(rawText).isEmpty();
+        }
+        if (hasTypeVerb(rawText)) {
+            return hasTypeThenSendIntent(rawText);
+        }
+        return isStandaloneCurrentScreenSendCommand(rawText);
+    }
+
+    private static boolean hasTypeVerb(String rawText) {
+        String value = normalize(rawText);
+        String folded = TextMatch.caseFold(rawText == null ? "" : rawText);
         return containsAny(value,
-                "送出", "傳送", "传送", "發送", "发送",
-                "sendthismessage", "sendcurrentmessage",
-                "sendmessage", "sendtext", "send");
+                "輸入", "输入", "打字", "寫入", "写入", "寫", "写",
+                "貼上", "贴上", "填入", "填上")
+                || folded.matches(".*\\b(type|input|enter|write|paste|fill)\\b.*");
+    }
+
+    private static boolean hasTypeThenSendIntent(String rawText) {
+        String value = normalize(rawText);
+        String folded = TextMatch.caseFold(rawText == null ? "" : rawText).trim();
+
+        boolean chinese = value.matches(
+                ".*(?:輸入|输入|打字|寫入|写入|寫|写|貼上|贴上|填入|填上).+"
+                        + "(?:並|并|然後|然后|接著|接着|再)"
+                        + ".*(?:送出|傳送|传送|發送|发送|送出去|傳出去|传出去|發出去|发出去).*");
+        boolean english = folded.matches(
+                ".*\\b(?:type|input|enter|write|paste|fill)\\b.+"
+                        + "\\b(?:and\\s+)?(?:then\\s+)?send\\b.*");
+        return chinese || english;
     }
 
     private static boolean isNamedRecipientMessagingRequest(String rawText) {
