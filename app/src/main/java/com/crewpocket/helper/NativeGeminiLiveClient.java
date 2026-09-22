@@ -3838,16 +3838,6 @@ final class NativeGeminiLiveClient {
 
         String elementMeta = semanticElementMeta(elementId);
         if (UserActionScope.looksLikeSendTarget(elementMeta)) {
-            if (userActionScope.shouldBlockFurtherMessageMutation()) {
-                return new JSONObject()
-                        .put("success", true)
-                        .put("action", "SEND_CURRENT")
-                        .put("sendMode", "ALREADY_HANDLED")
-                        .put("remappedFrom", "TAP_SEND_CONTROL")
-                        .put("stepResult", "STEP_OK")
-                        .put("instruction",
-                                "本輪訊息送出 transaction 已經處理過；不要再次點擊或重送。");
-            }
             JSONObject routedSend = sendTextToPhone(new JSONObject());
             routedSend.put("remappedFrom", "TAP_SEND_CONTROL");
             if (routedSend.optBoolean("success", false)) {
