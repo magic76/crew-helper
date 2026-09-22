@@ -52,6 +52,26 @@ public final class VoiceExecutionPolicyTest {
                 VoiceExecutionPolicy.requiresReliableTranscript(
                         "tap_screen", "刪除"),
                 "sensitive tap requires reliable transcript");
+        check(
+                VoiceExecutionPolicy.bypassesMessageVoiceGate(
+                        "send_text", "", true),
+                "no-confirm preference bypasses send voice gate");
+        check(
+                VoiceExecutionPolicy.bypassesMessageVoiceGate(
+                        "start_conversation_loop", "", true),
+                "no-confirm preference bypasses loop-start voice gate");
+        check(
+                VoiceExecutionPolicy.bypassesMessageVoiceGate(
+                        "tap_screen", "Send message", true),
+                "no-confirm preference bypasses semantic send tap gate");
+        check(
+                !VoiceExecutionPolicy.bypassesMessageVoiceGate(
+                        "tap_screen", "刪除", true),
+                "message preference never bypasses destructive action gate");
+        check(
+                !VoiceExecutionPolicy.bypassesMessageVoiceGate(
+                        "send_text", "", false),
+                "preference off keeps normal message voice gate");
 
         System.out.println(
                 "VoiceExecutionPolicyTest passed "
