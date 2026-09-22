@@ -3504,39 +3504,85 @@ final class NativeGeminiLiveClient {
     }
 
     private JSONObject waitForCondition(JSONObject args) throws Exception {
-        String condition = args == null ? "" : args.optString("condition", "screen_change").trim();
-        String elementId = args == null ? "" : args.optString("element_id", "").trim();
-        long timeoutMs = args == null ? 5000L : args.optLong("timeout_ms", 5000L);
+        String condition = args == null
+                ? "" : args.optString("condition", "screen_change").trim();
+        String elementId = args == null
+                ? "" : args.optString("element_id", "").trim();
+        long timeoutMs = args == null
+                ? 5000L : args.optLong("timeout_ms", 5000L);
+        timeoutMs = Math.max(250L, Math.min(15000L, timeoutMs));
 
         PendingCondition.Type type = PendingCondition.Type.SCREEN_CHANGE;
-        if ("element_appears".equals(condition)) type = PendingCondition.Type.ELEMENT_APPEARS;
-        else if ("element_disappears".equals(condition)) type = PendingCondition.Type.ELEMENT_DISAPPEARS;
+        if ("element_appears".equals(condition)) {
+            type = PendingCondition.Type.ELEMENT_APPEARS;
+        } else if ("element_disappears".equals(condition)) {
+            type = PendingCondition.Type.ELEMENT_DISAPPEARS;
+        }
 
-        pendingCondition = new PendingCondition(type, elementId, observationVerificationController.latestFingerprint(), timeoutMs);
+        JSONObject revisionState = phoneRuntimeExecutor.post(
+                "/wait_ui_change",
+                new JSONObject()
+                        .put("after_revision", -1L)
+                        .put("timeout_ms", 0L),
+                2500);
+        long revision = revisionState.optLong("revision", 0L);
+
+        pendingCondition = new PendingCondition(
+                type,
+                elementId,
+                observationVerificationController.latestFingerprint(),
+                timeoutMs);
         workingContext.setPendingTask("WAIT_" + type.name());
 
-        long deadline = System.currentTimeMillis() + pendingCondition.timeoutMs;
+        long deadline = System.currentTimeMillis()
+                + pendingCondition.timeoutMs;
         JSONObject last = null;
+
         while (System.currentTimeMillis() < deadline
                 && pendingCondition != null
                 && !Thread.currentThread().isInterrupted()) {
-            try { Thread.sleep(450L); } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                break;
+            long remaining =
+                    Math.max(1L, deadline - System.currentTimeMillis());
+            long eventWaitMs = Math.min(5000L, remaining);
+
+            JSONObject event = null;
+            try {
+                event = phoneRuntimeExecutor.post(
+                        "/wait_ui_change",
+                        new JSONObject()
+                                .put("after_revision", revision)
+                                .put("timeout_ms", eventWaitMs),
+                        (int) Math.min(8000L, eventWaitMs + 1800L));
+            } catch (Exception ignored) {}
+
+            if (event != null) {
+                revision = event.optLong("revision", revision);
             }
+
+            // Accessibility events are timing hints only. Always perform a
+            // fresh semantic verification after wake/timeout.
             try {
                 last = phoneRuntimeExecutor.get("/semantic_screen");
             } catch (Exception ignored) {}
-            if (last == null || !last.optBoolean("success", false)) continue;
+            if (last == null
+                    || !last.optBoolean("success", false)) {
+                continue;
+            }
 
             String fp = last.optString("fingerprint", "");
             boolean met = false;
             if (type == PendingCondition.Type.SCREEN_CHANGE) {
-                met = !fp.isEmpty() && !fp.equals(pendingCondition.baselineFingerprint);
+                met = !fp.isEmpty()
+                        && !fp.equals(
+                                pendingCondition.baselineFingerprint);
             } else if (type == PendingCondition.Type.ELEMENT_APPEARS) {
-                met = containsElement(last.optJSONArray("elements"), elementId);
+                met = containsElement(
+                        last.optJSONArray("elements"),
+                        elementId);
             } else if (type == PendingCondition.Type.ELEMENT_DISAPPEARS) {
-                met = !containsElement(last.optJSONArray("elements"), elementId);
+                met = !containsElement(
+                        last.optJSONArray("elements"),
+                        elementId);
             }
 
             if (met) {
@@ -3545,26 +3591,28 @@ final class NativeGeminiLiveClient {
                 workingContext.setPendingTask("");
                 pendingCondition = null;
 
-                JSONObject compact = ModelScreenView.compact(last, "WAIT_CONDITION");
-                try {
-                    compact.put("conditionMet", true)
-                           .put("condition", type.name());
-                } catch (Exception ignored) {}
+                JSONObject compact =
+                        ModelScreenView.compact(
+                                last, "WAIT_CONDITION");
+                compact.put("conditionMet", true)
+                        .put("condition", type.name())
+                        .put("wakeSource", "ACCESSIBILITY_EVENT");
                 return compact;
             }
         }
 
-        JSONObject raw = last == null ? new JSONObject() : last;
+        JSONObject raw = last == null
+                ? new JSONObject() : last;
         pendingCondition = null;
         workingContext.setPendingTask("");
 
-        JSONObject out = ModelScreenView.compact(raw, "WAIT_TIMEOUT");
-        try {
-            out.put("success", true)
-               .put("conditionMet", false)
-               .put("condition", type.name())
-               .put("timeout", true);
-        } catch (Exception ignored) {}
+        JSONObject out =
+                ModelScreenView.compact(raw, "WAIT_TIMEOUT");
+        out.put("success", true)
+                .put("conditionMet", false)
+                .put("condition", type.name())
+                .put("timeout", true)
+                .put("wakeSource", "ACCESSIBILITY_EVENT_WITH_FALLBACK");
         return out;
     }
 
