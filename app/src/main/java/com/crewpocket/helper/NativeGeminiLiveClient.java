@@ -2158,7 +2158,12 @@ final class NativeGeminiLiveClient {
             return;
         }
 
-        if (userActionScope.shouldBlockFurtherMessageMutation() && isMutationTool(name)) {
+        boolean conversationLoopSend =
+                "send_text".equals(name)
+                        && conversationLoopRuntime.hasSendLease();
+        if (userActionScope.shouldBlockFurtherMessageMutation()
+                && isMutationTool(name)
+                && !conversationLoopSend) {
             sendBlockedToolResponse(id, requestedName,
                     "MESSAGE_TRANSACTION_ALREADY_HANDLED：本句明確傳送要求已完成一次原子送出交易；禁止再用 type/tap 重試。等待使用者的新指令。");
             return;
@@ -4496,85 +4501,173 @@ final class NativeGeminiLiveClient {
 
     private JSONObject sendTextToPhone(JSONObject args) throws Exception {
         String text = args == null ? "" : args.optString("text", "");
+        boolean loopAuthorized =
+                conversationLoopRuntime.hasSendLease();
 
-        if (!userActionScope.canSend()
-                || userActionScope.blocksNamedRecipientMessagingAction()) {
+        if (!loopAuthorized
+                && (!userActionScope.canSend()
+                        || userActionScope
+                                .blocksNamedRecipientMessagingAction())) {
             LiveTurnCoordinator.FinalizedTurn finalized =
                     liveTurnCoordinator.latest();
             ensureSendAuthorizationFromFinalized(finalized, args);
         }
-        if (userActionScope.blocksNamedRecipientMessagingAction()) {
+
+        if (!loopAuthorized
+                && userActionScope
+                        .blocksNamedRecipientMessagingAction()) {
             return runtimeBlocked(
                     "RECIPIENT_TARGET_UNKNOWN",
                     "這一輪看起來要傳給特定對象，但 Runtime 無法從原始指令抽出可驗證的收件人。不要猜收件人；請使用者用『跟 X 說…』或『傳給 X：「…」』明確指定。");
         }
-        if (!userActionScope.canSend()) {
+        if (!loopAuthorized && !userActionScope.canSend()) {
             return runtimeBlocked(
                     "CURRENT_SCREEN_SEND_NOT_AUTHORIZED",
-                    "send_text 只用於最新一句明確要求送出訊息。若使用者只是要在目前可見欄位打字、填入或貼上內容（包含設定、system prompt、表單或聊天輸入框），請改用 phone_action(TYPE)；不要宣稱 Crew 無法一般打字。");
+                    "send_text 只用於最新一句明確要求送出訊息，或已明確啟用且仍有效的 Conversation Loop。若使用者只是要在目前可見欄位打字、填入或貼上內容，請改用 phone_action(TYPE)。");
         }
 
-        if (userActionScope.requiresRecipientVerification()) {
-            JSONObject recipientVerification = verifyAuthorizedRecipientOnCurrentScreen();
+        if (loopAuthorized) {
+            JSONObject verification =
+                    verifyRecipientOnCurrentScreen(
+                            conversationLoopRuntime.recipient());
+            if (!verification.optBoolean("success", false)) {
+                conversationLoopRuntime.beforeSend();
+                conversationLoopRuntime.afterSend(false);
+                return verification;
+            }
+            String verifiedPackage =
+                    verification.optString("package", "");
+            if (!conversationLoopRuntime.sameVerifiedPackage(
+                    verifiedPackage)) {
+                conversationLoopRuntime.beforeSend();
+                conversationLoopRuntime.afterSend(false);
+                return runtimeBlocked(
+                        "CONVERSATION_LOOP_PACKAGE_CHANGED",
+                        "Conversation Loop 只授權啟用時驗證過的聊天室 App；目前 package 已改變。Runtime 已暫停自動回覆，不會跨 App 送出。");
+            }
+        } else if (userActionScope.requiresRecipientVerification()) {
+            JSONObject recipientVerification =
+                    verifyAuthorizedRecipientOnCurrentScreen();
             if (!recipientVerification.optBoolean("success", false)) {
                 return recipientVerification;
             }
         }
 
         PerformanceMetrics.recordTextRouteSend();
-        userActionScope.markMessageTransactionHandled();
-        userActionScope.consumeSendAuthorization();
+        if (loopAuthorized) {
+            // Consume exactly one continuous-send lease before mutation. A
+            // verified send automatically re-arms the event watcher.
+            conversationLoopRuntime.beforeSend();
+        } else {
+            userActionScope.markMessageTransactionHandled();
+            userActionScope.consumeSendAuthorization();
+        }
 
-        // 0052 active messaging path is intentionally simple:
-        // optional TYPE(text) -> SEND_CURRENT.
-        if (!text.isEmpty()) {
-            JSONObject typed = phoneRuntimeExecutor.typeText(text);
-            workingContext.recordAction(
-                    "type_for_send",
-                    typed.optBoolean("success", false) ? "submitted" : "failed");
+        try {
+            // 0052 active messaging path is intentionally simple:
+            // optional TYPE(text) -> SEND_CURRENT.
+            if (!text.isEmpty()) {
+                JSONObject typed = phoneRuntimeExecutor.typeText(text);
+                workingContext.recordAction(
+                        "type_for_send",
+                        typed.optBoolean("success", false)
+                                ? "submitted"
+                                : "failed");
 
-            if (!typed.optBoolean("success", false)) {
-                JSONObject failure = new JSONObject()
-                        .put("success", false)
-                        .put("action", "SEND_CURRENT")
-                        .put("stage", "TYPE")
-                        .put("error", typed.optString("error", "TYPE_FAILED"))
-                        .put("textLength", text.length())
-                        .put("sendMode", "TYPE_THEN_SEND_CURRENT");
-                workingContext.recordAction("send_current", "failed");
-                return failure;
+                if (!typed.optBoolean("success", false)) {
+                    JSONObject failure = new JSONObject()
+                            .put("success", false)
+                            .put("action", "SEND_CURRENT")
+                            .put("stage", "TYPE")
+                            .put(
+                                    "error",
+                                    typed.optString(
+                                            "error",
+                                            "TYPE_FAILED"))
+                            .put("textLength", text.length())
+                            .put(
+                                    "sendMode",
+                                    "TYPE_THEN_SEND_CURRENT");
+                    workingContext.recordAction(
+                            "send_current", "failed");
+                    if (loopAuthorized) {
+                        conversationLoopRuntime.afterSend(false);
+                    }
+                    return failure;
+                }
             }
-        }
 
-        JSONObject reply = phoneRuntimeExecutor.post("/send_current", new JSONObject());
-        JSONObject sendVerification = reply.optJSONObject("verification");
-        Log.i(TAG, "RuntimeSend SEND_CURRENT_RESULT success="
-                + reply.optBoolean("success", false)
-                + " stage=" + reply.optString("stage", "")
-                + " submitMethod=" + reply.optString("submitMethod", "")
-                + " verification=" + (sendVerification == null ? "" : sendVerification.optString("state", ""))
-                + " composerCleared=" + (sendVerification != null && sendVerification.optBoolean("composerCleared", false))
-                + " conversationChanged=" + (sendVerification != null && sendVerification.optBoolean("conversationChanged", false))
-                + " matchingMessageAppeared=" + (sendVerification != null && sendVerification.optBoolean("matchingMessageAppeared", false))
-                + " error=" + reply.optString("error", ""));
-        reply.put("sendMode",
-                text.isEmpty() ? "CURRENT_COMPOSER" : "TYPE_THEN_SEND_CURRENT");
-        if (!text.isEmpty()) {
-            reply.put("textLength", text.length());
-        }
+            JSONObject reply = phoneRuntimeExecutor.post(
+                    "/send_current", new JSONObject());
+            JSONObject sendVerification =
+                    reply.optJSONObject("verification");
+            Log.i(TAG, "RuntimeSend SEND_CURRENT_RESULT success="
+                    + reply.optBoolean("success", false)
+                    + " stage=" + reply.optString("stage", "")
+                    + " submitMethod="
+                    + reply.optString("submitMethod", "")
+                    + " verification="
+                    + (sendVerification == null
+                            ? ""
+                            : sendVerification.optString("state", ""))
+                    + " composerCleared="
+                    + (sendVerification != null
+                            && sendVerification.optBoolean(
+                                    "composerCleared", false))
+                    + " conversationChanged="
+                    + (sendVerification != null
+                            && sendVerification.optBoolean(
+                                    "conversationChanged", false))
+                    + " matchingMessageAppeared="
+                    + (sendVerification != null
+                            && sendVerification.optBoolean(
+                                    "matchingMessageAppeared", false))
+                    + " error=" + reply.optString("error", ""));
+            reply.put(
+                    "sendMode",
+                    text.isEmpty()
+                            ? "CURRENT_COMPOSER"
+                            : "TYPE_THEN_SEND_CURRENT");
+            if (!text.isEmpty()) {
+                reply.put("textLength", text.length());
+            }
+            if (loopAuthorized) {
+                reply.put("conversationLoop", true);
+            }
 
-        if (!reply.optBoolean("success", false)) {
-            String stage = reply.optString("stage", "UNKNOWN");
-            String detail = reply.optString("error", "SEND_FAILED");
-            reportStage("訊息未送出：" + stage + " · " + detail);
-            reply.put("instruction",
-                    "Runtime 沒有確認送出；不要重送，等待使用者下一個指令。");
-        }
+            boolean success =
+                    reply.optBoolean("success", false);
+            if (loopAuthorized) {
+                conversationLoopRuntime.afterSend(success);
+            }
 
-        workingContext.recordAction(
-                "send_current",
-                reply.optBoolean("success", false) ? "submitted" : "failed");
-        return reply;
+            if (!success) {
+                String stage =
+                        reply.optString("stage", "UNKNOWN");
+                String detail =
+                        reply.optString("error", "SEND_FAILED");
+                reportStage(
+                        "訊息未送出："
+                                + stage
+                                + " · "
+                                + detail);
+                reply.put(
+                        "instruction",
+                        loopAuthorized
+                                ? "Runtime 沒有確認送出；Conversation Loop 已暫停，不會自動重送。"
+                                : "Runtime 沒有確認送出；不要重送，等待使用者下一個指令。");
+            }
+
+            workingContext.recordAction(
+                    "send_current",
+                    success ? "submitted" : "failed");
+            return reply;
+        } catch (Exception error) {
+            if (loopAuthorized) {
+                conversationLoopRuntime.afterSend(false);
+            }
+            throw error;
+        }
     }
 
     private JSONObject pressKey(JSONObject args) throws Exception {
