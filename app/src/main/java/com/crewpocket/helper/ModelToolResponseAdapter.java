@@ -25,11 +25,11 @@ final class ModelToolResponseAdapter {
     static final String NEED_USER = "NEED_USER";
     static final String FAILED = "FAILED";
 
-    private static final int MAX_SCREEN_ITEMS = 8;
-    private static final int MAX_CHOICES = 10;
-    private static final int MAX_MESSAGE = 180;
-    private static final int MAX_LABEL = 80;
-    private static final int MAX_GOAL = 240;
+    private static final int MAX_SCREEN_ITEMS = 12;
+    private static final int MAX_CHOICES = 18;
+    private static final int MAX_MESSAGE = 200;
+    private static final int MAX_LABEL = 96;
+    private static final int MAX_GOAL = 320;
     private static final int MAX_PROGRESS_ACTIONS = 3;
 
     private ModelToolResponseAdapter() {}
@@ -88,47 +88,45 @@ final class ModelToolResponseAdapter {
         JSONObject screen = out.optJSONObject("screen");
         JSONObject progress = out.optJSONObject("progress");
 
-        trimArray(screen, "items", 6);
-        trimArray(screen, "choices", 6);
+        trimArray(screen, "items", 10);
+        trimArray(screen, "choices", 12);
         trimArray(progress, "recentActions", 2);
-        clipInPlace(out, "message", 140);
-        clipInPlace(progress, "goal", 180);
-        clipInPlace(progress, "rootGoal", 180);
+        clipInPlace(out, "message", 170);
+        clipInPlace(progress, "goal", 260);
+        clipInPlace(progress, "rootGoal", 260);
 
         if (ContextPayloadBudget.utf8Bytes(out.toString()) <= budget) {
             return out;
         }
 
         if (progress != null) {
-            progress.remove("rootGoal");
             trimArray(progress, "recentActions", 1);
         }
-        trimArray(screen, "items", 4);
-        trimArray(screen, "choices", 4);
+        trimArray(screen, "items", 8);
+        trimArray(screen, "choices", 8);
 
         if (ContextPayloadBudget.utf8Bytes(out.toString()) <= budget) {
             return out;
         }
 
-        // Preserve authoritative status/step/next first. Screen details are
-        // lowest priority once the model-facing envelope is already oversized.
-        if (screen != null) {
-            screen.remove("items");
-            JSONObject focus = screen.optJSONObject("focus");
-            if (focus != null) {
-                clipInPlace(focus, "label", 56);
-                clipInPlace(focus, "role", 40);
-                clipInPlace(focus, "can", 56);
-            }
-        }
+        // Last-resort compaction still preserves a mixed current-screen view.
+        // Losing every screen item made the model more rule-bound but less aware
+        // of what the user was actually looking at.
+        trimArray(screen, "items", 6);
+        trimArray(screen, "choices", 4);
         if (progress != null) {
             progress.remove("recentActions");
-            clipInPlace(progress, "goal", 120);
-            clipInPlace(progress, "currentApp", 56);
-            clipInPlace(progress, "pendingTask", 56);
+            String goal = progress.optString("goal", "");
+            String rootGoal = progress.optString("rootGoal", "");
+            if (!goal.isEmpty() && goal.equals(rootGoal)) {
+                progress.remove("rootGoal");
+            }
+            clipInPlace(progress, "goal", 180);
+            clipInPlace(progress, "rootGoal", 180);
+            clipInPlace(progress, "currentApp", 64);
+            clipInPlace(progress, "pendingTask", 64);
         }
-        clipInPlace(out, "message", 110);
-        trimArray(screen, "choices", 3);
+        clipInPlace(out, "message", 120);
         return out;
     }
 
@@ -410,43 +408,7 @@ final class ModelToolResponseAdapter {
                 copyString(source, out, "package");
                 JSONArray important = source.optJSONArray("important");
                 if (important != null && important.length() > 0) {
-                    java.util.ArrayList<JSONObject> ranked =
-                            new java.util.ArrayList<JSONObject>();
-                    for (int i = 0; i < important.length(); i++) {
-                        JSONObject raw = important.optJSONObject(i);
-                        if (raw != null) ranked.add(raw);
-                    }
-                    java.util.Collections.sort(
-                            ranked,
-                            new java.util.Comparator<JSONObject>() {
-                                @Override public int compare(
-                                        JSONObject left,
-                                        JSONObject right) {
-                                    int leftScore =
-                                            ScreenItemPriorityPolicy.score(
-                                                    left.optString("role", ""),
-                                                    left.optString("label", ""),
-                                                    left.optString("semanticHint", ""),
-                                                    left.optString("can", ""));
-                                    int rightScore =
-                                            ScreenItemPriorityPolicy.score(
-                                                    right.optString("role", ""),
-                                                    right.optString("label", ""),
-                                                    right.optString("semanticHint", ""),
-                                                    right.optString("can", ""));
-                                    return Integer.compare(
-                                            rightScore,
-                                            leftScore);
-                                }
-                            });
-
-                    JSONArray items = new JSONArray();
-                    for (int i = 0;
-                            i < ranked.size() && items.length() < MAX_SCREEN_ITEMS;
-                            i++) {
-                        JSONObject item = compactItem(ranked.get(i));
-                        if (item.length() > 0) items.put(item);
-                    }
+                    JSONArray items = balancedImportantItems(important);
                     if (items.length() > 0) out.put("items", items);
                 }
 
@@ -462,6 +424,86 @@ final class ModelToolResponseAdapter {
             if (choices.length() > 0) out.put("choices", choices);
         } catch (Exception ignored) {}
         return out;
+    }
+
+    private static JSONArray balancedImportantItems(JSONArray important) {
+        java.util.ArrayList<JSONObject> original =
+                new java.util.ArrayList<JSONObject>();
+        java.util.ArrayList<JSONObject> actions =
+                new java.util.ArrayList<JSONObject>();
+        java.util.ArrayList<JSONObject> scenes =
+                new java.util.ArrayList<JSONObject>();
+        java.util.ArrayList<JSONObject> ranked =
+                new java.util.ArrayList<JSONObject>();
+
+        for (int i = 0; i < important.length(); i++) {
+            JSONObject item = important.optJSONObject(i);
+            if (item == null) continue;
+            original.add(item);
+            ranked.add(item);
+            if (ScreenItemPriorityPolicy.isActionable(
+                    item.optString("role", ""),
+                    item.optString("label", ""),
+                    item.optString("semanticHint", ""),
+                    item.optString("can", ""))) {
+                actions.add(item);
+            } else if (ScreenItemPriorityPolicy.isSceneContext(
+                    item.optString("role", ""),
+                    item.optString("label", ""),
+                    item.optString("semanticHint", ""),
+                    item.optString("can", ""))) {
+                scenes.add(item);
+            }
+        }
+
+        java.util.Comparator<JSONObject> byPriority =
+                new java.util.Comparator<JSONObject>() {
+                    @Override public int compare(JSONObject left, JSONObject right) {
+                        return Integer.compare(screenScore(right), screenScore(left));
+                    }
+                };
+        java.util.Collections.sort(actions, byPriority);
+        java.util.Collections.sort(ranked, byPriority);
+
+        int actionLimit = Math.min(6, actions.size());
+        int sceneLimit = Math.min(6, scenes.size());
+        java.util.ArrayList<JSONObject> selected =
+                new java.util.ArrayList<JSONObject>();
+
+        int actionIndex = 0;
+        int sceneIndex = 0;
+        while (selected.size() < MAX_SCREEN_ITEMS
+                && (actionIndex < actionLimit || sceneIndex < sceneLimit)) {
+            if (actionIndex < actionLimit) {
+                selected.add(actions.get(actionIndex++));
+            }
+            if (selected.size() >= MAX_SCREEN_ITEMS) break;
+            if (sceneIndex < sceneLimit) {
+                JSONObject scene = scenes.get(sceneIndex++);
+                if (!selected.contains(scene)) selected.add(scene);
+            }
+        }
+
+        for (JSONObject item : ranked) {
+            if (selected.size() >= MAX_SCREEN_ITEMS) break;
+            if (!selected.contains(item)) selected.add(item);
+        }
+
+        JSONArray out = new JSONArray();
+        for (JSONObject item : selected) {
+            JSONObject compact = compactItem(item);
+            if (compact.length() > 0) out.put(compact);
+        }
+        return out;
+    }
+
+    private static int screenScore(JSONObject item) {
+        if (item == null) return 0;
+        return ScreenItemPriorityPolicy.score(
+                item.optString("role", ""),
+                item.optString("label", ""),
+                item.optString("semanticHint", ""),
+                item.optString("can", ""));
     }
 
     private static JSONArray choices(JSONObject result) {
