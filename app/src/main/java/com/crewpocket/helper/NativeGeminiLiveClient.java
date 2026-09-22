@@ -1705,7 +1705,7 @@ final class NativeGeminiLiveClient {
             JSONObject requestedArgs) {
         if (finalized == null
                 || finalized.generation != userIntentGeneration
-                || userActionScope.shouldBlockFurtherMessageMutation()
+                || userActionScope.isMessageCommitDispatched()
                 || runtimeSendCurrentExecuting
                 || runtimeSendCurrentHandledGeneration
                         == finalized.generation) {
@@ -2175,23 +2175,6 @@ final class NativeGeminiLiveClient {
                 && isMutationTool(name)) {
             sendBlockedToolResponse(id, requestedName,
                     "WAITING_USER_CHOICE：Runtime 正在等待或執行使用者的搜尋結果選擇；禁止 Gemini 重複點擊。");
-            return;
-        }
-
-        // If THIS turn contains new text + send intent, TYPE is upgraded to
-        // the simple TYPE -> SEND_CURRENT path. Standalone send-only turns are
-        // intercepted before model tool selection.
-        if (userActionScope.canSend() && "type_text".equals(name)) {
-            sendBlockedToolResponse(id, requestedName,
-                    "SEND_TEXT_REQUIRED：這句同時包含新訊息內容與送出要求，請使用 send_text(text=該訊息)。");
-            return;
-        }
-
-        if (userActionScope.shouldBlockFurtherMessageMutation()
-                && isMutationTool(name)
-                && !conversationLeaseSend) {
-            sendBlockedToolResponse(id, requestedName,
-                    "MESSAGE_TRANSACTION_ALREADY_HANDLED：本句明確傳送要求已完成一次原子送出交易；禁止再用 type/tap 重試。等待使用者的新指令。");
             return;
         }
 
@@ -3433,17 +3416,6 @@ final class NativeGeminiLiveClient {
         String tapMeta = label + " " + id;
 
         if (UserActionScope.looksLikeSendTarget(tapMeta)) {
-            if (userActionScope.shouldBlockFurtherMessageMutation()) {
-                return new JSONObject()
-                        .put("success", true)
-                        .put("action", "SEND_CURRENT")
-                        .put("sendMode", "ALREADY_HANDLED")
-                        .put("remappedFrom", "TAP_SEND_CONTROL")
-                        .put("stepResult", "STEP_OK")
-                        .put("instruction",
-                                "本輪訊息送出 transaction 已經處理過；不要再次點擊或重送。");
-            }
-
             JSONObject routedSend = sendTextToPhone(new JSONObject());
             routedSend.put("remappedFrom", "TAP_SEND_CONTROL");
             if (routedSend.optBoolean("success", false)) {
@@ -4467,17 +4439,9 @@ final class NativeGeminiLiveClient {
     private JSONObject typeText(JSONObject args) throws Exception {
         String text = args.optString("text", "").trim();
         if (text.isEmpty()) return new JSONObject().put("success", false).put("error", "輸入文字不可為空");
-        // Weak Live models occasionally choose TYPE even though the latest
-        // utterance clearly asks to send.  Upgrade that call to the one safe
-        // Runtime-owned transaction instead of permitting TYPE -> TAP guessing.
-        if (userActionScope.canSend()) {
-            PerformanceMetrics.recordTextRouteTypeRemappedToSend();
-            return sendTextToPhone(args);
-        }
-        if (userActionScope.shouldBlockAdditionalTextEntry()) {
-            return runtimeBlocked("SEARCH_SCOPE_ADDITIONAL_TEXT_NOT_AUTHORIZED",
-                    "搜尋查詢已輸入；最新任務沒有授權進入聊天室或再輸入訊息。");
-        }
+        // TYPE is a reversible draft operation. Never block it merely because
+        // the same user turn may later commit the message. Commit policy runs
+        // only after text entry succeeds and immediately before SEND_CURRENT.
 
         // Older/weak Live turns may still choose TYPE for a search request.
         // Never let that write into a random editable field: use the same
@@ -4578,6 +4542,18 @@ final class NativeGeminiLiveClient {
                     .put("message", "已輸入文字，未送出")
                     .put("instruction",
                             "使用者只要求輸入文字；TYPE 已完成。禁止再點 Send、提交或呼叫 send_text。");
+            return observed;
+        }
+
+        // If this turn also explicitly requested SEND, TYPE still happens
+        // first. Only after the draft exists do we cross the guarded commit
+        // boundary. Passing no text prevents a second insertion.
+        if (observed.optBoolean("success", false)
+                && userActionScope.canSend()) {
+            PerformanceMetrics.recordTextRouteTypeRemappedToSend();
+            JSONObject committed = sendTextToPhone(new JSONObject());
+            committed.put("draftTypedBeforeCommit", true);
+            return committed;
         }
         return observed;
     }
@@ -4936,40 +4912,28 @@ final class NativeGeminiLiveClient {
                     "RECIPIENT_TARGET_UNKNOWN",
                     "這一輪看起來要傳給特定對象，但 Runtime 無法從原始指令抽出可驗證的收件人。不要猜收件人；請使用者用『跟 X 說…』或『傳給 X：「…」』明確指定。");
         }
+
+        // Duplicate suppression is a commit concern, not a TYPE concern.
+        if (!loopSend && userActionScope.isMessageCommitDispatched()) {
+            return new JSONObject()
+                    .put("success", true)
+                    .put("action", "SEND_CURRENT")
+                    .put("sendMode", "ALREADY_DISPATCHED")
+                    .put("stepResult", "STEP_OK")
+                    .put("taskState", "DONE")
+                    .put("completionEvidence", "COMMIT_ALREADY_DISPATCHED")
+                    .put("instruction",
+                            "這一輪 SEND 已經 dispatch；不要再次送出。草稿操作本身不受此限制。");
+        }
+
         if (!loopSend && !userActionScope.canSend()) {
             return runtimeBlocked(
                     "CURRENT_SCREEN_SEND_NOT_AUTHORIZED",
-                    "send_text 只用於最新一句明確要求送出訊息。若使用者只是要在目前可見欄位打字、填入或貼上內容（包含設定、system prompt、表單或聊天輸入框），請改用 phone_action(TYPE)；不要宣稱 Crew 無法一般打字。");
+                    "真正的訊息提交需要最新一句明確 SEND intent。TYPE/草稿輸入不需要這份授權，也不應宣稱無法打字。");
         }
 
-        if (loopSend) {
-            JSONObject recipientVerification =
-                    verifyRecipientOnCurrentScreen(
-                            conversationLoopRecipe.recipient());
-            if (!recipientVerification.optBoolean("success", false)) {
-                conversationLoopRecipe.stop(
-                        "RECIPIENT_VERIFICATION_FAILED");
-                return recipientVerification
-                        .put("conversationLoop", "STOPPED")
-                        .put("instruction",
-                                "Runtime 無法再證明目前仍是原本收件人的聊天室，已停止持續對話租約；不要換人或猜。");
-            }
-        } else if (userActionScope.requiresRecipientVerification()) {
-            JSONObject recipientVerification =
-                    verifyAuthorizedRecipientOnCurrentScreen();
-            if (!recipientVerification.optBoolean("success", false)) {
-                return recipientVerification;
-            }
-        }
-
-        PerformanceMetrics.recordTextRouteSend();
-        if (!loopSend) {
-            userActionScope.markMessageTransactionHandled();
-            userActionScope.consumeSendAuthorization();
-        }
-
-        // 0052 active messaging path is intentionally simple:
-        // optional TYPE(text) -> SEND_CURRENT.
+        // Preparation stays reversible. If send_text carries new text, insert
+        // the draft first; a TYPE failure does NOT consume SEND permission.
         if (!text.isEmpty()) {
             JSONObject typed = phoneRuntimeExecutor.typeText(text);
             workingContext.recordAction(
@@ -4983,17 +4947,72 @@ final class NativeGeminiLiveClient {
                         .put("stage", "TYPE")
                         .put("error", typed.optString("error", "TYPE_FAILED"))
                         .put("textLength", text.length())
-                        .put("sendMode", "TYPE_THEN_SEND_CURRENT");
-                workingContext.recordAction("send_current", "failed");
+                        .put("sendMode", "TYPE_THEN_SEND_CURRENT")
+                        .put("taskState", "IN_PROGRESS")
+                        .put("completionEvidence", "DRAFT_TYPE_FAILED")
+                        .put("instruction",
+                                "草稿尚未輸入成功；SEND 尚未 dispatch。可以重新聚焦或改用其他 TYPE 方法，但不要假裝已送出。");
+                workingContext.recordAction("type_for_send", "failed");
                 if (loopSend) {
                     conversationLoopRecipe.stop("TYPE_FAILED");
                     workingContext.setPendingTask("");
-                    failure.put("conversationLoop", "STOPPED")
-                            .put("instruction",
-                                    "持續對話輸入失敗，Runtime 已停止 loop；不要自動重試或重複送訊息。");
+                    failure.put("conversationLoop", "STOPPED");
                 }
                 return failure;
             }
+        }
+
+        boolean targetVerified = false;
+        boolean targetVerificationRequired =
+                loopSend || userActionScope.requiresRecipientVerification();
+
+        if (targetVerificationRequired) {
+            JSONObject recipientVerification =
+                    loopSend
+                            ? verifyRecipientOnCurrentScreen(
+                                    conversationLoopRecipe.recipient())
+                            : verifyAuthorizedRecipientOnCurrentScreen();
+            if (!recipientVerification.optBoolean("success", false)) {
+                if (loopSend) {
+                    conversationLoopRecipe.stop(
+                            "RECIPIENT_VERIFICATION_FAILED");
+                    recipientVerification.put("conversationLoop", "STOPPED");
+                }
+                return recipientVerification.put(
+                        "instruction",
+                        "草稿可以保留，但 commit target 尚未驗證；不要送出，也不要猜收件人。");
+            }
+            targetVerified = true;
+        }
+
+        CommitGuard.Result commitDecision = CommitGuard.evaluate(
+                loopSend || userActionScope.canSend(),
+                !loopSend && userActionScope.isMessageCommitDispatched(),
+                targetVerificationRequired,
+                targetVerified,
+                false);
+        if (!commitDecision.allowed()) {
+            if (commitDecision.decision
+                    == CommitGuard.Decision.SUPPRESS_DUPLICATE) {
+                return new JSONObject()
+                        .put("success", true)
+                        .put("action", "SEND_CURRENT")
+                        .put("sendMode", "ALREADY_DISPATCHED")
+                        .put("stepResult", "STEP_OK")
+                        .put("taskState", "DONE")
+                        .put("completionEvidence", commitDecision.code);
+            }
+            return runtimeBlocked(
+                    commitDecision.code,
+                    "CommitGuard 未允許 SEND；草稿仍可編輯，但不得提交。");
+        }
+
+        PerformanceMetrics.recordTextRouteSend();
+
+        // This is the irreversible edge. Mark it BEFORE bridge dispatch so an
+        // ambiguous bridge/network result can never cause a blind duplicate.
+        if (!loopSend) {
+            userActionScope.markMessageCommitDispatched();
         }
 
         JSONObject reply = phoneRuntimeExecutor.post("/send_current", new JSONObject());
