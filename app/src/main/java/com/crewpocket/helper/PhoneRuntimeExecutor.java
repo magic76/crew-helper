@@ -349,20 +349,76 @@ final class PhoneRuntimeExecutor {
                 safeArgs.optString("text", safeArgs.optString("name", "")))
                 .trim();
         String id = safeArgs.optString("id", "").trim();
+        String semanticHint = safeArgs.optString("semanticHint",
+                safeArgs.optString("semantic_hint", "")).trim();
+        String role = safeArgs.optString("role", "").trim();
+        String elementId = safeArgs.optString("elementId",
+                safeArgs.optString("element_id", "")).trim();
         String coordinateSpace =
                 safeArgs.optString("coordinate_space", "")
                         .trim().toLowerCase();
-        boolean resolvedFromNode = false;
 
+        JSONArray fallbackTrace = new JSONArray();
+        boolean resolvedFromNode = false;
+        boolean hasSemanticTarget = !label.isEmpty()
+                || !id.isEmpty()
+                || !semanticHint.isEmpty()
+                || !role.isEmpty()
+                || !elementId.isEmpty();
+
+        // 1) Semantic locator first. If two candidates are too close, stop here
+        // and ask the user instead of silently falling through to a guess.
+        if (hasSemanticTarget) {
+            try {
+                JSONObject semantic = post(
+                        "/click_v2",
+                        new JSONObject()
+                                .put("label", label)
+                                .put("id", id)
+                                .put("semanticHint", semanticHint)
+                                .put("role", role)
+                                .put("elementId", elementId));
+                fallbackTrace.put("semantic_v2:"
+                        + semantic.optString("decision",
+                                semantic.optString("error", "UNKNOWN")));
+
+                if ("MULTIPLE_MATCHES".equals(
+                                semantic.optString("status", ""))
+                        || "AMBIGUOUS".equals(
+                                semantic.optString("decision", ""))) {
+                    semantic.put("resolvedFrom", "semantic_v2")
+                            .put("fallbackTrace", fallbackTrace)
+                            .put("stepResult", "STEP_FAILED")
+                            .put("taskState", "NEED_USER");
+                    return semantic;
+                }
+
+                if (semantic.optBoolean("success", false)) {
+                    return semantic.put("resolvedFrom", "semantic_v2")
+                            .put("fallbackTrace", fallbackTrace);
+                }
+            } catch (Exception error) {
+                fallbackTrace.put("semantic_v2:BRIDGE_ERROR");
+            }
+        }
+
+        // 2) Legacy label/id Accessibility lookup.
         if (!label.isEmpty() || !id.isEmpty()) {
             try {
                 JSONObject nodeClick = post(
                         "/click",
                         new JSONObject().put("label", label).put("id", id));
+                fallbackTrace.put("label_lookup:"
+                        + (nodeClick.optBoolean("success")
+                                ? "SUCCESS" : "MISS"));
                 if (nodeClick.optBoolean("success")) {
-                    return nodeClick.put("resolvedFrom", "ui_node_action");
+                    return nodeClick
+                            .put("resolvedFrom", "label_lookup")
+                            .put("fallbackTrace", fallbackTrace);
                 }
 
+                // 3) Use the matched node bounds only as a deterministic
+                // coordinate fallback after semantic + label resolution failed.
                 JSONObject nodesResp = get("/nodes");
                 if (nodesResp.optBoolean("success")) {
                     JSONArray nodes = nodesResp.optJSONArray("nodes");
@@ -373,13 +429,13 @@ final class PhoneRuntimeExecutor {
                             String desc = node.optString("desc", "");
                             String nodeId = node.optString("id", "");
                             boolean matchId = !id.isEmpty()
-                                    && nodeId.toLowerCase()
-                                            .contains(id.toLowerCase());
+                                    && nodeId.toLowerCase(Locale.ROOT)
+                                            .contains(id.toLowerCase(Locale.ROOT));
                             boolean matchLabel = !label.isEmpty()
-                                    && (text.toLowerCase()
-                                                .contains(label.toLowerCase())
-                                        || desc.toLowerCase()
-                                                .contains(label.toLowerCase()));
+                                    && (text.toLowerCase(Locale.ROOT)
+                                                .contains(label.toLowerCase(Locale.ROOT))
+                                        || desc.toLowerCase(Locale.ROOT)
+                                                .contains(label.toLowerCase(Locale.ROOT)));
                             if (matchId || matchLabel) {
                                 JSONObject bounds =
                                         node.optJSONObject("bounds");
@@ -393,13 +449,16 @@ final class PhoneRuntimeExecutor {
                                             + bounds.optDouble("bottom", 0))
                                             / 2.0;
                                     resolvedFromNode = true;
+                                    fallbackTrace.put("node_bounds:SUCCESS");
                                     break;
                                 }
                             }
                         }
                     }
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+                fallbackTrace.put("label_lookup:BRIDGE_ERROR");
+            }
         }
 
         if (targetX < 0 || targetY < 0) {
@@ -407,15 +466,18 @@ final class PhoneRuntimeExecutor {
                     .put("success", false)
                     .put("stepResult", "STEP_FAILED")
                     .put("error", "UI_TARGET_NOT_FOUND")
+                    .put("fallbackTrace", fallbackTrace)
                     .put("instruction",
-                            "找不到指定點擊目標。這不是使用者消歧義事件；不要顯示選擇卡，請依最新畫面改用不同方法。");
+                            "語意與 label 定位都失敗，而且沒有可信座標。不要猜；請重新 inspect_ui 或請使用者指明目標。");
         }
 
+        // 4) Explicit coordinates are the final fallback only.
         if (!resolvedFromNode && "image".equals(coordinateSpace)) {
             if (visionController.lastScreenWidth() <= 1
                     || visionController.lastScreenHeight() <= 1) {
                 return new JSONObject()
                         .put("success", false)
+                        .put("fallbackTrace", fallbackTrace)
                         .put("error",
                                 "尚未取得目前螢幕尺寸，請先要求查看螢幕後再依影像座標點擊");
             }
@@ -427,12 +489,14 @@ final class PhoneRuntimeExecutor {
                     targetY,
                     visionController.lastVisionHeight(),
                     visionController.lastScreenHeight());
+            fallbackTrace.put("coordinate:image");
         } else if (!resolvedFromNode
                 && "normalized_1000".equals(coordinateSpace)) {
             if (visionController.lastScreenWidth() <= 1
                     || visionController.lastScreenHeight() <= 1) {
                 return new JSONObject()
                         .put("success", false)
+                        .put("fallbackTrace", fallbackTrace)
                         .put("error",
                                 "尚未取得目前螢幕尺寸，請先 inspect_ui 或查看螢幕");
             }
@@ -440,6 +504,7 @@ final class PhoneRuntimeExecutor {
                     * visionController.lastScreenWidth();
             targetY = (targetY / 1000.0)
                     * visionController.lastScreenHeight();
+            fallbackTrace.put("coordinate:normalized_1000");
         } else if (!resolvedFromNode
                 && coordinateSpace.isEmpty()
                 && targetX <= 1.0
@@ -449,6 +514,7 @@ final class PhoneRuntimeExecutor {
                     * Math.max(1, visionController.lastScreenWidth());
             targetY = targetY
                     * Math.max(1, visionController.lastScreenHeight());
+            fallbackTrace.put("coordinate:normalized_1");
         } else if (!resolvedFromNode
                 && coordinateSpace.isEmpty()
                 && targetX <= 1000.0
@@ -460,6 +526,9 @@ final class PhoneRuntimeExecutor {
                     * Math.max(1, visionController.lastScreenWidth());
             targetY = (targetY / 1000.0)
                     * Math.max(1, visionController.lastScreenHeight());
+            fallbackTrace.put("coordinate:legacy_normalized_1000");
+        } else if (!resolvedFromNode) {
+            fallbackTrace.put("coordinate:screen");
         }
 
         JSONObject reply = post(
@@ -470,10 +539,11 @@ final class PhoneRuntimeExecutor {
         return reply
                 .put("resolvedFrom",
                         resolvedFromNode
-                                ? "ui_node"
+                                ? "node_bounds"
                                 : (coordinateSpace.isEmpty()
-                                        ? "legacy"
+                                        ? "coordinate"
                                         : coordinateSpace))
+                .put("fallbackTrace", fallbackTrace)
                 .put(
                         "visionSize",
                         visionController.lastVisionWidth()
