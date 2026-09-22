@@ -1,0 +1,6 @@
+kind=locator_fallback
+stage=semantic
+locator.decision=AMBIGUOUS
+target.hasLabel=true
+target.hasCoordinate=true
+expect.next=ASK_USER
