@@ -1,0 +1,4 @@
+kind=context_budget
+source=inspect_ui
+bytes=1800
+expect.within=true
