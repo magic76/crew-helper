@@ -4296,8 +4296,14 @@ final class NativeGeminiLiveClient {
      * history, prior conversation memory, screenshots, or model inference can
      * satisfy the target check.
      */
-    private JSONObject verifyAuthorizedRecipientOnCurrentScreen() throws Exception {
-        String recipient = userActionScope.authorizedRecipient();
+    private JSONObject verifyAuthorizedRecipientOnCurrentScreen()
+            throws Exception {
+        return verifyRecipientOnCurrentScreen(
+                userActionScope.authorizedRecipient());
+    }
+
+    private JSONObject verifyRecipientOnCurrentScreen(
+            String recipient) throws Exception {
         if (recipient == null || recipient.trim().isEmpty()) {
             return runtimeBlocked("RECIPIENT_TARGET_UNKNOWN",
                     "缺少可驗證的收件人；不要猜測或直接送出。");
@@ -4388,6 +4394,8 @@ final class NativeGeminiLiveClient {
         return new JSONObject()
                 .put("success", true)
                 .put("recipientVerified", true)
+                .put("recipient", recipient.trim())
+                .put("package", semantic.optString("package", ""))
                 .put("verificationSource", "ACCESSIBILITY_CURRENT_SCREEN");
     }
 
