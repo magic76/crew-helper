@@ -53,6 +53,7 @@ final class NativeGeminiLiveClient {
     private final NotebookToolHandler notebookToolHandler;
     private final AppPlaybookStore appPlaybookStore;
     private final TaskRecipeStore taskRecipeStore;
+    private final ConversationLoopRuntime conversationLoopRuntime;
     private volatile long taskRecipeCandidateGeneration = -1L;
     private volatile String taskRecipeCandidateId = "";
     private final PhoneRuntimeExecutor phoneRuntimeExecutor;
@@ -342,6 +343,40 @@ final class NativeGeminiLiveClient {
                             String message,
                             Throwable error) {
                         NativeGeminiLiveClient.this.fail(message, error);
+                    }
+                });
+
+        this.conversationLoopRuntime = new ConversationLoopRuntime(
+                this.appContext,
+                new ConversationLoopRuntime.Host() {
+                    @Override public JSONObject verifyRecipient(
+                            String recipient) throws Exception {
+                        return NativeGeminiLiveClient.this
+                                .verifyRecipientOnCurrentScreen(recipient);
+                    }
+
+                    @Override public void sendInternalDirective(String text) {
+                        NativeGeminiLiveClient.this
+                                .sendInternalAgentDirective(text);
+                    }
+
+                    @Override public void reportStage(String text) {
+                        NativeGeminiLiveClient.this.reportStage(text);
+                    }
+
+                    @Override public boolean hasLiveSession() {
+                        return NativeGeminiLiveClient.this.running
+                                && NativeGeminiLiveClient.this
+                                        .liveConnection.isAvailable();
+                    }
+
+                    @Override public void beginRuntimeContinuation(
+                            String safeHint) {
+                        NativeGeminiLiveClient.this
+                                .beginContinuationUserIntent(
+                                        safeHint == null
+                                                ? "對談模式事件"
+                                                : safeHint);
                     }
                 });
 
