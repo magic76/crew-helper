@@ -2599,13 +2599,14 @@ final class NativeGeminiLiveClient {
                             result.optString("semanticTarget", "").trim();
                     boolean verifiedNavigationStart =
                             freshAfter
+                                    && result.optBoolean("screenChanged", false)
                                     && GoogleMapsSemanticContract.START_NAVIGATION
                                             .equals(semanticTarget);
 
                     if (verifiedNavigationStart) {
                         result.put("taskState", "DONE")
                                 .put("completionEvidence",
-                                        "MAPS_START_NAVIGATION_FRESH_SCREEN")
+                                        "MAPS_START_NAVIGATION_SCREEN_CHANGED")
                                 .put("nextRequirement", "NONE");
                         task.requiresPostActionInspection = false;
                     } else {
