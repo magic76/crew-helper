@@ -61,8 +61,6 @@ final class VoiceExecutionGuard {
         }
     }
 
-    private static final double LOW_CONFIDENCE_THRESHOLD = 0.72d;
-
     private long latestVoiceGeneration = -1L;
     private String latestVoiceText = "";
     private double latestVoiceConfidence = -1.0d;
@@ -161,24 +159,24 @@ final class VoiceExecutionGuard {
         }
 
         String finalized = latestVoiceText;
-        if (latestVoiceConfidence >= 0.0d
-                && latestVoiceConfidence < LOW_CONFIDENCE_THRESHOLD) {
+        if (VoiceExecutionPolicy.shouldRepeat(
+                finalized, latestVoiceConfidence)) {
+            String code = latestVoiceConfidence >= 0.0d
+                    && latestVoiceConfidence < 0.72d
+                    ? "VOICE_TRANSCRIPT_LOW_CONFIDENCE"
+                    : "VOICE_TRANSCRIPT_INCOMPLETE";
             return Preflight.block(
-                    "VOICE_TRANSCRIPT_LOW_CONFIDENCE",
+                    code,
                     "",
-                    "這段 finalized 語音辨識信心偏低。不要執行手機 mutation；請使用者把指令再說一次。");
-        }
-        if (VoiceCommandQualityPolicy.looksIncomplete(finalized)) {
-            return Preflight.block(
-                    "VOICE_TRANSCRIPT_INCOMPLETE",
-                    "",
-                    "這段 finalized 語音看起來仍不完整。不要執行手機 mutation；只請使用者把指令說完整一次。");
+                    "這段語音不足以安全執行手機 mutation。不要硬做；請使用者把指令再說完整一次。");
         }
 
         // Critical-entity read-back is required immediately before message
         // submission or another Runtime-recognized irreversible target.
         // Navigation/search/type stay fluid.
-        if (!requiresCriticalEntityConfirmation(runtimeName, runtimeArgs)) {
+        if (!VoiceExecutionPolicy.requiresCriticalEntityConfirmation(
+                runtimeName,
+                criticalTargetMetadata(runtimeArgs))) {
             return Preflight.allow();
         }
 
@@ -243,25 +241,13 @@ final class VoiceExecutionGuard {
         latestVoiceConfidence = -1.0d;
     }
 
-    private static boolean requiresCriticalEntityConfirmation(
-            String runtimeName,
-            JSONObject args) {
-        if ("send_text".equals(runtimeName)
-                || "start_conversation_loop".equals(runtimeName)) {
-            return true;
-        }
-        if (!"tap_screen".equals(runtimeName)
-                && !"tap_element".equals(runtimeName)) {
-            return false;
-        }
+    private static String criticalTargetMetadata(JSONObject args) {
         JSONObject safe = args == null ? new JSONObject() : args;
-        String metadata =
-                safe.optString("label", "") + " "
-                        + safe.optString("target", "") + " "
-                        + safe.optString("id", "") + " "
-                        + safe.optString("element_id", "") + " "
-                        + safe.optString("semanticHint", "");
-        return ActionSafetyPolicy.blocks(metadata);
+        return safe.optString("label", "") + " "
+                + safe.optString("target", "") + " "
+                + safe.optString("id", "") + " "
+                + safe.optString("element_id", "") + " "
+                + safe.optString("semanticHint", "");
     }
 
     private static String fingerprint(
