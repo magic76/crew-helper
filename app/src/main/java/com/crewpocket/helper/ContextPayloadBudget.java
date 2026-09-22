@@ -6,7 +6,7 @@ import java.nio.charset.StandardCharsets;
 final class ContextPayloadBudget {
     static final int PHONE_ACTION_BYTES = 2200;
     static final int INSPECT_UI_BYTES = 2800;
-    static final int SEND_TEXT_BYTES = 1200;
+    static final int SEND_TEXT_BYTES = 900;
     static final int WAIT_BYTES = 1200;
     static final int CONTROL_BYTES = 1200;
     static final int DEFAULT_TOOL_BYTES = 2000;
