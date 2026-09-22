@@ -21,9 +21,13 @@ public final class VoiceExecutionPolicyTest {
                         "tap_screen", "刪除"),
                 "irreversible tap requires read-back");
         check(
-                VoiceExecutionPolicy.requiresCriticalEntityConfirmation(
+                !VoiceExecutionPolicy.requiresCriticalEntityConfirmation(
                         "send_text", ""),
-                "send always requires critical-entity policy");
+                "explicit one-shot send does not need redundant read-back");
+        check(
+                VoiceExecutionPolicy.requiresCriticalEntityConfirmation(
+                        "start_conversation_loop", ""),
+                "persistent conversation delegation keeps confirmation gate");
         check(
                 !VoiceExecutionPolicy.requiresCriticalEntityConfirmation(
                         "search_current_app", "4486819"),
