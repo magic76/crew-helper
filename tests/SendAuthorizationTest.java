@@ -85,6 +85,16 @@ public final class SendAuthorizationTest {
         check(explicitTypeThenSend.canAttempt(),
                 "type then explicit send authorizes commit");
 
+        SendAuthorization directPayload = new SendAuthorization();
+        directPayload.updateFromUserText("發送你好");
+        check(directPayload.canAttempt(),
+                "direct current-chat send with payload authorizes commit");
+
+        SendAuthorization englishDirectPayload = new SendAuthorization();
+        englishDirectPayload.updateFromUserText("send hello");
+        check(englishDirectPayload.canAttempt(),
+                "english direct send with payload authorizes commit");
+
         SendAuthorization bodyNegation = new SendAuthorization();
         bodyNegation.updateFromUserText("跟小明說如果下雨就不要來");
         check(bodyNegation.canAttempt(),
