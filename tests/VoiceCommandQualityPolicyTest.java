@@ -39,7 +39,7 @@ public final class VoiceCommandQualityPolicyTest {
                         "跟 Amy 說 19:30 到，代碼 4486819");
         String numericSummary =
                 VoiceCommandQualityPolicy.summary(numeric);
-        assertContains(numericSummary, "Amy", "English recipient should be captured");
+        assertContains(numericSummary, "amy", "English recipient should be captured");
         assertContains(numericSummary, "19:30", "clock time should be captured");
         assertContains(numericSummary, "4486819", "number should be captured");
 
