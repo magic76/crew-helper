@@ -25,6 +25,26 @@ public final class ConversationLoopRecipeTest {
                         "幫我跟小明持續聊天", "小明"),
                 "recipient must be present");
         check(
+                "小明".equals(ConversationLoopPolicy.extractRecipient(
+                        "幫我跟小明聊")),
+                "runtime extracts recipient from natural chat request");
+        check(
+                "小明".equals(ConversationLoopPolicy.extractRecipient(
+                        "你自己跟小明聊一下")),
+                "runtime extracts recipient from self-directed chat request");
+        check(
+                "John".equals(ConversationLoopPolicy.extractRecipient(
+                        "chat with John")),
+                "runtime extracts english recipient");
+        check(
+                ConversationLoopPolicy.extractRecipient(
+                        "幫我跟他聊").isEmpty(),
+                "pronoun is not accepted as bound recipient");
+        check(
+                !ConversationLoopPolicy.isExplicitStartIntent(
+                        "停止跟小明聊天"),
+                "stop wording must never restart a loop");
+        check(
                 ConversationLoopPolicy.isStopIntent(
                         "停止跟他聊天"),
                 "explicit stop should stop loop");
