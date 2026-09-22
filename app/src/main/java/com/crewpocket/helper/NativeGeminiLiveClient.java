@@ -3089,7 +3089,7 @@ final class NativeGeminiLiveClient {
                 .put("taskState", "IN_PROGRESS")
                 .put("conversationLoop", "READY_TO_SEND")
                 .put("instruction",
-                        "持續對話租約已啟用。先確認/開啟指定 recipient 的聊天室；可送出一則自然開場或使用者指定內容。每次 send_text 後 Runtime 會自動背景等待新訊息，不要輪詢。");
+                        "持續對話租約已啟用。ACTIVE lease 已授權對綁定 recipient 的後續自動回覆；不需要每則再取得新的 user turn 或詢問使用者。先確認/開啟指定 recipient 的聊天室；每次 send_text 後 Runtime 會自動背景等待新訊息，不要輪詢。");
     }
 
     private JSONObject continueConversationLoop(JSONObject args)
@@ -3232,8 +3232,9 @@ final class NativeGeminiLiveClient {
                         reportStage(task.status);
                         sendInternalAgentDirective(
                                 "【CONVERSATION LOOP WAKE】Runtime 偵測到指定聊天室有新的 Accessibility 變化。"
+                                        + "ACTIVE Conversation Loop lease 就是使用者對此綁定 recipient 的持續回覆授權；不要說無法自行聊天，不要要求新的 user turn，也不要逐則詢問確認。"
                                         + "現在只呼叫一次 inspect_ui 看 fresh screenshot。"
-                                        + "若確實有新的對方訊息，依使用者原本授權自然組一則簡短回覆並用 send_text 送出；"
+                                        + "若確實有新的對方訊息，自行理解上下文、自然組一則簡短回覆並用 send_text 送出；"
                                         + "若只是自己的訊息、typing indicator 或其他 UI noise，呼叫 continue_conversation_loop 重新等待。"
                                         + "不要切到其他收件人，也不要輪詢。");
                         agentResponseCoordinator
@@ -4916,10 +4917,13 @@ final class NativeGeminiLiveClient {
                             "這一輪 SEND 已經 dispatch；不要再次送出。草稿操作本身不受此限制。");
         }
 
-        if (!loopSend && !userActionScope.canSend()) {
+        boolean delegatedSendAuthorized =
+                ConversationLoopPolicy.hasDelegatedSendAuthority(
+                        loopSend, userActionScope.canSend());
+        if (!delegatedSendAuthorized) {
             return runtimeBlocked(
                     "CURRENT_SCREEN_SEND_NOT_AUTHORIZED",
-                    "真正的訊息提交需要最新一句明確 SEND intent。TYPE/草稿輸入不需要這份授權，也不應宣稱無法打字。");
+                    "訊息提交需要最新一句明確 SEND intent，或 ACTIVE Conversation Loop 租約。Loop active 時，Runtime wake 本身就是後續回覆授權，不需要新的 user turn。TYPE/草稿輸入不需要這份授權。");
         }
 
         // Preparation stays reversible. If send_text carries new text, insert
@@ -4976,7 +4980,7 @@ final class NativeGeminiLiveClient {
         }
 
         CommitGuard.Result commitDecision = CommitGuard.evaluate(
-                loopSend || userActionScope.canSend(),
+                delegatedSendAuthorized,
                 !loopSend && userActionScope.isMessageCommitDispatched(),
                 targetVerificationRequired,
                 targetVerified,
