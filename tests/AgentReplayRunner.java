@@ -48,6 +48,10 @@ public final class AgentReplayRunner {
             runLocatorConfidence(file, p);
             return;
         }
+        if ("locator_fallback".equals(kind)) {
+            runLocatorFallback(file, p);
+            return;
+        }
 
         String runtime = required(p, "runtime");
         ActionTransaction.ExpectedEffect expected = ActionExpectation.forRuntimeAction(runtime);
@@ -113,6 +117,35 @@ public final class AgentReplayRunner {
                         + result.code
                         + " margin="
                         + result.margin);
+    }
+
+    private static void runLocatorFallback(File file, Properties p) {
+        String stage = p.getProperty("stage", "semantic").trim();
+        LocatorFallbackPolicy.Next next;
+        if ("label".equals(stage)) {
+            next = LocatorFallbackPolicy.afterLabel(
+                    bool(p, "label.matched"),
+                    bool(p, "label.nodeBounds"),
+                    bool(p, "target.hasCoordinate"));
+        } else {
+            next = LocatorFallbackPolicy.afterSemantic(
+                    p.getProperty("locator.decision", ""),
+                    bool(p, "target.hasLabel"),
+                    bool(p, "target.hasCoordinate"));
+        }
+
+        String expected = required(p, "expect.next");
+        if (!expected.equals(next.name())) {
+            throw new AssertionError(
+                    file.getName()
+                            + " expected "
+                            + expected
+                            + " but got "
+                            + next);
+        }
+        passed++;
+        System.out.println(
+                "  PASS " + file.getName() + " -> " + next);
     }
 
     private static ActionObservation observation(Properties p, String prefix) {

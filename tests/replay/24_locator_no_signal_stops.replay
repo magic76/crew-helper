@@ -1,0 +1,6 @@
+kind=locator_fallback
+stage=label
+label.matched=false
+label.nodeBounds=false
+target.hasCoordinate=false
+expect.next=STOP

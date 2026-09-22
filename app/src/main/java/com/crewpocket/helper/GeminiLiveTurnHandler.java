@@ -40,6 +40,7 @@ final class GeminiLiveTurnHandler {
 
         boolean serverPresent;
         String inputText = "";
+        double inputConfidence = -1.0d;
         String interimInputText = "";
         String outputText = "";
         boolean interrupted;
@@ -109,6 +110,10 @@ final class GeminiLiveTurnHandler {
         if (inputTranscript != null) {
             frame.inputText =
                     inputTranscript.optString("text", "").trim();
+            if (inputTranscript.has("confidence")) {
+                frame.inputConfidence =
+                        inputTranscript.optDouble("confidence", -1.0d);
+            }
         }
 
         JSONObject interimInputTranscript = objectAlias(
