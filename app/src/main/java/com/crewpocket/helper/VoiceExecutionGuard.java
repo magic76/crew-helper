@@ -156,14 +156,49 @@ final class VoiceExecutionGuard {
                     "這段 finalized 語音看起來仍不完整。不要執行手機 mutation；只請使用者把指令說完整一次。");
         }
 
+        long now = System.currentTimeMillis();
+        JSONObject safeArgs =
+                runtimeArgs == null ? new JSONObject() : runtimeArgs;
+
+        if ("conversation_loop".equals(runtimeName)
+                && ConversationLoopPolicy.ACTION_START.equals(
+                        ConversationLoopPolicy.normalizeAction(
+                                safeArgs.optString("action", "")))) {
+            String recipient =
+                    safeArgs.optString("recipient", "").trim();
+            if (recipient.isEmpty()) {
+                return Preflight.allow();
+            }
+            return requireCriticalConfirmation(
+                    runtimeName,
+                    safeArgs,
+                    "對談對象「" + recipient + "」",
+                    now);
+        }
+
         // Critical-entity read-back is required only immediately before an
         // irreversible message submission. Navigation/search/type stay fluid.
         if (!"send_text".equals(runtimeName)) {
             return Preflight.allow();
         }
 
-        long now = System.currentTimeMillis();
+        List<String> entities =
+                VoiceCommandQualityPolicy.criticalEntities(finalized);
+        String summary =
+                VoiceCommandQualityPolicy.summary(entities);
+        if (summary.isEmpty()) {
+            return Preflight.allow();
+        }
 
+        return requireCriticalConfirmation(
+                runtimeName, safeArgs, summary, now);
+    }
+
+    private Preflight requireCriticalConfirmation(
+            String runtimeName,
+            JSONObject runtimeArgs,
+            String summary,
+            long now) {
         // A confirmation utterance contains only "對/確認", not the original
         // entities. Bind the lease to the original summary + exact payload.
         if (!confirmedFingerprint.isEmpty()) {
@@ -186,21 +221,13 @@ final class VoiceExecutionGuard {
                 return Preflight.block(
                         "VOICE_CONFIRMATION_ACTION_MISMATCH",
                         confirmedSummary,
-                        "剛才只確認了原本那一份送出內容；目前 action 已改變，Runtime 不會沿用確認。請重新複誦目前關鍵資訊。");
+                        "剛才只確認了原本那一份操作；目前 action 已改變，Runtime 不會沿用確認。請重新複誦目前關鍵資訊。");
             }
         }
 
-        List<String> entities =
-                VoiceCommandQualityPolicy.criticalEntities(finalized);
-        String summary =
-                VoiceCommandQualityPolicy.summary(entities);
-        if (summary.isEmpty()) {
-            return Preflight.allow();
-        }
-
-        String fingerprint =
+        String actionFingerprint =
                 fingerprint(runtimeName, runtimeArgs, summary);
-        pending = new Pending(fingerprint, summary, now);
+        pending = new Pending(actionFingerprint, summary, now);
         return Preflight.block(
                 "VOICE_CRITICAL_ENTITY_CONFIRMATION_REQUIRED",
                 summary,
