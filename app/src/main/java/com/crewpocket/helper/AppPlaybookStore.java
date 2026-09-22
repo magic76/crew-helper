@@ -30,8 +30,8 @@ final class AppPlaybookStore {
     private static final int MAX_GUIDANCE_CHARS = 500;
     private static final int MAX_TITLE_CHARS = 72;
     private static final int MAX_MODEL_RULES = 8;
-    private static final int MAX_MODEL_LEARNED_CHARS = 1200;
-    private static final int MAX_MODEL_CONTEXT_CHARS = 2200;
+    private static final int MAX_MODEL_LEARNED_CHARS = 700;
+    private static final int MAX_MODEL_CONTEXT_CHARS = 1200;
     private static final Object LOCK = new Object();
 
     private final Context context;
@@ -316,7 +316,7 @@ final class AppPlaybookStore {
             putQuiet(contextJson, "app", labelFor(pkg));
             putQuiet(contextJson, "runtimeAdapter", adapter.id());
             putQuiet(contextJson, "builtInGuidance",
-                    clip(adapter.builtInGuidance(), 700));
+                    clip(adapter.builtInGuidance(), 420));
             return systemInstruction(contextJson);
         }
     }
@@ -346,7 +346,7 @@ final class AppPlaybookStore {
         if (adapter != null) {
             putQuiet(out, "runtimeAdapter", adapter.id());
             putQuiet(out, "builtInGuidance",
-                    clip(adapter.builtInGuidance(), 700));
+                    clip(adapter.builtInGuidance(), 420));
         }
 
         JSONArray rules = new JSONArray();
