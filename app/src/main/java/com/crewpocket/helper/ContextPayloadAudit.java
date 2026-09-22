@@ -142,6 +142,6 @@ final class ContextPayloadAudit {
         String out = value == null ? "unknown" : value.trim();
         if (out.isEmpty()) return "unknown";
         return out.toLowerCase(Locale.ROOT)
-                .replaceAll("[^a-z0-9_:.\-]", "_");
+                .replaceAll("[^a-z0-9_:.\\-]", "_");
     }
 }
