@@ -27,7 +27,7 @@ final class ActionRegistry {
         CrewAccessibilityService service = CrewAccessibilityService.getInstance();
         if (service != null && service.getLearnedUiMappingStore() != null) {
             try {
-                AccessibilityNodeInfo composer = service.findActiveEditText(root);
+                AccessibilityNodeInfo composer = AccessibilityNodeRepository.findActiveEditText(root);
                 if (ComposerSendResolver.isSearchInput(composer)) {
                     if (composer != null) composer.recycle();
                     return;
