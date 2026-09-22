@@ -83,11 +83,11 @@ final class ModelStepGuidance {
             String taskState,
             String searchTransaction,
             boolean verifiedSend) {
-        if (verifiedSend) return "MESSAGE_SENT";
-        if (NEED_USER.equals(status)) return "USER_CHOICE_REQUIRED";
         if ("WAITING_BACKGROUND".equals(upper(taskState))) {
             return "BACKGROUND_WAIT_ARMED";
         }
+        if (verifiedSend) return "MESSAGE_SENT";
+        if (NEED_USER.equals(status)) return "USER_CHOICE_REQUIRED";
         if (WAIT.equals(status)) return "AWAITING_UI";
         if (FAILED.equals(status)) return "STEP_FAILED";
 
