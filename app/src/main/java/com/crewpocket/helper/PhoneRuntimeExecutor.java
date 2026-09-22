@@ -34,6 +34,7 @@ final class PhoneRuntimeExecutor {
 
     private final Context appContext;
     private final LiveVisionController visionController;
+    private final AppAutonomyStore autonomyStore;
     private final ArrayList<JSONObject> lastCandidateApps =
             new ArrayList<JSONObject>();
     private volatile HttpURLConnection activeConnection;
@@ -41,6 +42,7 @@ final class PhoneRuntimeExecutor {
     PhoneRuntimeExecutor(Context appContext, LiveVisionController visionController) {
         this.appContext = appContext;
         this.visionController = visionController;
+        this.autonomyStore = new AppAutonomyStore(appContext);
     }
 
     void resetTransientState() {
@@ -368,6 +370,10 @@ final class PhoneRuntimeExecutor {
 
         JSONArray fallbackTrace = new JSONArray();
         boolean resolvedFromNode = false;
+        JSONObject recoveryNodes = null;
+        boolean trustedAutonomy = false;
+        String targetMetadata =
+                label + " " + id + " " + semanticHint + " " + role;
         final boolean hasExplicitCoordinate = targetX >= 0 && targetY >= 0;
         boolean hasSemanticTarget = !label.isEmpty()
                 || !id.isEmpty()
@@ -399,21 +405,80 @@ final class PhoneRuntimeExecutor {
                                 !label.isEmpty() || !id.isEmpty(),
                                 hasExplicitCoordinate);
 
-                if ("MULTIPLE_MATCHES".equals(
+                boolean ambiguity =
+                        "MULTIPLE_MATCHES".equals(
                                 semantic.optString("status", ""))
                         || semanticNext
-                                == LocatorFallbackPolicy.Next.ASK_USER) {
-                    semantic.put("resolvedFrom", "semantic_v2")
-                            .put("fallbackTrace", fallbackTrace)
-                            .put("stepResult", "STEP_FAILED")
-                            .put("taskState", "NEED_USER")
-                            .put("instruction",
-                                    "定位候選太接近。列出 Runtime 提供的 candidates 請使用者選；不要降級猜 label 或座標。");
-                    return semantic;
+                                == LocatorFallbackPolicy.Next.ASK_USER;
+                boolean mediumConfidence =
+                        semanticNext
+                                == LocatorFallbackPolicy.Next.REOBSERVE;
+
+                if ((ambiguity || mediumConfidence)
+                        && !ActionSafetyPolicy.blocks(targetMetadata)) {
+                    try {
+                        recoveryNodes = get("/nodes");
+                        String currentPackage =
+                                recoveryNodes.optString("package", "");
+                        trustedAutonomy =
+                                AppAutonomyPolicy.maySelfResolve(
+                                        autonomyStore.isTrusted(currentPackage),
+                                        targetMetadata);
+                        if (trustedAutonomy) {
+                            fallbackTrace.put(
+                                    "trusted_autonomy:" + currentPackage);
+                        }
+                    } catch (Exception ignored) {
+                        recoveryNodes = null;
+                    }
                 }
 
-                if (semanticNext
-                        == LocatorFallbackPolicy.Next.REOBSERVE) {
+                if (ambiguity) {
+                    if (trustedAutonomy) {
+                        JSONArray candidates =
+                                semantic.optJSONArray("candidates");
+                        JSONObject top =
+                                candidates == null
+                                        ? null
+                                        : candidates.optJSONObject(0);
+                        String trustedElementId =
+                                top == null
+                                        ? ""
+                                        : top.optString("elementId", "");
+                        if (!trustedElementId.isEmpty()) {
+                            JSONObject trustedTap = post(
+                                    "/semantic_tap",
+                                    new JSONObject().put(
+                                            "elementId",
+                                            trustedElementId));
+                            fallbackTrace.put(
+                                    "trusted_top_candidate:"
+                                            + (trustedTap.optBoolean(
+                                                    "success", false)
+                                                    ? "SUCCESS"
+                                                    : "MISS"));
+                            if (trustedTap.optBoolean("success", false)) {
+                                return trustedTap
+                                        .put(
+                                            "resolvedFrom",
+                                            "trusted_autonomy_top_candidate")
+                                        .put(
+                                            "fallbackTrace",
+                                            fallbackTrace);
+                            }
+                        }
+                    } else {
+                        semantic.put("resolvedFrom", "semantic_v2")
+                                .put("fallbackTrace", fallbackTrace)
+                                .put("stepResult", "STEP_FAILED")
+                                .put("taskState", "NEED_USER")
+                                .put("instruction",
+                                        "定位候選太接近。列出 Runtime 提供的 candidates 請使用者選；不要降級猜 label 或座標。");
+                        return semantic;
+                    }
+                }
+
+                if (mediumConfidence && !trustedAutonomy) {
                     return semantic
                             .put("resolvedFrom", "semantic_v2")
                             .put("fallbackTrace", fallbackTrace)
@@ -458,8 +523,22 @@ final class PhoneRuntimeExecutor {
                 // 3) Node-bounds degradation is allowed only for ONE
                 // deterministic structural match. Never take the first of
                 // several fuzzy matches.
-                JSONObject nodesResp = get("/nodes");
+                JSONObject nodesResp =
+                        recoveryNodes != null ? recoveryNodes : get("/nodes");
                 if (nodesResp.optBoolean("success")) {
+                    String currentPackage =
+                            nodesResp.optString("package", "");
+                    if (!trustedAutonomy
+                            && !ActionSafetyPolicy.blocks(targetMetadata)) {
+                        trustedAutonomy =
+                                AppAutonomyPolicy.maySelfResolve(
+                                        autonomyStore.isTrusted(currentPackage),
+                                        targetMetadata);
+                        if (trustedAutonomy) {
+                            fallbackTrace.put(
+                                    "trusted_autonomy:" + currentPackage);
+                        }
+                    }
                     JSONArray nodes = nodesResp.optJSONArray("nodes");
                     JSONObject uniqueBounds = null;
                     int structuralMatches = 0;
@@ -487,7 +566,8 @@ final class PhoneRuntimeExecutor {
                         }
                     }
 
-                    if (structuralMatches > 1) {
+                    if (structuralMatches > 1
+                            && !trustedAutonomy) {
                         fallbackTrace.put("node_bounds:AMBIGUOUS");
                         return new JSONObject()
                                 .put("success", false)
@@ -499,14 +579,11 @@ final class PhoneRuntimeExecutor {
                                         "legacy label/id 也命中多個元件。不要取第一個或改猜座標；請重新 inspect_ui 或請使用者選候選。");
                     }
 
-                    LocatorFallbackPolicy.Next afterLabel =
-                            LocatorFallbackPolicy.afterLabel(
-                                    false,
-                                    structuralMatches == 1,
-                                    hasExplicitCoordinate);
-                    if (afterLabel
-                            == LocatorFallbackPolicy.Next.EXECUTE_SEMANTIC
-                            && uniqueBounds != null) {
+                    boolean mayUseBounds =
+                            uniqueBounds != null
+                                    && (structuralMatches == 1
+                                            || trustedAutonomy);
+                    if (mayUseBounds) {
                         targetX = (
                                 uniqueBounds.optDouble("left", 0)
                                 + uniqueBounds.optDouble("right", 0))
@@ -516,7 +593,11 @@ final class PhoneRuntimeExecutor {
                                 + uniqueBounds.optDouble("bottom", 0))
                                 / 2.0;
                         resolvedFromNode = true;
-                        fallbackTrace.put("node_bounds:UNIQUE");
+                        fallbackTrace.put(
+                                structuralMatches == 1
+                                        ? "node_bounds:UNIQUE"
+                                        : "node_bounds:TRUSTED_FIRST_OF_"
+                                                + structuralMatches);
                     }
                 }
             } catch (Exception ignored) {
