@@ -4724,34 +4724,51 @@ final class NativeGeminiLiveClient {
 
     private JSONObject sendTextToPhone(JSONObject args) throws Exception {
         String text = args == null ? "" : args.optString("text", "");
+        boolean loopSend = conversationLoopRecipe.canSend();
 
-        if (!userActionScope.canSend()
-                || userActionScope.blocksNamedRecipientMessagingAction()) {
+        if (!loopSend && (!userActionScope.canSend()
+                || userActionScope.blocksNamedRecipientMessagingAction())) {
             LiveTurnCoordinator.FinalizedTurn finalized =
                     liveTurnCoordinator.latest();
             ensureSendAuthorizationFromFinalized(finalized, args);
         }
-        if (userActionScope.blocksNamedRecipientMessagingAction()) {
+        if (!loopSend
+                && userActionScope.blocksNamedRecipientMessagingAction()) {
             return runtimeBlocked(
                     "RECIPIENT_TARGET_UNKNOWN",
                     "這一輪看起來要傳給特定對象，但 Runtime 無法從原始指令抽出可驗證的收件人。不要猜收件人；請使用者用『跟 X 說…』或『傳給 X：「…」』明確指定。");
         }
-        if (!userActionScope.canSend()) {
+        if (!loopSend && !userActionScope.canSend()) {
             return runtimeBlocked(
                     "CURRENT_SCREEN_SEND_NOT_AUTHORIZED",
                     "send_text 只用於最新一句明確要求送出訊息。若使用者只是要在目前可見欄位打字、填入或貼上內容（包含設定、system prompt、表單或聊天輸入框），請改用 phone_action(TYPE)；不要宣稱 Crew 無法一般打字。");
         }
 
-        if (userActionScope.requiresRecipientVerification()) {
-            JSONObject recipientVerification = verifyAuthorizedRecipientOnCurrentScreen();
+        if (loopSend) {
+            JSONObject recipientVerification =
+                    verifyRecipientOnCurrentScreen(
+                            conversationLoopRecipe.recipient());
+            if (!recipientVerification.optBoolean("success", false)) {
+                conversationLoopRecipe.stop(
+                        "RECIPIENT_VERIFICATION_FAILED");
+                return recipientVerification
+                        .put("conversationLoop", "STOPPED")
+                        .put("instruction",
+                                "Runtime 無法再證明目前仍是原本收件人的聊天室，已停止持續對話租約；不要換人或猜。");
+            }
+        } else if (userActionScope.requiresRecipientVerification()) {
+            JSONObject recipientVerification =
+                    verifyAuthorizedRecipientOnCurrentScreen();
             if (!recipientVerification.optBoolean("success", false)) {
                 return recipientVerification;
             }
         }
 
         PerformanceMetrics.recordTextRouteSend();
-        userActionScope.markMessageTransactionHandled();
-        userActionScope.consumeSendAuthorization();
+        if (!loopSend) {
+            userActionScope.markMessageTransactionHandled();
+            userActionScope.consumeSendAuthorization();
+        }
 
         // 0052 active messaging path is intentionally simple:
         // optional TYPE(text) -> SEND_CURRENT.
@@ -4802,6 +4819,46 @@ final class NativeGeminiLiveClient {
         workingContext.recordAction(
                 "send_current",
                 reply.optBoolean("success", false) ? "submitted" : "failed");
+
+        if (loopSend) {
+            if (!reply.optBoolean("success", false)) {
+                conversationLoopRecipe.stop("SEND_FAILED");
+                workingContext.setPendingTask("");
+                reply.put("conversationLoop", "STOPPED")
+                        .put("instruction",
+                                "持續對話送出失敗，Runtime 已停止 loop，避免自動重試造成重複訊息。");
+                return reply;
+            }
+
+            String baseline = "";
+            try {
+                JSONObject semantic =
+                        phoneRuntimeExecutor.get("/semantic_screen");
+                if (semantic != null
+                        && semantic.optBoolean("success", false)) {
+                    baseline = semantic.optString("fingerprint", "");
+                }
+            } catch (Exception ignored) {}
+
+            boolean keepWaiting =
+                    conversationLoopRecipe.markSent(baseline);
+            if (keepWaiting) {
+                workingContext.setPendingTask("CONVERSATION_LOOP_WAIT");
+                reply.put("taskState", "WAITING_BACKGROUND")
+                        .put("conversationLoop", "WAITING_FOR_MESSAGE")
+                        .put("loopStatus", conversationLoopStatusJson())
+                        .put("instruction",
+                                "訊息已送出。Runtime 已接手等待下一個聊天室 Accessibility 事件；不要輪詢、不要再次 send_text，直到 Runtime 喚醒。");
+                armConversationLoopWaitAsync();
+            } else {
+                workingContext.setPendingTask("");
+                reply.put("conversationLoop", "STOPPED")
+                        .put("loopStatus", conversationLoopStatusJson())
+                        .put("message",
+                                "已達持續對話回覆上限，Runtime 自動停止。");
+            }
+        }
+
         return reply;
     }
 
