@@ -81,6 +81,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/ScrollDirectionPolicyTest.java" \
   "$ROOT/tests/ActionVerifierV2Test.java" \
   "$ROOT/tests/ActionRecoveryPolicyTest.java" \
+  "$ROOT/tests/LocatorConfidencePolicyTest.java" \
   "$ROOT/tests/AgentTaskLifecyclePolicyTest.java" \
   "$ROOT/tests/AgentRuntimeV2Test.java" \
   "$ROOT/tests/AgentRuntimeRolloutTest.java" \
@@ -126,6 +127,7 @@ java -cp "$OUT" com.crewpocket.helper.SearchTransactionPolicyTest
 java -cp "$OUT" com.crewpocket.helper.ScrollDirectionPolicyTest
 java -cp "$OUT" com.crewpocket.helper.ActionVerifierV2Test
 java -cp "$OUT" com.crewpocket.helper.ActionRecoveryPolicyTest
+java -cp "$OUT" com.crewpocket.helper.LocatorConfidencePolicyTest
 java -cp "$OUT" com.crewpocket.helper.AgentTaskLifecyclePolicyTest
 java -cp "$OUT" com.crewpocket.helper.AgentRuntimeV2Test
 java -cp "$OUT" com.crewpocket.helper.AgentRuntimeRolloutTest
