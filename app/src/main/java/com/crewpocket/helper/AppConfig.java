@@ -16,6 +16,8 @@ public class AppConfig {
     public static final String KEY_INTERRUPTION_SENSITIVITY = "interruption_sensitivity";
     public static final String KEY_AUDIO_OUTPUT = "audio_output";
     public static final String KEY_VOICE_PRESET = "voice_preset";
+    /** User-controlled trust preference: message commits skip voice confirmation/repeat gates. */
+    public static final String KEY_MESSAGE_SEND_NO_CONFIRMATION = "message_send_no_confirmation";
 
 
     // 0091: voice and speaking personality are independent.
@@ -178,6 +180,20 @@ public class AppConfig {
     public static void setAudioOutput(Context context, String output) {
         if (context == null) return;
         getPrefs(context).edit().putString(KEY_AUDIO_OUTPUT, "media".equals(output) ? "media" : "call").apply();
+    }
+
+    public static boolean isMessageSendNoConfirmationEnabled(Context context) {
+        if (context == null) return false;
+        return getPrefs(context).getBoolean(KEY_MESSAGE_SEND_NO_CONFIRMATION, false);
+    }
+
+    public static void setMessageSendNoConfirmationEnabled(
+            Context context,
+            boolean enabled) {
+        if (context == null) return;
+        getPrefs(context).edit()
+                .putBoolean(KEY_MESSAGE_SEND_NO_CONFIRMATION, enabled)
+                .apply();
     }
 
     public static String getVoicePreset(Context context) {
