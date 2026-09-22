@@ -11,7 +11,22 @@ public final class ElementReferenceChoiceTest {
         expect(-1, ElementReferenceChoice.parseIndex("25", 24), "out of range");
         expect(-1, ElementReferenceChoice.parseIndex("", 24), "empty");
 
+        expectTrue(ElementReferenceChoice.looksLikeChoice("5"), "digit looks like choice");
+        expectTrue(ElementReferenceChoice.looksLikeChoice("第五個"), "ordinal looks like choice");
+        expectTrue(ElementReferenceChoice.looksLikeChoice("25"), "out-of-range digit is still a choice attempt");
+        expectFalse(ElementReferenceChoice.looksLikeChoice("開始"), "semantic action must exit choice mode");
+        expectFalse(ElementReferenceChoice.looksLikeChoice("路線"), "navigation action must exit choice mode");
+        expectFalse(ElementReferenceChoice.looksLikeChoice("返回"), "back command must exit choice mode");
+
         System.out.println("ElementReferenceChoiceTest passed");
+    }
+
+    private static void expectTrue(boolean value, String message) {
+        if (!value) throw new AssertionError(message);
+    }
+
+    private static void expectFalse(boolean value, String message) {
+        if (value) throw new AssertionError(message);
     }
 
     private static void expect(int expected, int actual, String message) {
