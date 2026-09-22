@@ -175,6 +175,31 @@ final class LiveToolCatalog {
                         .put("required", new JSONArray()
                                 .put("condition")
                                 .put("action"))));
+        tools.put(new JSONObject()
+                .put("name", "conversation_loop")
+                .put("description",
+                        "SPECIAL CONTINUOUS-CONVERSATION TASK RECIPE. Use only when the user explicitly asks Crew to keep conversing/auto-replying with one named person until stopped. Before START, navigate to that person's chat. Runtime verifies the recipient, grants a bounded continuous-send lease, then waits event-driven for screen changes/new-message markers. On wake Runtime tells you to inspect once. If it is a real new incoming message, compose one reply and call send_text once; successful send automatically re-arms the watcher. If the wake was only typing/time/animation, call WAIT. STOP immediately revokes the lease. Never use this for payments, forms, email sending, posting, or ordinary one-shot messages.")
+                .put("parameters", new JSONObject()
+                        .put("type", "OBJECT")
+                        .put("properties", new JSONObject()
+                                .put("action", new JSONObject()
+                                        .put("type", "STRING")
+                                        .put("enum", new JSONArray()
+                                                .put("START")
+                                                .put("WAIT")
+                                                .put("STOP")
+                                                .put("STATUS"))
+                                        .put("description", "START opens the explicit loop; WAIT re-arms after a false wake; STOP revokes it; STATUS reads state."))
+                                .put("recipient", new JSONObject()
+                                        .put("type", "STRING")
+                                        .put("description", "Required for START. Exact user-named chat recipient. Runtime verifies it on the current screen."))
+                                .put("new_message_marker", new JSONObject()
+                                        .put("type", "STRING")
+                                        .put("description", "Optional marker that is absent now and appears only for a new incoming message. Normally omit it; Runtime uses event-driven screen_change and then inspect_ui."))
+                                .put("duration_minutes", new JSONObject()
+                                        .put("type", "INTEGER")
+                                        .put("description", "Loop expiry 1-60 minutes; default 30.")))
+                        .put("required", new JSONArray().put("action"))));
         tools.put(new JSONObject().put("name", "send_text").put("description",
                 "MESSAGE SUBMISSION ONLY. Use only when THIS turn explicitly asks to send a message. For an already-visible chat, pass the exact new message text once. For an explicit named-recipient request such as『跟小明說…』or『傳給小明：「…」』, first use normal semantic phone navigation (OPEN_APP/SEARCH/TAP as needed) to reach that recipient; do not infer a different person. Then call send_text once. Runtime will fail closed until Accessibility verifies both a chat composer and the explicitly requested recipient on the current conversation screen. If the user only asks to type/fill/paste without sending, use phone_action(TYPE). Standalone 送出/發送/send is Runtime-owned.")
                 .put("parameters", new JSONObject().put("type", "OBJECT")
@@ -312,6 +337,7 @@ final class LiveToolCatalog {
                 || "wait_then_action".equals(name)
                 || "list_active_schedules".equals(name)
                 || "cancel_schedule".equals(name)
+                || "conversation_loop".equals(name)
                 || "send_text".equals(name)
                 || "end_voice_session".equals(name);
     }

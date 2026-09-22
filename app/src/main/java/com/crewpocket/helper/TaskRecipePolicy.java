@@ -6,6 +6,8 @@ import java.util.Locale;
 final class TaskRecipePolicy {
     static final int MAX_STEPS = 8;
     static final int MAX_SEARCH_CHARS = 120;
+    static final String SPECIAL_CONVERSATION_LOOP =
+            "CONVERSATION_LOOP";
 
     private TaskRecipePolicy() {}
 
@@ -16,6 +18,11 @@ final class TaskRecipePolicy {
                 || "commit_search".equals(name)
                 || "swipe_screen".equals(name)
                 || "press_key".equals(name);
+    }
+
+    static boolean isSpecialConversationLoopRecipe(String type) {
+        return SPECIAL_CONVERSATION_LOOP.equals(
+                type == null ? "" : type.trim().toUpperCase(Locale.ROOT));
     }
 
     static boolean isIgnorableObservation(String name) {

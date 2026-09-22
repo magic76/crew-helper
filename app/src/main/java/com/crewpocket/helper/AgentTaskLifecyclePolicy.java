@@ -126,6 +126,7 @@ final class AgentTaskLifecyclePolicy {
                 || "wait".equals(name)
                 || "teach_ui_element".equals(name)
                 || "list_active_schedules".equals(name)
+                || "conversation_loop".equals(name)
                 || "list_memory_rules".equals(name)
                 || "list_decks".equals(name)
                 || "get_deck_card".equals(name)

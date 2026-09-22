@@ -253,6 +253,9 @@ final class ModelToolResponseAdapter {
         }
 
         if (isVerifiedSend(result) || "send_text".equals(toolName)) {
+            if (result.optBoolean("conversationLoop", false)) {
+                return "對談回覆已驗證送出；Runtime 已重新等待下一則訊息。保持安靜，不要向使用者逐輪播報。";
+            }
             return "訊息已送出。";
         }
         if ("wait".equals(toolName)) {

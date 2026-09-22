@@ -53,6 +53,7 @@ final class NativeGeminiLiveClient {
     private final NotebookToolHandler notebookToolHandler;
     private final AppPlaybookStore appPlaybookStore;
     private final TaskRecipeStore taskRecipeStore;
+    private final ConversationLoopRuntime conversationLoopRuntime;
     private volatile long taskRecipeCandidateGeneration = -1L;
     private volatile String taskRecipeCandidateId = "";
     private final PhoneRuntimeExecutor phoneRuntimeExecutor;
@@ -345,6 +346,40 @@ final class NativeGeminiLiveClient {
                     }
                 });
 
+        this.conversationLoopRuntime = new ConversationLoopRuntime(
+                this.appContext,
+                new ConversationLoopRuntime.Host() {
+                    @Override public JSONObject verifyRecipient(
+                            String recipient) throws Exception {
+                        return NativeGeminiLiveClient.this
+                                .verifyRecipientOnCurrentScreen(recipient);
+                    }
+
+                    @Override public void sendInternalDirective(String text) {
+                        NativeGeminiLiveClient.this
+                                .sendInternalAgentDirective(text);
+                    }
+
+                    @Override public void reportStage(String text) {
+                        NativeGeminiLiveClient.this.reportStage(text);
+                    }
+
+                    @Override public boolean hasLiveSession() {
+                        return NativeGeminiLiveClient.this.running
+                                && NativeGeminiLiveClient.this
+                                        .liveConnection.isAvailable();
+                    }
+
+                    @Override public void beginRuntimeContinuation(
+                            String safeHint) {
+                        NativeGeminiLiveClient.this
+                                .beginContinuationUserIntent(
+                                        safeHint == null
+                                                ? "對談模式事件"
+                                                : safeHint);
+                    }
+                });
+
         this.agentResponseCoordinator = new AgentResponseCoordinator(
                 this.agentTaskCoordinator,
                 new AgentResponseCoordinator.Host() {
@@ -545,6 +580,12 @@ final class NativeGeminiLiveClient {
                             JSONObject args) throws Exception {
                         return NativeGeminiLiveClient.this
                                 .waitThenAction(args);
+                    }
+
+                    @Override public JSONObject conversationLoop(
+                            JSONObject args) throws Exception {
+                        return NativeGeminiLiveClient.this
+                                .conversationLoop(args);
                     }
                 });
 
@@ -821,6 +862,12 @@ final class NativeGeminiLiveClient {
         try {
             String input = text.trim();
             if (audioIncidentRecorder != null) audioIncidentRecorder.markTypedInput(input);
+
+            if (conversationLoopRuntime.isActive()
+                    && ConversationLoopPolicy.isStopPhrase(input)) {
+                conversationLoopRuntime.stopFromUser();
+                workingContext.setPendingTask("");
+            }
 
             if (consumePendingUiChoiceInput(input)) return true;
             if (hasPendingUiChoice()) clearPendingUiChoiceSilently();
@@ -1144,6 +1191,7 @@ final class NativeGeminiLiveClient {
         setupReady = false;
         interruptionHandler.removeCallbacks(clearInterruptedFallback);
         liveAudioController.stop();
+        conversationLoopRuntime.shutdown();
         voiceExecutionGuard.clear();
         liveConnection.stop();
         if (wasRunning) listener.onStopped("已結束");
@@ -1209,6 +1257,13 @@ final class NativeGeminiLiveClient {
             }
             listener.onTranscript(
                     "你", completeUserInput);
+
+            if (conversationLoopRuntime.isActive()
+                    && ConversationLoopPolicy.isStopPhrase(
+                            completeUserInput)) {
+                conversationLoopRuntime.stopFromUser();
+                workingContext.setPendingTask("");
+            }
 
             if (consumePendingUiChoiceInput(
                     completeUserInput)) {
@@ -1520,6 +1575,13 @@ final class NativeGeminiLiveClient {
             JSONObject requestedArgs) {
         if (SemanticPhoneAction.TOOL_NAME.equals(requestedName)) {
             return true;
+        }
+        if ("conversation_loop".equals(requestedName)) {
+            return ConversationLoopPolicy.ACTION_START.equals(
+                    ConversationLoopPolicy.normalizeAction(
+                            requestedArgs == null
+                                    ? ""
+                                    : requestedArgs.optString("action", "")));
         }
         return "send_text".equals(requestedName)
                 || "end_voice_session".equals(requestedName)
@@ -1905,12 +1967,18 @@ final class NativeGeminiLiveClient {
         // Gemini Live may emit the tool frame before the authoritative
         // finalized user transcript. Reconcile only operations whose payload
         // can be matched deterministically to that finalized turn.
-        long reconciledGeneration = awaitFinalizedOperationalGeneration(
-                requestedName, requestedArgs, callIntentGeneration);
-        reconciledGeneration = awaitFinalizedSendAuthorization(
-                requestedName, requestedArgs, reconciledGeneration);
-        reconciledGeneration = awaitFinalizedLiteralTypeGeneration(
-                requestedName, requestedArgs, reconciledGeneration);
+        boolean conversationLoopSendDispatch =
+                "send_text".equals(requestedName)
+                        && conversationLoopRuntime.hasSendLease();
+        long reconciledGeneration = callIntentGeneration;
+        if (!conversationLoopSendDispatch) {
+            reconciledGeneration = awaitFinalizedOperationalGeneration(
+                    requestedName, requestedArgs, callIntentGeneration);
+            reconciledGeneration = awaitFinalizedSendAuthorization(
+                    requestedName, requestedArgs, reconciledGeneration);
+            reconciledGeneration = awaitFinalizedLiteralTypeGeneration(
+                    requestedName, requestedArgs, reconciledGeneration);
+        }
 
         if (reconciledGeneration != callIntentGeneration) {
             callIntentGeneration = reconciledGeneration;
@@ -1993,10 +2061,13 @@ final class NativeGeminiLiveClient {
         final JSONObject args = semantic.runtimeArgs;
 
         VoiceExecutionGuard.Preflight voicePreflight =
-                voiceExecutionGuard.preflight(
-                        callIntentGeneration,
-                        name,
-                        args);
+                "send_text".equals(name)
+                        && conversationLoopRuntime.hasSendLease()
+                        ? VoiceExecutionGuard.Preflight.allow()
+                        : voiceExecutionGuard.preflight(
+                                callIntentGeneration,
+                                name,
+                                args);
         if (!voicePreflight.allowed) {
             JSONObject blocked = new JSONObject();
             try {
@@ -2087,7 +2158,12 @@ final class NativeGeminiLiveClient {
             return;
         }
 
-        if (userActionScope.shouldBlockFurtherMessageMutation() && isMutationTool(name)) {
+        boolean conversationLoopSend =
+                "send_text".equals(name)
+                        && conversationLoopRuntime.hasSendLease();
+        if (userActionScope.shouldBlockFurtherMessageMutation()
+                && isMutationTool(name)
+                && !conversationLoopSend) {
             sendBlockedToolResponse(id, requestedName,
                     "MESSAGE_TRANSACTION_ALREADY_HANDLED：本句明確傳送要求已完成一次原子送出交易；禁止再用 type/tap 重試。等待使用者的新指令。");
             return;
@@ -2218,6 +2294,27 @@ final class NativeGeminiLiveClient {
             sendToolResponse(id, requestedName, result);
             PerformanceMetrics.markAgentToolResultSent(
                     task.taskId, task.intentGeneration, name);
+
+            boolean completedConversationLoopSend =
+                    "send_text".equals(name)
+                            && result.optBoolean("conversationLoop", false)
+                            && result.optBoolean("success", false);
+            boolean rearmedConversationLoopWait =
+                    "conversation_loop".equals(name)
+                            && ConversationLoopPolicy.ACTION_WAIT.equals(
+                                    ConversationLoopPolicy.normalizeAction(
+                                            args.optString("action", "")))
+                            && result.optBoolean("success", false);
+            if (completedConversationLoopSend
+                    || rearmedConversationLoopWait) {
+                finishAgentTask(task, "任務完成", "");
+                reportStage(
+                        completedConversationLoopSend
+                                ? "對談模式：已送出並重新等待新訊息"
+                                : "對談模式：已重新等待新訊息");
+                return;
+            }
+
             if (task.blockedReason != null) {
                 agentResponseCoordinator.requestConclusion(task, task.blockedReason);
             } else if (shouldSuspendAgentForUser(result)) {
@@ -2859,6 +2956,17 @@ final class NativeGeminiLiveClient {
                 .put("success", true)
                 .put("task", task.toJson())
                 .put("message", "已啟動畫面監控：" + lbl);
+    }
+
+    private JSONObject conversationLoop(JSONObject args)
+            throws Exception {
+        JSONObject result = conversationLoopRuntime.execute(args);
+        if (result.optBoolean("active", false)) {
+            workingContext.setPendingTask("CONVERSATION_LOOP");
+        } else if (!conversationLoopRuntime.isActive()) {
+            workingContext.setPendingTask("");
+        }
+        return result;
     }
 
     private JSONObject waitThenAction(JSONObject args) throws Exception {
@@ -4261,8 +4369,14 @@ final class NativeGeminiLiveClient {
      * history, prior conversation memory, screenshots, or model inference can
      * satisfy the target check.
      */
-    private JSONObject verifyAuthorizedRecipientOnCurrentScreen() throws Exception {
-        String recipient = userActionScope.authorizedRecipient();
+    private JSONObject verifyAuthorizedRecipientOnCurrentScreen()
+            throws Exception {
+        return verifyRecipientOnCurrentScreen(
+                userActionScope.authorizedRecipient());
+    }
+
+    private JSONObject verifyRecipientOnCurrentScreen(
+            String recipient) throws Exception {
         if (recipient == null || recipient.trim().isEmpty()) {
             return runtimeBlocked("RECIPIENT_TARGET_UNKNOWN",
                     "缺少可驗證的收件人；不要猜測或直接送出。");
@@ -4353,6 +4467,8 @@ final class NativeGeminiLiveClient {
         return new JSONObject()
                 .put("success", true)
                 .put("recipientVerified", true)
+                .put("recipient", recipient.trim())
+                .put("package", semantic.optString("package", ""))
                 .put("verificationSource", "ACCESSIBILITY_CURRENT_SCREEN");
     }
 
@@ -4406,85 +4522,173 @@ final class NativeGeminiLiveClient {
 
     private JSONObject sendTextToPhone(JSONObject args) throws Exception {
         String text = args == null ? "" : args.optString("text", "");
+        boolean loopAuthorized =
+                conversationLoopRuntime.hasSendLease();
 
-        if (!userActionScope.canSend()
-                || userActionScope.blocksNamedRecipientMessagingAction()) {
+        if (!loopAuthorized
+                && (!userActionScope.canSend()
+                        || userActionScope
+                                .blocksNamedRecipientMessagingAction())) {
             LiveTurnCoordinator.FinalizedTurn finalized =
                     liveTurnCoordinator.latest();
             ensureSendAuthorizationFromFinalized(finalized, args);
         }
-        if (userActionScope.blocksNamedRecipientMessagingAction()) {
+
+        if (!loopAuthorized
+                && userActionScope
+                        .blocksNamedRecipientMessagingAction()) {
             return runtimeBlocked(
                     "RECIPIENT_TARGET_UNKNOWN",
                     "這一輪看起來要傳給特定對象，但 Runtime 無法從原始指令抽出可驗證的收件人。不要猜收件人；請使用者用『跟 X 說…』或『傳給 X：「…」』明確指定。");
         }
-        if (!userActionScope.canSend()) {
+        if (!loopAuthorized && !userActionScope.canSend()) {
             return runtimeBlocked(
                     "CURRENT_SCREEN_SEND_NOT_AUTHORIZED",
-                    "send_text 只用於最新一句明確要求送出訊息。若使用者只是要在目前可見欄位打字、填入或貼上內容（包含設定、system prompt、表單或聊天輸入框），請改用 phone_action(TYPE)；不要宣稱 Crew 無法一般打字。");
+                    "send_text 只用於最新一句明確要求送出訊息，或已明確啟用且仍有效的 Conversation Loop。若使用者只是要在目前可見欄位打字、填入或貼上內容，請改用 phone_action(TYPE)。");
         }
 
-        if (userActionScope.requiresRecipientVerification()) {
-            JSONObject recipientVerification = verifyAuthorizedRecipientOnCurrentScreen();
+        if (loopAuthorized) {
+            JSONObject verification =
+                    verifyRecipientOnCurrentScreen(
+                            conversationLoopRuntime.recipient());
+            if (!verification.optBoolean("success", false)) {
+                conversationLoopRuntime.beforeSend();
+                conversationLoopRuntime.afterSend(false);
+                return verification;
+            }
+            String verifiedPackage =
+                    verification.optString("package", "");
+            if (!conversationLoopRuntime.sameVerifiedPackage(
+                    verifiedPackage)) {
+                conversationLoopRuntime.beforeSend();
+                conversationLoopRuntime.afterSend(false);
+                return runtimeBlocked(
+                        "CONVERSATION_LOOP_PACKAGE_CHANGED",
+                        "Conversation Loop 只授權啟用時驗證過的聊天室 App；目前 package 已改變。Runtime 已暫停自動回覆，不會跨 App 送出。");
+            }
+        } else if (userActionScope.requiresRecipientVerification()) {
+            JSONObject recipientVerification =
+                    verifyAuthorizedRecipientOnCurrentScreen();
             if (!recipientVerification.optBoolean("success", false)) {
                 return recipientVerification;
             }
         }
 
         PerformanceMetrics.recordTextRouteSend();
-        userActionScope.markMessageTransactionHandled();
-        userActionScope.consumeSendAuthorization();
+        if (loopAuthorized) {
+            // Consume exactly one continuous-send lease before mutation. A
+            // verified send automatically re-arms the event watcher.
+            conversationLoopRuntime.beforeSend();
+        } else {
+            userActionScope.markMessageTransactionHandled();
+            userActionScope.consumeSendAuthorization();
+        }
 
-        // 0052 active messaging path is intentionally simple:
-        // optional TYPE(text) -> SEND_CURRENT.
-        if (!text.isEmpty()) {
-            JSONObject typed = phoneRuntimeExecutor.typeText(text);
-            workingContext.recordAction(
-                    "type_for_send",
-                    typed.optBoolean("success", false) ? "submitted" : "failed");
+        try {
+            // 0052 active messaging path is intentionally simple:
+            // optional TYPE(text) -> SEND_CURRENT.
+            if (!text.isEmpty()) {
+                JSONObject typed = phoneRuntimeExecutor.typeText(text);
+                workingContext.recordAction(
+                        "type_for_send",
+                        typed.optBoolean("success", false)
+                                ? "submitted"
+                                : "failed");
 
-            if (!typed.optBoolean("success", false)) {
-                JSONObject failure = new JSONObject()
-                        .put("success", false)
-                        .put("action", "SEND_CURRENT")
-                        .put("stage", "TYPE")
-                        .put("error", typed.optString("error", "TYPE_FAILED"))
-                        .put("textLength", text.length())
-                        .put("sendMode", "TYPE_THEN_SEND_CURRENT");
-                workingContext.recordAction("send_current", "failed");
-                return failure;
+                if (!typed.optBoolean("success", false)) {
+                    JSONObject failure = new JSONObject()
+                            .put("success", false)
+                            .put("action", "SEND_CURRENT")
+                            .put("stage", "TYPE")
+                            .put(
+                                    "error",
+                                    typed.optString(
+                                            "error",
+                                            "TYPE_FAILED"))
+                            .put("textLength", text.length())
+                            .put(
+                                    "sendMode",
+                                    "TYPE_THEN_SEND_CURRENT");
+                    workingContext.recordAction(
+                            "send_current", "failed");
+                    if (loopAuthorized) {
+                        conversationLoopRuntime.afterSend(false);
+                    }
+                    return failure;
+                }
             }
-        }
 
-        JSONObject reply = phoneRuntimeExecutor.post("/send_current", new JSONObject());
-        JSONObject sendVerification = reply.optJSONObject("verification");
-        Log.i(TAG, "RuntimeSend SEND_CURRENT_RESULT success="
-                + reply.optBoolean("success", false)
-                + " stage=" + reply.optString("stage", "")
-                + " submitMethod=" + reply.optString("submitMethod", "")
-                + " verification=" + (sendVerification == null ? "" : sendVerification.optString("state", ""))
-                + " composerCleared=" + (sendVerification != null && sendVerification.optBoolean("composerCleared", false))
-                + " conversationChanged=" + (sendVerification != null && sendVerification.optBoolean("conversationChanged", false))
-                + " matchingMessageAppeared=" + (sendVerification != null && sendVerification.optBoolean("matchingMessageAppeared", false))
-                + " error=" + reply.optString("error", ""));
-        reply.put("sendMode",
-                text.isEmpty() ? "CURRENT_COMPOSER" : "TYPE_THEN_SEND_CURRENT");
-        if (!text.isEmpty()) {
-            reply.put("textLength", text.length());
-        }
+            JSONObject reply = phoneRuntimeExecutor.post(
+                    "/send_current", new JSONObject());
+            JSONObject sendVerification =
+                    reply.optJSONObject("verification");
+            Log.i(TAG, "RuntimeSend SEND_CURRENT_RESULT success="
+                    + reply.optBoolean("success", false)
+                    + " stage=" + reply.optString("stage", "")
+                    + " submitMethod="
+                    + reply.optString("submitMethod", "")
+                    + " verification="
+                    + (sendVerification == null
+                            ? ""
+                            : sendVerification.optString("state", ""))
+                    + " composerCleared="
+                    + (sendVerification != null
+                            && sendVerification.optBoolean(
+                                    "composerCleared", false))
+                    + " conversationChanged="
+                    + (sendVerification != null
+                            && sendVerification.optBoolean(
+                                    "conversationChanged", false))
+                    + " matchingMessageAppeared="
+                    + (sendVerification != null
+                            && sendVerification.optBoolean(
+                                    "matchingMessageAppeared", false))
+                    + " error=" + reply.optString("error", ""));
+            reply.put(
+                    "sendMode",
+                    text.isEmpty()
+                            ? "CURRENT_COMPOSER"
+                            : "TYPE_THEN_SEND_CURRENT");
+            if (!text.isEmpty()) {
+                reply.put("textLength", text.length());
+            }
+            if (loopAuthorized) {
+                reply.put("conversationLoop", true);
+            }
 
-        if (!reply.optBoolean("success", false)) {
-            String stage = reply.optString("stage", "UNKNOWN");
-            String detail = reply.optString("error", "SEND_FAILED");
-            reportStage("訊息未送出：" + stage + " · " + detail);
-            reply.put("instruction",
-                    "Runtime 沒有確認送出；不要重送，等待使用者下一個指令。");
-        }
+            boolean success =
+                    reply.optBoolean("success", false);
+            if (loopAuthorized) {
+                conversationLoopRuntime.afterSend(success);
+            }
 
-        workingContext.recordAction(
-                "send_current",
-                reply.optBoolean("success", false) ? "submitted" : "failed");
-        return reply;
+            if (!success) {
+                String stage =
+                        reply.optString("stage", "UNKNOWN");
+                String detail =
+                        reply.optString("error", "SEND_FAILED");
+                reportStage(
+                        "訊息未送出："
+                                + stage
+                                + " · "
+                                + detail);
+                reply.put(
+                        "instruction",
+                        loopAuthorized
+                                ? "Runtime 沒有確認送出；Conversation Loop 已暫停，不會自動重送。"
+                                : "Runtime 沒有確認送出；不要重送，等待使用者下一個指令。");
+            }
+
+            workingContext.recordAction(
+                    "send_current",
+                    success ? "submitted" : "failed");
+            return reply;
+        } catch (Exception error) {
+            if (loopAuthorized) {
+                conversationLoopRuntime.afterSend(false);
+            }
+            throw error;
+        }
     }
 
     private JSONObject pressKey(JSONObject args) throws Exception {
@@ -4546,6 +4750,10 @@ final class NativeGeminiLiveClient {
         final JSONObject modelResult =
                 ModelToolResponseAdapter.forModel(
                         name, result, workingContext.toProgressJson());
+        JSONObject loopState = conversationLoopRuntime.modelState();
+        if (loopState.optBoolean("active", false)) {
+            modelResult.put("conversationLoop", loopState);
+        }
         JSONObject appPlaybook = result == null ? null : result.optJSONObject("appPlaybook");
         if (appPlaybook != null && appPlaybook.length() > 0) {
             modelResult.put("appPlaybook", appPlaybook);
@@ -4600,7 +4808,9 @@ final class NativeGeminiLiveClient {
         if (error != null) Log.e(TAG, message, error); else Log.e(TAG, message);
         running = false;
         interruptionHandler.removeCallbacks(clearInterruptedFallback);
-        liveAudioController.stop(); listener.onStopped(message);
+        conversationLoopRuntime.shutdown();
+        liveAudioController.stop();
+        listener.onStopped(message);
     }
 
 }
