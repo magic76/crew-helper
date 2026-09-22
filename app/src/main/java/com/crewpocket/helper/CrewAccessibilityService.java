@@ -521,7 +521,33 @@ public class CrewAccessibilityService extends AccessibilityService {
             String body = bodyBuilder.toString();
 
             String responseJson = "{\"status\":\"OK\"}";
-            if (path.startsWith("/status")) {
+            if (path.startsWith("/wait_ui_change")) {
+                long afterRevision = -1L;
+                long timeoutMs = 0L;
+                try {
+                    JSONObject request = body == null || body.trim().isEmpty()
+                            ? new JSONObject() : new JSONObject(body);
+                    afterRevision = request.optLong("after_revision", -1L);
+                    timeoutMs = Math.max(
+                            0L,
+                            Math.min(5000L, request.optLong("timeout_ms", 0L)));
+                } catch (Exception ignored) {}
+
+                long beforeRevision = uiChangeSignal.revision();
+                boolean changed = false;
+                if (afterRevision >= 0L && timeoutMs > 0L) {
+                    changed = uiChangeSignal.awaitChange(
+                            afterRevision,
+                            timeoutMs);
+                }
+                long revision = uiChangeSignal.revision();
+                responseJson = new JSONObject()
+                        .put("success", true)
+                        .put("changed", changed || revision > afterRevision)
+                        .put("revision", revision)
+                        .put("beforeRevision", beforeRevision)
+                        .toString();
+            } else if (path.startsWith("/status")) {
                 android.util.DisplayMetrics metrics = getResources().getDisplayMetrics();
                 responseJson = "{\"active\":true,\"service\":\"CrewAccessibilityService\",\"port\":8766,\"screenWidth\":" + metrics.widthPixels + ",\"screenHeight\":" + metrics.heightPixels + "}";
             } else if (path.startsWith("/volume")) {
