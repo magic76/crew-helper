@@ -33,6 +33,12 @@ final class ConversationLoopPolicy {
         return conversation && delegation;
     }
 
+    static boolean hasDelegatedSendAuthority(
+            boolean activeLoopCanSend,
+            boolean latestTurnCanSend) {
+        return activeLoopCanSend || latestTurnCanSend;
+    }
+
     static boolean mentionsRecipient(String rawText, String recipient) {
         String text = normalize(rawText);
         String target = normalize(recipient);
