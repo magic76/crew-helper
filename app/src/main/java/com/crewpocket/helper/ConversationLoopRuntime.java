@@ -245,7 +245,7 @@ final class ConversationLoopRuntime {
                     .put("stopped", wasActive)
                     .put("reason", reason == null ? "" : reason)
                     .put("recipient", oldRecipient)
-                    .put("recipeType", ConversationLoopPolicy.RECIPE_TYPE);
+                    .put("recipeType", TaskRecipePolicy.SPECIAL_CONVERSATION_LOOP);
         } catch (Exception ignored) {}
         return out;
     }
