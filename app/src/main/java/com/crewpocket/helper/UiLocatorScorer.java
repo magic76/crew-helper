@@ -110,29 +110,32 @@ final class UiLocatorScorer {
             return new Ranking(Decision.NOT_FOUND, null, null, "NO_MATCHING_TARGET");
         }
 
-        // A current semantic element id is the strongest possible structural proof.
-        if (best.exactElementId && best.confidence >= 0.98) {
-            return new Ranking(Decision.AUTO, best, second, "EXACT_CURRENT_ELEMENT_ID");
+        LocatorConfidencePolicy.Result gate =
+                LocatorConfidencePolicy.evaluate(
+                        best.confidence,
+                        second == null ? 0.0 : second.confidence,
+                        best.exactElementId,
+                        best.exactViewId,
+                        second != null && second.exactViewId);
+        Decision decision;
+        switch (gate.outcome) {
+            case AUTO:
+                decision = Decision.AUTO;
+                break;
+            case RETRY_OBSERVE:
+                decision = Decision.RETRY_OBSERVE;
+                break;
+            case FALLBACK:
+                decision = Decision.FALLBACK;
+                break;
+            case AMBIGUOUS:
+                decision = Decision.AMBIGUOUS;
+                break;
+            default:
+                decision = Decision.NOT_FOUND;
+                break;
         }
-
-        boolean ambiguous = second != null
-                && second.confidence >= 0.70
-                && (best.points - second.points) <= 55
-                && !(best.exactViewId && !second.exactViewId);
-        if (ambiguous) {
-            return new Ranking(Decision.AMBIGUOUS, best, second, "TOP_CANDIDATES_TOO_CLOSE");
-        }
-
-        if (best.confidence >= 0.86) {
-            return new Ranking(Decision.AUTO, best, second, "HIGH_CONFIDENCE");
-        }
-        if (best.confidence >= 0.68) {
-            return new Ranking(Decision.RETRY_OBSERVE, best, second, "MEDIUM_CONFIDENCE");
-        }
-        if (best.confidence >= 0.50) {
-            return new Ranking(Decision.FALLBACK, best, second, "LOW_CONFIDENCE");
-        }
-        return new Ranking(Decision.NOT_FOUND, best, second, "INSUFFICIENT_SIGNAL");
+        return new Ranking(decision, best, second, gate.code);
     }
 
     static Score score(UiNodeSnapshot node, UiTargetSpec spec, UiNodeSnapshot anchor) {

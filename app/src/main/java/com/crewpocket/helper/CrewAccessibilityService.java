@@ -757,9 +757,30 @@ public class CrewAccessibilityService extends AccessibilityService {
                                     .put("decision", match.decision.name())
                                     .put("confidence", match.confidence)
                                     .put("runnerUpConfidence", match.runnerUpConfidence)
+                                    .put("confidenceMargin", match.confidenceMargin)
                                     .put("code", match.code)
                                     .put("source", match.source);
-                            if (match.autoExecutable()) {
+
+                            if (match.decision == UiLocatorScorer.Decision.AMBIGUOUS) {
+                                JSONArray candidates = new JSONArray();
+                                for (UiLocatorV2.CandidateSummary candidate
+                                        : match.candidates) {
+                                    candidates.put(new JSONObject()
+                                            .put("index", candidate.index)
+                                            .put("label", candidate.displayLabel())
+                                            .put("elementId", candidate.elementId)
+                                            .put("viewId", candidate.viewId)
+                                            .put("role", candidate.role)
+                                            .put("semanticHint", candidate.semanticHint)
+                                            .put("confidence", candidate.confidence));
+                                }
+                                out.put("status", "MULTIPLE_MATCHES")
+                                        .put("taskState", "NEED_USER")
+                                        .put("candidates", candidates)
+                                        .put("error", match.code)
+                                        .put("instruction",
+                                                "定位結果太接近，Runtime 不會猜。只列出候選並請使用者選第幾個。");
+                            } else if (match.autoExecutable()) {
                                 boolean clicked = false;
                                 try {
                                     if (!SensitiveDataGuard.isBlockedAction(match.node)) {
