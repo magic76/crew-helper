@@ -34,6 +34,11 @@ public class ScheduledTaskManager {
                 throws Exception;
     }
 
+    interface PendingConditionListener {
+        void onConditionMet(ScheduledTask task);
+        void onTimeout(ScheduledTask task);
+    }
+
     // Accessibility often emits several events for one visual transition.
     // Coalesce the burst and inspect the semantic tree once.
     private static final long EVENT_CHECK_DEBOUNCE_MS = 180L;
@@ -75,6 +80,7 @@ public class ScheduledTaskManager {
         public boolean cancelled;
         public Runnable runnable;
         PendingActionExecutor pendingActionExecutor;
+        PendingConditionListener pendingConditionListener;
 
         public JSONObject toJson() {
             JSONObject obj = new JSONObject();
@@ -316,6 +322,64 @@ public class ScheduledTaskManager {
             int intervalSec,
             int durationMin,
             PendingActionExecutor executor) throws Exception {
+        return startPendingActionInternal(
+                label,
+                conditionType,
+                conditionText,
+                action,
+                actionTarget,
+                actionText,
+                intervalSec,
+                durationMin,
+                executor,
+                null);
+    }
+
+    ScheduledTask startConditionCallback(
+            String label,
+            String conditionType,
+            String conditionText,
+            int intervalSec,
+            int durationMin,
+            PendingConditionListener listener) throws Exception {
+        if (listener == null) {
+            throw new IllegalArgumentException(
+                    "PendingConditionListener required");
+        }
+        PendingActionPolicy.Validation validation =
+                PendingActionPolicy.validate(
+                        conditionType,
+                        conditionText,
+                        PendingActionPolicy.ACTION_NOTIFY,
+                        "",
+                        "");
+        if (!validation.allowed) {
+            throw new Exception(validation.message);
+        }
+        return startPendingActionInternal(
+                label,
+                validation.conditionType,
+                conditionText,
+                PendingActionPolicy.ACTION_NOTIFY,
+                "",
+                "",
+                intervalSec,
+                durationMin,
+                null,
+                listener);
+    }
+
+    private ScheduledTask startPendingActionInternal(
+            String label,
+            String conditionType,
+            String conditionText,
+            String action,
+            String actionTarget,
+            String actionText,
+            int intervalSec,
+            int durationMin,
+            PendingActionExecutor executor,
+            PendingConditionListener conditionListener) throws Exception {
         if (executor == null
                 && !PendingActionPolicy.ACTION_NOTIFY.equals(action)) {
             throw new Exception("缺少 Pending Action executor");
@@ -385,6 +449,7 @@ public class ScheduledTaskManager {
         task.lastCheckReason = "";
         task.cancelled = false;
         task.pendingActionExecutor = executor;
+        task.pendingConditionListener = conditionListener;
 
         task.runnable = new Runnable() {
             @Override public void run() {
@@ -392,9 +457,15 @@ public class ScheduledTaskManager {
                 if (System.currentTimeMillis() >= task.targetTime) {
                     task.cancelled = true;
                     activeTasks.remove(task.id);
-                    triggerAlarm(
-                            "等待已逾時",
-                            task.label + "，沒有執行後續操作。");
+                    if (task.pendingConditionListener != null) {
+                        try {
+                            task.pendingConditionListener.onTimeout(task);
+                        } catch (Exception ignored) {}
+                    } else {
+                        triggerAlarm(
+                                "等待已逾時",
+                                task.label + "，沒有執行後續操作。");
+                    }
                     return;
                 }
 
@@ -490,14 +561,7 @@ public class ScheduledTaskManager {
                 if (!isConditionMet(task, root, currentPackage)) return;
 
                 if (PendingActionPolicy.ACTION_NOTIFY.equals(task.action)) {
-                    task.cancelled = true;
-                    activeTasks.remove(task.id);
-                    if (eventAtMs > 0L) {
-                        task.triggerLatencyMs = Math.max(
-                                0L,
-                                System.currentTimeMillis() - eventAtMs);
-                    }
-                    triggerAlarm("目標條件已達成", task.label);
+                    completeNotificationTask(task, eventAtMs);
                     return;
                 }
 
@@ -541,6 +605,12 @@ public class ScheduledTaskManager {
             task.triggerLatencyMs = Math.max(
                     0L,
                     System.currentTimeMillis() - eventAtMs);
+        }
+        if (task.pendingConditionListener != null) {
+            try {
+                task.pendingConditionListener.onConditionMet(task);
+            } catch (Exception ignored) {}
+            return;
         }
         triggerAlarm("目標條件已達成", task.label);
     }
