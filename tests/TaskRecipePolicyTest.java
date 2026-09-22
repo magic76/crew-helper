@@ -8,6 +8,7 @@ public final class TaskRecipePolicyTest {
         requiresStableScreenTransitionForTap();
         allowsLowRiskToolsOnly();
         rejectsSensitiveSearch();
+        isolatesConversationLoopRecipe();
         System.out.println("TaskRecipePolicyTest passed");
     }
 
@@ -48,6 +49,18 @@ public final class TaskRecipePolicyTest {
     private static void rejectsSensitiveSearch() {
         check(!TaskRecipePolicy.canPersistSearch("OTP 123456"));
         check(TaskRecipePolicy.canPersistSearch("台北車站"));
+    }
+
+    private static void isolatesConversationLoopRecipe() {
+        check(TaskRecipePolicy.isSpecialConversationLoopRecipe(
+                "CONVERSATION_LOOP"));
+        check(TaskRecipePolicy.isSpecialConversationLoopRecipe(
+                "conversation_loop"));
+        check(!TaskRecipePolicy.isSpecialConversationLoopRecipe(
+                "ordinary_recipe"));
+        // The special loop does not widen generic reusable recipe authority.
+        check(!TaskRecipePolicy.isAllowedTool("type_text"));
+        check(!TaskRecipePolicy.isAllowedTool("send_text"));
     }
 
     private static void check(boolean value) {
