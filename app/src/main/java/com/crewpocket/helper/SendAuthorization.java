@@ -175,6 +175,65 @@ final class SendAuthorization {
         return residual.isEmpty();
     }
 
+    static boolean isExplicitTypeOnlyRequest(String rawText) {
+        if (rawText == null || rawText.trim().isEmpty()) return false;
+
+        String folded = TextMatch.caseFold(rawText).trim();
+        String value = normalize(rawText);
+
+        boolean typing = containsAny(value,
+                "輸入", "输入", "打字", "寫入", "写入", "寫", "写",
+                "貼上", "贴上", "填入", "填上")
+                || folded.matches(".*\\b(type|input|enter|write|paste|fill)\\b.*");
+        if (!typing) return false;
+
+        // Questions/hypotheticals are not execution requests.
+        if (containsAny(value,
+                "怎麼", "怎么", "如何", "為什麼", "为什么", "如果", "假如", "能不能")
+                || folded.matches(".*\\b(how|why|if|should)\\b.*")) {
+            return false;
+        }
+
+        // Negating the typing itself is not an executable TYPE request. A
+        // negated SEND such as "打字 X，不要送出" is intentionally allowed.
+        if (containsAny(value,
+                "不要輸入", "不要输入", "別輸入", "别输入",
+                "不要打字", "別打字", "别打字",
+                "不要寫", "不要写", "別寫", "别写",
+                "不要貼上", "不要贴上", "不要填入")
+                || folded.matches(
+                        ".*\\b(don't|dont|do not|never)\\s+(type|input|enter|write|paste|fill)\\b.*")) {
+            return false;
+        }
+
+        // Let the existing SEND parser decide whether the same utterance grants
+        // submission or named-recipient messaging. Negated SEND wording does
+        // not grant it, which is exactly what type-only needs.
+        SendAuthorization sendProbe = new SendAuthorization();
+        sendProbe.updateFromUserText(rawText);
+        if (sendProbe.canAttempt()
+                || sendProbe.hasAmbiguousNamedRecipient()) {
+            return false;
+        }
+
+        // Keep this helper deliberately narrow: a compound navigation/action
+        // request should stay model-driven instead of being prematurely marked
+        // complete after text entry.
+        if (containsAny(value,
+                "然後", "然后", "接著", "接着",
+                "再按", "再點", "再点", "點擊", "点击", "按下",
+                "打開", "打开", "開啟", "开启",
+                "搜尋", "搜索", "查找", "返回", "提交")) {
+            return false;
+        }
+        if (folded.matches(
+                ".*\\b(and then|then (?:click|tap|press|open|search)|submit)\\b.*")) {
+            return false;
+        }
+
+        return true;
+    }
+
     private static boolean hasCurrentScreenSendIntent(String rawText) {
         String value = normalize(rawText == null ? "" : rawText);
         return containsAny(value,

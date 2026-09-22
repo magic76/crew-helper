@@ -17,8 +17,11 @@ final class VoiceExecutionPolicy {
     static boolean requiresCriticalEntityConfirmation(
             String runtimeName,
             String metadata) {
-        if ("send_text".equals(runtimeName)
-                || "start_conversation_loop".equals(runtimeName)) {
+        // A one-shot explicit message send no longer needs an extra voice
+        // confirmation. Runtime still requires fresh SEND authorization and,
+        // for named recipients, Accessibility verification of the exact chat.
+        // Persistent delegated conversation loops remain confirmation-gated.
+        if ("start_conversation_loop".equals(runtimeName)) {
             return true;
         }
         if (!"tap_screen".equals(runtimeName)
