@@ -14,6 +14,8 @@ import org.json.JSONObject;
  */
 final class LiveToolCatalog {
     private static final String TAG = "CrewLiveToolCatalog";
+    private static final int MAX_TOOL_DESCRIPTION_CHARS = 420;
+    private static final int MAX_NESTED_DESCRIPTION_CHARS = 180;
 
     private LiveToolCatalog() {}
 
@@ -319,6 +321,7 @@ final class LiveToolCatalog {
                 // Gemini 3.8 Live defaults function calls to NON_BLOCKING.
                 // Crew's phone Runtime intentionally preserves the proven
                 // request -> tool result -> next model step ordering.
+                compactDescriptions(tool, 0);
                 exposed.put(tool.put("behavior", "BLOCKING"));
             }
         }
@@ -375,6 +378,39 @@ final class LiveToolCatalog {
                 || "update_deck_card".equals(name)
                 || "insert_deck_card".equals(name)
                 || "remove_future_deck_card".equals(name);
+    }
+
+
+    private static void compactDescriptions(
+            Object value,
+            int depth) throws Exception {
+        if (value instanceof JSONObject) {
+            JSONObject object = (JSONObject) value;
+            java.util.Iterator<String> keys = object.keys();
+            java.util.ArrayList<String> names =
+                    new java.util.ArrayList<String>();
+            while (keys.hasNext()) names.add(keys.next());
+            for (String key : names) {
+                Object child = object.opt(key);
+                if ("description".equals(key)
+                        && child instanceof String) {
+                    int max = depth <= 0
+                            ? MAX_TOOL_DESCRIPTION_CHARS
+                            : MAX_NESTED_DESCRIPTION_CHARS;
+                    String text = ((String) child).trim();
+                    if (text.length() > max) {
+                        object.put(key, text.substring(0, max));
+                    }
+                    continue;
+                }
+                compactDescriptions(child, depth + 1);
+            }
+        } else if (value instanceof JSONArray) {
+            JSONArray array = (JSONArray) value;
+            for (int i = 0; i < array.length(); i++) {
+                compactDescriptions(array.opt(i), depth + 1);
+            }
+        }
     }
 
 }
