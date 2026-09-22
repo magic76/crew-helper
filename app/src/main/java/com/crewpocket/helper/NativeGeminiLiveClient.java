@@ -2513,19 +2513,26 @@ final class NativeGeminiLiveClient {
                             signature,
                             loopOwnedTool ? "" : task.lastSignature,
                             loopOwnedTool ? 0 : task.getToolCount(name),
-                            loopOwnedTool ? 0 : task.mutationActions);
+                            loopOwnedTool ? 0 : task.mutationActions,
+                            loopOwnedTool ? 0 : task.observationActions);
             if (!decision.allowed) task.blockedReason = decision.blockedReason;
 
             if (task.blockedReason == null) {
-                task.steps++;
+                boolean observation = isObservationTool(name);
+                if (observation) task.observationActions++;
+                else task.steps++;
                 task.lastSignature = signature;
                 task.incrementTool(name);
                 if (isMutationTool(name)) task.mutationActions++;
                 task.awaitingModel = false;
                 task.userVisibleReplyProducedSinceLastAction = false;
                 task.finalSpeechRetryCount = 0;
-                task.status = "Agent 第 " + task.steps + " / "
-                        + maxSteps + " 步：正在執行「" + name + "」";
+                task.status = observation
+                        ? "Agent 觀察 " + task.observationActions + " / "
+                                + AgentTaskLifecyclePolicy.MAX_OBSERVATION_ACTIONS
+                                + "：正在執行「" + name + "」"
+                        : "Agent 第 " + task.steps + " / "
+                                + maxSteps + " 步：正在執行「" + name + "」";
                 reportStage(task.status);
             }
             return task;
