@@ -581,6 +581,12 @@ final class NativeGeminiLiveClient {
                         return NativeGeminiLiveClient.this
                                 .waitThenAction(args);
                     }
+
+                    @Override public JSONObject conversationLoop(
+                            JSONObject args) throws Exception {
+                        return NativeGeminiLiveClient.this
+                                .conversationLoop(args);
+                    }
                 });
 
         shadowAgentRuntime.setListener(new AgentLedger.Listener() {
@@ -2894,6 +2900,17 @@ final class NativeGeminiLiveClient {
                 .put("success", true)
                 .put("task", task.toJson())
                 .put("message", "已啟動畫面監控：" + lbl);
+    }
+
+    private JSONObject conversationLoop(JSONObject args)
+            throws Exception {
+        JSONObject result = conversationLoopRuntime.execute(args);
+        if (result.optBoolean("active", false)) {
+            workingContext.setPendingTask("CONVERSATION_LOOP");
+        } else if (!conversationLoopRuntime.isActive()) {
+            workingContext.setPendingTask("");
+        }
+        return result;
     }
 
     private JSONObject waitThenAction(JSONObject args) throws Exception {
