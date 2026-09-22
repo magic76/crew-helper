@@ -159,8 +159,11 @@ final class VoiceExecutionGuard {
         }
 
         String finalized = latestVoiceText;
-        if (VoiceExecutionPolicy.shouldRepeat(
-                finalized, latestVoiceConfidence)) {
+        String targetMetadata = criticalTargetMetadata(runtimeArgs);
+        if (VoiceExecutionPolicy.requiresReliableTranscript(
+                        runtimeName, targetMetadata)
+                && VoiceExecutionPolicy.shouldRepeat(
+                        finalized, latestVoiceConfidence)) {
             String code = latestVoiceConfidence >= 0.0d
                     && latestVoiceConfidence < 0.72d
                     ? "VOICE_TRANSCRIPT_LOW_CONFIDENCE"
@@ -168,15 +171,14 @@ final class VoiceExecutionGuard {
             return Preflight.block(
                     code,
                     "",
-                    "這段語音不足以安全執行手機 mutation。不要硬做；請使用者把指令再說完整一次。");
+                    "這段語音不足以安全執行送出或敏感操作。草稿輸入與一般導覽不受此限制；請使用者只重說需要 commit 的指令。");
         }
 
-        // Critical-entity read-back is required immediately before message
-        // submission or another Runtime-recognized irreversible target.
-        // Navigation/search/type stay fluid.
+        // Critical-entity read-back is required only at an irreversible
+        // boundary. Navigation/search/type stay fluid.
         if (!VoiceExecutionPolicy.requiresCriticalEntityConfirmation(
                 runtimeName,
-                criticalTargetMetadata(runtimeArgs))) {
+                targetMetadata)) {
             return Preflight.allow();
         }
 
