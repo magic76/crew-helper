@@ -2304,6 +2304,11 @@ final class NativeGeminiLiveClient {
             if (semantic.semantic) {
                 result.put("semanticAction", semantic.semanticAction)
                         .put("resolvedByRuntime", name);
+                String semanticTarget =
+                        semantic.runtimeArgs.optString("semantic_target", "").trim();
+                if (!semanticTarget.isEmpty()) {
+                    result.put("semanticTarget", semanticTarget);
+                }
             }
             if (runtimeV2Enforced) {
                 ExecutionEvidence evidence = executionEvidenceFromResult(name, result);
@@ -2315,6 +2320,11 @@ final class NativeGeminiLiveClient {
             if (isPhoneContextTool(name)) attachCurrentAppPlaybook(result);
             updateTaskCompletionContract(task, name, result);
             updateAgentStabilityAfterResult(task, name, args, result);
+            task.lastToolName = name == null ? "" : name;
+            task.lastTaskState = result.optString("taskState", "").trim();
+            task.lastCompletionEvidence =
+                    result.optString("completionEvidence", "").trim();
+            task.prematureModelReplies = 0;
             task.captureRecipeStep(name, args, result, recipeBeforeContext);
             task.addStep(name, result);
             sendToolResponse(id, requestedName, result);
@@ -2572,19 +2582,35 @@ final class NativeGeminiLiveClient {
                     task.postActionInspectionPrompted = false;
 
                     if (!result.has("actionStatus")) result.put("actionStatus", "EXECUTED");
-                    if (!result.has("taskState")) {
-                        result.put("taskState",
-                                freshAfter ? "EVIDENCE_AVAILABLE" : "IN_PROGRESS");
-                    }
-                    if (!result.has("completionEvidence")) {
-                        result.put("completionEvidence", freshAfter
-                                ? "AUTO_AFTER_ACTION"
-                                : "PENDING_POST_ACTION_INSPECTION");
-                    }
-                    if (!result.has("nextRequirement")) {
-                        result.put("nextRequirement", freshAfter
-                                ? "Use the fresh compact after state to choose the next action; STEP_OK is not whole-task completion."
-                                : "Call inspect_ui once and use the actual post-action screen before concluding.");
+
+                    String semanticTarget =
+                            result.optString("semanticTarget", "").trim();
+                    boolean verifiedNavigationStart =
+                            freshAfter
+                                    && GoogleMapsSemanticContract.START_NAVIGATION
+                                            .equals(semanticTarget);
+
+                    if (verifiedNavigationStart) {
+                        result.put("taskState", "DONE")
+                                .put("completionEvidence",
+                                        "MAPS_START_NAVIGATION_FRESH_SCREEN")
+                                .put("nextRequirement", "NONE");
+                        task.requiresPostActionInspection = false;
+                    } else {
+                        if (!result.has("taskState")) {
+                            result.put("taskState",
+                                    freshAfter ? "EVIDENCE_AVAILABLE" : "IN_PROGRESS");
+                        }
+                        if (!result.has("completionEvidence")) {
+                            result.put("completionEvidence", freshAfter
+                                    ? "AUTO_AFTER_ACTION"
+                                    : "PENDING_POST_ACTION_INSPECTION");
+                        }
+                        if (!result.has("nextRequirement")) {
+                            result.put("nextRequirement", freshAfter
+                                    ? "Use the fresh compact after state to choose the next action; STEP_OK is not whole-task completion."
+                                    : "Call inspect_ui once and use the actual post-action screen before concluding.");
+                        }
                     }
                 }
 
