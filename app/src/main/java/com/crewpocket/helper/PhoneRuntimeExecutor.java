@@ -84,6 +84,13 @@ final class PhoneRuntimeExecutor {
     }
 
     JSONObject post(String endpoint, JSONObject payload) throws Exception {
+        return post(endpoint, payload, 7000);
+    }
+
+    JSONObject post(
+            String endpoint,
+            JSONObject payload,
+            int readTimeoutMs) throws Exception {
         HttpURLConnection connection = null;
         try {
             connection = (HttpURLConnection) new URL(
@@ -95,7 +102,8 @@ final class PhoneRuntimeExecutor {
             authenticate(connection);
             connection.setDoOutput(true);
             connection.setConnectTimeout(3500);
-            connection.setReadTimeout(7000);
+            connection.setReadTimeout(
+                    Math.max(1000, Math.min(15000, readTimeoutMs)));
             byte[] body = (payload == null ? new JSONObject() : payload)
                     .toString().getBytes("UTF-8");
             connection.setFixedLengthStreamingMode(body.length);
