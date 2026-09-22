@@ -120,6 +120,28 @@ public final class AgentTaskLifecyclePolicyTest {
         check(!AgentTaskLifecyclePolicy.shouldStopAfterMutationFailure(2),
                 "two mutation failures do not stop loop");
 
+        check(!AgentTaskLifecyclePolicy.canFinishAfterModelReply(
+                        "IN_PROGRESS", "tap_screen", false, false),
+                "mutation in progress cannot finish from model speech");
+        check(!AgentTaskLifecyclePolicy.canFinishAfterModelReply(
+                        "EVIDENCE_AVAILABLE", "tap_screen", false, false),
+                "fresh after mutation is step evidence, not whole-task completion");
+        check(AgentTaskLifecyclePolicy.canFinishAfterModelReply(
+                        "EVIDENCE_AVAILABLE", "inspect_ui", false, false),
+                "fresh explicit observation may close the goal");
+        check(AgentTaskLifecyclePolicy.canFinishAfterModelReply(
+                        "DONE", "tap_screen", false, false),
+                "runtime DONE may close the goal");
+        check(AgentTaskLifecyclePolicy.canFinishAfterModelReply(
+                        "ANSWER_READY", "inspect_ui", false, false),
+                "answer-ready state may close the goal");
+        check(!AgentTaskLifecyclePolicy.canFinishAfterModelReply(
+                        "DONE", "tap_screen", true, false),
+                "required post-action inspection still blocks completion");
+        check(AgentTaskLifecyclePolicy.canFinishAfterModelReply(
+                        "IN_PROGRESS", "tap_screen", false, true),
+                "blocked task may conclude instead of looping");
+
         System.out.println("PASS AgentTaskLifecyclePolicyTest: " + assertions + " checks");
     }
 }
