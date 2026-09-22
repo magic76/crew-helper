@@ -2023,11 +2023,29 @@ final class NativeGeminiLiveClient {
         final String name = semantic.runtimeName;
         final JSONObject args = semantic.runtimeArgs;
 
+        if (conversationLoopRecipe.isActive()
+                && !conversationLoopRecipe.allowsTool(name)) {
+            try {
+                sendToolResponse(
+                        id,
+                        requestedName,
+                        runtimeBlocked(
+                                "CONVERSATION_LOOP_TOOL_BLOCKED",
+                                "持續對話租約進行中。Runtime 已縮小可用操作範圍；不要離開指定聊天室或做無關 mutation。若使用者要做其他任務，先停止 conversation loop。"));
+            } catch (Exception ignored) {}
+            return;
+        }
+
+        final boolean conversationLeaseSend =
+                "send_text".equals(name)
+                        && conversationLoopRecipe.canSend();
         VoiceExecutionGuard.Preflight voicePreflight =
-                voiceExecutionGuard.preflight(
-                        callIntentGeneration,
-                        name,
-                        args);
+                conversationLeaseSend
+                        ? VoiceExecutionGuard.Preflight.allow()
+                        : voiceExecutionGuard.preflight(
+                                callIntentGeneration,
+                                name,
+                                args);
         if (!voicePreflight.allowed) {
             JSONObject blocked = new JSONObject();
             try {
@@ -2118,7 +2136,9 @@ final class NativeGeminiLiveClient {
             return;
         }
 
-        if (userActionScope.shouldBlockFurtherMessageMutation() && isMutationTool(name)) {
+        if (userActionScope.shouldBlockFurtherMessageMutation()
+                && isMutationTool(name)
+                && !conversationLeaseSend) {
             sendBlockedToolResponse(id, requestedName,
                     "MESSAGE_TRANSACTION_ALREADY_HANDLED：本句明確傳送要求已完成一次原子送出交易；禁止再用 type/tap 重試。等待使用者的新指令。");
             return;
@@ -2278,7 +2298,8 @@ final class NativeGeminiLiveClient {
             String requestedName,
             JSONObject requestedArgs,
             long callIntentGeneration) {
-        if (!SemanticPhoneAction.TOOL_NAME.equals(requestedName)
+        if (conversationLoopRecipe.isActive()
+                || !SemanticPhoneAction.TOOL_NAME.equals(requestedName)
                 || callIntentGeneration != taskRecipeCandidateGeneration
                 || taskRecipeCandidateId == null
                 || taskRecipeCandidateId.isEmpty()
@@ -2429,17 +2450,21 @@ final class NativeGeminiLiveClient {
             if (task == null || task.cancelled) return null;
 
             int maxSteps = agentTaskCoordinator.maxSteps();
+            boolean loopOwnedTool =
+                    conversationLoopRecipe.isActive()
+                            && conversationLoopRecipe.allowsTool(name);
+            long nowMs = System.currentTimeMillis();
             AgentTaskLifecyclePolicy.StepDecision decision =
                     AgentTaskLifecyclePolicy.evaluateStep(
-                            System.currentTimeMillis(),
-                            task.startedAt,
-                            task.steps,
+                            nowMs,
+                            loopOwnedTool ? nowMs : task.startedAt,
+                            loopOwnedTool ? 0 : task.steps,
                             maxSteps,
                             name,
                             signature,
-                            task.lastSignature,
-                            task.getToolCount(name),
-                            task.mutationActions);
+                            loopOwnedTool ? "" : task.lastSignature,
+                            loopOwnedTool ? 0 : task.getToolCount(name),
+                            loopOwnedTool ? 0 : task.mutationActions);
             if (!decision.allowed) task.blockedReason = decision.blockedReason;
 
             if (task.blockedReason == null) {
