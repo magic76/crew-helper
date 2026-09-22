@@ -1,0 +1,8 @@
+kind=locator_confidence
+locator.best=0.94
+locator.runnerUp=0.78
+locator.exactElementId=false
+locator.exactViewId=false
+locator.runnerUpExactViewId=false
+expect.status=AUTO
+expect.code=HIGH_CONFIDENCE
