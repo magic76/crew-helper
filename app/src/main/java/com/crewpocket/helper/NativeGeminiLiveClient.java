@@ -4567,7 +4567,56 @@ final class NativeGeminiLiveClient {
             return observed;
         }
 
-        return observationVerificationController.autoObserveAfterMutation(reply, "type_text");
+        JSONObject observed =
+                observationVerificationController.autoObserveAfterMutation(
+                        reply, "type_text");
+        if (observed.optBoolean("success", false)
+                && currentTurnIsExplicitTypeOnly()) {
+            observed.put("taskState", "DONE")
+                    .put("completionEvidence", "TYPE_ONLY_USER_INTENT_SATISFIED")
+                    .put("nextRequirement", "NONE")
+                    .put("message", "已輸入文字，未送出")
+                    .put("instruction",
+                            "使用者只要求輸入文字；TYPE 已完成。禁止再點 Send、提交或呼叫 send_text。");
+        }
+        return observed;
+    }
+
+    private boolean currentTurnIsExplicitTypeOnly() {
+        LiveTurnCoordinator.FinalizedTurn finalized =
+                liveTurnCoordinator.latest();
+        return finalized.generation == userIntentGeneration
+                && SendAuthorization.isExplicitTypeOnlyRequest(
+                        finalized.text);
+    }
+
+    private JSONObject executeTypeOnlyFromSendMisroute(
+            String text) throws Exception {
+        PerformanceMetrics.recordTextRouteSendRemappedToType();
+        PerformanceMetrics.recordTextRouteType();
+
+        JSONObject reply = phoneRuntimeExecutor.typeText(text);
+        workingContext.recordAction(
+                "type_from_send_misroute",
+                reply.optBoolean("success", false)
+                        ? "submitted" : "failed");
+
+        JSONObject observed =
+                observationVerificationController.autoObserveAfterMutation(
+                        reply, "type_text");
+        observed.put("remappedFrom", "send_text")
+                .put("sendSuppressed", true);
+
+        if (observed.optBoolean("success", false)) {
+            observed.put("taskState", "DONE")
+                    .put("completionEvidence",
+                            "TYPE_ONLY_USER_INTENT_SATISFIED")
+                    .put("nextRequirement", "NONE")
+                    .put("message", "已輸入文字，未送出")
+                    .put("instruction",
+                            "Runtime 已把誤選的 send_text 降級為 TYPE。使用者只要求打字；禁止送出。");
+        }
+        return observed;
     }
 
     private JSONObject searchCurrentApp(JSONObject args) throws Exception {
@@ -4862,11 +4911,23 @@ final class NativeGeminiLiveClient {
     private JSONObject sendTextToPhone(JSONObject args) throws Exception {
         String text = args == null ? "" : args.optString("text", "");
         boolean loopSend = conversationLoopRecipe.canSend();
+        LiveTurnCoordinator.FinalizedTurn finalized =
+                liveTurnCoordinator.latest();
+
+        // Weak Live models sometimes mistake "在聊天框打字" for SEND because
+        // the destination is a messaging app. Runtime owns this distinction:
+        // explicit type-only intent is a reversible draft action. Preserve the
+        // model-generated exact text, but suppress submission entirely.
+        if (!loopSend
+                && !text.isEmpty()
+                && finalized.generation == userIntentGeneration
+                && SendAuthorization.isExplicitTypeOnlyRequest(
+                        finalized.text)) {
+            return executeTypeOnlyFromSendMisroute(text);
+        }
 
         if (!loopSend && (!userActionScope.canSend()
                 || userActionScope.blocksNamedRecipientMessagingAction())) {
-            LiveTurnCoordinator.FinalizedTurn finalized =
-                    liveTurnCoordinator.latest();
             ensureSendAuthorizationFromFinalized(finalized, args);
         }
         if (!loopSend
