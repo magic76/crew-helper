@@ -31,6 +31,23 @@ public final class AppAutonomyPolicyTest {
                         true, "修改帳號"),
                 "account change never bypasses safety");
 
+        expect(
+                AppAutonomyPolicy.mayRecoverWithoutObservation(
+                        true, "tap_screen", "開始 navigation"),
+                "trusted low-risk tap can recover without inspect");
+        expect(
+                AppAutonomyPolicy.mayRecoverWithoutObservation(
+                        true, "search_current_app", "大皇宮"),
+                "trusted search can recover without inspect");
+        expect(
+                !AppAutonomyPolicy.mayRecoverWithoutObservation(
+                        true, "send_text", "hello"),
+                "message send never gains trusted recovery bypass");
+        expect(
+                !AppAutonomyPolicy.mayRecoverWithoutObservation(
+                        true, "tap_screen", "取消行程"),
+                "sensitive tap still requires safety handling");
+
         System.out.println("AppAutonomyPolicyTest passed");
     }
 
