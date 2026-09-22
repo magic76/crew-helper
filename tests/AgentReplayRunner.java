@@ -52,6 +52,10 @@ public final class AgentReplayRunner {
             runLocatorFallback(file, p);
             return;
         }
+        if ("context_budget".equals(kind)) {
+            runContextBudget(file, p);
+            return;
+        }
 
         String runtime = required(p, "runtime");
         ActionTransaction.ExpectedEffect expected = ActionExpectation.forRuntimeAction(runtime);
@@ -146,6 +150,43 @@ public final class AgentReplayRunner {
         passed++;
         System.out.println(
                 "  PASS " + file.getName() + " -> " + next);
+    }
+
+    private static void runContextBudget(
+            File file,
+            Properties p) {
+        String source = required(p, "source");
+        int bytes = integer(p, "bytes", -1);
+        boolean expectedWithin =
+                boolDefault(p, "expect.within", true);
+        boolean actualWithin =
+                ContextPayloadBudget.withinToolBudget(
+                        source, bytes);
+        if (actualWithin != expectedWithin) {
+            throw new AssertionError(
+                    file.getName()
+                            + " source="
+                            + source
+                            + " bytes="
+                            + bytes
+                            + " budget="
+                            + ContextPayloadBudget.toolBudget(source)
+                            + " expectedWithin="
+                            + expectedWithin
+                            + " actual="
+                            + actualWithin);
+        }
+        passed++;
+        System.out.println(
+                "  PASS "
+                        + file.getName()
+                        + " -> "
+                        + source
+                        + " "
+                        + bytes
+                        + "/"
+                        + ContextPayloadBudget.toolBudget(source)
+                        + " B");
     }
 
     private static ActionObservation observation(Properties p, String prefix) {

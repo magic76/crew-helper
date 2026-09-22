@@ -62,6 +62,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/VoiceExecutionPolicy.java" \
   "$SRC/ConversationLoopPolicy.java" \
   "$SRC/ConversationLoopRecipe.java" \
+  "$SRC/ContextPayloadBudget.java" \
   "$ROOT/tests/SendAuthorizationTest.java" \
   "$ROOT/tests/LiveTurnCoordinatorTest.java" \
   "$ROOT/tests/ToolCallDispatchLedgerTest.java" \
@@ -102,6 +103,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/VoiceCommandQualityPolicyTest.java" \
   "$ROOT/tests/VoiceExecutionPolicyTest.java" \
   "$ROOT/tests/ConversationLoopRecipeTest.java" \
+  "$ROOT/tests/ContextPayloadBudgetTest.java" \
   "$ROOT/tests/AgentReplayRunner.java"
 
 java -cp "$OUT" com.crewpocket.helper.SendAuthorizationTest
@@ -144,4 +146,9 @@ java -cp "$OUT" com.crewpocket.helper.TaskRecipePolicyTest
 java -cp "$OUT" com.crewpocket.helper.VoiceCommandQualityPolicyTest
 java -cp "$OUT" com.crewpocket.helper.VoiceExecutionPolicyTest
 java -cp "$OUT" com.crewpocket.helper.ConversationLoopRecipeTest
+java -cp "$OUT" com.crewpocket.helper.ContextPayloadBudgetTest
 java -cp "$OUT" com.crewpocket.helper.AgentReplayRunner "$ROOT/tests/replay"
+
+if command -v python3 >/dev/null 2>&1; then
+  python3 -m py_compile "$ROOT/scripts/analyze_context_audit.py"
+fi

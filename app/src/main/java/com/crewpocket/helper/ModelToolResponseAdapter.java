@@ -25,11 +25,11 @@ final class ModelToolResponseAdapter {
     static final String NEED_USER = "NEED_USER";
     static final String FAILED = "FAILED";
 
-    private static final int MAX_SCREEN_ITEMS = 14;
-    private static final int MAX_CHOICES = 24;
-    private static final int MAX_MESSAGE = 220;
-    private static final int MAX_LABEL = 96;
-    private static final int MAX_GOAL = 320;
+    private static final int MAX_SCREEN_ITEMS = 8;
+    private static final int MAX_CHOICES = 10;
+    private static final int MAX_MESSAGE = 180;
+    private static final int MAX_LABEL = 80;
+    private static final int MAX_GOAL = 240;
     private static final int MAX_PROGRESS_ACTIONS = 3;
 
     private ModelToolResponseAdapter() {}
@@ -73,7 +73,88 @@ final class ModelToolResponseAdapter {
             JSONObject progress = progress(progressContext, status);
             if (progress.length() > 0) out.put("progress", progress);
         } catch (Exception ignored) {}
+        return enforceBudget(toolName, out);
+    }
+
+    private static JSONObject enforceBudget(
+            String toolName,
+            JSONObject out) {
+        if (out == null) return new JSONObject();
+        int budget = ContextPayloadBudget.toolBudget(toolName);
+        if (ContextPayloadBudget.utf8Bytes(out.toString()) <= budget) {
+            return out;
+        }
+
+        JSONObject screen = out.optJSONObject("screen");
+        JSONObject progress = out.optJSONObject("progress");
+
+        trimArray(screen, "items", 6);
+        trimArray(screen, "choices", 6);
+        trimArray(progress, "recentActions", 2);
+        clipInPlace(out, "message", 140);
+        clipInPlace(progress, "goal", 180);
+        clipInPlace(progress, "rootGoal", 180);
+
+        if (ContextPayloadBudget.utf8Bytes(out.toString()) <= budget) {
+            return out;
+        }
+
+        if (progress != null) {
+            progress.remove("rootGoal");
+            trimArray(progress, "recentActions", 1);
+        }
+        trimArray(screen, "items", 4);
+        trimArray(screen, "choices", 4);
+
+        if (ContextPayloadBudget.utf8Bytes(out.toString()) <= budget) {
+            return out;
+        }
+
+        // Preserve authoritative status/step/next first. Screen details are
+        // lowest priority once the model-facing envelope is already oversized.
+        if (screen != null) {
+            screen.remove("items");
+            JSONObject focus = screen.optJSONObject("focus");
+            if (focus != null) {
+                clipInPlace(focus, "label", 56);
+                clipInPlace(focus, "role", 40);
+                clipInPlace(focus, "can", 56);
+            }
+        }
+        if (progress != null) {
+            progress.remove("recentActions");
+            clipInPlace(progress, "goal", 120);
+            clipInPlace(progress, "currentApp", 56);
+            clipInPlace(progress, "pendingTask", 56);
+        }
+        clipInPlace(out, "message", 110);
+        trimArray(screen, "choices", 3);
         return out;
+    }
+
+    private static void trimArray(
+            JSONObject owner,
+            String key,
+            int maxItems) {
+        if (owner == null) return;
+        JSONArray source = owner.optJSONArray(key);
+        if (source == null || source.length() <= maxItems) return;
+        JSONArray trimmed = new JSONArray();
+        for (int i = 0; i < source.length() && i < maxItems; i++) {
+            trimmed.put(source.opt(i));
+        }
+        try { owner.put(key, trimmed); } catch (Exception ignored) {}
+    }
+
+    private static void clipInPlace(
+            JSONObject owner,
+            String key,
+            int maxChars) {
+        if (owner == null) return;
+        String value = owner.optString(key, "");
+        if (value.isEmpty()) return;
+        try { owner.put(key, clip(value, maxChars)); }
+        catch (Exception ignored) {}
     }
 
     private static JSONObject step(ModelStepGuidance.Guidance guidance) {

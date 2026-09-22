@@ -26,13 +26,21 @@ final class LiveVisionController {
     private static final int MAX_VISION_EDGE = 1536;
 
     private final Sender sender;
+    private final ContextPayloadAudit payloadAudit;
     private volatile int lastVisionWidth = 1;
     private volatile int lastVisionHeight = 1;
     private volatile int lastScreenWidth = 1;
     private volatile int lastScreenHeight = 1;
 
     LiveVisionController(Sender sender) {
+        this(sender, null);
+    }
+
+    LiveVisionController(
+            Sender sender,
+            ContextPayloadAudit payloadAudit) {
         this.sender = sender;
+        this.payloadAudit = payloadAudit;
     }
 
     int lastVisionWidth() { return lastVisionWidth; }
@@ -45,7 +53,7 @@ final class LiveVisionController {
         JSONObject video = new JSONObject()
                 .put("mimeType", "image/jpeg")
                 .put("data", Base64.encodeToString(jpegBytes, Base64.NO_WRAP));
-        return sendVideo(video);
+        return sendVideo(video, "camera_jpeg", jpegBytes.length);
     }
 
     boolean sendImageFile(String path, boolean isScreenFrame) throws Exception {
@@ -76,10 +84,14 @@ final class LiveVisionController {
         } finally {
             bitmap.recycle();
         }
+        byte[] jpeg = output.toByteArray();
         JSONObject video = new JSONObject()
                 .put("mimeType", "image/jpeg")
-                .put("data", Base64.encodeToString(output.toByteArray(), Base64.NO_WRAP));
-        return sendVideo(video);
+                .put("data", Base64.encodeToString(jpeg, Base64.NO_WRAP));
+        return sendVideo(
+                video,
+                isScreenFrame ? "screen_jpeg" : "camera_frame_jpeg",
+                jpeg.length);
     }
 
     boolean sendSelectedRegionSnapshot(SelectedRegionContext selected) throws Exception {
@@ -145,17 +157,28 @@ final class LiveVisionController {
         } finally {
             bitmap.recycle();
         }
+        byte[] jpeg = output.toByteArray();
         JSONObject video = new JSONObject()
                 .put("mimeType", "image/jpeg")
-                .put("data", Base64.encodeToString(output.toByteArray(), Base64.NO_WRAP));
-        return sendVideo(video);
+                .put("data", Base64.encodeToString(jpeg, Base64.NO_WRAP));
+        return sendVideo(video, "selected_region_jpeg", jpeg.length);
     }
 
-    private boolean sendVideo(JSONObject video) throws Exception {
+    private boolean sendVideo(
+            JSONObject video,
+            String source,
+            int rawBytes) throws Exception {
         if (sender == null) return false;
-        return sender.send(new JSONObject()
+        String payload = new JSONObject()
                 .put("realtimeInput", new JSONObject().put("video", video))
-                .toString());
+                .toString();
+        if (payloadAudit != null) {
+            payloadAudit.logVision(
+                    source,
+                    rawBytes,
+                    ContextPayloadBudget.utf8Bytes(payload));
+        }
+        return sender.send(payload);
     }
 
     private static int clamp(int value, int min, int max) {

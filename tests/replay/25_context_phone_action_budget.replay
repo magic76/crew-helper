@@ -1,0 +1,4 @@
+kind=context_budget
+source=phone_action
+bytes=1400
+expect.within=true

@@ -99,6 +99,8 @@ final class NativeGeminiLiveClient {
     private String conversationGoalHint = "";
     private String customPrompt = "";
     private final java.util.concurrent.atomic.AtomicBoolean screenCaptureInProgress = new java.util.concurrent.atomic.AtomicBoolean(false);
+    private final ContextPayloadAudit contextPayloadAudit =
+            new ContextPayloadAudit();
     private final WorkingContext workingContext = new WorkingContext();
     private final UserActionScope userActionScope = new UserActionScope();
     // 0070: observational-only state projection. It must never gate execution.
@@ -254,7 +256,8 @@ final class NativeGeminiLiveClient {
                     @Override public boolean send(String payload) {
                         return NativeGeminiLiveClient.this.liveConnection.send(payload);
                     }
-                });
+                },
+                this.contextPayloadAudit);
         this.phoneRuntimeExecutor = new PhoneRuntimeExecutor(
                 this.appContext, this.visionController);
         this.runtimeToolExecutor = new RuntimeToolExecutor(
@@ -791,6 +794,7 @@ final class NativeGeminiLiveClient {
         String shadowTaskId = "";
         synchronized (agentLock) {
             userIntentGeneration++;
+            contextPayloadAudit.beginTurn(userIntentGeneration);
             PerformanceMetrics.markAgentUserIntent(userIntentGeneration);
             // Calls that have not started belong to the old utterance. An
             // executing call is additionally guarded by its generation below.
@@ -860,14 +864,20 @@ final class NativeGeminiLiveClient {
             }
             JSONObject part = new JSONObject().put("text", text.trim());
             JSONObject turn = new JSONObject().put("role", "user").put("parts", new JSONArray().put(part));
-            boolean sent = liveConnection.send(
-                    new JSONObject().put(
-                            "clientContent",
-                            new JSONObject()
-                                    .put("turns", new JSONArray().put(turn))
-                                    .put("turnComplete", true))
-                            .toString());
-            if (sent) listener.onTranscript("你", text.trim());
+            String payload = new JSONObject().put(
+                    "clientContent",
+                    new JSONObject()
+                            .put("turns", new JSONArray().put(turn))
+                            .put("turnComplete", true))
+                    .toString();
+            boolean sent = liveConnection.send(payload);
+            if (sent) {
+                contextPayloadAudit.logTypedTurn(
+                        userIntentGeneration,
+                        ContextPayloadBudget.utf8Bytes(text.trim()),
+                        ContextPayloadBudget.utf8Bytes(payload));
+                listener.onTranscript("你", text.trim());
+            }
             return sent;
         } catch (Exception error) {
             Log.e(TAG, "文字訊息傳送失敗", error);
@@ -1147,6 +1157,7 @@ final class NativeGeminiLiveClient {
     }
 
     void stop() {
+        contextPayloadAudit.flushTurn();
         conversationLoopRecipe.stop("LIVE_SESSION_STOPPED");
         workingContext.setPendingTask("");
 
@@ -1865,13 +1876,14 @@ final class NativeGeminiLiveClient {
         }
         setup.put("inputAudioTranscription", new JSONObject());
         setup.put("outputAudioTranscription", new JSONObject());
-        setup.put("tools", new JSONArray().put(new JSONObject().put(
-                "functionDeclarations",
+        JSONArray modelTools =
                 LiveToolCatalog.build(
                         deckRuntimeController.isSessionMode(),
                         deckRuntimeController.isCreateStartup(),
                         deckRuntimeController.isPresentStartup(),
-                        deckRuntimeController.hasWorkspaceStartup()))));
+                        deckRuntimeController.hasWorkspaceStartup());
+        setup.put("tools", new JSONArray().put(new JSONObject().put(
+                "functionDeclarations", modelTools)));
         String customPrompt = this.customPrompt;
         String deckInstruction = "";
         if (deckRuntimeController.isSessionMode()) {
@@ -1879,7 +1891,9 @@ final class NativeGeminiLiveClient {
                     ? LivePrompt.DECK_CREATE
                     : LivePrompt.DECK;
         }
-        String baseInstruction = LivePrompt.CORE + "\nSpeaking personality: " + personalityInstruction()
+        String personality =
+                "Speaking personality: " + personalityInstruction();
+        String baseInstruction = LivePrompt.CORE + "\n" + personality
                 + (deckInstruction.isEmpty() ? "" : "\n" + deckInstruction);
 
         String sessionContext = SessionContextSnapshot.systemInstruction(
@@ -1899,8 +1913,40 @@ final class NativeGeminiLiveClient {
         if (!initialAppPlaybook.isEmpty()) {
             baseInstruction = baseInstruction + "\n" + initialAppPlaybook;
         }
-        setup.put("systemInstruction", new JSONObject().put("parts", new JSONArray().put(new JSONObject().put("text", baseInstruction))));
-        root.put("setup", setup); return root.toString();
+        setup.put("systemInstruction", new JSONObject().put(
+                "parts",
+                new JSONArray().put(
+                        new JSONObject().put("text", baseInstruction))));
+        root.put("setup", setup);
+
+        String payload = root.toString();
+        contextPayloadAudit.logSetupComponent(
+                "core_prompt",
+                ContextPayloadBudget.utf8Bytes(LivePrompt.CORE));
+        contextPayloadAudit.logSetupComponent(
+                "personality",
+                ContextPayloadBudget.utf8Bytes(personality));
+        contextPayloadAudit.logSetupComponent(
+                "deck_instruction",
+                ContextPayloadBudget.utf8Bytes(deckInstruction));
+        contextPayloadAudit.logSetupComponent(
+                "session_context",
+                ContextPayloadBudget.utf8Bytes(sessionContext));
+        contextPayloadAudit.logSetupComponent(
+                "custom_prompt",
+                ContextPayloadBudget.utf8Bytes(
+                        customPrompt == null ? "" : customPrompt.trim()));
+        contextPayloadAudit.logSetupComponent(
+                "app_playbook",
+                ContextPayloadBudget.utf8Bytes(initialAppPlaybook));
+        contextPayloadAudit.logSetupComponent(
+                "tool_schema",
+                ContextPayloadBudget.utf8Bytes(modelTools.toString()));
+        contextPayloadAudit.logSetupTotal(
+                ContextPayloadBudget.utf8Bytes(baseInstruction),
+                ContextPayloadBudget.utf8Bytes(modelTools.toString()),
+                ContextPayloadBudget.utf8Bytes(payload));
+        return payload;
     }
 
     private String personalityInstruction() {
@@ -2763,9 +2809,28 @@ final class NativeGeminiLiveClient {
         try {
             if (!liveConnection.isAvailable()) return;
             JSONObject part = new JSONObject().put("text", text);
-            JSONObject turn = new JSONObject().put("role", "user").put("parts", new JSONArray().put(part));
-            liveConnection.send(new JSONObject().put("clientContent", new JSONObject().put("turns", new JSONArray().put(turn)).put("turnComplete", true)).toString());
-        } catch (Exception error) { Log.w(TAG, "Agent 結論指令傳送失敗：" + error.getMessage()); }
+            JSONObject turn = new JSONObject()
+                    .put("role", "user")
+                    .put("parts", new JSONArray().put(part));
+            String payload = new JSONObject()
+                    .put("clientContent", new JSONObject()
+                            .put("turns", new JSONArray().put(turn))
+                            .put("turnComplete", true))
+                    .toString();
+            int outboundBytes =
+                    ContextPayloadBudget.utf8Bytes(payload);
+            contextPayloadAudit.logInternalDirective(
+                    userIntentGeneration,
+                    ContextPayloadBudget.utf8Bytes(text),
+                    outboundBytes);
+            contextPayloadAudit.logBudget(
+                    "internal_directive",
+                    outboundBytes,
+                    ContextPayloadBudget.INTERNAL_DIRECTIVE_BYTES);
+            liveConnection.send(payload);
+        } catch (Exception error) {
+            Log.w(TAG, "Agent 結論指令傳送失敗：" + error.getMessage());
+        }
     }
 
 
@@ -4929,17 +4994,58 @@ final class NativeGeminiLiveClient {
         // only a stable phone-control contract plus a compact goal-progress
         // projection. Fingerprints, authorization state and other debug fields
         // remain Runtime-internal.
+        JSONObject progressContext = workingContext.toProgressJson();
         final JSONObject modelResult =
                 ModelToolResponseAdapter.forModel(
-                        name, result, workingContext.toProgressJson());
-        JSONObject appPlaybook = result == null ? null : result.optJSONObject("appPlaybook");
+                        name, result, progressContext);
+        int coreModelBytes =
+                ContextPayloadBudget.utf8Bytes(modelResult.toString());
+
+        JSONObject appPlaybook =
+                result == null ? null : result.optJSONObject("appPlaybook");
         if (appPlaybook != null && appPlaybook.length() > 0) {
             modelResult.put("appPlaybook", appPlaybook);
         }
 
         JSONArray responses =
                 toolCallDispatcher.expandResponses(id, name, modelResult);
-        if (!liveConnection.isAvailable() || !liveConnection.send(new JSONObject().put("toolResponse", new JSONObject().put("functionResponses", responses)).toString())) {
+        String payload = new JSONObject()
+                .put("toolResponse", new JSONObject()
+                        .put("functionResponses", responses))
+                .toString();
+
+        int rawBytes = ContextPayloadBudget.utf8Bytes(
+                result == null ? "" : result.toString());
+        int modelBytes =
+                ContextPayloadBudget.utf8Bytes(modelResult.toString());
+        int progressBytes =
+                ContextPayloadBudget.utf8Bytes(progressContext.toString());
+        int playbookBytes = ContextPayloadBudget.utf8Bytes(
+                appPlaybook == null ? "" : appPlaybook.toString());
+        int outboundBytes =
+                ContextPayloadBudget.utf8Bytes(payload);
+
+        contextPayloadAudit.logTool(
+                userIntentGeneration,
+                name,
+                rawBytes,
+                modelBytes,
+                progressBytes,
+                playbookBytes,
+                outboundBytes);
+        contextPayloadAudit.logBudget(
+                "tool:" + name,
+                coreModelBytes,
+                ContextPayloadBudget.toolBudget(name));
+        if (playbookBytes > 0) {
+            contextPayloadAudit.logBudget(
+                    "app_playbook",
+                    playbookBytes,
+                    ContextPayloadBudget.APP_PLAYBOOK_BYTES);
+        }
+
+        if (!liveConnection.isAvailable()
+                || !liveConnection.send(payload)) {
             throw new Exception("工具結果無法傳回 Gemini");
         }
     }
@@ -4983,6 +5089,7 @@ final class NativeGeminiLiveClient {
     private void reportStage(String text) { stage = text; listener.onStatus(text); Log.d(TAG, text); }
     private synchronized void fail(String message, Throwable error) {
         if (!running) return;
+        contextPayloadAudit.flushTurn();
         conversationLoopRecipe.stop("LIVE_SESSION_FAILED");
         workingContext.setPendingTask("");
         if (error != null) Log.e(TAG, message, error); else Log.e(TAG, message);
