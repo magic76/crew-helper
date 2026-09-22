@@ -5034,6 +5034,12 @@ final class NativeGeminiLiveClient {
                 "tool:" + name,
                 modelBytes,
                 ContextPayloadBudget.toolBudget(name));
+        if (playbookBytes > 0) {
+            contextPayloadAudit.logBudget(
+                    "app_playbook",
+                    playbookBytes,
+                    ContextPayloadBudget.APP_PLAYBOOK_BYTES);
+        }
 
         if (!liveConnection.isAvailable()
                 || !liveConnection.send(payload)) {
