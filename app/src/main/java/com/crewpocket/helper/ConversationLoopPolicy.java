@@ -20,7 +20,7 @@ final class ConversationLoopPolicy {
                         || text.contains("一直回")
                         || text.contains("自動回")
                         || text.contains("自动回")
-                        || text.matches(".*\b(chat|conversation|reply)\b.*");
+                        || text.matches(".*\\b(chat|conversation|reply)\\b.*");
         boolean delegation =
                 text.contains("幫我")
                         || text.contains("帮我")
@@ -44,7 +44,7 @@ final class ConversationLoopPolicy {
         if (text.isEmpty()) return false;
         return text.matches(".*(停止|停掉|結束|结束|不要再|先停|別回了|别回了|不用回了).*(聊天|對話|对话|對談|对谈|回覆|回复|代聊|自動回|自动回).*")
                 || text.matches(".*(停止聊天|結束聊天|结束聊天|停止對話|停止对话|別再回|别再回).*")
-                || text.matches(".*\b(stop|end|cancel)\b.*\b(chat|conversation|replies|replying)\b.*");
+                || text.matches(".*\\b(stop|end|cancel)\\b.*\\b(chat|conversation|replies|replying)\\b.*");
     }
 
     private static String normalize(String raw) {
