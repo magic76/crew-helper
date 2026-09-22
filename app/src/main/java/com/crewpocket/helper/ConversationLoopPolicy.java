@@ -11,6 +11,10 @@ final class ConversationLoopPolicy {
         if (text.isEmpty()) return false;
         boolean conversation =
                 text.contains("聊天")
+                        || text.contains("聊一下")
+                        || text.contains("聊聊")
+                        || text.contains("聊")
+                        || text.contains("代聊")
                         || text.contains("對談")
                         || text.contains("对谈")
                         || text.contains("對話")
@@ -20,7 +24,7 @@ final class ConversationLoopPolicy {
                         || text.contains("一直回")
                         || text.contains("自動回")
                         || text.contains("自动回")
-                        || text.matches(".*\\b(chat|conversation|reply)\\b.*");
+                        || text.matches(".*\\b(chat|conversation|reply|talk|converse)\\b.*");
         boolean delegation =
                 text.contains("幫我")
                         || text.contains("帮我")

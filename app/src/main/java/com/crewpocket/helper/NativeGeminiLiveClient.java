@@ -2090,8 +2090,19 @@ final class NativeGeminiLiveClient {
         final boolean conversationLeaseSend =
                 "send_text".equals(name)
                         && conversationLoopRecipe.canSend();
+        final String voiceTargetMetadata =
+                args.optString("label", "") + " "
+                        + args.optString("target", "") + " "
+                        + args.optString("id", "") + " "
+                        + args.optString("element_id", "") + " "
+                        + args.optString("semanticHint", "");
+        final boolean userBypassesMessageVoiceGate =
+                VoiceExecutionPolicy.bypassesMessageVoiceGate(
+                        name,
+                        voiceTargetMetadata,
+                        AppConfig.isMessageSendNoConfirmationEnabled(appContext));
         VoiceExecutionGuard.Preflight voicePreflight =
-                conversationLeaseSend
+                conversationLeaseSend || userBypassesMessageVoiceGate
                         ? VoiceExecutionGuard.Preflight.allow()
                         : voiceExecutionGuard.preflight(
                                 callIntentGeneration,
@@ -3068,7 +3079,7 @@ final class NativeGeminiLiveClient {
         if (!explicit || !recipientBound) {
             return runtimeBlocked(
                     "CONVERSATION_LOOP_NOT_EXPLICIT",
-                    "持續代聊是長時間送訊息授權，只能來自使用者明確要求，且 recipient 必須出現在該要求中。不要從一般單次傳訊息推斷成對話模式。");
+                    "持續代聊需要使用者明確委託並指定 recipient。『跟 X 聊』『自己跟 X 聊』『持續跟 X 聊』『代我回 X』都算明確委託；不要把這些自然說法誤判成無法授權。一般單次傳訊息則不可推斷成對話模式。");
         }
 
         ConversationLoopRecipe.StartResult started =

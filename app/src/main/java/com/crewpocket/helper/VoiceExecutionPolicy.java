@@ -14,6 +14,20 @@ final class VoiceExecutionPolicy {
         return VoiceCommandQualityPolicy.looksIncomplete(finalizedText);
     }
 
+    static boolean bypassesMessageVoiceGate(
+            String runtimeName,
+            String metadata,
+            boolean noConfirmationEnabled) {
+        if (!noConfirmationEnabled) return false;
+        if ("send_text".equals(runtimeName)
+                || "start_conversation_loop".equals(runtimeName)) {
+            return true;
+        }
+        return ("tap_screen".equals(runtimeName)
+                        || "tap_element".equals(runtimeName))
+                && SendAuthorization.looksLikeSendTarget(metadata);
+    }
+
     static boolean requiresReliableTranscript(
             String runtimeName,
             String metadata) {
@@ -32,10 +46,9 @@ final class VoiceExecutionPolicy {
     static boolean requiresCriticalEntityConfirmation(
             String runtimeName,
             String metadata) {
-        // A one-shot explicit message send no longer needs an extra voice
-        // confirmation. Runtime still requires fresh SEND authorization and,
-        // for named recipients, Accessibility verification of the exact chat.
-        // Persistent delegated conversation loops remain confirmation-gated.
+        // Conversation-loop delegation keeps one confirmation by default.
+        // The user-controlled Message Send No Confirmation preference bypasses
+        // this preflight in NativeGeminiLiveClient when explicitly enabled.
         if ("start_conversation_loop".equals(runtimeName)) {
             return true;
         }

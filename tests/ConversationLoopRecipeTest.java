@@ -9,6 +9,18 @@ public final class ConversationLoopRecipeTest {
                         "幫我跟小明持續聊天"),
                 "explicit delegated chat should start");
         check(
+                ConversationLoopPolicy.isExplicitStartIntent(
+                        "幫我跟小明聊"),
+                "natural 跟某人聊 wording should start");
+        check(
+                ConversationLoopPolicy.isExplicitStartIntent(
+                        "你自己跟小明聊一下"),
+                "self-directed chat wording should start");
+        check(
+                ConversationLoopPolicy.isExplicitStartIntent(
+                        "你和 John talk"),
+                "natural mixed-language talk wording should start");
+        check(
                 ConversationLoopPolicy.mentionsRecipient(
                         "幫我跟小明持續聊天", "小明"),
                 "recipient must be present");
