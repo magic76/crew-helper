@@ -1,0 +1,8 @@
+kind=locator_confidence
+locator.best=0.94
+locator.runnerUp=0.90
+locator.exactElementId=false
+locator.exactViewId=false
+locator.runnerUpExactViewId=false
+expect.status=AMBIGUOUS
+expect.code=LOCATOR_MARGIN_TOO_SMALL
