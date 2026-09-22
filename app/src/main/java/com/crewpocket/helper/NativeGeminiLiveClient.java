@@ -2446,6 +2446,18 @@ final class NativeGeminiLiveClient {
         boolean success = result.optBoolean("success", false);
         taskRecipeStore.recordRun(recipeId, success);
         try {
+            if (success) {
+                result.put("taskState", "DONE")
+                        .put("completionEvidence", "TASK_RECIPE_COMPLETED")
+                        .put("nextRequirement", "NONE");
+            } else if (!result.has("taskState")) {
+                result.put("taskState", "IN_PROGRESS");
+            }
+            task.lastToolName = "task_recipe";
+            task.lastTaskState = result.optString("taskState", "").trim();
+            task.lastCompletionEvidence =
+                    result.optString("completionEvidence", "").trim();
+            task.prematureModelReplies = 0;
             task.addStep("task_recipe", result);
             sendToolResponse(id, requestedName, result);
             task.awaitingModel = true;
