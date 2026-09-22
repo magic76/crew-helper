@@ -1285,7 +1285,15 @@ final class NativeGeminiLiveClient {
                     completeUserInput)) {
                 return;
             }
-            if (isStopAgentTaskPhrase(
+            if (conversationLoopRecipe.isActive()
+                    && ConversationLoopPolicy.isStopIntent(
+                            completeUserInput)) {
+                conversationLoopRecipe.stop(
+                        "使用者停止對話模式");
+                reportStage("✓ 已停止持續對話模式");
+                cancelAgentTask(
+                        "使用者停止對話模式");
+            } else if (isStopAgentTaskPhrase(
                     completeUserInput)) {
                 deckRuntimeController.cancelAutoAdvance();
                 cancelAgentTask(
@@ -1543,6 +1551,8 @@ final class NativeGeminiLiveClient {
             return true;
         }
         return "send_text".equals(requestedName)
+                || "start_conversation_loop".equals(requestedName)
+                || "stop_conversation_loop".equals(requestedName)
                 || "end_voice_session".equals(requestedName)
                 || "wait_then_action".equals(requestedName)
                 || "cancel_schedule".equals(requestedName);
@@ -2246,7 +2256,10 @@ final class NativeGeminiLiveClient {
                     task.awaitingModel = false;
                     task.watchdogPrompted = false;
                     agentResponseCoordinator.clear();
-                    task.status = "等待使用者選擇搜尋結果";
+                    task.status = "WAITING_BACKGROUND".equals(
+                            result.optString("taskState", ""))
+                            ? "對話模式：背景等待新訊息"
+                            : "等待使用者選擇搜尋結果";
                 }
                 reportStage(task.status);
             } else {
@@ -2367,9 +2380,12 @@ final class NativeGeminiLiveClient {
     }
 
     private boolean shouldSuspendAgentForUser(JSONObject result) {
-        if (result != null && "WAITING_USER".equals(
-                result.optString("taskState", ""))) {
-            return true;
+        if (result != null) {
+            String state = result.optString("taskState", "");
+            if ("WAITING_USER".equals(state)
+                    || "WAITING_BACKGROUND".equals(state)) {
+                return true;
+            }
         }
         return hasPendingUiChoice();
     }
@@ -4330,8 +4346,14 @@ final class NativeGeminiLiveClient {
      * history, prior conversation memory, screenshots, or model inference can
      * satisfy the target check.
      */
-    private JSONObject verifyAuthorizedRecipientOnCurrentScreen() throws Exception {
-        String recipient = userActionScope.authorizedRecipient();
+    private JSONObject verifyAuthorizedRecipientOnCurrentScreen()
+            throws Exception {
+        return verifyRecipientOnCurrentScreen(
+                userActionScope.authorizedRecipient());
+    }
+
+    private JSONObject verifyRecipientOnCurrentScreen(String recipient)
+            throws Exception {
         if (recipient == null || recipient.trim().isEmpty()) {
             return runtimeBlocked("RECIPIENT_TARGET_UNKNOWN",
                     "缺少可驗證的收件人；不要猜測或直接送出。");
