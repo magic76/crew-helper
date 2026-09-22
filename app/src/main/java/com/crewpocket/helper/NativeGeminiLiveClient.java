@@ -1222,7 +1222,8 @@ final class NativeGeminiLiveClient {
             VoiceExecutionGuard.TurnDisposition voiceDisposition =
                     voiceExecutionGuard.onFinalizedVoiceTurn(
                             userIntentGeneration + 1L,
-                            completeUserInput);
+                            completeUserInput,
+                            frame.inputConfidence);
             boolean confirmationContinuation =
                     voiceDisposition
                             != VoiceExecutionGuard.TurnDisposition.NORMAL;
