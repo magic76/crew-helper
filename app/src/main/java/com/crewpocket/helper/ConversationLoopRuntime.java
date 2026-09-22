@@ -20,6 +20,7 @@ final class ConversationLoopRuntime {
         void sendInternalDirective(String text);
         void reportStage(String text);
         boolean hasLiveSession();
+        void beginRuntimeContinuation(String safeHint);
     }
 
     private enum State {
@@ -321,6 +322,8 @@ final class ConversationLoopRuntime {
 
         host.reportStage(
                 "對談模式：偵測到畫面更新，正在確認是否有新訊息");
+        host.beginRuntimeContinuation(
+                "對談模式收到新的畫面事件");
         host.sendInternalDirective(
                 "【CONVERSATION LOOP EVENT】Runtime 偵測到已驗證聊天室「"
                         + recipient
