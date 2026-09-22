@@ -17,11 +17,41 @@ final class UiLocatorV2 {
     private static final int MAX_NODES = 220;
     private static final int MAX_CLICKABLE_ANCESTOR_HOPS = 6;
 
+    static final class CandidateSummary {
+        final int index;
+        final String label;
+        final String elementId;
+        final String viewId;
+        final String role;
+        final String semanticHint;
+        final double confidence;
+
+        CandidateSummary(int index, UiLocatorScorer.Score score) {
+            UiNodeSnapshot node = score == null ? null : score.node;
+            this.index = index;
+            this.label = node == null ? "" : node.label;
+            this.elementId = node == null ? "" : node.elementId;
+            this.viewId = node == null ? "" : node.viewId;
+            this.role = node == null ? "" : node.role;
+            this.semanticHint = node == null ? "" : node.semanticHint;
+            this.confidence = score == null ? 0.0 : score.confidence;
+        }
+
+        String displayLabel() {
+            if (!label.trim().isEmpty()) return label.trim();
+            if (!semanticHint.trim().isEmpty()) return semanticHint.trim();
+            if (!role.trim().isEmpty()) return role.trim();
+            if (!viewId.trim().isEmpty()) return viewId.trim();
+            return "候選 " + index;
+        }
+    }
+
     static final class Match {
         final AccessibilityNodeInfo node; // non-null only for AUTO
         final UiLocatorScorer.Decision decision;
         final double confidence;
         final double runnerUpConfidence;
+        final double confidenceMargin;
         final int score;
         final String code;
         final String matchedElementId;
@@ -29,6 +59,7 @@ final class UiLocatorV2 {
         final String matchedSemanticHint;
         final String source;
         final List<String> reasons;
+        final List<CandidateSummary> candidates;
 
         Match(AccessibilityNodeInfo node,
               UiLocatorScorer.Decision decision,
@@ -37,11 +68,13 @@ final class UiLocatorV2 {
               int score,
               String code,
               UiNodeSnapshot snapshot,
-              List<String> reasons) {
+              List<String> reasons,
+              List<CandidateSummary> candidates) {
             this.node = node;
             this.decision = decision == null ? UiLocatorScorer.Decision.NOT_FOUND : decision;
             this.confidence = confidence;
             this.runnerUpConfidence = runnerUpConfidence;
+            this.confidenceMargin = Math.max(0.0, confidence - runnerUpConfidence);
             this.score = score;
             this.code = code == null ? "" : code;
             this.matchedElementId = snapshot == null ? "" : snapshot.elementId;
@@ -51,6 +84,10 @@ final class UiLocatorV2 {
             this.reasons = reasons == null
                     ? java.util.Collections.<String>emptyList()
                     : java.util.Collections.unmodifiableList(new ArrayList<String>(reasons));
+            this.candidates = candidates == null
+                    ? java.util.Collections.<CandidateSummary>emptyList()
+                    : java.util.Collections.unmodifiableList(
+                            new ArrayList<CandidateSummary>(candidates));
         }
 
         boolean autoExecutable() {
@@ -118,7 +155,7 @@ final class UiLocatorV2 {
             UiLocatorScorer.Score second = ranking.second;
             if (best == null) {
                 return new Match(null, ranking.decision, 0.0, 0.0, 0,
-                        ranking.code, null, null);
+                        ranking.code, null, null, candidateSummaries(best, second));
             }
 
             AccessibilityNodeInfo resolved = null;
@@ -135,7 +172,8 @@ final class UiLocatorV2 {
                             best.points,
                             "AUTO_MATCH_HAS_NO_ACTION_NODE",
                             best.node,
-                            best.reasons);
+                            best.reasons,
+                            candidateSummaries(best, second));
                 }
             }
 
@@ -145,7 +183,8 @@ final class UiLocatorV2 {
                     best.points,
                     ranking.code,
                     best.node,
-                    best.reasons);
+                    best.reasons,
+                    candidateSummaries(best, second));
         } finally {
             for (Candidate candidate : candidates) candidate.recycle();
         }
@@ -306,7 +345,26 @@ final class UiLocatorV2 {
     }
 
     private static Match empty(UiLocatorScorer.Decision decision, String code) {
-        return new Match(null, decision, 0.0, 0.0, 0, code, null, null);
+        return new Match(
+                null,
+                decision,
+                0.0,
+                0.0,
+                0,
+                code,
+                null,
+                null,
+                java.util.Collections.<CandidateSummary>emptyList());
+    }
+
+    private static List<CandidateSummary> candidateSummaries(
+            UiLocatorScorer.Score best,
+            UiLocatorScorer.Score second) {
+        ArrayList<CandidateSummary> out =
+                new ArrayList<CandidateSummary>();
+        if (best != null) out.add(new CandidateSummary(1, best));
+        if (second != null) out.add(new CandidateSummary(2, second));
+        return out;
     }
 
     private static String safe(Object value) {
