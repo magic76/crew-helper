@@ -63,14 +63,26 @@ final class VoiceExecutionGuard {
 
     private long latestVoiceGeneration = -1L;
     private String latestVoiceText = "";
+    private boolean interimPending;
 
     private Pending pending;
     private String confirmedFingerprint = "";
     private long confirmedUntil = 0L;
 
+    synchronized void onInterimVoice(String text) {
+        if (text != null && !text.trim().isEmpty()) {
+            interimPending = true;
+        }
+    }
+
+    synchronized boolean hasPendingInterim() {
+        return interimPending;
+    }
+
     synchronized TurnDisposition onFinalizedVoiceTurn(
             long generation,
             String text) {
+        interimPending = false;
         latestVoiceGeneration = generation;
         latestVoiceText = text == null ? "" : text.trim();
 
@@ -106,6 +118,7 @@ final class VoiceExecutionGuard {
     }
 
     synchronized void onFinalizedTypedTurn(long generation, String text) {
+        interimPending = false;
         latestVoiceGeneration = -1L;
         latestVoiceText = "";
         if (pending != null) {
@@ -176,6 +189,7 @@ final class VoiceExecutionGuard {
     }
 
     synchronized void clear() {
+        interimPending = false;
         pending = null;
         confirmedFingerprint = "";
         confirmedUntil = 0L;
