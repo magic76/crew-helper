@@ -92,6 +92,16 @@ public final class SendAuthorizationTest {
         check("小明".equals(bodyNegation.recipient()),
                 "recipient survives message body negation");
 
+        SendAuthorization negatedNamed = new SendAuthorization();
+        negatedNamed.updateFromUserText("不要跟小明說我晚點到");
+        check(!negatedNamed.canAttempt(),
+                "negated named-recipient command grants no commit");
+
+        SendAuthorization englishNegatedNamed = new SendAuthorization();
+        englishNegatedNamed.updateFromUserText("don't tell John I arrived");
+        check(!englishNegatedNamed.canAttempt(),
+                "english negated named-recipient command grants no commit");
+
         System.out.println("PASS SendAuthorizationTest: " + assertions + " checks");
     }
 }
