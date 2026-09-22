@@ -9,6 +9,7 @@ public final class ModelStepGuidanceTest {
         successfulTypeReturnsUsefulEffect();
         waitRequiresObservation();
         backgroundWaitStopsPolling();
+        searchContinuesOriginalGoal();
         System.out.println("ModelStepGuidanceTest passed");
     }
 
@@ -67,6 +68,14 @@ public final class ModelStepGuidanceTest {
                 "", "WAITING_BACKGROUND", "", true);
         expect("BACKGROUND_WAIT_ARMED", g.effect);
         expect("WAIT_FOR_RUNTIME", g.next);
+    }
+
+    private static void searchContinuesOriginalGoal() {
+        ModelStepGuidance.Guidance g = ModelStepGuidance.from(
+                "phone_action", "DONE", "SEARCH", "search_current_app",
+                "", "IN_PROGRESS", "COMMITTED", false);
+        expect("SEARCH_UPDATED", g.effect);
+        expect("CONTINUE_GOAL", g.next);
     }
 
     private static void expect(String expected, String actual) {
