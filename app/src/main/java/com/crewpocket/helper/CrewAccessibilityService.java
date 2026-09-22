@@ -1168,7 +1168,7 @@ public class CrewAccessibilityService extends AccessibilityService {
                                 .append(",\"screenHeight\":").append(metrics.heightPixels).append(",");
                         sb.append("\"fingerprint\":\"").append(jsonEscape(fingerprint)).append("\",");
                         sb.append("\"nodes\":[");
-                        dumpNodesJson(root, sb);
+                        AccessibilityNodeRepository.dumpNodesJson(root, sb);
                         if (sb.charAt(sb.length() - 1) == ',') sb.deleteCharAt(sb.length() - 1);
                         sb.append("],\"actions\":").append(actions.toString()).append("}");
                         responseJson = sb.toString();
@@ -1247,7 +1247,7 @@ public class CrewAccessibilityService extends AccessibilityService {
                     sb.append("{\"success\":true,\"package\":\"").append(pkg != null ? jsonEscape(pkg.toString()) : "").append("\",");
                     sb.append("\"screenWidth\":").append(metrics.widthPixels).append(",\"screenHeight\":").append(metrics.heightPixels).append(",");
                     sb.append("\"nodes\":[");
-                    dumpNodesJson(root, sb);
+                    AccessibilityNodeRepository.dumpNodesJson(root, sb);
                     if (sb.charAt(sb.length() - 1) == ',') sb.deleteCharAt(sb.length() - 1);
                     sb.append("]}");
                     responseJson = sb.toString();
@@ -1346,11 +1346,11 @@ public class CrewAccessibilityService extends AccessibilityService {
         try {
             AccessibilityNodeInfo target = null;
             if (id != null && !id.trim().isEmpty()) {
-                target = findMatchingNodeById(root, id.trim());
+                target = AccessibilityNodeRepository.findMatchingNodeById(root, id.trim());
             }
             if (target == null && label != null && !label.trim().isEmpty()) {
-                target = findMatchingClickableNode(root, label.trim(), true);
-                if (target == null) target = findMatchingClickableNode(root, label.trim(), false);
+                target = AccessibilityNodeRepository.findMatchingClickableNode(root, label.trim(), true);
+                if (target == null) target = AccessibilityNodeRepository.findMatchingClickableNode(root, label.trim(), false);
                 // ChatGPT and many modern composers expose only an icon.  When
                 // the model clearly asks to send, rank the composer-side icons
                 // instead of giving up because there is no visible text.
@@ -1377,135 +1377,6 @@ public class CrewAccessibilityService extends AccessibilityService {
         }
     }
 
-    private void collectClickableNodes(AccessibilityNodeInfo node, List<AccessibilityNodeInfo> list) {
-        if (node == null) return;
-        if (node.isClickable()) {
-            Rect b = new Rect();
-            node.getBoundsInScreen(b);
-            // Ignore giant full-screen containers
-            if (b.width() > 0 && b.height() > 0 && (b.width() < 600 || b.height() < 400)) {
-                list.add(AccessibilityNodeInfo.obtain(node));
-            }
-        }
-        int count = node.getChildCount();
-        for (int i = 0; i < count; i++) {
-            AccessibilityNodeInfo child = node.getChild(i);
-            if (child != null) {
-                collectClickableNodes(child, list);
-                child.recycle();
-            }
-        }
-    }
-
-    AccessibilityNodeInfo findActiveEditText(AccessibilityNodeInfo root) {
-        if (root == null) return null;
-        List<AccessibilityNodeInfo> editList = new ArrayList<AccessibilityNodeInfo>();
-        collectEditableNodes(root, editList);
-        AccessibilityNodeInfo lowest = null;
-        int maxBottom = -1;
-        for (AccessibilityNodeInfo e : editList) {
-            Rect b = new Rect();
-            e.getBoundsInScreen(b);
-            if (b.bottom > maxBottom && b.height() > 10) {
-                maxBottom = b.bottom;
-                if (lowest != null) lowest.recycle();
-                lowest = AccessibilityNodeInfo.obtain(e);
-            }
-            e.recycle();
-        }
-        return lowest;
-    }
-
-    private void collectEditableNodes(AccessibilityNodeInfo node, List<AccessibilityNodeInfo> list) {
-        if (node == null) return;
-        if (node.isEditable() || (node.getClassName() != null && node.getClassName().toString().toLowerCase(Locale.ROOT).contains("edittext"))) {
-            list.add(AccessibilityNodeInfo.obtain(node));
-        }
-        int count = node.getChildCount();
-        for (int i = 0; i < count; i++) {
-            AccessibilityNodeInfo child = node.getChild(i);
-            if (child != null) {
-                collectEditableNodes(child, list);
-                child.recycle();
-            }
-        }
-    }
-
-    private AccessibilityNodeInfo findMatchingNodeById(AccessibilityNodeInfo node, String id) {
-        if (node == null) return null;
-        CharSequence viewId = node.getViewIdResourceName();
-        if (viewId != null && viewId.toString().toLowerCase(Locale.ROOT).contains(id.toLowerCase(Locale.ROOT))) {
-            AccessibilityNodeInfo clickable = findClickableAncestor(node);
-            if (clickable != null) return clickable;
-            return AccessibilityNodeInfo.obtain(node);
-        }
-        int count = node.getChildCount();
-        for (int i = 0; i < count; i++) {
-            AccessibilityNodeInfo child = node.getChild(i);
-            if (child == null) continue;
-            try {
-                AccessibilityNodeInfo res = findMatchingNodeById(child, id);
-                if (res != null) return res;
-            } finally {
-                child.recycle();
-            }
-        }
-        return null;
-    }
-
-    private AccessibilityNodeInfo findMatchingClickableNode(AccessibilityNodeInfo node, String label, boolean exact) {
-        if (node == null) return null;
-        String query = label.toLowerCase(Locale.ROOT).trim();
-        String text = node.getText() == null ? "" : node.getText().toString().trim();
-        String desc = node.getContentDescription() == null ? "" : node.getContentDescription().toString().trim();
-        String viewId = node.getViewIdResourceName() == null ? "" : node.getViewIdResourceName().toString().trim();
-
-        boolean matched = exact
-                ? (text.equalsIgnoreCase(label) || desc.equalsIgnoreCase(label) || viewId.equalsIgnoreCase(label))
-                : (text.toLowerCase(Locale.ROOT).contains(query) || desc.toLowerCase(Locale.ROOT).contains(query) || viewId.toLowerCase(Locale.ROOT).contains(query));
-
-        if (!matched && !exact) {
-            boolean isSendQuery = isSendIntent(label, "");
-            if (isSendQuery) {
-                String combined = (text + " " + desc + " " + viewId).toLowerCase(Locale.ROOT);
-                if (hasSendMarker(combined)) {
-                    matched = true;
-                }
-            }
-        }
-
-        if (matched) {
-            AccessibilityNodeInfo clickable = findClickableAncestor(node);
-            if (clickable != null) return clickable;
-            return AccessibilityNodeInfo.obtain(node);
-        }
-        int count = node.getChildCount();
-        for (int i = 0; i < count; i++) {
-            AccessibilityNodeInfo child = node.getChild(i);
-            if (child == null) continue;
-            try {
-                AccessibilityNodeInfo result = findMatchingClickableNode(child, label, exact);
-                if (result != null) return result;
-            } finally {
-                child.recycle();
-            }
-        }
-        return null;
-    }
-
-    private boolean isSendIntent(String label, String id) {
-        String query = ((label == null ? "" : label) + " " + (id == null ? "" : id)).toLowerCase(Locale.ROOT);
-        return query.contains("發送") || query.contains("送出") || query.contains("傳送") || query.contains("send")
-                || query.contains("提交") || query.contains("傳訊") || query.contains("reply");
-    }
-
-    private boolean hasSendMarker(String value) {
-        return value.contains("發送") || value.contains("送出") || value.contains("傳送") || value.contains("提交")
-                || value.contains("send") || value.contains("send-btn") || value.contains("send_button")
-                || value.contains("composer_send") || value.contains("message_send") || value.contains("action_send")
-                || value.contains("reply") || value.contains("arrow_upward") || value.contains("up_arrow");
-    }
-
     private LearnedUiResolver.Match lastLearnedSendMatch = null;
 
     /**
@@ -1520,7 +1391,7 @@ public class CrewAccessibilityService extends AccessibilityService {
         }
         lastLearnedSendMatch = null;
         try {
-            AccessibilityNodeInfo composer = findActiveEditText(root);
+            AccessibilityNodeInfo composer = AccessibilityNodeRepository.findActiveEditText(root);
             if (composer != null
                     && !"HAS_TEXT".equals(LearnedUiMappingStore.composerState(composer))) {
                 composer.recycle();
@@ -1699,7 +1570,7 @@ public class CrewAccessibilityService extends AccessibilityService {
     public boolean beginTeachElement(String role) {
         final String requestedRole = role == null ? "" : role.trim().toUpperCase(java.util.Locale.ROOT);
         AccessibilityNodeInfo root = getRootInActiveWindow();
-        AccessibilityNodeInfo activeComposer = root != null ? findActiveEditText(root) : null;
+        AccessibilityNodeInfo activeComposer = root != null ? AccessibilityNodeRepository.findActiveEditText(root) : null;
         if ("COMPOSER_SEND".equalsIgnoreCase(requestedRole)
                 && activeComposer != null
                 && "EMPTY".equals(LearnedUiMappingStore.composerState(activeComposer))) {
@@ -1742,7 +1613,7 @@ public class CrewAccessibilityService extends AccessibilityService {
                                 ScreenFingerprint.createStructure(root);
 
                         if ("COMPOSER_SEND".equals(requestedRole)) {
-                            composer = findActiveEditText(root);
+                            composer = AccessibilityNodeRepository.findActiveEditText(root);
                         }
 
                         if (learnedUiMappingStore == null) learnedUiMappingStore = new LearnedUiMappingStore(CrewAccessibilityService.this);
@@ -1788,17 +1659,6 @@ public class CrewAccessibilityService extends AccessibilityService {
         NativeLiveService.suspendIdleWakeIfRunning();
     }
 
-    private AccessibilityNodeInfo findClickableAncestor(AccessibilityNodeInfo node) {
-        AccessibilityNodeInfo current = AccessibilityNodeInfo.obtain(node);
-        while (current != null) {
-            if (current.isClickable()) return current;
-            AccessibilityNodeInfo parent = current.getParent();
-            current.recycle();
-            current = parent;
-        }
-        return null;
-    }
-
     /**
      * Shared one-shot message transaction.
      *
@@ -1815,7 +1675,7 @@ public class CrewAccessibilityService extends AccessibilityService {
 
                     @Override
                     public AccessibilityNodeInfo resolveComposer(AccessibilityNodeInfo root) {
-                        return findActiveEditText(root);
+                        return AccessibilityNodeRepository.findActiveEditText(root);
                     }
 
                     @Override
@@ -1871,11 +1731,11 @@ public class CrewAccessibilityService extends AccessibilityService {
         AccessibilityNodeInfo target = null;
         try {
             target = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
-            if (target == null || !isEditableCandidate(target)) {
+            if (target == null || !AccessibilityNodeRepository.isEditableCandidate(target)) {
                 if (target != null) { target.recycle(); target = null; }
-                target = findFocusedEditableNode(root);
+                target = AccessibilityNodeRepository.findFocusedEditableNode(root);
             }
-            if (target == null) target = findEditableNode(root);
+            if (target == null) target = AccessibilityNodeRepository.findEditableNode(root);
             if (target == null) {
                 lastTextInputFailure = "NO_EDITABLE_TARGET";
                 return false;
@@ -1925,32 +1785,6 @@ public class CrewAccessibilityService extends AccessibilityService {
     /** Runtime search must never report success unless the text is observable. */
     boolean performSetTextVerified(String text) {
         return performSetText(text) && lastTextInputVerified;
-    }
-
-    private boolean isEditableCandidate(AccessibilityNodeInfo node) {
-        if (node == null) return false;
-        CharSequence cls = node.getClassName();
-        return node.isEditable() || (cls != null
-                && cls.toString().toLowerCase(Locale.ROOT).contains("edittext"));
-    }
-
-    private AccessibilityNodeInfo findFocusedEditableNode(AccessibilityNodeInfo node) {
-        if (node == null) return null;
-        if (isEditableCandidate(node) && node.isFocused()) {
-            return AccessibilityNodeInfo.obtain(node);
-        }
-        int count = node.getChildCount();
-        for (int i = 0; i < count; i++) {
-            AccessibilityNodeInfo child = node.getChild(i);
-            if (child == null) continue;
-            try {
-                AccessibilityNodeInfo hit = findFocusedEditableNode(child);
-                if (hit != null) return hit;
-            } finally {
-                child.recycle();
-            }
-        }
-        return null;
     }
 
     private boolean pasteIntoTarget(AccessibilityNodeInfo target, String text) {
@@ -2024,41 +1858,24 @@ public class CrewAccessibilityService extends AccessibilityService {
         } catch (Exception ignored) {}
     }
 
-    private AccessibilityNodeInfo findEditableNode(AccessibilityNodeInfo node) {
-        if (node == null) return null;
-        if (node.isEditable() || (node.getClassName() != null && node.getClassName().toString().contains("EditText"))) {
-            return AccessibilityNodeInfo.obtain(node);
-        }
-        int count = node.getChildCount();
-        for (int i = 0; i < count; i++) {
-            AccessibilityNodeInfo child = node.getChild(i);
-            if (child != null) {
-                AccessibilityNodeInfo res = findEditableNode(child);
-                child.recycle();
-                if (res != null) return res;
-            }
-        }
-        return null;
-    }
-
     private boolean performScrollAction(boolean forward, String id) {
         AccessibilityNodeInfo root = getRootInActiveWindow();
         if (root == null) return false;
         try {
             AccessibilityNodeInfo scrollable = null;
             if (id != null && !id.trim().isEmpty()) {
-                AccessibilityNodeInfo targetNode = findMatchingNodeById(root, id.trim());
+                AccessibilityNodeInfo targetNode = AccessibilityNodeRepository.findMatchingNodeById(root, id.trim());
                 if (targetNode != null) {
                     if (targetNode.isScrollable()) {
                         scrollable = targetNode;
                     } else {
-                        scrollable = findScrollableNode(targetNode);
+                        scrollable = AccessibilityNodeRepository.findScrollableNode(targetNode);
                         if (scrollable == null) scrollable = targetNode;
                     }
                 }
             }
             if (scrollable == null) {
-                scrollable = findScrollableNode(root);
+                scrollable = AccessibilityNodeRepository.findScrollableNode(root);
             }
             if (scrollable != null) {
                 int action = forward ? AccessibilityNodeInfo.ACTION_SCROLL_FORWARD : AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD;
@@ -2071,23 +1888,6 @@ public class CrewAccessibilityService extends AccessibilityService {
             root.recycle();
         }
         return false;
-    }
-
-    private AccessibilityNodeInfo findScrollableNode(AccessibilityNodeInfo node) {
-        if (node == null) return null;
-        if (node.isScrollable()) {
-            return AccessibilityNodeInfo.obtain(node);
-        }
-        int count = node.getChildCount();
-        for (int i = 0; i < count; i++) {
-            AccessibilityNodeInfo child = node.getChild(i);
-            if (child != null) {
-                AccessibilityNodeInfo res = findScrollableNode(child);
-                child.recycle();
-                if (res != null) return res;
-            }
-        }
-        return null;
     }
 
     private void performSwipe(float x1, float y1, float x2, float y2, long duration) {
@@ -2114,52 +1914,12 @@ public class CrewAccessibilityService extends AccessibilityService {
         dispatchGesture(builder.build(), null, null);
     }
 
-    private void dumpNodesJson(AccessibilityNodeInfo node, StringBuilder sb) {
-        if (node == null) return;
-        Rect bounds = new Rect();
-        node.getBoundsInScreen(bounds);
-
-        CharSequence text = node.getText();
-        CharSequence desc = node.getContentDescription();
-        CharSequence cls = node.getClassName();
-        CharSequence viewId = node.getViewIdResourceName();
-        boolean clickable = node.isClickable();
-        boolean scrollable = node.isScrollable();
-        boolean editable = node.isEditable();
-        boolean sensitive = SensitiveDataGuard.isSensitiveNode(node);
-
-        boolean hasContent = (text != null && text.length() > 0) || (desc != null && desc.length() > 0) || (viewId != null && viewId.length() > 0);
-        if (hasContent || clickable || scrollable || editable) {
-            sb.append("{");
-            sb.append("\"class\":\"").append(cls != null ? cls.toString() : "").append("\",");
-            sb.append("\"text\":\"").append(sensitive ? SensitiveDataGuard.REDACTED : (text != null ? jsonEscape(text.toString()) : "")).append("\",");
-            sb.append("\"desc\":\"").append(sensitive ? SensitiveDataGuard.REDACTED : (desc != null ? jsonEscape(desc.toString()) : "")).append("\",");
-            sb.append("\"id\":\"").append(viewId != null ? jsonEscape(viewId.toString()) : "").append("\",");
-            if (sensitive) sb.append("\"sensitive\":true,");
-            sb.append("\"clickable\":").append(clickable).append(",");
-            sb.append("\"scrollable\":").append(scrollable).append(",");
-            sb.append("\"editable\":").append(editable).append(",");
-            sb.append("\"bounds\":{\"left\":").append(bounds.left).append(",\"top\":").append(bounds.top)
-              .append(",\"right\":").append(bounds.right).append(",\"bottom\":").append(bounds.bottom).append("}");
-            sb.append("},");
-        }
-
-        int count = node.getChildCount();
-        for (int i = 0; i < count; i++) {
-            AccessibilityNodeInfo child = node.getChild(i);
-            if (child != null) {
-                dumpNodesJson(child, sb);
-                child.recycle();
-            }
-        }
-    }
-
     private boolean isActiveInputHardBlocked() {
         AccessibilityNodeInfo root = getRootInActiveWindow();
         if (root == null) return false;
         try {
             AccessibilityNodeInfo target = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
-            if (target == null) target = findEditableNode(root);
+            if (target == null) target = AccessibilityNodeRepository.findEditableNode(root);
             if (target == null) return false;
             try {
                 return SensitiveDataGuard.isHardBlockedInput(target);
@@ -2177,7 +1937,7 @@ public class CrewAccessibilityService extends AccessibilityService {
         AccessibilityNodeInfo root = getRootInActiveWindow();
         if (root == null) return new PolicyEngine.Result(PolicyEngine.Decision.BLOCK, "no observable tap target");
         try {
-            AccessibilityNodeInfo target = findActionNodeAtPoint(root, Math.round(x), Math.round(y));
+            AccessibilityNodeInfo target = AccessibilityNodeRepository.findActionNodeAtPoint(root, Math.round(x), Math.round(y));
             if (target == null) return new PolicyEngine.Result(PolicyEngine.Decision.BLOCK, "unidentified coordinate target requires manual operation");
             try {
                 if (SensitiveDataGuard.isBlockedAction(target)) return new PolicyEngine.Result(PolicyEngine.Decision.BLOCK, "sensitive target");
@@ -2194,26 +1954,6 @@ public class CrewAccessibilityService extends AccessibilityService {
         } finally {
             root.recycle();
         }
-    }
-
-    private AccessibilityNodeInfo findActionNodeAtPoint(AccessibilityNodeInfo node, int x, int y) {
-        if (node == null) return null;
-        Rect bounds = new Rect();
-        node.getBoundsInScreen(bounds);
-        if (!bounds.contains(x, y)) return null;
-
-        int count = node.getChildCount();
-        for (int i = 0; i < count; i++) {
-            AccessibilityNodeInfo child = node.getChild(i);
-            if (child == null) continue;
-            try {
-                AccessibilityNodeInfo nested = findActionNodeAtPoint(child, x, y);
-                if (nested != null) return nested;
-            } finally {
-                child.recycle();
-            }
-        }
-        return node.isClickable() ? AccessibilityNodeInfo.obtain(node) : null;
     }
 
     private String policyBlockJson(PolicyEngine.Result result) {
