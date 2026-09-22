@@ -87,6 +87,8 @@ final class ModelScreenView {
         if (element.optBoolean("editable", false)) score += 90;
         if (!hint.isEmpty()) score += 70;
         if (element.optBoolean("clickable", false)) score += 55;
+        score += ModelScreenPriorityPolicy.actionControlPriority(
+                label, hint);
         if (element.optBoolean("selected", false)) score += 25;
         if ("switch".equals(role) || "checkbox".equals(role) || "radio".equals(role)) score += 35;
         if (element.optBoolean("scrollable", false)) score += 18;
@@ -105,6 +107,9 @@ final class ModelScreenView {
             if (includeId) copyString(source, out, "id");
             if (!role.isEmpty()) out.put("role", role);
             if (!label.isEmpty()) out.put("label", label);
+
+            String hint = clip(source.optString("semanticHint", ""));
+            if (!hint.isEmpty()) out.put("semanticHint", hint);
 
             String can = capabilities(source);
             if (!can.isEmpty()) out.put("can", can);

@@ -469,6 +469,7 @@ final class ModelToolResponseAdapter {
         try {
             copyClippedString(source, out, "role");
             copyClippedString(source, out, "label");
+            copyClippedString(source, out, "semanticHint");
             copyClippedString(source, out, "can");
         } catch (Exception ignored) {}
         return out;

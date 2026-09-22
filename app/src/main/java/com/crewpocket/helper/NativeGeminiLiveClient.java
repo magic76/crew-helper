@@ -2590,6 +2590,8 @@ final class NativeGeminiLiveClient {
                     boolean waitingUser = "WAITING_USER".equals(domainState);
                     boolean blocked = task.blockedReason != null
                             || "BLOCKED".equals(domainState);
+                    JSONObject progressForCompletion =
+                            workingContext.toProgressJson();
                     boolean answerFastPath =
                             !conversationLoopRecipe.isActive()
                                     && InformationAnswerFastPathPolicy.shouldOffer(
@@ -2598,7 +2600,9 @@ final class NativeGeminiLiveClient {
                                     task.getToolCount("search_current_app"),
                                     task.getToolCount("commit_search"),
                                     blocked,
-                                    waitingUser);
+                                    waitingUser,
+                                    progressForCompletion.optString("goal", ""),
+                                    progressForCompletion.optString("rootGoal", ""));
 
                     if (answerFastPath) {
                         result.put("answerFastPath", true)

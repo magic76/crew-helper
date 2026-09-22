@@ -50,9 +50,17 @@ final class ModelStepGuidance {
                 taskState,
                 searchTransaction,
                 verifiedSend);
-        String next = "WAITING_BACKGROUND".equals(upper(taskState))
-                ? "WAIT_FOR_RUNTIME"
-                : next(cleanStatus, reason);
+        String next;
+        if ("WAITING_BACKGROUND".equals(upper(taskState))) {
+            next = "WAIT_FOR_RUNTIME";
+        } else if ("SEARCH_UPDATED".equals(effect)) {
+            // Search is a verified intermediate effect. Re-evaluate the
+            // original goal before speaking; action goals may still require
+            // opening a result, Directions, Start, Send, etc.
+            next = "CONTINUE_GOAL";
+        } else {
+            next = next(cleanStatus, reason);
+        }
         return new Guidance(action, effect, reason, next);
     }
 
