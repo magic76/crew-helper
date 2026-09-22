@@ -84,7 +84,7 @@ final class SendAuthorization {
         // Message bodies may legitimately contain words such as "不要" or "如果".
         if (value.matches(
                 "^(?:不要|別|别|不用|取消|停止|先不要|暫時不要|暂时不要)"
-                        + ".*(?:送出|傳送|传送|發送|发送|傳給|传给|發給|发给|告訴|告诉).*")) {
+                        + ".*(?:送出|傳送|传送|發送|发送|傳給|传给|發給|发给|告訴|告诉|跟.+說|跟.+说|向.+說|向.+说|對.+說|对.+说).*")) {
             return true;
         }
         if (value.matches(
@@ -93,7 +93,7 @@ final class SendAuthorization {
             return true;
         }
         return folded.matches(
-                "^\\s*(?:don't|dont|do not|never|cancel|stop)\\s+.*\\b(?:send|message|text)\\b.*")
+                "^\\s*(?:don't|dont|do not|never|cancel|stop)\\s+.*\\b(?:send|message|text|tell)\\b.*")
                 || folded.matches(
                 "^\\s*(?:how|why|if|should)\\b.*\\b(?:send|message|text)\\b.*");
     }
