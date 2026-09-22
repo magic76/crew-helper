@@ -58,6 +58,18 @@ public final class SendOnlyPolicyTest {
         check(englishNamed.requiresRecipientVerification(), "english named recipient requires verification");
         check("john".equals(englishNamed.authorizedRecipient()), "english named recipient stored");
 
+        UserActionScope bodyWords = new UserActionScope();
+        bodyWords.updateFromUserText("跟小明說如果下雨就不要來");
+        check(bodyWords.canSend(),
+                "message body words do not clear send authorization");
+        check("小明".equals(bodyWords.authorizedRecipient()),
+                "message body keeps named recipient");
+
+        UserActionScope literalSend = new UserActionScope();
+        literalSend.updateFromUserText("幫我輸入 send");
+        check(!literalSend.canSend(),
+                "typing literal send does not grant commit");
+
         System.out.println("PASS SendOnlyPolicyTest: " + assertions + " checks");
     }
 }
