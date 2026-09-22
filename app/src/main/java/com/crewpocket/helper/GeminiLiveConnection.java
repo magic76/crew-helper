@@ -34,6 +34,7 @@ final class GeminiLiveConnection extends WebSocketListener {
 
     private OkHttpClient httpClient;
     private volatile WebSocket socket;
+    private volatile boolean open;
 
     GeminiLiveConnection(String apiKey, Listener listener) {
         this.apiKey = apiKey == null ? "" : apiKey;
@@ -43,6 +44,8 @@ final class GeminiLiveConnection extends WebSocketListener {
     synchronized void start() {
         if (httpClient == null) {
             httpClient = new OkHttpClient.Builder()
+                    .connectTimeout(10, TimeUnit.SECONDS)
+                    .writeTimeout(10, TimeUnit.SECONDS)
                     .readTimeout(0, TimeUnit.MILLISECONDS)
                     .build();
         }
@@ -52,6 +55,8 @@ final class GeminiLiveConnection extends WebSocketListener {
     synchronized void connect() {
         if (httpClient == null) {
             httpClient = new OkHttpClient.Builder()
+                    .connectTimeout(10, TimeUnit.SECONDS)
+                    .writeTimeout(10, TimeUnit.SECONDS)
                     .readTimeout(0, TimeUnit.MILLISECONDS)
                     .build();
         }
@@ -59,16 +64,17 @@ final class GeminiLiveConnection extends WebSocketListener {
                 .url(ENDPOINT + apiKey)
                 .header("Origin", "https://generativelanguage.googleapis.com")
                 .build();
+        open = false;
         socket = httpClient.newWebSocket(request, this);
     }
 
     boolean send(String payload) {
         WebSocket current = socket;
-        return current != null && payload != null && current.send(payload);
+        return open && current != null && payload != null && current.send(payload);
     }
 
     boolean isAvailable() {
-        return socket != null;
+        return open && socket != null;
     }
 
     void closeForReconnect(String reason) {
@@ -84,6 +90,7 @@ final class GeminiLiveConnection extends WebSocketListener {
 
     synchronized void stop() {
         WebSocket current = socket;
+        open = false;
         socket = null;
         if (current != null) {
             try { current.close(1000, "Client ended call"); }
@@ -100,6 +107,7 @@ final class GeminiLiveConnection extends WebSocketListener {
 
     @Override public void onOpen(WebSocket webSocket, Response response) {
         socket = webSocket;
+        open = true;
         if (listener != null) listener.onOpened();
     }
 
@@ -114,11 +122,15 @@ final class GeminiLiveConnection extends WebSocketListener {
     }
 
     @Override public void onClosing(WebSocket webSocket, int code, String reason) {
+        if (socket == webSocket) open = false;
         try { webSocket.close(code, null); } catch (Exception ignored) {}
     }
 
     @Override public void onClosed(WebSocket webSocket, int code, String reason) {
-        if (socket == webSocket) socket = null;
+        if (socket == webSocket) {
+            open = false;
+            socket = null;
+        }
         if (listener != null) listener.onClosed(code, reason == null ? "" : reason);
     }
 
@@ -126,7 +138,10 @@ final class GeminiLiveConnection extends WebSocketListener {
             WebSocket webSocket,
             Throwable error,
             Response response) {
-        if (socket == webSocket) socket = null;
+        if (socket == webSocket) {
+            open = false;
+            socket = null;
+        }
         String detail = response == null
                 ? (error == null ? "unknown failure" : error.getMessage())
                 : "HTTP " + response.code() + " " + response.message();

@@ -363,8 +363,8 @@ final class NativeGeminiLiveClient {
                         NativeGeminiLiveClient.this.reportStage(text);
                     }
 
-                    @Override public void sendInternalDirective(String text) {
-                        NativeGeminiLiveClient.this
+                    @Override public boolean sendInternalDirective(String text) {
+                        return NativeGeminiLiveClient.this
                                 .sendInternalAgentDirective(text);
                     }
 
@@ -2935,9 +2935,9 @@ final class NativeGeminiLiveClient {
     }
 
     /** Internal control turn: do not pollute the user-facing live transcript. */
-    private void sendInternalAgentDirective(String text) {
+    private boolean sendInternalAgentDirective(String text) {
         try {
-            if (!liveConnection.isAvailable()) return;
+            if (!liveConnection.isAvailable()) return false;
             JSONObject part = new JSONObject().put("text", text);
             JSONObject turn = new JSONObject()
                     .put("role", "user")
@@ -2957,9 +2957,14 @@ final class NativeGeminiLiveClient {
                     "internal_directive",
                     outboundBytes,
                     ContextPayloadBudget.INTERNAL_DIRECTIVE_BYTES);
-            liveConnection.send(payload);
+            boolean sent = liveConnection.send(payload);
+            if (!sent) {
+                Log.w(TAG, "Internal directive send failed: websocket unavailable or closed");
+            }
+            return sent;
         } catch (Exception error) {
             Log.w(TAG, "Agent 結論指令傳送失敗：" + error.getMessage());
+            return false;
         }
     }
 
