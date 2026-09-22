@@ -14,6 +14,20 @@ final class VoiceExecutionPolicy {
         return VoiceCommandQualityPolicy.looksIncomplete(finalizedText);
     }
 
+    static boolean bypassesMessageVoiceGate(
+            String runtimeName,
+            String metadata,
+            boolean noConfirmationEnabled) {
+        if (!noConfirmationEnabled) return false;
+        if ("send_text".equals(runtimeName)
+                || "start_conversation_loop".equals(runtimeName)) {
+            return true;
+        }
+        return ("tap_screen".equals(runtimeName)
+                        || "tap_element".equals(runtimeName))
+                && SendAuthorization.looksLikeSendTarget(metadata);
+    }
+
     static boolean requiresReliableTranscript(
             String runtimeName,
             String metadata) {
