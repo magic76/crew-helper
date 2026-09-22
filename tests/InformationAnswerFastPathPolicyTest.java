@@ -16,6 +16,22 @@ public final class InformationAnswerFastPathPolicyTest {
                 "inspect_ui", true, 1, 1, true, false));
         expect(false, InformationAnswerFastPathPolicy.shouldOffer(
                 "inspect_ui", true, 1, 1, false, true));
+
+        expect(false, InformationAnswerFastPathPolicy.shouldOffer(
+                "inspect_ui", true, 1, 1, false, false,
+                "搜尋大皇宮並導航過去", ""));
+        expect(false, InformationAnswerFastPathPolicy.shouldOffer(
+                "inspect_ui", true, 1, 1, false, false,
+                "搜尋大皇宮，按路線然後開始導航", ""));
+        expect(false, InformationAnswerFastPathPolicy.shouldOffer(
+                "inspect_ui", true, 1, 1, false, false,
+                "find Grand Palace and start navigation", ""));
+        expect(true, InformationAnswerFastPathPolicy.shouldOffer(
+                "inspect_ui", true, 1, 1, false, false,
+                "大皇宮幾點關門", ""));
+        expect(true, InformationAnswerFastPathPolicy.shouldOffer(
+                "inspect_ui", true, 1, 1, false, false,
+                "Grand Palace opening hours", ""));
         System.out.println("InformationAnswerFastPathPolicyTest passed");
     }
 
