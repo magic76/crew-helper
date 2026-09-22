@@ -126,12 +126,10 @@ final class VoiceExecutionGuard {
         interimPending = false;
         latestVoiceGeneration = -1L;
         latestVoiceText = "";
-        if (pending != null) {
-            pending = null;
-            confirmedFingerprint = "";
-            confirmedSummary = "";
-            confirmedUntil = 0L;
-        }
+        pending = null;
+        confirmedFingerprint = "";
+        confirmedSummary = "";
+        confirmedUntil = 0L;
     }
 
     synchronized boolean isVoiceGeneration(long generation) {
