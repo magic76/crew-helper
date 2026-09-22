@@ -87,7 +87,8 @@ final class ModelScreenView {
         if (element.optBoolean("editable", false)) score += 90;
         if (!hint.isEmpty()) score += 70;
         if (element.optBoolean("clickable", false)) score += 55;
-        score += actionControlPriority(label, hint);
+        score += ModelScreenPriorityPolicy.actionControlPriority(
+                label, hint);
         if (element.optBoolean("selected", false)) score += 25;
         if ("switch".equals(role) || "checkbox".equals(role) || "radio".equals(role)) score += 35;
         if (element.optBoolean("scrollable", false)) score += 18;
@@ -95,34 +96,6 @@ final class ModelScreenView {
         if (!element.optBoolean("clickable", false) && !element.optBoolean("editable", false)
                 && !element.optBoolean("scrollable", false) && hint.isEmpty() && !"text".equals(role)) return 0;
         return score;
-    }
-
-    private static int actionControlPriority(
-            String label,
-            String semanticHint) {
-        String text = ((label == null ? "" : label)
-                + " "
-                + (semanticHint == null ? "" : semanticHint))
-                .toLowerCase(java.util.Locale.ROOT);
-
-        String mapsTarget = GoogleMapsSemanticContract.canonicalTarget(label);
-        if (GoogleMapsSemanticContract.DIRECTIONS.equals(mapsTarget)
-                || GoogleMapsSemanticContract.START_NAVIGATION.equals(mapsTarget)) {
-            return 130;
-        }
-        if (!mapsTarget.isEmpty()) return 80;
-
-        String[] strong = new String[] {
-                "路線", "路线", "開始", "开始", "導航", "导航",
-                "directions", "start navigation", "navigate",
-                "send", "送出", "傳送", "发送",
-                "next", "下一步", "繼續", "继续",
-                "confirm", "確認", "确认"
-        };
-        for (String token : strong) {
-            if (text.contains(token)) return 95;
-        }
-        return 0;
     }
 
     private static JSONObject compactElement(JSONObject source, boolean includeId) {
