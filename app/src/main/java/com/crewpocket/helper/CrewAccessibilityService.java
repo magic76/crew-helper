@@ -1354,7 +1354,7 @@ public class CrewAccessibilityService extends AccessibilityService {
                 // ChatGPT and many modern composers expose only an icon.  When
                 // the model clearly asks to send, rank the composer-side icons
                 // instead of giving up because there is no visible text.
-                if (target == null && isSendIntent(label, id)) target = findLikelySendButton(root);
+                if (target == null && AccessibilityNodeRepository.isSendIntent(label, id)) target = findLikelySendButton(root);
             }
             if (target == null) return false;
             try {
