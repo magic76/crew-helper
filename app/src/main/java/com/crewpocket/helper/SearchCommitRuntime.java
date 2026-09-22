@@ -134,7 +134,7 @@ final class SearchCommitRuntime {
 
         AccessibilityNodeInfo active = null;
         try {
-            active = service.findActiveEditText(root);
+            active = AccessibilityNodeRepository.findActiveEditText(root);
             if (active != null
                     && active.isEditable()
                     && active.isEnabled()
