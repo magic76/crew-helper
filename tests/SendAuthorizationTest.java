@@ -47,6 +47,28 @@ public final class SendAuthorizationTest {
         discussion.updateFromUserText("不要送出");
         check(!discussion.canAttempt(), "negated send grants no send");
 
+        check(SendAuthorization.isExplicitTypeOnlyRequest(
+                        "在 WhatsApp 打字測試測試123"),
+                "chat composer typing is explicit type-only");
+        check(SendAuthorization.isExplicitTypeOnlyRequest(
+                        "在 WhatsApp 打字測試測試123，不要送出"),
+                "type with explicit no-send remains type-only");
+        check(SendAuthorization.isExplicitTypeOnlyRequest(
+                        "please type hello in WhatsApp"),
+                "english chat typing is explicit type-only");
+        check(!SendAuthorization.isExplicitTypeOnlyRequest(
+                        "輸入測試測試123並送出"),
+                "type plus send is not type-only");
+        check(!SendAuthorization.isExplicitTypeOnlyRequest(
+                        "不要打字測試測試123"),
+                "negated type is not executable");
+        check(!SendAuthorization.isExplicitTypeOnlyRequest(
+                        "怎麼在 WhatsApp 打字"),
+                "typing how-to is not executable");
+        check(!SendAuthorization.isExplicitTypeOnlyRequest(
+                        "輸入123然後按下一步"),
+                "compound type then action is not pure type-only");
+
         System.out.println("PASS SendAuthorizationTest: " + assertions + " checks");
     }
 }
