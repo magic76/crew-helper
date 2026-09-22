@@ -233,34 +233,6 @@ final class SendAuthorization {
         return true;
     }
 
-    static boolean allowsPersistentMessageTrust(String rawText) {
-        if (rawText == null || rawText.trim().isEmpty()) return true;
-
-        String folded = TextMatch.caseFold(rawText).trim();
-        String value = normalize(rawText);
-
-        // Persistent trust removes repeated confirmation, never an explicit
-        // current-turn "do not send" / explanatory / hypothetical boundary.
-        if (isNonExecutingDiscussion(rawText)
-                || value.matches(
-                        "^(?:不要|別|别|不用|取消|停止|先不要|暫時不要|暂时不要)$")
-                || folded.matches(
-                        "^\\s*(?:don't|dont|do not|never|cancel|stop)\\s*$")) {
-            return false;
-        }
-
-        // A request to TYPE/draft without an explicit SEND remains draft-only
-        // even when the persistent message-trust switch is enabled.
-        if (hasTypeVerb(rawText)
-                && !hasTypeThenSendIntent(rawText)
-                && !isNamedRecipientMessagingRequest(rawText)
-                && !hasDirectSendWithPayloadIntent(rawText)) {
-            return false;
-        }
-
-        return true;
-    }
-
     static boolean isExplicitSendRequest(String rawText) {
         if (rawText == null || rawText.trim().isEmpty()) return false;
         if (isNonExecutingDiscussion(rawText)) return false;
