@@ -15,6 +15,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/ActionVerifierV2.java" \
   "$SRC/ActionRecoveryPolicy.java" \
   "$SRC/LocatorConfidencePolicy.java" \
+  "$SRC/LocatorFallbackPolicy.java" \
   "$SRC/AgentTaskLifecyclePolicy.java" \
   "$SRC/AgentRuntimeRollout.java" \
   "$SRC/AgentEvent.java" \
