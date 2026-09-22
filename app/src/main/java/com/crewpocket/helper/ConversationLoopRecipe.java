@@ -124,6 +124,7 @@ final class ConversationLoopRecipe {
         expireIfNeeded();
         if (!isActive()) return true;
         if ("stop_conversation_loop".equals(name)
+                || "end_voice_session".equals(name)
                 || "inspect_ui".equals(name)) {
             return true;
         }
