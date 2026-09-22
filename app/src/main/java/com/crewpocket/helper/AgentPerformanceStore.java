@@ -6,6 +6,9 @@ import android.content.SharedPreferences;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
+
 /**
  * Persistent, privacy-bounded summaries for recently finished Agent tasks.
  * Stores counters and timings only; never transcript text, tool args, screenshots,
@@ -69,6 +72,7 @@ final class AgentPerformanceStore {
                         .put("outcome", outcome)
                         .put("success", terminalSuccess)
                         .put("cancelled", cancelled)
+                        .put("cancelCategory", task.optString("cancelCategory", ""))
                         .put("partial", partial)
                         .put("recovered", recovered)
                         .put("steps", task.optInt("stepCount", 0))
@@ -106,6 +110,8 @@ final class AgentPerformanceStore {
         int partial = 0;
         int cancelled = 0;
         int hardFailure = 0;
+        LinkedHashMap<String, Integer> cancelCategories =
+                new LinkedHashMap<String, Integer>();
         long taskTotal = 0L;
         int taskSamples = 0;
         long toolTotal = 0L;
@@ -123,8 +129,13 @@ final class AgentPerformanceStore {
             if ("SUCCESS".equals(outcome)) success++;
             else if ("RECOVERED_SUCCESS".equals(outcome)) recovered++;
             else if ("PARTIAL".equals(outcome)) partial++;
-            else if ("CANCELLED".equals(outcome)) cancelled++;
-            else hardFailure++;
+            else if ("CANCELLED".equals(outcome)) {
+                cancelled++;
+                String category = item.optString("cancelCategory", "").trim();
+                if (category.isEmpty()) category = "UNKNOWN";
+                Integer count = cancelCategories.get(category);
+                cancelCategories.put(category, count == null ? 1 : count + 1);
+            } else hardFailure++;
 
             long taskMs = item.optLong("taskMs", -1L);
             if (taskMs >= 0L) { taskTotal += taskMs; taskSamples++; }
@@ -150,8 +161,18 @@ final class AgentPerformanceStore {
                 .append("Recovered success: ").append(recovered).append("\n")
                 .append("Partial: ").append(partial).append("\n")
                 .append("Hard failures: ").append(hardFailure).append("\n")
-                .append("Cancelled / superseded: ").append(cancelled).append("\n")
-                .append("Full-success rate: ")
+                .append("Cancelled / superseded: ").append(cancelled).append("\n");
+        if (!cancelCategories.isEmpty()) {
+            out.append("Cancel categories: ");
+            boolean first = true;
+            for (Map.Entry<String, Integer> entry : cancelCategories.entrySet()) {
+                if (!first) out.append(" · ");
+                first = false;
+                out.append(entry.getKey()).append("=").append(entry.getValue());
+            }
+            out.append("\n");
+        }
+        out.append("Full-success rate: ")
                 .append(Math.round(fullSuccess * 100.0 / total)).append("%\n");
         if (taskSamples > 0) out.append("Avg task time: ").append(taskTotal / taskSamples).append(" ms\n");
         if (toolSamples > 0) out.append("Avg Runtime tool time: ").append(toolTotal / toolSamples).append(" ms\n");
