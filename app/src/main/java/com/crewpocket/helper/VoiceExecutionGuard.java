@@ -67,6 +67,7 @@ final class VoiceExecutionGuard {
 
     private Pending pending;
     private String confirmedFingerprint = "";
+    private String confirmedSummary = "";
     private long confirmedUntil = 0L;
 
     synchronized void onInterimVoice(String text) {
@@ -92,12 +93,14 @@ final class VoiceExecutionGuard {
         if (now - pending.createdAt > CONFIRMATION_TTL_MS) {
             pending = null;
             confirmedFingerprint = "";
+            confirmedSummary = "";
             confirmedUntil = 0L;
             return TurnDisposition.NORMAL;
         }
 
         if (VoiceCommandQualityPolicy.isAffirmative(latestVoiceText)) {
             confirmedFingerprint = pending.fingerprint;
+            confirmedSummary = pending.summary;
             confirmedUntil = now + CONFIRMATION_TTL_MS;
             pending = null;
             return TurnDisposition.CONFIRMATION_ACCEPTED;
@@ -106,6 +109,7 @@ final class VoiceExecutionGuard {
         if (VoiceCommandQualityPolicy.isNegative(latestVoiceText)) {
             pending = null;
             confirmedFingerprint = "";
+            confirmedSummary = "";
             confirmedUntil = 0L;
             return TurnDisposition.CONFIRMATION_REJECTED;
         }
@@ -113,6 +117,7 @@ final class VoiceExecutionGuard {
         // A different utterance replaces the pending confirmation.
         pending = null;
         confirmedFingerprint = "";
+        confirmedSummary = "";
         confirmedUntil = 0L;
         return TurnDisposition.NORMAL;
     }
@@ -124,6 +129,7 @@ final class VoiceExecutionGuard {
         if (pending != null) {
             pending = null;
             confirmedFingerprint = "";
+            confirmedSummary = "";
             confirmedUntil = 0L;
         }
     }
@@ -158,6 +164,34 @@ final class VoiceExecutionGuard {
             return Preflight.allow();
         }
 
+        long now = System.currentTimeMillis();
+
+        // A confirmation utterance contains only "對/確認", not the original
+        // entities. Bind the lease to the original summary + exact payload.
+        if (!confirmedFingerprint.isEmpty()) {
+            if (now > confirmedUntil) {
+                confirmedFingerprint = "";
+                confirmedSummary = "";
+                confirmedUntil = 0L;
+            } else {
+                String confirmedAction =
+                        fingerprint(
+                                runtimeName,
+                                runtimeArgs,
+                                confirmedSummary);
+                if (confirmedFingerprint.equals(confirmedAction)) {
+                    confirmedFingerprint = "";
+                    confirmedSummary = "";
+                    confirmedUntil = 0L;
+                    return Preflight.allow();
+                }
+                return Preflight.block(
+                        "VOICE_CONFIRMATION_ACTION_MISMATCH",
+                        confirmedSummary,
+                        "剛才只確認了原本那一份送出內容；目前 action 已改變，Runtime 不會沿用確認。請重新複誦目前關鍵資訊。");
+            }
+        }
+
         List<String> entities =
                 VoiceCommandQualityPolicy.criticalEntities(finalized);
         String summary =
@@ -168,14 +202,6 @@ final class VoiceExecutionGuard {
 
         String fingerprint =
                 fingerprint(runtimeName, runtimeArgs, summary);
-        long now = System.currentTimeMillis();
-        if (fingerprint.equals(confirmedFingerprint)
-                && now <= confirmedUntil) {
-            confirmedFingerprint = "";
-            confirmedUntil = 0L;
-            return Preflight.allow();
-        }
-
         pending = new Pending(fingerprint, summary, now);
         return Preflight.block(
                 "VOICE_CRITICAL_ENTITY_CONFIRMATION_REQUIRED",
@@ -192,6 +218,7 @@ final class VoiceExecutionGuard {
         interimPending = false;
         pending = null;
         confirmedFingerprint = "";
+        confirmedSummary = "";
         confirmedUntil = 0L;
         latestVoiceGeneration = -1L;
         latestVoiceText = "";
