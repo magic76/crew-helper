@@ -58,9 +58,10 @@ final class UserActionScope {
         String value = normalize(text);
         boolean explicitAppLearning = hasAppLearningIntent(text);
 
-        // Fail closed on negated / hypothetical / explanatory discussions.
-        if (containsAny(value, "不要", "別", "不用", "取消", "停止", "怎麼", "如何", "如果", "假如",
-                "don't", "dont", "do not", "never", "cancel", "stop", "how to", "if ")) {
+        // Only command-level negation/questions clear action grants.
+        // Do not scan the entire utterance for words such as "不要" or "如果":
+        // those may be literal message content (e.g. 跟小明說如果下雨就不要來).
+        if (isCommandLevelNonExecuting(text, value)) {
             clearActionGrants();
             // Negated operational guidance such as “記住，以後不要點這個”
             // may be learned, while every phone-action grant remains cleared.
@@ -319,6 +320,30 @@ final class UserActionScope {
         searchResultSelectionDispatched = false;
         selectedSearchResult = "";
         dispatchedSearchResult = "";
+    }
+
+    private static boolean isCommandLevelNonExecuting(
+            String rawText,
+            String normalized) {
+        String value = normalized == null ? "" : normalized;
+        String folded = TextMatch.caseFold(rawText == null ? "" : rawText).trim();
+
+        if (value.matches(
+                "^(?:不要|別|别|不用|取消|停止|先不要|暫時不要|暂时不要)"
+                        + ".*(?:打開|打开|開啟|开启|搜尋|搜索|導航|导航|送出|傳送|传送|發送|发送|傳給|传给|發給|发给|點擊|点击|按下|輸入|输入|打字).*")) {
+            return true;
+        }
+        if (value.matches(
+                "^(?:怎麼|怎么|如何|為什麼|为什么|如果|假如)"
+                        + ".*(?:打開|打开|開啟|开启|搜尋|搜索|導航|导航|送出|傳送|传送|發送|发送|傳訊息|传讯息|點擊|点击|輸入|输入).*")) {
+            return true;
+        }
+        return folded.matches(
+                "^\\s*(?:don't|dont|do not|never|cancel|stop)\\b.*"
+                        + "\\b(?:open|search|navigate|send|click|tap|type|input)\\b.*")
+                || folded.matches(
+                "^\\s*(?:how|why|if)\\b.*"
+                        + "\\b(?:open|search|navigate|send|click|tap|type|input)\\b.*");
     }
 
     private static boolean hasAppLearningIntent(String rawText) {
