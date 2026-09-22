@@ -1,0 +1,8 @@
+kind=locator_confidence
+locator.best=0.995
+locator.runnerUp=0.99
+locator.exactElementId=true
+locator.exactViewId=false
+locator.runnerUpExactViewId=false
+expect.status=AUTO
+expect.code=EXACT_CURRENT_ELEMENT_ID
