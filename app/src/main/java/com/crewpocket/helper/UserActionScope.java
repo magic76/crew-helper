@@ -330,7 +330,7 @@ final class UserActionScope {
 
         if (value.matches(
                 "^(?:不要|別|别|不用|取消|停止|先不要|暫時不要|暂时不要)"
-                        + ".*(?:打開|打开|開啟|开启|搜尋|搜索|導航|导航|送出|傳送|传送|發送|发送|傳給|传给|發給|发给|點擊|点击|按下|輸入|输入|打字).*")) {
+                        + ".*(?:打開|打开|開啟|开启|搜尋|搜索|導航|导航|送出|傳送|传送|發送|发送|傳給|传给|發給|发给|跟.+說|跟.+说|向.+說|向.+说|對.+說|对.+说|點擊|点击|按下|輸入|输入|打字).*")) {
             return true;
         }
         if (value.matches(
@@ -340,7 +340,7 @@ final class UserActionScope {
         }
         return folded.matches(
                 "^\\s*(?:don't|dont|do not|never|cancel|stop)\\b.*"
-                        + "\\b(?:open|search|navigate|send|click|tap|type|input)\\b.*")
+                        + "\\b(?:open|search|navigate|send|tell|click|tap|type|input)\\b.*")
                 || folded.matches(
                 "^\\s*(?:how|why|if)\\b.*"
                         + "\\b(?:open|search|navigate|send|click|tap|type|input)\\b.*");
