@@ -119,6 +119,44 @@ final class AgentTaskLifecyclePolicy {
         return consecutiveMutationFailures >= 3;
     }
 
+    /**
+     * A model reply is not whole-task completion by itself.
+     *
+     * DONE / ANSWER_READY are explicit Runtime completion boundaries. A fresh
+     * observation may also close the task because Gemini has then seen the
+     * actual post-action screen. Mutation-only EVIDENCE_AVAILABLE / IN_PROGRESS
+     * states must continue instead of silently splitting one goal into many
+     * one-step tasks.
+     */
+    static boolean canFinishAfterModelReply(
+            String taskState,
+            String lastToolName,
+            boolean requiresPostActionInspection,
+            boolean hasBlockedReason) {
+        if (requiresPostActionInspection) return false;
+        if (hasBlockedReason) return true;
+
+        String state = safe(taskState).trim().toUpperCase();
+        if ("DONE".equals(state)
+                || "ANSWER_READY".equals(state)
+                || "BLOCKED".equals(state)) return true;
+        if ("WAITING_USER".equals(state)
+                || "WAITING_BACKGROUND".equals(state)
+                || "NEED_USER".equals(state)
+                || "IN_PROGRESS".equals(state)) {
+            return false;
+        }
+
+        // EVIDENCE_AVAILABLE after a mutation is only step evidence. After an
+        // explicit observation, however, a spoken conclusion may close the task.
+        if ("EVIDENCE_AVAILABLE".equals(state)) {
+            return isObservationTool(lastToolName);
+        }
+
+        // Read/inspect-only tasks can legitimately end after their observation.
+        return isObservationTool(lastToolName);
+    }
+
     static int maxRunsForTool(String name) {
         return "advance_deck".equals(name) || "present_deck_card".equals(name)
                 ? DECK_NAV_MAX_RUNS : MAX_TOOL_RUNS;

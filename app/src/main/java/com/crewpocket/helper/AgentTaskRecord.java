@@ -38,9 +38,14 @@ final class AgentTaskRecord {
     boolean watchdogPrompted;
     boolean userVisibleReplyProducedSinceLastAction;
     int finalSpeechRetryCount;
+    String lastToolName = "";
+    String lastTaskState = "";
+    String lastCompletionEvidence = "";
+    int prematureModelReplies;
     boolean requiresPostActionInspection;
     boolean postActionInspectionPrompted;
     boolean cancelled;
+    String cancelCategory = "";
     boolean finished;
 
     AgentTaskRecord(String id) { taskId = id; }
@@ -261,6 +266,11 @@ final class AgentTaskRecord {
                     .put("finished", finished)
                     .put("userVisibleReplyProduced", userVisibleReplyProducedSinceLastAction)
                     .put("finalSpeechRetryCount", finalSpeechRetryCount)
+                    .put("lastToolName", lastToolName)
+                    .put("lastTaskState", lastTaskState)
+                    .put("lastCompletionEvidence", lastCompletionEvidence)
+                    .put("prematureModelReplies", prematureModelReplies)
+                    .put("cancelCategory", cancelCategory)
                     .put("recipeEligible", recipeEligible)
                     .put("recipeStepCount", recipeSteps.size());
         } catch (Exception ignored) {}

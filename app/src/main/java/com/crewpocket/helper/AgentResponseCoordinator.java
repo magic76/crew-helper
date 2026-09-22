@@ -124,6 +124,17 @@ final class AgentResponseCoordinator {
             return;
         }
 
+        boolean completionReady =
+                AgentTaskLifecyclePolicy.canFinishAfterModelReply(
+                        task.lastTaskState,
+                        task.lastToolName,
+                        task.requiresPostActionInspection,
+                        task.blockedReason != null);
+        if (!completionReady) {
+            requestNextToolAfterIntermediateReply(task);
+            return;
+        }
+
         if (!host.isAgentMuted()
                 && !task.userVisibleReplyProducedSinceLastAction) {
             requestFinalSpeechOrNextTool(task);
@@ -156,6 +167,33 @@ final class AgentResponseCoordinator {
                 "【Runtime 必要驗證】上一個手機操作只代表動作已執行，尚未證明任務完成。"
                         + "現在必須呼叫 inspect_ui；Runtime 會送一張 fresh screenshot。"
                         + "直接看最新畫面決定下一步；在取得該證據前，不要對使用者作答或作結論。");
+    }
+
+    private void requestNextToolAfterIntermediateReply(
+            AgentTaskRecord task) {
+        synchronized (tasks.monitor()) {
+            if (!tasks.isActive(task)
+                    || task.finished
+                    || task.cancelled
+                    || !task.awaitingModel) {
+                return;
+            }
+            task.prematureModelReplies++;
+            task.userVisibleReplyProducedSinceLastAction = false;
+            task.finalSpeechRetryCount = 0;
+            task.watchdogPrompted = false;
+            clearLocked();
+            task.status = "目標尚未完成，繼續同一個 Agent 任務";
+        }
+
+        host.reportStage(task.status);
+        host.sendInternalDirective(
+                "【WHOLE TASK CONTINUITY】剛才的語音/文字回覆不是 whole-task completion。"
+                        + "目前 active goal 必須保持同一個 task，不要因 STEP_OK 或 EVIDENCE_AVAILABLE 就停。"
+                        + "若還有明確下一步，保持安靜並只呼叫下一個工具；"
+                        + "若你認為目標真的完成，先用 inspect_ui 取得 fresh 畫面證據，再給最後一句 AUDIO。"
+                        + "只有 Runtime taskState=DONE/ANSWER_READY，或 fresh observation 後的結論，才可結束。");
+        scheduleWatchdog(task);
     }
 
     private void requestFinalSpeechOrNextTool(

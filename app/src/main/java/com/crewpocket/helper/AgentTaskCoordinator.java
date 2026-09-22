@@ -132,11 +132,16 @@ final class AgentTaskCoordinator {
     }
 
     AgentTaskRecord cancelActive(String reason) {
+        return cancelActive(reason, cancellationCategory(reason));
+    }
+
+    AgentTaskRecord cancelActive(String reason, String category) {
         synchronized (monitor) {
             AgentTaskRecord task = active;
             if (task == null || task.finished) return null;
 
             task.cancelled = true;
+            task.cancelCategory = category == null ? "OTHER" : category;
             task.finished = true;
             task.endReason = reason == null ? "使用者取消" : reason;
             task.status = "Agent 任務已停止";
@@ -145,6 +150,22 @@ final class AgentTaskCoordinator {
             active = null;
             return task;
         }
+    }
+
+    private static String cancellationCategory(String reason) {
+        String value = reason == null ? "" : reason;
+        if (value.contains("新使用者指令")) return "NEW_USER_GOAL";
+        if (value.contains("使用者打斷")
+                || value.contains("使用者語音停止")
+                || value.contains("使用者停止對話")) {
+            return "USER_INTERRUPTED";
+        }
+        if (value.contains("通話已結束")) return "SESSION_ENDED";
+        if (value.contains("等待使用者選擇")) return "WAIT_FOR_CHOICE";
+        if (value.contains("舊操作") || value.contains("stale")) return "STALE_TASK";
+        if (value.contains("重新規劃") || value.contains("replan")) return "LIVE_REPLAN";
+        if (value.contains("取代") || value.contains("supersede")) return "INTERNAL_SUPERSEDE";
+        return "OTHER";
     }
 
     boolean finish(
