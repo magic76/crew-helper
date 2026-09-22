@@ -61,8 +61,11 @@ final class VoiceExecutionGuard {
         }
     }
 
+    private static final double LOW_CONFIDENCE_THRESHOLD = 0.72d;
+
     private long latestVoiceGeneration = -1L;
     private String latestVoiceText = "";
+    private double latestVoiceConfidence = -1.0d;
     private boolean interimPending;
 
     private Pending pending;
@@ -83,9 +86,17 @@ final class VoiceExecutionGuard {
     synchronized TurnDisposition onFinalizedVoiceTurn(
             long generation,
             String text) {
+        return onFinalizedVoiceTurn(generation, text, -1.0d);
+    }
+
+    synchronized TurnDisposition onFinalizedVoiceTurn(
+            long generation,
+            String text,
+            double confidence) {
         interimPending = false;
         latestVoiceGeneration = generation;
         latestVoiceText = text == null ? "" : text.trim();
+        latestVoiceConfidence = confidence;
 
         if (pending == null) return TurnDisposition.NORMAL;
 
@@ -126,6 +137,7 @@ final class VoiceExecutionGuard {
         interimPending = false;
         latestVoiceGeneration = -1L;
         latestVoiceText = "";
+        latestVoiceConfidence = -1.0d;
         pending = null;
         confirmedFingerprint = "";
         confirmedSummary = "";
@@ -149,6 +161,13 @@ final class VoiceExecutionGuard {
         }
 
         String finalized = latestVoiceText;
+        if (latestVoiceConfidence >= 0.0d
+                && latestVoiceConfidence < LOW_CONFIDENCE_THRESHOLD) {
+            return Preflight.block(
+                    "VOICE_TRANSCRIPT_LOW_CONFIDENCE",
+                    "",
+                    "這段 finalized 語音辨識信心偏低。不要執行手機 mutation；請使用者把指令再說一次。");
+        }
         if (VoiceCommandQualityPolicy.looksIncomplete(finalized)) {
             return Preflight.block(
                     "VOICE_TRANSCRIPT_INCOMPLETE",
@@ -156,9 +175,10 @@ final class VoiceExecutionGuard {
                     "這段 finalized 語音看起來仍不完整。不要執行手機 mutation；只請使用者把指令說完整一次。");
         }
 
-        // Critical-entity read-back is required only immediately before an
-        // irreversible message submission. Navigation/search/type stay fluid.
-        if (!"send_text".equals(runtimeName)) {
+        // Critical-entity read-back is required immediately before message
+        // submission or another Runtime-recognized irreversible target.
+        // Navigation/search/type stay fluid.
+        if (!requiresCriticalEntityConfirmation(runtimeName, runtimeArgs)) {
             return Preflight.allow();
         }
 
@@ -220,6 +240,28 @@ final class VoiceExecutionGuard {
         confirmedUntil = 0L;
         latestVoiceGeneration = -1L;
         latestVoiceText = "";
+        latestVoiceConfidence = -1.0d;
+    }
+
+    private static boolean requiresCriticalEntityConfirmation(
+            String runtimeName,
+            JSONObject args) {
+        if ("send_text".equals(runtimeName)
+                || "start_conversation_loop".equals(runtimeName)) {
+            return true;
+        }
+        if (!"tap_screen".equals(runtimeName)
+                && !"tap_element".equals(runtimeName)) {
+            return false;
+        }
+        JSONObject safe = args == null ? new JSONObject() : args;
+        String metadata =
+                safe.optString("label", "") + " "
+                        + safe.optString("target", "") + " "
+                        + safe.optString("id", "") + " "
+                        + safe.optString("element_id", "") + " "
+                        + safe.optString("semanticHint", "");
+        return ActionSafetyPolicy.blocks(metadata);
     }
 
     private static String fingerprint(
