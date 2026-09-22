@@ -46,12 +46,11 @@ final class VoiceExecutionPolicy {
     static boolean requiresCriticalEntityConfirmation(
             String runtimeName,
             String metadata) {
-        // Explicit one-shot SEND and explicit bounded conversation delegation
-        // do not need a second redundant "確認嗎". Runtime still requires the
-        // original user intent, a bound recipient, lease limits, and exact-chat
-        // Accessibility verification before every actual SEND.
+        // Conversation-loop delegation keeps one confirmation by default.
+        // The user-controlled Message Send No Confirmation preference bypasses
+        // this preflight in NativeGeminiLiveClient when explicitly enabled.
         if ("start_conversation_loop".equals(runtimeName)) {
-            return false;
+            return true;
         }
         if (!"tap_screen".equals(runtimeName)
                 && !"tap_element".equals(runtimeName)) {
