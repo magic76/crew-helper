@@ -14,6 +14,21 @@ final class VoiceExecutionPolicy {
         return VoiceCommandQualityPolicy.looksIncomplete(finalizedText);
     }
 
+    static boolean requiresReliableTranscript(
+            String runtimeName,
+            String metadata) {
+        if ("send_text".equals(runtimeName)
+                || "start_conversation_loop".equals(runtimeName)) {
+            return true;
+        }
+        if ("tap_screen".equals(runtimeName)
+                || "tap_element".equals(runtimeName)) {
+            return SendAuthorization.looksLikeSendTarget(metadata)
+                    || ActionSafetyPolicy.blocks(metadata);
+        }
+        return false;
+    }
+
     static boolean requiresCriticalEntityConfirmation(
             String runtimeName,
             String metadata) {
