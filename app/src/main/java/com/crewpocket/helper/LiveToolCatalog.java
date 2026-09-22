@@ -175,6 +175,38 @@ final class LiveToolCatalog {
                         .put("required", new JSONArray()
                                 .put("condition")
                                 .put("action"))));
+        tools.put(new JSONObject()
+                .put("name", "start_conversation_loop")
+                .put("description",
+                        "Start a bounded persistent conversation TaskRecipe ONLY when the user explicitly delegates an ongoing conversation with a named recipient (for example 幫我跟小明持續聊天/代我回他直到我喊停). Runtime requires voice confirmation before arming the lease, verifies the same recipient chat before every send, waits on Accessibility events between replies, and stops on explicit user stop, timeout, or reply limit. This tool only arms the loop; use normal navigation/inspect/send_text inside the bounded lease.")
+                .put("parameters", new JSONObject()
+                        .put("type", "OBJECT")
+                        .put("properties", new JSONObject()
+                                .put("recipient", new JSONObject()
+                                        .put("type", "STRING")
+                                        .put("description", "Exact named recipient from the user's request. Never infer a different person."))
+                                .put("max_replies", new JSONObject()
+                                        .put("type", "INTEGER")
+                                        .put("description", "Maximum automatic replies, default 10, Runtime hard max 20."))
+                                .put("timeout_minutes", new JSONObject()
+                                        .put("type", "INTEGER")
+                                        .put("description", "Lease duration, default 15 minutes, Runtime hard max 30.")))
+                        .put("required", new JSONArray().put("recipient"))));
+        tools.put(new JSONObject()
+                .put("name", "continue_conversation_loop")
+                .put("description",
+                        "Conversation-loop control only. Use after inspect_ui when an Accessibility wake was only typing/UI noise and there is no new incoming message to answer. Runtime re-arms background event waiting; do not poll. No phone mutation.")
+                .put("parameters", new JSONObject()
+                        .put("type", "OBJECT")
+                        .put("properties", new JSONObject())));
+        tools.put(new JSONObject()
+                .put("name", "stop_conversation_loop")
+                .put("description",
+                        "Stop the currently active persistent conversation loop. Use for an explicit user request to stop/end/cancel the delegated conversation.")
+                .put("parameters", new JSONObject()
+                        .put("type", "OBJECT")
+                        .put("properties", new JSONObject())));
+
         tools.put(new JSONObject().put("name", "send_text").put("description",
                 "MESSAGE SUBMISSION ONLY. Use only when THIS turn explicitly asks to send a message. For an already-visible chat, pass the exact new message text once. For an explicit named-recipient request such as『跟小明說…』or『傳給小明：「…」』, first use normal semantic phone navigation (OPEN_APP/SEARCH/TAP as needed) to reach that recipient; do not infer a different person. Then call send_text once. Runtime will fail closed until Accessibility verifies both a chat composer and the explicitly requested recipient on the current conversation screen. If the user only asks to type/fill/paste without sending, use phone_action(TYPE). Standalone 送出/發送/send is Runtime-owned.")
                 .put("parameters", new JSONObject().put("type", "OBJECT")
@@ -313,6 +345,9 @@ final class LiveToolCatalog {
                 || "list_active_schedules".equals(name)
                 || "cancel_schedule".equals(name)
                 || "send_text".equals(name)
+                || "start_conversation_loop".equals(name)
+                || "continue_conversation_loop".equals(name)
+                || "stop_conversation_loop".equals(name)
                 || "end_voice_session".equals(name);
     }
 
