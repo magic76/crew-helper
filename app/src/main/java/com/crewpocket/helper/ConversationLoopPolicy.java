@@ -51,7 +51,8 @@ final class ConversationLoopPolicy {
         return raw == null
                 ? ""
                 : raw.toLowerCase(Locale.ROOT)
-                        .replaceAll("[\s，,。！？!「」『』\"'：:；;（）()]", "")
+                        .replaceAll("[，,。！？!「」『』\"'：:；;（）()]", "")
+                        .replaceAll("\\s+", " ")
                         .trim();
     }
 }
