@@ -60,6 +60,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/TaskRecipePolicy.java" \
   "$SRC/VoiceCommandQualityPolicy.java" \
   "$SRC/ActionSafetyPolicy.java" \
+  "$SRC/CommitGuard.java" \
   "$SRC/AppAutonomyPolicy.java" \
   "$SRC/VoiceExecutionPolicy.java" \
   "$SRC/ConversationLoopPolicy.java" \
@@ -107,6 +108,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/TaskRecipePolicyTest.java" \
   "$ROOT/tests/VoiceCommandQualityPolicyTest.java" \
   "$ROOT/tests/VoiceExecutionPolicyTest.java" \
+  "$ROOT/tests/CommitGuardTest.java" \
   "$ROOT/tests/AppAutonomyPolicyTest.java" \
   "$ROOT/tests/ConversationLoopRecipeTest.java" \
   "$ROOT/tests/ContextPayloadBudgetTest.java" \
@@ -154,6 +156,7 @@ java -cp "$OUT" com.crewpocket.helper.AppPlaybookRelevanceTest
 java -cp "$OUT" com.crewpocket.helper.TaskRecipePolicyTest
 java -cp "$OUT" com.crewpocket.helper.VoiceCommandQualityPolicyTest
 java -cp "$OUT" com.crewpocket.helper.VoiceExecutionPolicyTest
+java -cp "$OUT" com.crewpocket.helper.CommitGuardTest
 java -cp "$OUT" com.crewpocket.helper.AppAutonomyPolicyTest
 java -cp "$OUT" com.crewpocket.helper.ConversationLoopRecipeTest
 java -cp "$OUT" com.crewpocket.helper.ContextPayloadBudgetTest
