@@ -85,12 +85,12 @@ final class NativeGeminiLiveClient {
     private static final int AGENT_FINAL_SPEECH_MAX_RETRIES = 2;
     // Navigation is deliberately repeatable during a presentation. All other
     // tools keep the conservative 3-run default safety limit.
+    // Model-turn ordering remains separate from Agent task-state ownership.
     private final Object agentLock = new Object();
-    private final ArrayList<AgentTaskRecord> agentHistory = new ArrayList<AgentTaskRecord>();
+    private final AgentTaskCoordinator agentTaskCoordinator =
+            new AgentTaskCoordinator();
     private final ToolCallDispatcher toolCallDispatcher;
     private volatile Thread activeToolThread;
-    private volatile int agentMaxSteps = 30;
-    private AgentTaskRecord activeAgentTask;
     // 0018: a goal can span several execution tasks/follow-ups inside one Live session.
     // Safety/tool budgets remain per AgentTaskRecord; they are NOT shared for the whole call.
     private static final long CONVERSATION_GOAL_IDLE_MS = 45_000L;
@@ -113,9 +113,8 @@ final class NativeGeminiLiveClient {
     // Tool calls retain the generation that created them, preventing an old
     // model turn from mutating the phone after the user has changed their mind.
     private long userIntentGeneration = 0L;
-    // 0100 latency trace + stale same-intent tool guard.
-    private long lastFinishedIntentGeneration = -1L;
-    private String lastFinishedTaskId = "";
+    // 0100 latency trace + stale same-intent tool guard is owned by
+    // AgentTaskCoordinator.
     // 0052: standalone "送出/發送/send" is owned directly by Runtime.
     private volatile boolean runtimeSendCurrentExecuting = false;
     private volatile long runtimeSendGuardUntil = 0L;
@@ -535,17 +534,20 @@ final class NativeGeminiLiveClient {
         return running && setupReady && liveConnection.isAvailable();
     }
 
-    void setAgentMaxSteps(int steps) { agentMaxSteps = Math.max(1, Math.min(100, steps)); }
-    int getAgentMaxSteps() { return agentMaxSteps; }
-    boolean hasActiveAgentTask() { synchronized (agentLock) { return activeAgentTask != null && !activeAgentTask.finished; } }
-    String getAgentTaskStatus() { synchronized (agentLock) { return activeAgentTask == null ? "" : activeAgentTask.status; } }
+    void setAgentMaxSteps(int steps) {
+        agentTaskCoordinator.setMaxSteps(steps);
+    }
+    int getAgentMaxSteps() {
+        return agentTaskCoordinator.maxSteps();
+    }
+    boolean hasActiveAgentTask() {
+        return agentTaskCoordinator.hasActive();
+    }
+    String getAgentTaskStatus() {
+        return agentTaskCoordinator.status();
+    }
     JSONArray getAgentTaskHistory() {
-        synchronized (agentLock) {
-            JSONArray records = new JSONArray();
-            for (AgentTaskRecord task : agentHistory) records.put(task.toJson());
-            if (activeAgentTask != null) records.put(activeAgentTask.toJson());
-            return records;
-        }
+        return agentTaskCoordinator.historyJson();
     }
 
     /**
@@ -572,16 +574,10 @@ final class NativeGeminiLiveClient {
             liveAudioController.stopPlayback();
         }
 
-        String hint = "";
-        boolean hadTask = false;
-        synchronized (agentLock) {
-            if (activeAgentTask != null && !activeAgentTask.finished) {
-                hadTask = true;
-                // Do not retain tool args, typed text, message bodies, or other
-                // potentially sensitive content.
-                hint = activeAgentTask.taskId + " · " + activeAgentTask.status;
-            }
-        }
+        // Do not retain tool args, typed text, message bodies, or other
+        // potentially sensitive content.
+        String hint = agentTaskCoordinator.activeHint();
+        boolean hadTask = !hint.isEmpty();
 
         if (hadTask) {
             cancelAgentTask("使用者打斷，等待修正");
@@ -652,24 +648,15 @@ final class NativeGeminiLiveClient {
 
     /** Cancels queued work and disconnects the currently blocking local bridge request. */
     boolean cancelAgentTask(String reason) {
-        AgentTaskRecord task;
-        synchronized (agentLock) {
-            task = activeAgentTask;
-            if (task == null || task.finished) return false;
-            task.cancelled = true;
-            task.finished = true;
-            task.endReason = reason == null ? "使用者取消" : reason;
-            task.status = "Agent 任務已停止";
-            toolCallDispatcher.clearPending();
-            clearAgentResponseWatchdogLocked();
-            agentHistory.add(task);
-            lastFinishedIntentGeneration = task.intentGeneration;
-            lastFinishedTaskId = task.taskId;
-            activeAgentTask = null;
-        }
+        AgentTaskRecord task = agentTaskCoordinator.cancelActive(reason);
+        if (task == null) return false;
+
+        toolCallDispatcher.clearPending();
+        clearAgentResponseWatchdog();
         phoneRuntimeExecutor.cancelActiveRequest();
         Thread worker = activeToolThread;
         if (worker != null) worker.interrupt();
+
         PerformanceMetrics.markAgentTaskFinished(
                 task.taskId, task.intentGeneration, "CANCELLED");
         PerformanceMetrics.recordAgentTask(
@@ -741,7 +728,7 @@ final class NativeGeminiLiveClient {
             // Calls that have not started belong to the old utterance. An
             // executing call is additionally guarded by its generation below.
             toolCallDispatcher.resetForNewIntent();
-            if (activeAgentTask != null) shadowTaskId = activeAgentTask.taskId;
+            shadowTaskId = agentTaskCoordinator.activeTaskId();
         }
 
         taskRecipeCandidateGeneration = -1L;
@@ -762,11 +749,7 @@ final class NativeGeminiLiveClient {
     }
 
     private boolean isFinishedIntentGeneration(long generation) {
-        synchronized (agentLock) {
-            return generation >= 0L
-                    && generation == lastFinishedIntentGeneration
-                    && (activeAgentTask == null || activeAgentTask.finished);
-        }
+        return agentTaskCoordinator.isFinishedIntentGeneration(generation);
     }
 
     private void sendFinishedIntentToolResponse(String id, String name) {
@@ -2070,7 +2053,7 @@ final class NativeGeminiLiveClient {
             if (task.blockedReason != null) {
                 requestAgentConclusion(task, task.blockedReason);
             } else if (shouldSuspendAgentForUser(result)) {
-                synchronized (agentLock) {
+                synchronized (agentTaskCoordinator.monitor()) {
                     task.awaitingModel = false;
                     task.watchdogPrompted = false;
                     clearAgentResponseWatchdogLocked();
@@ -2082,7 +2065,7 @@ final class NativeGeminiLiveClient {
                 scheduleAgentResponseWatchdog(task);
                 reportStage(result.optBoolean("answerFastPath", false)
                         ? "畫面已有搜尋結果，等待 Gemini 直接回答…"
-                        : "Agent 第 " + task.steps + " / " + agentMaxSteps
+                        : "Agent 第 " + task.steps + " / " + agentTaskCoordinator.maxSteps()
                                 + " 步：已取得「" + name + "」結果，正在決定下一步");
             }
         } catch (Exception error) { reportStage("Agent 工具結果回灌失敗：" + error.getMessage()); }
@@ -2203,19 +2186,8 @@ final class NativeGeminiLiveClient {
     }
 
     private void resumeAgentAfterUserChoice(String status) {
-        AgentTaskRecord task = null;
-        synchronized (agentLock) {
-            if (activeAgentTask != null
-                    && !activeAgentTask.finished
-                    && !activeAgentTask.cancelled) {
-                task = activeAgentTask;
-                task.awaitingModel = true;
-                task.watchdogPrompted = false;
-                task.userVisibleReplyProducedSinceLastAction = false;
-                task.finalSpeechRetryCount = 0;
-                task.status = status == null ? "使用者已完成選擇" : status;
-            }
-        }
+        AgentTaskRecord task =
+                agentTaskCoordinator.resumeAfterUserChoice(status);
         if (task != null) {
             reportStage(task.status);
             scheduleAgentResponseWatchdog(task);
@@ -2223,34 +2195,41 @@ final class NativeGeminiLiveClient {
     }
 
     private AgentTaskRecord beginAgentStep(String name, JSONObject args) {
-        synchronized (agentLock) {
-            if (activeAgentTask == null || activeAgentTask.finished) {
+        synchronized (agentTaskCoordinator.monitor()) {
+            AgentTaskRecord existing = agentTaskCoordinator.active();
+            if (existing == null || existing.finished) {
                 touchConversationGoal("最近工具：" + name);
                 conversationGoalTaskIndex++;
-                activeAgentTask = new AgentTaskRecord("agent_" + System.currentTimeMillis());
-                activeAgentTask.intentGeneration = userIntentGeneration;
-                activeAgentTask.goalId = conversationGoalId;
-                activeAgentTask.goalTaskIndex = conversationGoalTaskIndex;
+
                 JSONObject recipeContext = workingContext.toJson();
                 String recipeGoal = recipeContext.optString(
                         "latestUserTurn",
                         recipeContext.optString("rootGoal", ""));
-                activeAgentTask.setRecipeContext(
-                        recipeGoal,
-                        recipeContext.optString("currentApp", ""));
-                reportStage("Agent 任務開始：" + activeAgentTask.taskId);
+                AgentTaskCoordinator.StartResult started =
+                        agentTaskCoordinator.ensureActive(
+                                userIntentGeneration,
+                                conversationGoalId,
+                                conversationGoalTaskIndex,
+                                recipeGoal,
+                                recipeContext.optString("currentApp", ""));
+                existing = started.task;
+                if (started.created) {
+                    reportStage("Agent 任務開始：" + existing.taskId);
+                }
             }
-            AgentTaskRecord task = activeAgentTask;
+
+            AgentTaskRecord task = existing;
             clearAgentResponseWatchdogLocked();
             String signature = buildAgentSignature(name, args);
-            if (task.cancelled) return null;
+            if (task == null || task.cancelled) return null;
 
+            int maxSteps = agentTaskCoordinator.maxSteps();
             AgentTaskLifecyclePolicy.StepDecision decision =
                     AgentTaskLifecyclePolicy.evaluateStep(
                             System.currentTimeMillis(),
                             task.startedAt,
                             task.steps,
-                            agentMaxSteps,
+                            maxSteps,
                             name,
                             signature,
                             task.lastSignature,
@@ -2266,7 +2245,8 @@ final class NativeGeminiLiveClient {
                 task.awaitingModel = false;
                 task.userVisibleReplyProducedSinceLastAction = false;
                 task.finalSpeechRetryCount = 0;
-                task.status = "Agent 第 " + task.steps + " / " + agentMaxSteps + " 步：正在執行「" + name + "」";
+                task.status = "Agent 第 " + task.steps + " / "
+                        + maxSteps + " 步：正在執行「" + name + "」";
                 reportStage(task.status);
             }
             return task;
@@ -2285,7 +2265,7 @@ final class NativeGeminiLiveClient {
      */
     private void updateTaskCompletionContract(AgentTaskRecord task, String name, JSONObject result) {
         if (task == null || result == null) return;
-        synchronized (agentLock) {
+        synchronized (agentTaskCoordinator.monitor()) {
             if (task.cancelled || task.finished) return;
             boolean succeeded = result.optBoolean("success", false)
                     || "STEP_OK".equals(result.optString("stepResult", ""));
@@ -2367,14 +2347,12 @@ final class NativeGeminiLiveClient {
     }
 
     private AgentTaskRecord peekActiveAgentTask() {
-        synchronized (agentLock) {
-            return activeAgentTask == null || activeAgentTask.finished ? null : activeAgentTask;
-        }
+        return agentTaskCoordinator.activeRunning();
     }
 
     private JSONObject agentStabilityPreflight(AgentTaskRecord task, String name, JSONObject args) {
         if (task == null || task.finished || task.cancelled || !isMutationTool(name)) return null;
-        synchronized (agentLock) {
+        synchronized (agentTaskCoordinator.monitor()) {
             AgentTaskLifecyclePolicy.StabilityDecision decision =
                     AgentTaskLifecyclePolicy.evaluateStability(
                             task.finished,
@@ -2422,7 +2400,7 @@ final class NativeGeminiLiveClient {
                                                  JSONObject args,
                                                  JSONObject result) {
         if (task == null || result == null) return;
-        synchronized (agentLock) {
+        synchronized (agentTaskCoordinator.monitor()) {
             if ("inspect_ui".equals(name) && result.optBoolean("success", false)) {
                 task.requireObservationAfterFailure = false;
                 task.stabilityBlocks = 0;
@@ -2559,13 +2537,13 @@ final class NativeGeminiLiveClient {
     }
 
     private void scheduleAgentResponseWatchdog(final AgentTaskRecord task) {
-        synchronized (agentLock) {
+        synchronized (agentTaskCoordinator.monitor()) {
             clearAgentResponseWatchdogLocked();
             agentResponseWatchdog = new Runnable() {
                 @Override public void run() {
                     boolean shouldPrompt = false;
-                    synchronized (agentLock) {
-                        if (activeAgentTask == task && task.awaitingModel && !task.finished && !task.cancelled && !task.watchdogPrompted) {
+                    synchronized (agentTaskCoordinator.monitor()) {
+                        if (agentTaskCoordinator.isActive(task) && task.awaitingModel && !task.finished && !task.cancelled && !task.watchdogPrompted) {
                             task.watchdogPrompted = true;
                             shouldPrompt = true;
                         }
@@ -2586,7 +2564,11 @@ final class NativeGeminiLiveClient {
     }
 
     private void markAgentModelResponse() { clearAgentResponseWatchdog(); }
-    private void clearAgentResponseWatchdog() { synchronized (agentLock) { clearAgentResponseWatchdogLocked(); } }
+    private void clearAgentResponseWatchdog() {
+        synchronized (agentTaskCoordinator.monitor()) {
+            clearAgentResponseWatchdogLocked();
+        }
+    }
     private void clearAgentResponseWatchdogLocked() {
         if (agentResponseWatchdog != null) agentWatchdogHandler.removeCallbacks(agentResponseWatchdog);
         agentResponseWatchdog = null;
@@ -2609,11 +2591,7 @@ final class NativeGeminiLiveClient {
 
 
     private void appendAgentFinalText(String text) {
-        synchronized (agentLock) {
-            if (activeAgentTask != null && activeAgentTask.awaitingModel) {
-                activeAgentTask.finalReply += text;
-            }
-        }
+        agentTaskCoordinator.appendFinalText(text);
     }
 
     private void markCurrentModelTurnToolCall(
@@ -2688,35 +2666,20 @@ final class NativeGeminiLiveClient {
     }
 
     private void markAgentUserVisibleReplyProduced() {
-        String taskId = "";
-        long intentGeneration = -1L;
-        synchronized (agentLock) {
-            if (activeAgentTask != null
-                    && activeAgentTask.awaitingModel
-                    && !activeAgentTask.finished
-                    && !activeAgentTask.cancelled) {
-                activeAgentTask.userVisibleReplyProducedSinceLastAction = true;
-                activeAgentTask.finalSpeechRetryCount = 0;
-                taskId = activeAgentTask.taskId;
-                intentGeneration = activeAgentTask.intentGeneration;
-            }
-        }
-        if (!taskId.isEmpty()) {
-            PerformanceMetrics.markAgentFinalSpeech(taskId, intentGeneration);
+        AgentTaskCoordinator.TaskIdentity identity =
+                agentTaskCoordinator.markUserVisibleReplyProduced();
+        if (identity.available()) {
+            PerformanceMetrics.markAgentFinalSpeech(
+                    identity.taskId, identity.intentGeneration);
         }
     }
 
     private boolean shouldWithholdUnverifiedAgentReply() {
-        synchronized (agentLock) {
-            return activeAgentTask != null && !activeAgentTask.finished
-                    && !activeAgentTask.cancelled
-                    && activeAgentTask.requiresPostActionInspection;
-        }
+        return agentTaskCoordinator.shouldWithholdUnverifiedReply();
     }
 
     private void finishAgentTaskIfAwaitingModel() {
-        AgentTaskRecord task;
-        synchronized (agentLock) { task = activeAgentTask; }
+        AgentTaskRecord task = agentTaskCoordinator.active();
         if (task == null || !task.awaitingModel || task.finished) return;
         if (task.requiresPostActionInspection) {
             requestPostActionInspection(task);
@@ -2738,8 +2701,8 @@ final class NativeGeminiLiveClient {
      */
     private void requestFinalSpeechOrNextTool(AgentTaskRecord task) {
         int attempt;
-        synchronized (agentLock) {
-            if (activeAgentTask != task || task.finished || task.cancelled
+        synchronized (agentTaskCoordinator.monitor()) {
+            if (!agentTaskCoordinator.isActive(task) || task.finished || task.cancelled
                     || !task.awaitingModel) return;
 
             if (task.finalSpeechRetryCount >= AGENT_FINAL_SPEECH_MAX_RETRIES) {
@@ -2771,8 +2734,8 @@ final class NativeGeminiLiveClient {
     }
 
     private void requestPostActionInspection(AgentTaskRecord task) {
-        synchronized (agentLock) {
-            if (activeAgentTask != task || task.finished || task.cancelled
+        synchronized (agentTaskCoordinator.monitor()) {
+            if (!agentTaskCoordinator.isActive(task) || task.finished || task.cancelled
                     || !task.requiresPostActionInspection || task.postActionInspectionPrompted) return;
             task.postActionInspectionPrompted = true;
             task.awaitingModel = true;
@@ -2782,26 +2745,22 @@ final class NativeGeminiLiveClient {
         sendInternalAgentDirective("【Runtime 必要驗證】上一個手機操作只代表動作已執行，尚未證明任務完成。現在必須呼叫 inspect_ui；Runtime 會送一張 fresh screenshot。直接看最新畫面決定下一步；在取得該證據前，不要對使用者作答或作結論。");
     }
 
-    private void finishAgentTask(AgentTaskRecord task, String reason, String finalReply) {
+    private void finishAgentTask(
+            AgentTaskRecord task,
+            String reason,
+            String finalReply) {
         boolean shouldLearnRecipe =
                 "任務完成".equals(reason)
                         && task != null
                         && task.blockedReason == null
                         && task.canSaveRecipe();
-        synchronized (agentLock) {
-            if (task.finished) return;
-            task.finished = true;
-            clearAgentResponseWatchdogLocked();
-            task.endReason = reason;
-            task.finalReply = finalReply == null ? task.finalReply : finalReply;
-            task.status = "Agent 任務結束：" + reason;
-            agentHistory.add(task);
-            if (agentHistory.size() > 20) agentHistory.remove(0);
-            lastFinishedIntentGeneration = task.intentGeneration;
-            lastFinishedTaskId = task.taskId;
-            if (activeAgentTask == task) activeAgentTask = null;
-            conversationGoalTouchedAt = System.currentTimeMillis();
+
+        clearAgentResponseWatchdog();
+        if (!agentTaskCoordinator.finish(task, reason, finalReply)) {
+            return;
         }
+        conversationGoalTouchedAt = System.currentTimeMillis();
+
         if (shouldLearnRecipe) {
             JSONObject saved = taskRecipeStore.rememberSuccessful(
                     task.recipeGoal,
