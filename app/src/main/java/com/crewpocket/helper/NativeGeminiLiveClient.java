@@ -4998,6 +4998,9 @@ final class NativeGeminiLiveClient {
         final JSONObject modelResult =
                 ModelToolResponseAdapter.forModel(
                         name, result, progressContext);
+        int coreModelBytes =
+                ContextPayloadBudget.utf8Bytes(modelResult.toString());
+
         JSONObject appPlaybook =
                 result == null ? null : result.optJSONObject("appPlaybook");
         if (appPlaybook != null && appPlaybook.length() > 0) {
@@ -5032,7 +5035,7 @@ final class NativeGeminiLiveClient {
                 outboundBytes);
         contextPayloadAudit.logBudget(
                 "tool:" + name,
-                modelBytes,
+                coreModelBytes,
                 ContextPayloadBudget.toolBudget(name));
         if (playbookBytes > 0) {
             contextPayloadAudit.logBudget(
