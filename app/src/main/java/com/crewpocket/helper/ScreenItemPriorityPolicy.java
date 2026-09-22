@@ -51,6 +51,39 @@ final class ScreenItemPriorityPolicy {
         return score;
     }
 
+    static boolean isActionable(
+            String role,
+            String label,
+            String semanticHint,
+            String can) {
+        String r = normalize(role);
+        String l = normalize(label);
+        String h = normalize(semanticHint);
+        String c = normalize(can);
+        String all = r + " " + l + " " + h + " " + c;
+        return containsAny(r, "button", "switch", "checkbox", "radio")
+                || containsAny(c, "tap", "click", "press", "activate", "type", "scroll")
+                || containsAny(all,
+                        "directions", "navigation", "route",
+                        "start", "begin", "send", "submit", "confirm", "next",
+                        "路線", "路线", "導航", "导航", "開始", "开始",
+                        "發送", "发送", "送出", "確認", "确认", "下一步");
+    }
+
+    static boolean isSceneContext(
+            String role,
+            String label,
+            String semanticHint,
+            String can) {
+        String l = normalize(label);
+        if (l.isEmpty() || isActionable(role, label, semanticHint, can)) {
+            return false;
+        }
+        String r = normalize(role);
+        return containsAny(r, "text", "label", "image", "metadata", "heading")
+                || !normalize(semanticHint).isEmpty();
+    }
+
     private static boolean containsAny(
             String value,
             String... needles) {

@@ -30,8 +30,8 @@ final class AppPlaybookStore {
     private static final int MAX_GUIDANCE_CHARS = 500;
     private static final int MAX_TITLE_CHARS = 72;
     private static final int MAX_MODEL_RULES = 8;
-    private static final int MAX_MODEL_LEARNED_CHARS = 700;
-    private static final int MAX_MODEL_CONTEXT_CHARS = 1200;
+    private static final int MAX_MODEL_LEARNED_CHARS = 1000;
+    private static final int MAX_MODEL_CONTEXT_CHARS = 1800;
     private static final Object LOCK = new Object();
 
     private final Context context;

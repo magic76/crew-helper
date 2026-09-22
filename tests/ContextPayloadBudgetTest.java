@@ -19,6 +19,15 @@ public final class ContextPayloadBudgetTest {
                         == ContextPayloadBudget.SEND_TEXT_BYTES,
                 "send budget");
         check(
+                ContextPayloadBudget.PHONE_ACTION_BYTES >= 2000,
+                "phone action keeps enough model context");
+        check(
+                ContextPayloadBudget.INSPECT_UI_BYTES >= 2400,
+                "inspect keeps enough scene context");
+        check(
+                ContextPayloadBudget.APP_PLAYBOOK_BYTES >= 1600,
+                "app playbook context is not over-compressed");
+        check(
                 ContextPayloadBudget.withinToolBudget(
                         "phone_action",
                         ContextPayloadBudget.PHONE_ACTION_BYTES),
