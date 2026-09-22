@@ -863,6 +863,12 @@ final class NativeGeminiLiveClient {
             String input = text.trim();
             if (audioIncidentRecorder != null) audioIncidentRecorder.markTypedInput(input);
 
+            if (conversationLoopRuntime.isActive()
+                    && ConversationLoopPolicy.isStopPhrase(input)) {
+                conversationLoopRuntime.stopFromUser();
+                workingContext.setPendingTask("");
+            }
+
             if (consumePendingUiChoiceInput(input)) return true;
             if (hasPendingUiChoice()) clearPendingUiChoiceSilently();
 
@@ -1185,6 +1191,7 @@ final class NativeGeminiLiveClient {
         setupReady = false;
         interruptionHandler.removeCallbacks(clearInterruptedFallback);
         liveAudioController.stop();
+        conversationLoopRuntime.shutdown();
         voiceExecutionGuard.clear();
         liveConnection.stop();
         if (wasRunning) listener.onStopped("已結束");
@@ -1250,6 +1257,13 @@ final class NativeGeminiLiveClient {
             }
             listener.onTranscript(
                     "你", completeUserInput);
+
+            if (conversationLoopRuntime.isActive()
+                    && ConversationLoopPolicy.isStopPhrase(
+                            completeUserInput)) {
+                conversationLoopRuntime.stopFromUser();
+                workingContext.setPendingTask("");
+            }
 
             if (consumePendingUiChoiceInput(
                     completeUserInput)) {
@@ -1561,6 +1575,13 @@ final class NativeGeminiLiveClient {
             JSONObject requestedArgs) {
         if (SemanticPhoneAction.TOOL_NAME.equals(requestedName)) {
             return true;
+        }
+        if ("conversation_loop".equals(requestedName)) {
+            return ConversationLoopPolicy.ACTION_START.equals(
+                    ConversationLoopPolicy.normalizeAction(
+                            requestedArgs == null
+                                    ? ""
+                                    : requestedArgs.optString("action", "")));
         }
         return "send_text".equals(requestedName)
                 || "end_voice_session".equals(requestedName)
@@ -1946,12 +1967,18 @@ final class NativeGeminiLiveClient {
         // Gemini Live may emit the tool frame before the authoritative
         // finalized user transcript. Reconcile only operations whose payload
         // can be matched deterministically to that finalized turn.
-        long reconciledGeneration = awaitFinalizedOperationalGeneration(
-                requestedName, requestedArgs, callIntentGeneration);
-        reconciledGeneration = awaitFinalizedSendAuthorization(
-                requestedName, requestedArgs, reconciledGeneration);
-        reconciledGeneration = awaitFinalizedLiteralTypeGeneration(
-                requestedName, requestedArgs, reconciledGeneration);
+        boolean conversationLoopSendDispatch =
+                "send_text".equals(requestedName)
+                        && conversationLoopRuntime.hasSendLease();
+        long reconciledGeneration = callIntentGeneration;
+        if (!conversationLoopSendDispatch) {
+            reconciledGeneration = awaitFinalizedOperationalGeneration(
+                    requestedName, requestedArgs, callIntentGeneration);
+            reconciledGeneration = awaitFinalizedSendAuthorization(
+                    requestedName, requestedArgs, reconciledGeneration);
+            reconciledGeneration = awaitFinalizedLiteralTypeGeneration(
+                    requestedName, requestedArgs, reconciledGeneration);
+        }
 
         if (reconciledGeneration != callIntentGeneration) {
             callIntentGeneration = reconciledGeneration;
@@ -2034,10 +2061,13 @@ final class NativeGeminiLiveClient {
         final JSONObject args = semantic.runtimeArgs;
 
         VoiceExecutionGuard.Preflight voicePreflight =
-                voiceExecutionGuard.preflight(
-                        callIntentGeneration,
-                        name,
-                        args);
+                "send_text".equals(name)
+                        && conversationLoopRuntime.hasSendLease()
+                        ? VoiceExecutionGuard.Preflight.allow()
+                        : voiceExecutionGuard.preflight(
+                                callIntentGeneration,
+                                name,
+                                args);
         if (!voicePreflight.allowed) {
             JSONObject blocked = new JSONObject();
             try {
@@ -4606,6 +4636,10 @@ final class NativeGeminiLiveClient {
         final JSONObject modelResult =
                 ModelToolResponseAdapter.forModel(
                         name, result, workingContext.toProgressJson());
+        JSONObject loopState = conversationLoopRuntime.modelState();
+        if (loopState.optBoolean("active", false)) {
+            modelResult.put("conversationLoop", loopState);
+        }
         JSONObject appPlaybook = result == null ? null : result.optJSONObject("appPlaybook");
         if (appPlaybook != null && appPlaybook.length() > 0) {
             modelResult.put("appPlaybook", appPlaybook);
@@ -4660,7 +4694,9 @@ final class NativeGeminiLiveClient {
         if (error != null) Log.e(TAG, message, error); else Log.e(TAG, message);
         running = false;
         interruptionHandler.removeCallbacks(clearInterruptedFallback);
-        liveAudioController.stop(); listener.onStopped(message);
+        conversationLoopRuntime.shutdown();
+        liveAudioController.stop();
+        listener.onStopped(message);
     }
 
 }
