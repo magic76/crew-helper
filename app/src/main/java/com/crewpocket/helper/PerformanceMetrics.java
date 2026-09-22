@@ -60,6 +60,7 @@ final class PerformanceMetrics {
     private static long textRouteSend;
     private static long textRouteNotebook;
     private static long textRouteTypeRemappedToSend;
+    private static long textRouteSendRemappedToType;
     // 0117: App teaching counters only; no package, guidance or transcript text.
     private static long appTeachArmed;
     private static long appTeachSaved;
@@ -252,6 +253,10 @@ final class PerformanceMetrics {
         textRouteTypeRemappedToSend++;
     }
 
+    static synchronized void recordTextRouteSendRemappedToType() {
+        textRouteSendRemappedToType++;
+    }
+
     static synchronized void recordAppTeachArmed() { appTeachArmed++; }
     static synchronized void recordAppTeachSaved() { appTeachSaved++; }
     static synchronized void recordAppTeachCancelled() { appTeachCancelled++; }
@@ -315,6 +320,7 @@ final class PerformanceMetrics {
                 .append(" send=").append(textRouteSend)
                 .append(" notebook=").append(textRouteNotebook)
                 .append(" type-remapped-to-send=").append(textRouteTypeRemappedToSend)
+                .append(" send-remapped-to-type=").append(textRouteSendRemappedToType)
                 .append("\n");
         out.append("App teaching: armed=").append(appTeachArmed)
                 .append(" saved=").append(appTeachSaved)
@@ -447,6 +453,7 @@ final class PerformanceMetrics {
         textRouteSend = 0L;
         textRouteNotebook = 0L;
         textRouteTypeRemappedToSend = 0L;
+        textRouteSendRemappedToType = 0L;
         appTeachArmed = 0L;
         appTeachSaved = 0L;
         appTeachCancelled = 0L;
