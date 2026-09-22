@@ -25,9 +25,9 @@ public final class VoiceExecutionPolicyTest {
                         "send_text", ""),
                 "explicit one-shot send does not need redundant read-back");
         check(
-                !VoiceExecutionPolicy.requiresCriticalEntityConfirmation(
+                VoiceExecutionPolicy.requiresCriticalEntityConfirmation(
                         "start_conversation_loop", ""),
-                "explicit bounded conversation delegation needs no redundant confirmation");
+                "loop confirmation remains on when no-confirm preference is off");
         check(
                 !VoiceExecutionPolicy.requiresCriticalEntityConfirmation(
                         "search_current_app", "4486819"),
