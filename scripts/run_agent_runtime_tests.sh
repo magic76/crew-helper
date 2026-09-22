@@ -60,6 +60,8 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/VoiceCommandQualityPolicy.java" \
   "$SRC/ActionSafetyPolicy.java" \
   "$SRC/VoiceExecutionPolicy.java" \
+  "$SRC/ConversationLoopPolicy.java" \
+  "$SRC/ConversationLoopRecipe.java" \
   "$ROOT/tests/SendAuthorizationTest.java" \
   "$ROOT/tests/LiveTurnCoordinatorTest.java" \
   "$ROOT/tests/ToolCallDispatchLedgerTest.java" \
@@ -99,6 +101,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/TaskRecipePolicyTest.java" \
   "$ROOT/tests/VoiceCommandQualityPolicyTest.java" \
   "$ROOT/tests/VoiceExecutionPolicyTest.java" \
+  "$ROOT/tests/ConversationLoopRecipeTest.java" \
   "$ROOT/tests/AgentReplayRunner.java"
 
 java -cp "$OUT" com.crewpocket.helper.SendAuthorizationTest
@@ -140,4 +143,5 @@ java -cp "$OUT" com.crewpocket.helper.AppPlaybookRelevanceTest
 java -cp "$OUT" com.crewpocket.helper.TaskRecipePolicyTest
 java -cp "$OUT" com.crewpocket.helper.VoiceCommandQualityPolicyTest
 java -cp "$OUT" com.crewpocket.helper.VoiceExecutionPolicyTest
+java -cp "$OUT" com.crewpocket.helper.ConversationLoopRecipeTest
 java -cp "$OUT" com.crewpocket.helper.AgentReplayRunner "$ROOT/tests/replay"
