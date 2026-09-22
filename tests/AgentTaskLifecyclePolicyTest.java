@@ -135,6 +135,9 @@ public final class AgentTaskLifecyclePolicyTest {
         check(AgentTaskLifecyclePolicy.canFinishAfterModelReply(
                         "ANSWER_READY", "inspect_ui", false, false),
                 "answer-ready state may close the goal");
+        check(AgentTaskLifecyclePolicy.canFinishAfterModelReply(
+                        "BLOCKED", "tap_screen", false, false),
+                "explicit blocked state may conclude the goal");
         check(!AgentTaskLifecyclePolicy.canFinishAfterModelReply(
                         "DONE", "tap_screen", true, false),
                 "required post-action inspection still blocks completion");
