@@ -2090,8 +2090,19 @@ final class NativeGeminiLiveClient {
         final boolean conversationLeaseSend =
                 "send_text".equals(name)
                         && conversationLoopRecipe.canSend();
+        final String voiceTargetMetadata =
+                args.optString("label", "") + " "
+                        + args.optString("target", "") + " "
+                        + args.optString("id", "") + " "
+                        + args.optString("element_id", "") + " "
+                        + args.optString("semanticHint", "");
+        final boolean userBypassesMessageVoiceGate =
+                VoiceExecutionPolicy.bypassesMessageVoiceGate(
+                        name,
+                        voiceTargetMetadata,
+                        AppConfig.isMessageSendNoConfirmationEnabled(appContext));
         VoiceExecutionGuard.Preflight voicePreflight =
-                conversationLeaseSend
+                conversationLeaseSend || userBypassesMessageVoiceGate
                         ? VoiceExecutionGuard.Preflight.allow()
                         : voiceExecutionGuard.preflight(
                                 callIntentGeneration,
