@@ -242,7 +242,20 @@ final class SendAuthorization {
         if (hasTypeVerb(rawText)) {
             return hasTypeThenSendIntent(rawText);
         }
-        return isStandaloneCurrentScreenSendCommand(rawText);
+        return isStandaloneCurrentScreenSendCommand(rawText)
+                || hasDirectSendWithPayloadIntent(rawText);
+    }
+
+    private static boolean hasDirectSendWithPayloadIntent(String rawText) {
+        String folded = TextMatch.caseFold(rawText == null ? "" : rawText).trim();
+        String value = normalize(rawText);
+
+        boolean chinese = value.matches(
+                "^(?:麻煩你|麻烦你|幫我|帮我|請|请|替我|直接|現在|现在)*"
+                        + "(?:送出|發送|发送|傳送|传送).+");
+        boolean english = folded.matches(
+                "^\\s*(?:(?:please|just|now)\\s+)*send\\s+.+");
+        return chinese || english;
     }
 
     private static boolean hasTypeVerb(String rawText) {
