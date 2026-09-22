@@ -140,7 +140,19 @@ final class ConversationLoopRuntime {
     }
 
     synchronized JSONObject modelState() {
+        expireIfNeeded();
         return statusJson(false);
+    }
+
+    synchronized void shutdown() {
+        cancelWaitLocked();
+        active = false;
+        sendLeaseAvailable = false;
+        state = State.STOPPED;
+        recipient = "";
+        packageName = "";
+        newMessageMarker = "";
+        expiresAt = 0L;
     }
 
     synchronized boolean sameVerifiedPackage(String currentPackage) {
@@ -218,10 +230,11 @@ final class ConversationLoopRuntime {
         armWaitLocked();
         return statusJson(true)
                 .put("success", true)
+                .put("silent", true)
                 .put("taskState", "WAITING_BACKGROUND")
                 .put(
                         "instruction",
-                        "沒有確認到新的對方訊息；Runtime 已重新等待。不要輪詢 inspect_ui。");
+                        "沒有確認到新的對方訊息；Runtime 已重新等待。保持安靜，不要播報，也不要輪詢 inspect_ui。");
     }
 
     private JSONObject stop(String reason) {
