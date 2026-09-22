@@ -2265,7 +2265,7 @@ final class NativeGeminiLiveClient {
      */
     private void updateTaskCompletionContract(AgentTaskRecord task, String name, JSONObject result) {
         if (task == null || result == null) return;
-        synchronized (agentLock) {
+        synchronized (agentTaskCoordinator.monitor()) {
             if (task.cancelled || task.finished) return;
             boolean succeeded = result.optBoolean("success", false)
                     || "STEP_OK".equals(result.optString("stepResult", ""));
@@ -2352,7 +2352,7 @@ final class NativeGeminiLiveClient {
 
     private JSONObject agentStabilityPreflight(AgentTaskRecord task, String name, JSONObject args) {
         if (task == null || task.finished || task.cancelled || !isMutationTool(name)) return null;
-        synchronized (agentLock) {
+        synchronized (agentTaskCoordinator.monitor()) {
             AgentTaskLifecyclePolicy.StabilityDecision decision =
                     AgentTaskLifecyclePolicy.evaluateStability(
                             task.finished,
@@ -2400,7 +2400,7 @@ final class NativeGeminiLiveClient {
                                                  JSONObject args,
                                                  JSONObject result) {
         if (task == null || result == null) return;
-        synchronized (agentLock) {
+        synchronized (agentTaskCoordinator.monitor()) {
             if ("inspect_ui".equals(name) && result.optBoolean("success", false)) {
                 task.requireObservationAfterFailure = false;
                 task.stabilityBlocks = 0;
@@ -2537,12 +2537,12 @@ final class NativeGeminiLiveClient {
     }
 
     private void scheduleAgentResponseWatchdog(final AgentTaskRecord task) {
-        synchronized (agentLock) {
+        synchronized (agentTaskCoordinator.monitor()) {
             clearAgentResponseWatchdogLocked();
             agentResponseWatchdog = new Runnable() {
                 @Override public void run() {
                     boolean shouldPrompt = false;
-                    synchronized (agentLock) {
+                    synchronized (agentTaskCoordinator.monitor()) {
                         if (agentTaskCoordinator.isActive(task) && task.awaitingModel && !task.finished && !task.cancelled && !task.watchdogPrompted) {
                             task.watchdogPrompted = true;
                             shouldPrompt = true;
@@ -2564,7 +2564,11 @@ final class NativeGeminiLiveClient {
     }
 
     private void markAgentModelResponse() { clearAgentResponseWatchdog(); }
-    private void clearAgentResponseWatchdog() { synchronized (agentLock) { clearAgentResponseWatchdogLocked(); } }
+    private void clearAgentResponseWatchdog() {
+        synchronized (agentTaskCoordinator.monitor()) {
+            clearAgentResponseWatchdogLocked();
+        }
+    }
     private void clearAgentResponseWatchdogLocked() {
         if (agentResponseWatchdog != null) agentWatchdogHandler.removeCallbacks(agentResponseWatchdog);
         agentResponseWatchdog = null;
@@ -2730,7 +2734,7 @@ final class NativeGeminiLiveClient {
     }
 
     private void requestPostActionInspection(AgentTaskRecord task) {
-        synchronized (agentLock) {
+        synchronized (agentTaskCoordinator.monitor()) {
             if (!agentTaskCoordinator.isActive(task) || task.finished || task.cancelled
                     || !task.requiresPostActionInspection || task.postActionInspectionPrompted) return;
             task.postActionInspectionPrompted = true;
