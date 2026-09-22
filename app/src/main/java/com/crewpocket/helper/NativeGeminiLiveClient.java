@@ -25,19 +25,12 @@ import java.util.Set;
 import java.util.ArrayList;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.TimeUnit;
 import android.content.Context;
 import android.os.Handler;
 import android.os.Looper;
-import okhttp3.OkHttpClient;
-import okhttp3.Request;
-import okhttp3.Response;
-import okhttp3.WebSocket;
-import okhttp3.WebSocketListener;
-import okio.ByteString;
 
 /** Gemini Live backed by OkHttp's production WebSocket implementation. */
-final class NativeGeminiLiveClient extends WebSocketListener {
+final class NativeGeminiLiveClient {
     // 0100 latency trace: diagnose model-vs-runtime wait and reject stale post-finish tools.
     // 0073: AgentRuntimeV2 production authority is staged per action/package.
     private static final String TAG = "CrewNativeLive";
@@ -48,7 +41,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         void onSpeakingChanged(boolean speaking);
         void onMicrophoneLevel(double dbfs, double gateDbfs, boolean sending);
     }
-    private final String apiKey;
     private final String voiceName;
     private volatile String noiseMode;
     private volatile int noiseSuppression;
@@ -81,8 +73,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     private final LiveVisionController visionController;
     private volatile boolean running;
     private volatile String stage = "尚未開始";
-    private OkHttpClient httpClient;
-    private WebSocket webSocket;
+    private final GeminiLiveConnection liveConnection;
     private String resumptionHandle;
     private boolean reconnecting;
     private volatile long visualHoldUntil;
@@ -165,7 +156,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     }
     NativeGeminiLiveClient(Context context, String apiKey, String serverUrl, String voiceName, String noiseMode, int noiseSuppression, String liveTone, String customPrompt, int interruptionSensitivity, String audioOutput, Listener listener) {
         this.appContext = context == null ? null : context.getApplicationContext();
-        this.apiKey = apiKey;
         this.voiceName = voiceName == null || voiceName.trim().isEmpty()
                 ? AppConfig.DEFAULT_VOICE : voiceName.trim();
         this.noiseMode = "quiet".equals(noiseMode) || "noisy".equals(noiseMode)
@@ -177,6 +167,56 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 Math.max(0, Math.min(100, interruptionSensitivity));
         this.audioOutput = "media".equals(audioOutput) ? "media" : "call";
         this.listener = listener;
+        this.liveConnection = new GeminiLiveConnection(
+                apiKey,
+                new GeminiLiveConnection.Listener() {
+                    @Override public void onOpened() {
+                        try {
+                            NativeGeminiLiveClient.this.reconnecting = false;
+                            NativeGeminiLiveClient.this.reportStage(
+                                    "Gemini WebSocket 已連線，送出設定…");
+                            if (!NativeGeminiLiveClient.this.liveConnection.send(
+                                    NativeGeminiLiveClient.this.buildSetup())) {
+                                throw new Exception("setup 傳送失敗");
+                            }
+                            NativeGeminiLiveClient.this.reportStage(
+                                    "等待 Gemini setupComplete…");
+                        } catch (Exception error) {
+                            NativeGeminiLiveClient.this.fail(
+                                    "設定失敗：" + error.getMessage(), error);
+                        }
+                    }
+
+                    @Override public void onFrame(String text, boolean binary) {
+                        NativeGeminiLiveClient.this.logInboundFrame(text, binary);
+                        try {
+                            NativeGeminiLiveClient.this.handleJson(text);
+                        } catch (Exception error) {
+                            NativeGeminiLiveClient.this.fail(
+                                    binary
+                                            ? "Gemini binary 回覆錯誤：" + error.getMessage()
+                                            : "Gemini 回覆錯誤：" + error.getMessage(),
+                                    error);
+                        }
+                    }
+
+                    @Override public void onClosed(int code, String reason) {
+                        if (NativeGeminiLiveClient.this.running
+                                && !NativeGeminiLiveClient.this.reconnecting) {
+                            NativeGeminiLiveClient.this.fail(
+                                    "Gemini 已關閉連線（" + code + "）：" + reason,
+                                    null);
+                        }
+                    }
+
+                    @Override public void onFailure(
+                            String detail,
+                            Throwable error) {
+                        NativeGeminiLiveClient.this.fail(
+                                "Gemini WebSocket 失敗：" + detail,
+                                error);
+                    }
+                });
 
         this.notebookToolHandler = new NotebookToolHandler(this.appContext);
         this.appPlaybookStore = new AppPlaybookStore(this.appContext);
@@ -214,8 +254,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         this.visionController = new LiveVisionController(
                 new LiveVisionController.Sender() {
                     @Override public boolean send(String payload) {
-                        WebSocket socket = NativeGeminiLiveClient.this.webSocket;
-                        return socket != null && socket.send(payload);
+                        return NativeGeminiLiveClient.this.liveConnection.send(payload);
                     }
                 });
         this.phoneRuntimeExecutor = new PhoneRuntimeExecutor(
@@ -270,12 +309,11 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                     }
 
                     @Override public boolean canSendRealtime() {
-                        return NativeGeminiLiveClient.this.webSocket != null;
+                        return NativeGeminiLiveClient.this.liveConnection.isAvailable();
                     }
 
                     @Override public boolean sendRealtime(String payload) {
-                        WebSocket socket = NativeGeminiLiveClient.this.webSocket;
-                        return socket != null && socket.send(payload);
+                        return NativeGeminiLiveClient.this.liveConnection.send(payload);
                     }
 
                     @Override public void onStatus(String text) {
@@ -318,7 +356,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                     }
 
                     @Override public boolean hasLiveSession() {
-                        return NativeGeminiLiveClient.this.webSocket != null;
+                        return NativeGeminiLiveClient.this.liveConnection.isAvailable();
                     }
 
                     @Override public boolean isInterruptedCurrentTurn() {
@@ -494,7 +532,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     }
     boolean canSendVisualFrame() { return running && System.currentTimeMillis() >= visualHoldUntil; }
     boolean isSetupReadyForSelection() {
-        return running && setupReady && webSocket != null;
+        return running && setupReady && liveConnection.isAvailable();
     }
 
     void setAgentMaxSteps(int steps) { agentMaxSteps = Math.max(1, Math.min(100, steps)); }
@@ -745,7 +783,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     }
 
     boolean sendText(String text) {
-        if (!running || webSocket == null || text == null || text.trim().isEmpty()) return false;
+        if (!running || !liveConnection.isAvailable()
+                || text == null || text.trim().isEmpty()) return false;
         try {
             String input = text.trim();
             if (audioIncidentRecorder != null) audioIncidentRecorder.markTypedInput(input);
@@ -766,8 +805,13 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             }
             JSONObject part = new JSONObject().put("text", text.trim());
             JSONObject turn = new JSONObject().put("role", "user").put("parts", new JSONArray().put(part));
-            boolean sent = webSocket.send(new JSONObject().put("clientContent", new JSONObject()
-                    .put("turns", new JSONArray().put(turn)).put("turnComplete", true)).toString());
+            boolean sent = liveConnection.send(
+                    new JSONObject().put(
+                            "clientContent",
+                            new JSONObject()
+                                    .put("turns", new JSONArray().put(turn))
+                                    .put("turnComplete", true))
+                            .toString());
             if (sent) listener.onTranscript("你", text.trim());
             return sent;
         } catch (Exception error) {
@@ -866,7 +910,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
 
     void sendScreenFrame() {
-        if (!running || !setupReady || webSocket == null) {
+        if (!running || !setupReady || !liveConnection.isAvailable()) {
             Log.d(TAG, "略過螢幕影格：Gemini 尚未完成 setupComplete");
             return;
         }
@@ -901,17 +945,12 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         running = true;
         loadVoiceprintProfile();
         reportStage("建立 Gemini WebSocket…");
-        httpClient = new OkHttpClient.Builder().readTimeout(0, TimeUnit.MILLISECONDS).build();
-        connect();
+        liveConnection.start();
     }
 
     private void connect() {
         if (!running) return;
-        Request request = new Request.Builder()
-                .url("wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=" + apiKey)
-                .header("Origin", "https://generativelanguage.googleapis.com")
-                .build();
-        webSocket = httpClient.newWebSocket(request, this);
+        liveConnection.connect();
     }
 
     private volatile long serverInterruptedCount = 0L;
@@ -1019,14 +1058,14 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             listener.onSpeakingChanged(false);
             // Send zeroed silence frame to trigger Gemini server VAD turn completion instantly
             try {
-                if (webSocket != null) {
+                if (liveConnection.isAvailable()) {
                     byte[] silence = new byte[3200];
                     JSONObject root = new JSONObject();
                     JSONObject audio = new JSONObject();
                     audio.put("mimeType", "audio/pcm;rate=16000");
                     audio.put("data", Base64.encodeToString(silence, Base64.NO_WRAP));
                     root.put("realtimeInput", new JSONObject().put("audio", audio));
-                    webSocket.send(root.toString());
+                    liveConnection.send(root.toString());
                 }
             } catch (Exception ignored) {}
             return false; // remains unmuted, but interrupted
@@ -1070,30 +1109,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
         setupReady = false;
         interruptionHandler.removeCallbacks(clearInterruptedFallback);
         liveAudioController.stop();
-        try { if (webSocket != null) webSocket.close(1000, "Client ended call"); } catch (Exception ignored) {}
-        try { if (httpClient != null) httpClient.dispatcher().executorService().shutdown(); } catch (Exception ignored) {}
+        liveConnection.stop();
         if (wasRunning) listener.onStopped("已結束");
-    }
-
-    @Override public void onOpen(WebSocket socket, Response response) {
-        try {
-            reconnecting = false;
-            reportStage("Gemini WebSocket 已連線，送出設定…");
-            if (!socket.send(buildSetup())) throw new Exception("setup 傳送失敗");
-            reportStage("等待 Gemini setupComplete…");
-        } catch (Exception error) { fail("設定失敗：" + error.getMessage(), error); }
-    }
-    @Override public void onMessage(WebSocket socket, String text) {
-        logInboundFrame(text, false);
-        try { handleJson(text); } catch (Exception error) { fail("Gemini 回覆錯誤：" + error.getMessage(), error); }
-    }
-    @Override public void onMessage(WebSocket socket, ByteString bytes) {
-        // The Live endpoint commonly sends JSON in a binary WebSocket frame.
-        // Browsers receive it as a Blob and call Blob.text(); do the Android
-        // equivalent rather than treating a valid setupComplete as an error.
-        String text = bytes.utf8();
-        logInboundFrame(text, true);
-        try { handleJson(text); } catch (Exception error) { fail("Gemini binary 回覆錯誤：" + error.getMessage(), error); }
     }
 
     /** Avoid logging base64 PCM: formatting those large messages can starve audio. */
@@ -1104,15 +1121,6 @@ final class NativeGeminiLiveClient extends WebSocketListener {
                 : text.contains("turnComplete") || text.contains("turn_complete") ? "turnComplete" : "server event";
         Log.d(TAG, "Gemini " + (binary ? "binary " : "") + kind + " (" + text.length() + " chars)");
     }
-    @Override public void onClosing(WebSocket socket, int code, String reason) { socket.close(code, null); }
-    @Override public void onClosed(WebSocket socket, int code, String reason) {
-        if (running && !reconnecting) fail("Gemini 已關閉連線（" + code + "）：" + reason, null);
-    }
-    @Override public void onFailure(WebSocket socket, Throwable error, Response response) {
-        String detail = response == null ? error.getMessage() : "HTTP " + response.code() + " " + response.message();
-        fail("Gemini WebSocket 失敗：" + detail, error);
-    }
-
     private void handleJson(String raw) throws Exception {
         GeminiLiveTurnHandler.Frame frame =
                 geminiLiveTurnHandler.parse(raw);
@@ -1129,13 +1137,8 @@ final class NativeGeminiLiveClient extends WebSocketListener {
             }
             reportStage("🔄 正在延續長通話…");
             reconnecting = true;
-            try {
-                if (webSocket != null) {
-                    webSocket.close(
-                            1000,
-                            "Resuming Gemini Live session");
-                }
-            } catch (Exception ignored) {}
+            liveConnection.closeForReconnect(
+                    "Resuming Gemini Live session");
             new Handler(Looper.getMainLooper()).postDelayed(
                     new Runnable() {
                         @Override public void run() {
@@ -2592,10 +2595,10 @@ final class NativeGeminiLiveClient extends WebSocketListener {
     /** Internal control turn: do not pollute the user-facing live transcript. */
     private void sendInternalAgentDirective(String text) {
         try {
-            if (webSocket == null) return;
+            if (!liveConnection.isAvailable()) return;
             JSONObject part = new JSONObject().put("text", text);
             JSONObject turn = new JSONObject().put("role", "user").put("parts", new JSONArray().put(part));
-            webSocket.send(new JSONObject().put("clientContent", new JSONObject().put("turns", new JSONArray().put(turn)).put("turnComplete", true)).toString());
+            liveConnection.send(new JSONObject().put("clientContent", new JSONObject().put("turns", new JSONArray().put(turn)).put("turnComplete", true)).toString());
         } catch (Exception error) { Log.w(TAG, "Agent 結論指令傳送失敗：" + error.getMessage()); }
     }
 
@@ -4535,7 +4538,7 @@ final class NativeGeminiLiveClient extends WebSocketListener {
 
         JSONArray responses =
                 toolCallDispatcher.expandResponses(id, name, modelResult);
-        if (webSocket == null || !webSocket.send(new JSONObject().put("toolResponse", new JSONObject().put("functionResponses", responses)).toString())) {
+        if (!liveConnection.isAvailable() || !liveConnection.send(new JSONObject().put("toolResponse", new JSONObject().put("functionResponses", responses)).toString())) {
             throw new Exception("工具結果無法傳回 Gemini");
         }
     }
