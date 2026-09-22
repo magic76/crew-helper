@@ -180,7 +180,7 @@ final class LiveToolCatalog {
         tools.put(new JSONObject()
                 .put("name", "start_conversation_loop")
                 .put("description",
-                        "Start a bounded persistent conversation TaskRecipe ONLY when the user explicitly delegates an ongoing conversation with a named recipient (for example 幫我跟小明持續聊天/代我回他直到我喊停). Runtime requires voice confirmation before arming the lease, verifies the same recipient chat before every send, waits on Accessibility events between replies, and stops on explicit user stop, timeout, or reply limit. This tool only arms the loop; use normal navigation/inspect/send_text inside the bounded lease.")
+                        "Start a bounded persistent conversation TaskRecipe when the user explicitly delegates an ongoing conversation with a named recipient. Natural wording such as『幫我跟小明聊』『你自己跟小明聊』『幫我跟小明持續聊天』『代我回小明直到我喊停』counts as explicit delegation. The explicit request itself arms the bounded lease; do not claim automatic chat cannot be authorized and do not ask a redundant second confirmation. Runtime verifies the same recipient chat before every send, waits on Accessibility events between replies, and stops on explicit user stop, timeout, or reply limit.")
                 .put("parameters", new JSONObject()
                         .put("type", "OBJECT")
                         .put("properties", new JSONObject()
