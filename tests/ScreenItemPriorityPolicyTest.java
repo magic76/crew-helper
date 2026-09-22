@@ -21,6 +21,23 @@ public final class ScreenItemPriorityPolicyTest {
                 "text", "營業時間", "", "");
         expect(genericButton > metadata, "Clickable controls should outrank metadata");
 
+        expect(
+                ScreenItemPriorityPolicy.isActionable(
+                        "button", "開始", "navigation:START", "tap"),
+                "start button should be actionable");
+        expect(
+                ScreenItemPriorityPolicy.isSceneContext(
+                        "text", "大皇宮", "", ""),
+                "place title should survive as scene context");
+        expect(
+                ScreenItemPriorityPolicy.isSceneContext(
+                        "text", "4.6 顆星", "", ""),
+                "rating should remain available as scene context");
+        expect(
+                !ScreenItemPriorityPolicy.isSceneContext(
+                        "button", "路線", "navigation:DIRECTIONS", "tap"),
+                "action controls must not consume scene quota");
+
         System.out.println("ScreenItemPriorityPolicyTest passed");
     }
 
