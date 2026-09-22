@@ -4811,66 +4811,6 @@ final class NativeGeminiLiveClient {
                 userActionScope.authorizedRecipient());
     }
 
-    private JSONObject verifyTrustedCurrentChatOnScreen()
-            throws Exception {
-        JSONObject semantic = phoneRuntimeExecutor.get("/semantic_screen");
-        if (semantic == null || !semantic.optBoolean("success", false)) {
-            return runtimeBlocked(
-                    "TRUSTED_MESSAGE_CHAT_UNAVAILABLE",
-                    "訊息送出免確認已開啟，但 Runtime 目前無法讀取畫面確認聊天輸入框；這不是隱私限制。");
-        }
-
-        JSONArray elements = semantic.optJSONArray("elements");
-        if (elements == null || elements.length() == 0) {
-            return runtimeBlocked(
-                    "TRUSTED_MESSAGE_CHAT_NOT_VERIFIED",
-                    "訊息送出免確認已開啟，但目前沒有足夠 Accessibility 結構證明這是聊天畫面。");
-        }
-
-        boolean composerFound = false;
-        boolean composerLooksChatLike = false;
-        boolean sendControlVisible = false;
-        for (int i = 0; i < elements.length(); i++) {
-            JSONObject element = elements.optJSONObject(i);
-            if (element == null || element.optBoolean("sensitive", false)) {
-                continue;
-            }
-
-            String role = element.optString("role", "");
-            String label = element.optString("label", "");
-            String hint = element.optString("semanticHint", "");
-            String viewId = element.optString("viewId", "");
-            String metadata = label + " " + hint + " " + viewId;
-
-            if ("send".equalsIgnoreCase(hint)
-                    || UserActionScope.looksLikeSendTarget(metadata)) {
-                sendControlVisible = true;
-            }
-
-            if (!element.optBoolean("editable", false)
-                    && !"text_field".equals(role)) {
-                continue;
-            }
-            if (isSearchLikeMessagingField(element)) continue;
-
-            composerFound = true;
-            if (looksLikeChatComposer(element)) {
-                composerLooksChatLike = true;
-            }
-        }
-
-        if (!composerFound || (!composerLooksChatLike && !sendControlVisible)) {
-            return runtimeBlocked(
-                    "TRUSTED_MESSAGE_CHAT_NOT_VERIFIED",
-                    "訊息送出免確認已開啟，但目前畫面尚未證明是可傳訊息的聊天室；不要把一般表單當成訊息送出，也不要宣稱受隱私限制。");
-        }
-
-        return new JSONObject()
-                .put("success", true)
-                .put("chatComposerVerified", true)
-                .put("verificationSource", "ACCESSIBILITY_CURRENT_SCREEN");
-    }
-
     private JSONObject verifyRecipientOnCurrentScreen(String recipient)
             throws Exception {
         if (recipient == null || recipient.trim().isEmpty()) {
@@ -5020,51 +4960,27 @@ final class NativeGeminiLiveClient {
         LiveTurnCoordinator.FinalizedTurn finalized =
                 liveTurnCoordinator.latest();
 
-        boolean finalizedIsCurrent =
-                finalized.generation == userIntentGeneration;
-        boolean explicitTypeOnly =
-                !loopSend
-                        && finalizedIsCurrent
-                        && SendAuthorization.isExplicitTypeOnlyRequest(
-                                finalized.text);
-
-        // TYPE-only always wins over persistent trust. Even with the switch ON,
-        // "幫我輸入 X" or "打字 X，不要送出" must never cross the SEND edge.
-        if (explicitTypeOnly) {
-            if (!text.isEmpty()) {
-                return executeTypeOnlyFromSendMisroute(text);
-            }
-            return new JSONObject()
-                    .put("success", true)
-                    .put("action", "SEND_CURRENT")
-                    .put("sendSuppressed", true)
-                    .put("stepResult", "STEP_OK")
-                    .put("taskState", "DONE")
-                    .put("completionEvidence",
-                            "TYPE_ONLY_SEND_SUPPRESSED")
-                    .put("message", "已保留草稿，未送出")
-                    .put("instruction",
-                            "最新一句只授權 TYPE；訊息送出免確認不會覆蓋『不要送出』。");
+        // Weak Live models sometimes mistake "在聊天框打字" for SEND because
+        // the destination is a messaging app. Runtime owns this distinction:
+        // explicit type-only intent is a reversible draft action. Preserve the
+        // model-generated exact text, but suppress submission entirely.
+        if (!loopSend
+                && !text.isEmpty()
+                && finalized.generation == userIntentGeneration
+                && SendAuthorization.isExplicitTypeOnlyRequest(
+                        finalized.text)) {
+            return executeTypeOnlyFromSendMisroute(text);
         }
 
-        boolean persistentMessageTrust =
-                !loopSend
-                        && AppConfig.isMessageSendNoConfirmationEnabled(
-                                appContext)
-                        && SendAuthorization.allowsPersistentMessageTrust(
-                                finalized.text);
-
-        if (!loopSend
-                && (userActionScope.blocksNamedRecipientMessagingAction()
-                        || (!persistentMessageTrust
-                                && !userActionScope.canSend()))) {
+        if (!loopSend && (!userActionScope.canSend()
+                || userActionScope.blocksNamedRecipientMessagingAction())) {
             ensureSendAuthorizationFromFinalized(finalized, args);
         }
         if (!loopSend
                 && userActionScope.blocksNamedRecipientMessagingAction()) {
             return runtimeBlocked(
                     "RECIPIENT_TARGET_UNKNOWN",
-                    "訊息免確認不代表可以猜收件人；請先開啟或明確指定正確對象。");
+                    "這一輪看起來要傳給特定對象，但 Runtime 無法從原始指令抽出可驗證的收件人。不要猜收件人；請使用者用『跟 X 說…』或『傳給 X：「…」』明確指定。");
         }
 
         // Duplicate suppression is a commit concern, not a TYPE concern.
@@ -5082,14 +4998,11 @@ final class NativeGeminiLiveClient {
 
         boolean delegatedSendAuthorized =
                 ConversationLoopPolicy.hasDelegatedSendAuthority(
-                        loopSend, userActionScope.canSend())
-                        || persistentMessageTrust;
+                        loopSend, userActionScope.canSend());
         if (!delegatedSendAuthorized) {
             return runtimeBlocked(
                     "CURRENT_SCREEN_SEND_NOT_AUTHORIZED",
-                    AppConfig.isMessageSendNoConfirmationEnabled(appContext)
-                            ? "訊息免確認已開啟，但最新一句明確是草稿/禁止送出情境；Runtime 尊重當下指令。這不是隱私或安全限制。"
-                            : "訊息提交需要最新一句明確 SEND intent，或 ACTIVE Conversation Loop 租約。");
+                    "訊息提交需要最新一句明確 SEND intent，或 ACTIVE Conversation Loop 租約。Loop active 時，Runtime wake 本身就是後續回覆授權，不需要新的 user turn。TYPE/草稿輸入不需要這份授權。");
         }
 
         // Preparation stays reversible. If send_text carries new text, insert
@@ -5123,31 +5036,15 @@ final class NativeGeminiLiveClient {
         }
 
         boolean targetVerified = false;
-        boolean namedRecipientVerification =
-                userActionScope.requiresRecipientVerification();
-        boolean trustedCurrentChatVerification =
-                persistentMessageTrust
-                        && !loopSend
-                        && !namedRecipientVerification;
         boolean targetVerificationRequired =
-                loopSend
-                        || namedRecipientVerification
-                        || trustedCurrentChatVerification;
+                loopSend || userActionScope.requiresRecipientVerification();
 
         if (targetVerificationRequired) {
-            JSONObject recipientVerification;
-            if (loopSend) {
-                recipientVerification =
-                        verifyRecipientOnCurrentScreen(
-                                conversationLoopRecipe.recipient());
-            } else if (namedRecipientVerification) {
-                recipientVerification =
-                        verifyAuthorizedRecipientOnCurrentScreen();
-            } else {
-                recipientVerification =
-                        verifyTrustedCurrentChatOnScreen();
-            }
-
+            JSONObject recipientVerification =
+                    loopSend
+                            ? verifyRecipientOnCurrentScreen(
+                                    conversationLoopRecipe.recipient())
+                            : verifyAuthorizedRecipientOnCurrentScreen();
             if (!recipientVerification.optBoolean("success", false)) {
                 if (loopSend) {
                     conversationLoopRecipe.stop(
