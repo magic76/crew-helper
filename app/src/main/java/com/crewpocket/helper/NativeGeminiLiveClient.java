@@ -1147,6 +1147,9 @@ final class NativeGeminiLiveClient {
     }
 
     void stop() {
+        conversationLoopRecipe.stop("LIVE_SESSION_STOPPED");
+        workingContext.setPendingTask("");
+
         boolean wasRunning = running;
         correctionHandler.removeCallbacks(clearCorrectionWindow);
         correctionWindowActive = false;
@@ -2542,7 +2545,8 @@ final class NativeGeminiLiveClient {
                     boolean blocked = task.blockedReason != null
                             || "BLOCKED".equals(domainState);
                     boolean answerFastPath =
-                            InformationAnswerFastPathPolicy.shouldOffer(
+                            !conversationLoopRecipe.isActive()
+                                    && InformationAnswerFastPathPolicy.shouldOffer(
                                     name,
                                     true,
                                     task.getToolCount("search_current_app"),
@@ -4787,6 +4791,13 @@ final class NativeGeminiLiveClient {
                         .put("textLength", text.length())
                         .put("sendMode", "TYPE_THEN_SEND_CURRENT");
                 workingContext.recordAction("send_current", "failed");
+                if (loopSend) {
+                    conversationLoopRecipe.stop("TYPE_FAILED");
+                    workingContext.setPendingTask("");
+                    failure.put("conversationLoop", "STOPPED")
+                            .put("instruction",
+                                    "持續對話輸入失敗，Runtime 已停止 loop；不要自動重試或重複送訊息。");
+                }
                 return failure;
             }
         }
@@ -4972,6 +4983,8 @@ final class NativeGeminiLiveClient {
     private void reportStage(String text) { stage = text; listener.onStatus(text); Log.d(TAG, text); }
     private synchronized void fail(String message, Throwable error) {
         if (!running) return;
+        conversationLoopRecipe.stop("LIVE_SESSION_FAILED");
+        workingContext.setPendingTask("");
         if (error != null) Log.e(TAG, message, error); else Log.e(TAG, message);
         running = false;
         interruptionHandler.removeCallbacks(clearInterruptedFallback);
