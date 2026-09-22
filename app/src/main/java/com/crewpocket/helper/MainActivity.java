@@ -961,6 +961,9 @@ public class MainActivity extends Activity
         String conversationSummary =
                 interruptionSummary(AppConfig.getInterruptionSensitivity(this))
                         + " · " + audioOutputSummary()
+                        + " · " + (AppConfig.isMessageSendNoConfirmationEnabled(this)
+                                ? I18n.get(this, "送訊息免確認 ON", "Message no-confirm ON")
+                                : I18n.get(this, "送訊息免確認 OFF", "Message no-confirm OFF"))
                         + " · " + liveIdleTimeoutSummary(
                                 AppConfig.getLiveIdleTimeoutSeconds(this));
         pageContent.addView(makeSettingsOverviewRow(
@@ -2011,33 +2014,67 @@ public class MainActivity extends Activity
     }
 
     private void showConversationExperienceSettings() {
+        boolean messageNoConfirm =
+                AppConfig.isMessageSendNoConfirmationEnabled(this);
         showSettingsGroupDialog(
                 I18n.get(this, "對話體驗", "Conversation Experience"),
                 new int[]{
                         CrewIcons.INTERRUPT,
                         CrewIcons.AUDIO,
+                        CrewIcons.PHONE_ACTIONS,
                         CrewIcons.CLOCK
                 },
                 new String[]{
                         I18n.get(this, "插話靈敏度", "Interruption Sensitivity"),
                         I18n.get(this, "音訊輸出", "Audio Output"),
+                        I18n.get(this, "訊息送出免確認", "Message Send No Confirmation"),
                         I18n.get(this, "閒置自動結束", "Live Idle Auto-End")
                 },
                 new String[]{
                         interruptionSummary(
                                 AppConfig.getInterruptionSensitivity(this)),
                         audioOutputSummary(),
+                        messageNoConfirm
+                                ? I18n.get(this,
+                                        "ON · 明確送出時直接執行",
+                                        "ON · Commit explicit sends directly")
+                                : I18n.get(this,
+                                        "OFF · 保留語音確認門檻",
+                                        "OFF · Keep voice confirmation gate"),
                         liveIdleTimeoutSummary(
                                 AppConfig.getLiveIdleTimeoutSeconds(this))
                 },
                 new int[]{
                         CrewTheme.EMERALD_400,
                         CrewTheme.CYAN_400,
+                        messageNoConfirm
+                                ? CrewTheme.EMERALD_400
+                                : CrewTheme.TEXT_MUTED,
                         CrewTheme.CYAN_400
                 },
                 new Runnable[]{
                         () -> showInterruptionSensitivityDialog(),
                         () -> showAudioOutputDialog(),
+                        () -> {
+                            boolean next = !AppConfig
+                                    .isMessageSendNoConfirmationEnabled(
+                                            MainActivity.this);
+                            AppConfig.setMessageSendNoConfirmationEnabled(
+                                    MainActivity.this, next);
+                            Toast.makeText(
+                                    MainActivity.this,
+                                    next
+                                            ? I18n.get(
+                                                    MainActivity.this,
+                                                    "訊息送出免確認已開啟",
+                                                    "Message no-confirm enabled")
+                                            : I18n.get(
+                                                    MainActivity.this,
+                                                    "訊息送出免確認已關閉",
+                                                    "Message no-confirm disabled"),
+                                    Toast.LENGTH_SHORT).show();
+                            renderSettingsPage();
+                        },
                         () -> showLiveIdleTimeoutDialog()
                 });
     }
