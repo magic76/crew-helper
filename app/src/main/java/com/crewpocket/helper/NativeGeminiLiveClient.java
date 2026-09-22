@@ -1161,6 +1161,11 @@ final class NativeGeminiLiveClient {
         GeminiLiveTurnHandler.Frame frame =
                 geminiLiveTurnHandler.parse(raw);
 
+        if (!frame.interimInputText.isEmpty()) {
+            voiceExecutionGuard.onInterimVoice(
+                    frame.interimInputText);
+        }
+
         if (frame.resumable && !frame.resumptionHandle.isEmpty()) {
             resumptionHandle = frame.resumptionHandle;
         }
@@ -1474,7 +1479,14 @@ final class NativeGeminiLiveClient {
 
         LiveTurnCoordinator.FinalizedTurn latest =
                 liveTurnCoordinator.latest();
-        if (latest.generation == queuedGeneration) {
+
+        // If a new utterance has begun but Gemini has only emitted interim
+        // transcription, the previous finalized generation must never grant
+        // authority to this tool call.
+        boolean pendingInterim =
+                voiceExecutionGuard.hasPendingInterim();
+        if (!pendingInterim
+                && latest.generation == queuedGeneration) {
             return queuedGeneration;
         }
         if (latest.generation == queuedGeneration + 1L) {
@@ -1483,7 +1495,7 @@ final class NativeGeminiLiveClient {
 
         LiveTurnCoordinator.FinalizedTurn finalized =
                 liveTurnCoordinator.awaitNextAfter(
-                        queuedGeneration, 1200L);
+                        queuedGeneration, 1400L);
         if (finalized.generation == queuedGeneration + 1L) {
             Log.i(
                     TAG,
@@ -1493,6 +1505,9 @@ final class NativeGeminiLiveClient {
                             + requestedName);
             return finalized.generation;
         }
+
+        // Fail closed. Caller sees a stale generation and rejects the tool
+        // rather than executing against the previous authoritative utterance.
         return queuedGeneration;
     }
 
