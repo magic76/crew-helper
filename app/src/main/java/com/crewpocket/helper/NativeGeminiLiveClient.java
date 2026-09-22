@@ -2898,6 +2898,208 @@ final class NativeGeminiLiveClient {
                 .put("message", "已啟動畫面監控：" + lbl);
     }
 
+    private JSONObject startConversationLoop(JSONObject args)
+            throws Exception {
+        JSONObject safe = args == null ? new JSONObject() : args;
+        String recipient = safe.optString("recipient", "").trim();
+        int maxReplies = safe.optInt("max_replies", 10);
+        int timeoutMinutes = safe.optInt("timeout_minutes", 15);
+
+        LiveTurnCoordinator.FinalizedTurn latest =
+                liveTurnCoordinator.latest();
+        JSONObject context = workingContext.toJson();
+        String rootGoal = context.optString(
+                "rootGoal",
+                context.optString("latestUserTurn", ""));
+        boolean explicit =
+                ConversationLoopPolicy.isExplicitStartIntent(latest.text)
+                        || ConversationLoopPolicy.isExplicitStartIntent(
+                                rootGoal);
+        boolean recipientBound =
+                ConversationLoopPolicy.mentionsRecipient(
+                        latest.text, recipient)
+                        || ConversationLoopPolicy.mentionsRecipient(
+                                rootGoal, recipient);
+        if (!explicit || !recipientBound) {
+            return runtimeBlocked(
+                    "CONVERSATION_LOOP_NOT_EXPLICIT",
+                    "持續代聊是長時間送訊息授權，只能來自使用者明確要求，且 recipient 必須出現在該要求中。不要從一般單次傳訊息推斷成對話模式。");
+        }
+
+        ConversationLoopRecipe.StartResult started =
+                conversationLoopRecipe.start(
+                        recipient,
+                        userIntentGeneration,
+                        maxReplies,
+                        timeoutMinutes);
+        if (!started.success) {
+            return runtimeBlocked(
+                    started.code,
+                    "無法建立持續對話模式；請確認收件人。");
+        }
+
+        workingContext.setPendingTask("CONVERSATION_LOOP");
+        return conversationLoopStatusJson()
+                .put("success", true)
+                .put("taskState", "IN_PROGRESS")
+                .put("conversationLoop", "READY_TO_SEND")
+                .put("instruction",
+                        "持續對話租約已啟用。先確認/開啟指定 recipient 的聊天室；可送出一則自然開場或使用者指定內容。每次 send_text 後 Runtime 會自動背景等待新訊息，不要輪詢。");
+    }
+
+    private JSONObject continueConversationLoop(JSONObject args)
+            throws Exception {
+        if (!conversationLoopRecipe.isActive()) {
+            return runtimeBlocked(
+                    "CONVERSATION_LOOP_NOT_ACTIVE",
+                    "目前沒有持續對話租約，不要自行建立背景送訊息循環。");
+        }
+
+        JSONObject semantic =
+                phoneRuntimeExecutor.get("/semantic_screen");
+        String fingerprint = semantic == null
+                ? "" : semantic.optString("fingerprint", "");
+        if (!conversationLoopRecipe.rearmWait(fingerprint)) {
+            return runtimeBlocked(
+                    "CONVERSATION_LOOP_CANNOT_WAIT",
+                    "對話租約已停止或到期。");
+        }
+
+        armConversationLoopWaitAsync();
+        return conversationLoopStatusJson()
+                .put("success", true)
+                .put("taskState", "WAITING_BACKGROUND")
+                .put("conversationLoop", "WAITING_FOR_MESSAGE")
+                .put("instruction",
+                        "Runtime 已重新掛上 Accessibility event wait。不要 poll/inspect，等 Runtime 喚醒。");
+    }
+
+    private JSONObject stopConversationLoop(JSONObject args)
+            throws Exception {
+        boolean wasActive = conversationLoopRecipe.isActive();
+        conversationLoopRecipe.stop("MODEL_OR_USER_STOP");
+        workingContext.setPendingTask("");
+        return conversationLoopStatusJson()
+                .put("success", true)
+                .put("taskState", "DONE")
+                .put("conversationLoop", "STOPPED")
+                .put("message",
+                        wasActive
+                                ? "已停止持續對話模式"
+                                : "目前沒有進行中的持續對話模式");
+    }
+
+    private JSONObject conversationLoopStatusJson() {
+        JSONObject out = new JSONObject();
+        try {
+            out.put(
+                            "state",
+                            conversationLoopRecipe.state().name())
+                    .put(
+                            "recipient",
+                            conversationLoopRecipe.recipient())
+                    .put(
+                            "sentReplies",
+                            conversationLoopRecipe.sentReplies())
+                    .put(
+                            "maxReplies",
+                            conversationLoopRecipe.maxReplies())
+                    .put(
+                            "expiresAtMs",
+                            conversationLoopRecipe.expiresAtMs());
+        } catch (Exception ignored) {}
+        return out;
+    }
+
+    private void armConversationLoopWaitAsync() {
+        final long epoch = conversationLoopRecipe.epoch();
+        new Thread(new Runnable() {
+            @Override public void run() {
+                long revision = 0L;
+                try {
+                    JSONObject initial =
+                            phoneRuntimeExecutor.post(
+                                    "/wait_ui_change",
+                                    new JSONObject()
+                                            .put("after_revision", -1L)
+                                            .put("timeout_ms", 0L),
+                                    2500);
+                    revision = initial.optLong("revision", 0L);
+                } catch (Exception ignored) {}
+
+                while (running
+                        && conversationLoopRecipe.isActive()
+                        && conversationLoopRecipe.isWaiting()
+                        && conversationLoopRecipe.epoch() == epoch) {
+                    JSONObject event = null;
+                    try {
+                        event = phoneRuntimeExecutor.post(
+                                "/wait_ui_change",
+                                new JSONObject()
+                                        .put("after_revision", revision)
+                                        .put("timeout_ms", 5000L),
+                                7000);
+                    } catch (Exception ignored) {}
+
+                    if (conversationLoopRecipe.epoch() != epoch
+                            || !conversationLoopRecipe.isWaiting()) {
+                        return;
+                    }
+                    if (event == null) continue;
+                    revision = event.optLong("revision", revision);
+                    if (!event.optBoolean("changed", false)) continue;
+
+                    try { Thread.sleep(350L); }
+                    catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+
+                    JSONObject semantic = null;
+                    try {
+                        semantic =
+                                phoneRuntimeExecutor.get(
+                                        "/semantic_screen");
+                    } catch (Exception ignored) {}
+                    if (semantic == null
+                            || !semantic.optBoolean("success", false)) {
+                        continue;
+                    }
+
+                    String fingerprint =
+                            semantic.optString("fingerprint", "");
+                    if (!conversationLoopRecipe
+                            .markMessagePending(fingerprint)) {
+                        continue;
+                    }
+
+                    final AgentTaskRecord task =
+                            agentTaskCoordinator.active();
+                    if (task != null) {
+                        synchronized (agentTaskCoordinator.monitor()) {
+                            if (!task.finished && !task.cancelled) {
+                                task.awaitingModel = true;
+                                task.watchdogPrompted = false;
+                                task.status =
+                                        "對話模式：偵測到聊天室變化，等待檢查新訊息";
+                            }
+                        }
+                        reportStage(task.status);
+                        sendInternalAgentDirective(
+                                "【CONVERSATION LOOP WAKE】Runtime 偵測到指定聊天室有新的 Accessibility 變化。"
+                                        + "現在只呼叫一次 inspect_ui 看 fresh screenshot。"
+                                        + "若確實有新的對方訊息，依使用者原本授權自然組一則簡短回覆並用 send_text 送出；"
+                                        + "若只是自己的訊息、typing indicator 或其他 UI noise，呼叫 continue_conversation_loop 重新等待。"
+                                        + "不要切到其他收件人，也不要輪詢。");
+                        agentResponseCoordinator
+                                .scheduleWatchdog(task);
+                    }
+                    return;
+                }
+            }
+        }, "crew-conversation-loop-wait").start();
+    }
+
     private JSONObject waitThenAction(JSONObject args) throws Exception {
         String condition = args.optString("condition", "");
         String conditionText = args.optString("condition_text", "");
