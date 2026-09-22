@@ -8,19 +8,8 @@ final class ElementReferenceChoice {
 
     static int parseIndex(String raw, int max) {
         if (max <= 0 || raw == null) return -1;
-        String text = raw.toLowerCase(Locale.ROOT).trim();
-        if (text.isEmpty()) return -1;
-
-        String compact = text
-                .replaceAll("[，,。.!！?？：:；;（）()\\s]", "")
-                .replace("第", "")
-                .replace("個", "")
-                .replace("个", "")
-                .replace("號", "")
-                .replace("号", "")
-                .replace("項", "")
-                .replace("项", "")
-                .trim();
+        String compact = compact(raw);
+        if (compact.isEmpty()) return -1;
 
         if (compact.matches("\\d{1,2}")) {
             try {
@@ -38,6 +27,33 @@ final class ElementReferenceChoice {
         if ("fourth".equals(compact)) return max >= 4 ? 3 : -1;
         if ("fifth".equals(compact)) return max >= 5 ? 4 : -1;
         return -1;
+    }
+
+    static boolean looksLikeChoice(String raw) {
+        String compact = compact(raw);
+        if (compact.isEmpty()) return false;
+        if (compact.matches("\\d{1,2}")) return true;
+        if (chineseNumber(compact) >= 1) return true;
+        return "first".equals(compact)
+                || "second".equals(compact)
+                || "third".equals(compact)
+                || "fourth".equals(compact)
+                || "fifth".equals(compact);
+    }
+
+    private static String compact(String raw) {
+        if (raw == null) return "";
+        return raw.toLowerCase(Locale.ROOT)
+                .trim()
+                .replaceAll("[，,。.!！?？：:；;（）()\\s]", "")
+                .replace("第", "")
+                .replace("個", "")
+                .replace("个", "")
+                .replace("號", "")
+                .replace("号", "")
+                .replace("項", "")
+                .replace("项", "")
+                .trim();
     }
 
     private static int chineseNumber(String value) {
