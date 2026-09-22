@@ -410,11 +410,41 @@ final class ModelToolResponseAdapter {
                 copyString(source, out, "package");
                 JSONArray important = source.optJSONArray("important");
                 if (important != null && important.length() > 0) {
+                    java.util.ArrayList<JSONObject> ranked =
+                            new java.util.ArrayList<JSONObject>();
+                    for (int i = 0; i < important.length(); i++) {
+                        JSONObject raw = important.optJSONObject(i);
+                        if (raw != null) ranked.add(raw);
+                    }
+                    java.util.Collections.sort(
+                            ranked,
+                            new java.util.Comparator<JSONObject>() {
+                                @Override public int compare(
+                                        JSONObject left,
+                                        JSONObject right) {
+                                    int leftScore =
+                                            ScreenItemPriorityPolicy.score(
+                                                    left.optString("role", ""),
+                                                    left.optString("label", ""),
+                                                    left.optString("semanticHint", ""),
+                                                    left.optString("can", ""));
+                                    int rightScore =
+                                            ScreenItemPriorityPolicy.score(
+                                                    right.optString("role", ""),
+                                                    right.optString("label", ""),
+                                                    right.optString("semanticHint", ""),
+                                                    right.optString("can", ""));
+                                    return Integer.compare(
+                                            rightScore,
+                                            leftScore);
+                                }
+                            });
+
                     JSONArray items = new JSONArray();
                     for (int i = 0;
-                            i < important.length() && items.length() < MAX_SCREEN_ITEMS;
+                            i < ranked.size() && items.length() < MAX_SCREEN_ITEMS;
                             i++) {
-                        JSONObject item = compactItem(important.optJSONObject(i));
+                        JSONObject item = compactItem(ranked.get(i));
                         if (item.length() > 0) items.put(item);
                     }
                     if (items.length() > 0) out.put("items", items);
