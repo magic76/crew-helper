@@ -11,7 +11,8 @@ import java.util.regex.Pattern;
 /** Pure finalized-voice quality and critical-entity heuristics. */
 final class VoiceCommandQualityPolicy {
     private static final Pattern NUMBER_OR_TIME = Pattern.compile(
-            "(?<!\\p{L})(?:\\d{1,2}[:：]\\d{2}|\\d+(?:[.,]\\d+)?)(?!\\p{L})");
+            "(?<!\\p{L})(?:\\d{1,2}[:：]\\d{2}|\\d+(?:[.,]\\d+)?)(?!\\p{L})"
+                    + "|[零〇一二兩两三四五六七八九十]{1,3}[點点時时](?:半|[零〇一二兩两三四五六七八九十]{1,3}分?)?");
 
     private VoiceCommandQualityPolicy() {}
 
