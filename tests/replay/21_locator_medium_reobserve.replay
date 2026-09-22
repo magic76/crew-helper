@@ -1,0 +1,6 @@
+kind=locator_fallback
+stage=semantic
+locator.decision=RETRY_OBSERVE
+target.hasLabel=true
+target.hasCoordinate=true
+expect.next=REOBSERVE
