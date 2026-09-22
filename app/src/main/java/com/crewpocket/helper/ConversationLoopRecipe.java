@@ -1,7 +1,5 @@
 package com.crewpocket.helper;
 
-import org.json.JSONObject;
-
 /**
  * Bounded persistent conversation TaskRecipe.
  *
@@ -169,17 +167,19 @@ final class ConversationLoopRecipe {
         return state;
     }
 
-    synchronized JSONObject toJson() {
+    synchronized int sentReplies() {
         expireIfNeeded();
-        JSONObject out = new JSONObject();
-        try {
-            out.put("state", state.name())
-                    .put("recipient", recipient)
-                    .put("sentReplies", sentReplies)
-                    .put("maxReplies", maxReplies)
-                    .put("expiresAtMs", expiresAtMs);
-        } catch (Exception ignored) {}
-        return out;
+        return sentReplies;
+    }
+
+    synchronized int maxReplies() {
+        expireIfNeeded();
+        return maxReplies;
+    }
+
+    synchronized long expiresAtMs() {
+        expireIfNeeded();
+        return expiresAtMs;
     }
 
     private void expireIfNeeded() {
