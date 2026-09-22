@@ -4,14 +4,14 @@ import java.nio.charset.StandardCharsets;
 
 /** Stable byte budgets for model-facing text/JSON payloads. */
 final class ContextPayloadBudget {
-    static final int PHONE_ACTION_BYTES = 1400;
-    static final int INSPECT_UI_BYTES = 1800;
-    static final int SEND_TEXT_BYTES = 900;
-    static final int WAIT_BYTES = 1000;
-    static final int CONTROL_BYTES = 1000;
-    static final int DEFAULT_TOOL_BYTES = 1400;
-    static final int INTERNAL_DIRECTIVE_BYTES = 900;
-    static final int APP_PLAYBOOK_BYTES = 1200;
+    static final int PHONE_ACTION_BYTES = 2200;
+    static final int INSPECT_UI_BYTES = 2800;
+    static final int SEND_TEXT_BYTES = 1200;
+    static final int WAIT_BYTES = 1200;
+    static final int CONTROL_BYTES = 1200;
+    static final int DEFAULT_TOOL_BYTES = 2000;
+    static final int INTERNAL_DIRECTIVE_BYTES = 1100;
+    static final int APP_PLAYBOOK_BYTES = 1800;
 
     private ContextPayloadBudget() {}
 
