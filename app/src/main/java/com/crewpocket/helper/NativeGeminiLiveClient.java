@@ -2294,6 +2294,27 @@ final class NativeGeminiLiveClient {
             sendToolResponse(id, requestedName, result);
             PerformanceMetrics.markAgentToolResultSent(
                     task.taskId, task.intentGeneration, name);
+
+            boolean completedConversationLoopSend =
+                    "send_text".equals(name)
+                            && result.optBoolean("conversationLoop", false)
+                            && result.optBoolean("success", false);
+            boolean rearmedConversationLoopWait =
+                    "conversation_loop".equals(name)
+                            && ConversationLoopPolicy.ACTION_WAIT.equals(
+                                    ConversationLoopPolicy.normalizeAction(
+                                            args.optString("action", "")))
+                            && result.optBoolean("success", false);
+            if (completedConversationLoopSend
+                    || rearmedConversationLoopWait) {
+                finishAgentTask(task, "任務完成", "");
+                reportStage(
+                        completedConversationLoopSend
+                                ? "對談模式：已送出並重新等待新訊息"
+                                : "對談模式：已重新等待新訊息");
+                return;
+            }
+
             if (task.blockedReason != null) {
                 agentResponseCoordinator.requestConclusion(task, task.blockedReason);
             } else if (shouldSuspendAgentForUser(result)) {
