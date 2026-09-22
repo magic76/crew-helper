@@ -54,8 +54,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/GoogleMapsSemanticContract.java" \
   "$SRC/AgentTapDiagnostic.java" \
   "$SRC/ModelStepGuidance.java" \
-  "$SRC/ModelToolResponseAdapter.java" \
-  "$SRC/ModelScreenView.java" \
+  "$SRC/ModelScreenPriorityPolicy.java" \
   "$SRC/InformationAnswerFastPathPolicy.java" \
   "$SRC/AppPlaybookRelevance.java" \
   "$SRC/TaskRecipePolicy.java" \
@@ -99,8 +98,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/GoogleMapsSemanticContractTest.java" \
   "$ROOT/tests/AgentTapDiagnosticTest.java" \
   "$ROOT/tests/ModelStepGuidanceTest.java" \
-  "$ROOT/tests/ModelToolResponseAdapterTest.java" \
-  "$ROOT/tests/ModelScreenViewPriorityTest.java" \
+  "$ROOT/tests/ModelScreenPriorityPolicyTest.java" \
   "$ROOT/tests/InformationAnswerFastPathPolicyTest.java" \
   "$ROOT/tests/AppPlaybookRelevanceTest.java" \
   "$ROOT/tests/TaskRecipePolicyTest.java" \
@@ -144,8 +142,7 @@ java -cp "$OUT" com.crewpocket.helper.TextEntryGoalGuardTest
 java -cp "$OUT" com.crewpocket.helper.GoogleMapsSemanticContractTest
 java -cp "$OUT" com.crewpocket.helper.AgentTapDiagnosticTest
 java -cp "$OUT" com.crewpocket.helper.ModelStepGuidanceTest
-java -cp "$OUT" com.crewpocket.helper.ModelScreenViewPriorityTest
-java -cp "$OUT" com.crewpocket.helper.ModelToolResponseAdapterTest
+java -cp "$OUT" com.crewpocket.helper.ModelScreenPriorityPolicyTest
 java -cp "$OUT" com.crewpocket.helper.InformationAnswerFastPathPolicyTest
 java -cp "$OUT" com.crewpocket.helper.AppPlaybookRelevanceTest
 java -cp "$OUT" com.crewpocket.helper.TaskRecipePolicyTest
