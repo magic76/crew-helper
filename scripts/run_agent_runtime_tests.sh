@@ -64,6 +64,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/ConversationLoopPolicy.java" \
   "$SRC/ConversationLoopRecipe.java" \
   "$SRC/ContextPayloadBudget.java" \
+  "$SRC/ScreenItemPriorityPolicy.java" \
   "$ROOT/tests/SendAuthorizationTest.java" \
   "$ROOT/tests/LiveTurnCoordinatorTest.java" \
   "$ROOT/tests/ToolCallDispatchLedgerTest.java" \
@@ -106,6 +107,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/VoiceExecutionPolicyTest.java" \
   "$ROOT/tests/ConversationLoopRecipeTest.java" \
   "$ROOT/tests/ContextPayloadBudgetTest.java" \
+  "$ROOT/tests/ScreenItemPriorityPolicyTest.java" \
   "$ROOT/tests/AgentReplayRunner.java"
 
 java -cp "$OUT" com.crewpocket.helper.SendAuthorizationTest
@@ -150,6 +152,7 @@ java -cp "$OUT" com.crewpocket.helper.VoiceCommandQualityPolicyTest
 java -cp "$OUT" com.crewpocket.helper.VoiceExecutionPolicyTest
 java -cp "$OUT" com.crewpocket.helper.ConversationLoopRecipeTest
 java -cp "$OUT" com.crewpocket.helper.ContextPayloadBudgetTest
+java -cp "$OUT" com.crewpocket.helper.ScreenItemPriorityPolicyTest
 java -cp "$OUT" com.crewpocket.helper.AgentReplayRunner "$ROOT/tests/replay"
 
 if command -v python3 >/dev/null 2>&1; then
