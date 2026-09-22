@@ -1773,6 +1773,9 @@ final class NativeGeminiLiveClient {
         }
 
         workingContext.setPendingTask("CONVERSATION_LOOP");
+        workingContext.recordAction(
+                "conversation_loop",
+                "runtime_armed");
         reportStage("✓ 已啟動自動聊天：" + recipient);
         try {
             FloatingBubbleManager.getInstance(appContext)
