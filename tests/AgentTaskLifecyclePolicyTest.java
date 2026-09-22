@@ -17,7 +17,8 @@ public final class AgentTaskLifecyclePolicyTest {
             String signature,
             String lastSignature,
             int toolCount,
-            int mutationActions) {
+            int mutationActions,
+            int observationActions) {
         return AgentTaskLifecyclePolicy.evaluateStep(
                 nowMs,
                 startedAtMs,
@@ -27,7 +28,8 @@ public final class AgentTaskLifecyclePolicyTest {
                 signature,
                 lastSignature,
                 toolCount,
-                mutationActions);
+                mutationActions,
+                observationActions);
     }
 
     public static void main(String[] args) {
@@ -45,24 +47,36 @@ public final class AgentTaskLifecyclePolicyTest {
                 "inspect_ui is not mutation");
 
         check(step(1_000L, 0L, 0, 20,
-                        "inspect_ui", "same", "same", 4, 0).allowed,
+                        "inspect_ui", "same", "same", 4, 0, 0).allowed,
                 "repeated observation remains allowed");
         check(!step(1_000L, 0L, 0, 20,
-                        "tap_screen", "same", "same", 0, 0).allowed,
+                        "tap_screen", "same", "same", 0, 0, 0).allowed,
                 "repeated mutation is blocked");
         check(!step(AgentTaskLifecyclePolicy.TASK_TIMEOUT_MS + 1L, 0L, 0, 20,
-                        "inspect_ui", "inspect:1", "", 0, 0).allowed,
+                        "inspect_ui", "inspect:1", "", 0, 0, 0).allowed,
                 "task timeout blocks next step");
+        check(step(1_000L, 0L, 20, 20,
+                        "inspect_ui", "inspect:2", "", 0, 0, 1).allowed,
+                "observation does not consume action step budget");
         check(!step(1_000L, 0L, 20, 20,
-                        "inspect_ui", "inspect:2", "", 0, 0).allowed,
-                "step budget blocks next step");
+                        "tap_screen", "tap:budget", "", 0, 0, 1).allowed,
+                "action step budget still blocks actions");
+        check(!step(1_000L, 0L, 3, 20,
+                        "inspect_ui", "inspect:cap", "",
+                        AgentTaskLifecyclePolicy.MAX_INSPECT_UI_RUNS,
+                        0, 3).allowed,
+                "inspect_ui has its own cap");
+        check(!step(1_000L, 0L, 3, 20,
+                        "wait", "wait:cap", "", 3, 0,
+                        AgentTaskLifecyclePolicy.MAX_OBSERVATION_ACTIONS).allowed,
+                "observation budget is separate and bounded");
         check(!step(1_000L, 0L, 0, 20,
                         "take_screenshot", "shot:4", "shot:3",
-                        AgentTaskLifecyclePolicy.MAX_SCREENSHOTS, 0).allowed,
+                        AgentTaskLifecyclePolicy.MAX_SCREENSHOTS, 0, 0).allowed,
                 "screenshot cap is preserved");
         check(!step(1_000L, 0L, 0, 20,
                         "tap_screen", "tap:16", "tap:15", 0,
-                        AgentTaskLifecyclePolicy.MAX_MUTATION_ACTIONS).allowed,
+                        AgentTaskLifecyclePolicy.MAX_MUTATION_ACTIONS, 0).allowed,
                 "mutation cap is preserved");
         check(AgentTaskLifecyclePolicy.maxRunsForTool("advance_deck")
                         == AgentTaskLifecyclePolicy.DECK_NAV_MAX_RUNS,

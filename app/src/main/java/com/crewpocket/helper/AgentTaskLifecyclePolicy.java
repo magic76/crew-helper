@@ -11,6 +11,8 @@ final class AgentTaskLifecyclePolicy {
     static final long TASK_TIMEOUT_MS = 180_000L;
     static final int MAX_TOOL_RUNS = 8;
     static final int MAX_MUTATION_ACTIONS = 15;
+    static final int MAX_OBSERVATION_ACTIONS = 8;
+    static final int MAX_INSPECT_UI_RUNS = 5;
     static final int MAX_SCREENSHOTS = 3;
     static final int DECK_NAV_MAX_RUNS = 16;
 
@@ -46,15 +48,22 @@ final class AgentTaskLifecyclePolicy {
                                      String signature,
                                      String lastSignature,
                                      int toolCount,
-                                     int mutationActions) {
+                                     int mutationActions,
+                                     int observationActions) {
         boolean observation = isObservationTool(name);
         boolean mutation = isMutationTool(name);
 
         if (nowMs - startedAtMs > TASK_TIMEOUT_MS) {
             return blocked("本次 Agent 任務已逾時（180 秒），請以目前已知結果作結論。");
         }
-        if (steps >= maxSteps) {
+        if (!observation && steps >= maxSteps) {
             return blocked("已達本次自動執行步數上限（" + maxSteps + " 步），請以目前已知結果作結論。");
+        }
+        if (observation && observationActions >= MAX_OBSERVATION_ACTIONS) {
+            return blocked("已達本次畫面觀察上限（" + MAX_OBSERVATION_ACTIONS + " 次）；不要再重複 inspect，請改用現有證據、fallback 或作結論。");
+        }
+        if ("inspect_ui".equals(name) && toolCount >= MAX_INSPECT_UI_RUNS) {
+            return blocked("inspect_ui 已達本次任務上限（" + MAX_INSPECT_UI_RUNS + " 次）；請改用 Runtime fallback，不要繼續看同一畫面。");
         }
         if (!observation && safe(signature).equals(safe(lastSignature))) {
             return blocked("偵測到相同動作與參數連續重複呼叫，請先重新觀察畫面並改用替代方案。");

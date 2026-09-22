@@ -23,6 +23,7 @@ final class AgentTaskRecord {
     final HashMap<String, Integer> toolCounts = new HashMap<String, Integer>();
     int steps;
     int mutationActions;
+    int observationActions;
     int consecutiveMutationFailures;
     int stabilityBlocks;
     boolean requireObservationAfterFailure;

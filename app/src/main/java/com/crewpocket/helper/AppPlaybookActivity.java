@@ -24,10 +24,12 @@ import org.json.JSONObject;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
 
 /** User-facing management page for per-app Crew operational playbooks. */
 public class AppPlaybookActivity extends Activity {
     private AppPlaybookStore store;
+    private AppAutonomyStore autonomyStore;
     private AppCatalog appCatalog;
     private LinearLayout content;
 
@@ -36,6 +38,7 @@ public class AppPlaybookActivity extends Activity {
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         store = new AppPlaybookStore(this);
+        autonomyStore = new AppAutonomyStore(this);
         appCatalog = new AppCatalog(this);
         appCatalog.prewarm();
 
@@ -104,8 +107,8 @@ public class AppPlaybookActivity extends Activity {
 
         TextView explanation = new TextView(this);
         explanation.setText(I18n.get(this,
-                "在任何 App 裡展開 Crew 泡泡，語音通話中按腦圖示「教 Crew」，再說一句要記住的操作規則；也可以直接說「教你一個規則…」。這裡只保存操作經驗，不是可執行腳本，也不會繞過送出、付款、帳號或敏感操作的授權。",
-                "In any app, expand the Crew bubble during a Live call, tap the brain icon to Teach Crew, then say one operating rule. You can also say 'teach you a rule...'. These are operational hints, not executable scripts, and they never bypass send/payment/account/sensitive-action authorization."));
+                "除了操作經驗，你也可以把信任的 App 加入「自主操作」白名單。白名單讓 Crew 對低風險點擊、搜尋與導航更果斷，不會因定位稍有歧義就停下問你；付款、購買、轉帳、帳號/密碼、刪除、取消訂單/預約/行程與訊息送出授權仍不會被繞過。",
+                "You can also add trusted apps to the Autonomy whitelist. Trusted apps let Crew resolve low-risk taps, search and navigation more decisively instead of stopping on minor ambiguity. Payment, purchase, transfer, account/credential, deletion, trip/order/booking cancellation and message-send authorization are never bypassed."));
         explanation.setTextSize(11);
         explanation.setTextColor(CrewTheme.TEXT_SECONDARY);
         explanation.setLineSpacing(dp(2), 1.08f);
@@ -115,9 +118,11 @@ public class AppPlaybookActivity extends Activity {
         TextView stats = new TextView(this);
         stats.setText(I18n.get(this,
                 "自訂：" + store.learnedAppCount() + " 個 App · "
-                        + store.learnedRuleCount() + " 條經驗",
+                        + store.learnedRuleCount() + " 條經驗 · 自主 "
+                        + autonomyStore.trustedCount() + " 個",
                 "Learned: " + store.learnedAppCount() + " apps · "
-                        + store.learnedRuleCount() + " rules"));
+                        + store.learnedRuleCount() + " rules · "
+                        + autonomyStore.trustedCount() + " trusted"));
         stats.setTextSize(11);
         stats.setTextColor(CrewTheme.TEAL_300);
         stats.setPadding(dp(12), dp(9), dp(12), dp(9));
@@ -138,8 +143,27 @@ public class AppPlaybookActivity extends Activity {
         });
         LinearLayout.LayoutParams addLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(48));
-        addLp.setMargins(0, dp(12), 0, dp(18));
+        addLp.setMargins(0, dp(12), 0, dp(7));
         content.addView(add, addLp);
+
+        Button addTrusted = new Button(this);
+        addTrusted.setAllCaps(false);
+        addTrusted.setText(I18n.get(
+                this, "＋ 新增自主操作 App", "+ Add Trusted Autonomy App"));
+        addTrusted.setTextSize(12);
+        addTrusted.setTypeface(Typeface.DEFAULT_BOLD);
+        addTrusted.setTextColor(CrewTheme.TEAL_300);
+        addTrusted.setBackground(CrewTheme.createCard(
+                this, CrewTheme.BG_ELEVATED, CrewTheme.BORDER_TEAL, 14));
+        addTrusted.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                showAutonomyAppPicker();
+            }
+        });
+        LinearLayout.LayoutParams trustedLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(46));
+        trustedLp.setMargins(0, 0, 0, dp(18));
+        content.addView(addTrusted, trustedLp);
 
         TextView section = new TextView(this);
         section.setText(I18n.get(this, "已知 App", "KNOWN APPS"));
@@ -150,6 +174,19 @@ public class AppPlaybookActivity extends Activity {
         content.addView(section);
 
         ArrayList<String> packages = store.profilePackages();
+        HashSet<String> packageSet = new HashSet<String>(packages);
+        for (String pkg : autonomyStore.trustedPackages()) {
+            if (packageSet.add(pkg)) packages.add(pkg);
+        }
+        Collections.sort(packages, new Comparator<String>() {
+            @Override public int compare(String a, String b) {
+                return AppRuntimeRegistry.displayName(
+                                AppPlaybookActivity.this, a)
+                        .compareToIgnoreCase(
+                                AppRuntimeRegistry.displayName(
+                                        AppPlaybookActivity.this, b));
+            }
+        });
         if (packages.isEmpty()) {
             TextView empty = new TextView(this);
             empty.setText(I18n.get(this,
@@ -194,6 +231,8 @@ public class AppPlaybookActivity extends Activity {
         name.setTextColor(CrewTheme.TEXT_PRIMARY);
         info.addView(name);
 
+        boolean trustedAutonomy =
+                autonomyStore.isTrusted(packageName);
         String summary;
         if (adapter != null && rules.length() > 0) {
             summary = I18n.get(this,
@@ -203,6 +242,10 @@ public class AppPlaybookActivity extends Activity {
             summary = I18n.get(this, "內建 Runtime 規則", "Built-in Runtime guidance");
         } else {
             summary = rules.length() + " " + I18n.get(this, "條自訂經驗", "learned rules");
+        }
+        if (trustedAutonomy) {
+            summary = I18n.get(this, "自主操作 ON · ", "Autonomy ON · ")
+                    + summary;
         }
         TextView detail = new TextView(this);
         detail.setText(summary);
@@ -258,6 +301,72 @@ public class AppPlaybookActivity extends Activity {
         pkg.setTextColor(CrewTheme.TEXT_MUTED);
         pkg.setPadding(0, 0, 0, dp(10));
         root.addView(pkg);
+
+        final LinearLayout autonomyRow = new LinearLayout(this);
+        autonomyRow.setOrientation(LinearLayout.HORIZONTAL);
+        autonomyRow.setGravity(Gravity.CENTER_VERTICAL);
+        autonomyRow.setPadding(dp(11), dp(10), dp(10), dp(10));
+        autonomyRow.setBackground(CrewTheme.createCard(
+                this, CrewTheme.BG_ELEVATED, CrewTheme.BORDER_TEAL, 11));
+
+        LinearLayout autonomyText = new LinearLayout(this);
+        autonomyText.setOrientation(LinearLayout.VERTICAL);
+        TextView autonomyTitle = new TextView(this);
+        autonomyTitle.setText(I18n.get(
+                this, "自主操作白名單", "Trusted Autonomy"));
+        autonomyTitle.setTextSize(12);
+        autonomyTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        autonomyTitle.setTextColor(CrewTheme.TEXT_PRIMARY);
+        autonomyText.addView(autonomyTitle);
+        TextView autonomyDetail = new TextView(this);
+        autonomyDetail.setText(I18n.get(
+                this,
+                "低風險操作自行判斷與 fallback；敏感操作仍受保護",
+                "Self-resolve low-risk actions; sensitive actions stay protected"));
+        autonomyDetail.setTextSize(9.5f);
+        autonomyDetail.setTextColor(CrewTheme.TEXT_SECONDARY);
+        autonomyText.addView(autonomyDetail);
+        autonomyRow.addView(autonomyText, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        final TextView autonomyState = new TextView(this);
+        autonomyState.setTextSize(10);
+        autonomyState.setTypeface(Typeface.DEFAULT_BOLD);
+        autonomyState.setGravity(Gravity.CENTER);
+        autonomyState.setPadding(dp(9), dp(4), dp(9), dp(4));
+        autonomyRow.addView(autonomyState);
+        final boolean initialAutonomy =
+                autonomyStore.isTrusted(packageName);
+        updateAutonomyStateView(autonomyState, initialAutonomy);
+        autonomyRow.setTag(Boolean.valueOf(initialAutonomy));
+        autonomyRow.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                boolean current =
+                        v.getTag() instanceof Boolean
+                                && ((Boolean) v.getTag()).booleanValue();
+                boolean next = !current;
+                autonomyStore.setTrusted(packageName, next);
+                v.setTag(Boolean.valueOf(next));
+                updateAutonomyStateView(autonomyState, next);
+                Toast.makeText(
+                        AppPlaybookActivity.this,
+                        next
+                                ? I18n.get(
+                                        AppPlaybookActivity.this,
+                                        "已開啟自主操作",
+                                        "Trusted autonomy enabled")
+                                : I18n.get(
+                                        AppPlaybookActivity.this,
+                                        "已關閉自主操作",
+                                        "Trusted autonomy disabled"),
+                        Toast.LENGTH_SHORT).show();
+            }
+        });
+        LinearLayout.LayoutParams autonomyLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        autonomyLp.setMargins(0, 0, 0, dp(12));
+        root.addView(autonomyRow, autonomyLp);
 
         if (adapter != null) {
             TextView builtInTitle = sectionLabel(I18n.get(
@@ -373,6 +482,77 @@ public class AppPlaybookActivity extends Activity {
                 })
                 .setNegativeButton(I18n.get(this, "取消", "Cancel"), null)
                 .show();
+    }
+
+    private void showAutonomyAppPicker() {
+        final ArrayList<AppCatalog.Entry> apps =
+                appCatalog.listLaunchable();
+        Collections.sort(apps, new Comparator<AppCatalog.Entry>() {
+            @Override public int compare(
+                    AppCatalog.Entry a,
+                    AppCatalog.Entry b) {
+                return a.label.compareToIgnoreCase(b.label);
+            }
+        });
+        if (apps.isEmpty()) {
+            Toast.makeText(
+                    this,
+                    I18n.get(
+                            this,
+                            "找不到可啟動的 App",
+                            "No launchable apps found"),
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        String[] labels = new String[apps.size()];
+        for (int i = 0; i < apps.size(); i++) {
+            AppCatalog.Entry app = apps.get(i);
+            labels[i] =
+                    (autonomyStore.isTrusted(app.packageName)
+                            ? "✓ " : "")
+                            + app.label
+                            + "\n"
+                            + app.packageName;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(I18n.get(
+                        this,
+                        "選擇自主操作 App",
+                        "Choose Trusted Autonomy App"))
+                .setItems(labels, new DialogInterface.OnClickListener() {
+                    @Override public void onClick(
+                            DialogInterface dialog,
+                            int which) {
+                        AppCatalog.Entry app = apps.get(which);
+                        autonomyStore.setTrusted(
+                                app.packageName, true);
+                        render();
+                        showProfile(app.packageName);
+                    }
+                })
+                .setNegativeButton(
+                        I18n.get(this, "取消", "Cancel"), null)
+                .show();
+    }
+
+    private void updateAutonomyStateView(
+            TextView view,
+            boolean enabled) {
+        if (view == null) return;
+        view.setText(enabled ? "ON" : "OFF");
+        view.setTextColor(
+                enabled
+                        ? CrewTheme.TEAL_300
+                        : CrewTheme.TEXT_MUTED);
+        view.setBackground(CrewTheme.createCard(
+                this,
+                enabled
+                        ? Color.argb(45, 20, 184, 166)
+                        : CrewTheme.BG_SURFACE,
+                enabled
+                        ? CrewTheme.BORDER_TEAL
+                        : CrewTheme.BORDER_SUBTLE,
+                12));
     }
 
     private void showRuleEditor(
