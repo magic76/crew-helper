@@ -43,6 +43,12 @@ public final class AgentReplayRunner {
                 new FileInputStream(file), StandardCharsets.UTF_8));
         try { p.load(reader); } finally { reader.close(); }
 
+        String kind = p.getProperty("kind", "action_verification").trim();
+        if ("locator_confidence".equals(kind)) {
+            runLocatorConfidence(file, p);
+            return;
+        }
+
         String runtime = required(p, "runtime");
         ActionTransaction.ExpectedEffect expected = ActionExpectation.forRuntimeAction(runtime);
         ActionObservation before = observation(p, "before");
@@ -70,6 +76,45 @@ public final class AgentReplayRunner {
         System.out.println("  PASS " + file.getName() + " -> " + result.status + " / " + result.code);
     }
 
+    private static void runLocatorConfidence(File file, Properties p) {
+        LocatorConfidencePolicy.Result result =
+                LocatorConfidencePolicy.evaluate(
+                        decimal(p, "locator.best", 0.0),
+                        decimal(p, "locator.runnerUp", 0.0),
+                        bool(p, "locator.exactElementId"),
+                        bool(p, "locator.exactViewId"),
+                        bool(p, "locator.runnerUpExactViewId"));
+
+        String expectedStatus = required(p, "expect.status");
+        String expectedCode = p.getProperty("expect.code", "").trim();
+        boolean ok = expectedStatus.equals(result.outcome.name())
+                && (expectedCode.isEmpty() || expectedCode.equals(result.code));
+        if (!ok) {
+            throw new AssertionError(
+                    file.getName()
+                            + " expected "
+                            + expectedStatus
+                            + "/"
+                            + expectedCode
+                            + " but got "
+                            + result.outcome
+                            + "/"
+                            + result.code
+                            + " margin="
+                            + result.margin);
+        }
+        passed++;
+        System.out.println(
+                "  PASS "
+                        + file.getName()
+                        + " -> "
+                        + result.outcome
+                        + " / "
+                        + result.code
+                        + " margin="
+                        + result.margin);
+    }
+
     private static ActionObservation observation(Properties p, String prefix) {
         boolean available = boolDefault(p, prefix + ".available", true);
         if (!available) return ActionObservation.unavailable();
@@ -95,6 +140,11 @@ public final class AgentReplayRunner {
 
     private static int integer(Properties p, String key, int fallback) {
         try { return Integer.parseInt(p.getProperty(key, String.valueOf(fallback))); }
+        catch (Exception ignored) { return fallback; }
+    }
+
+    private static double decimal(Properties p, String key, double fallback) {
+        try { return Double.parseDouble(p.getProperty(key, String.valueOf(fallback))); }
         catch (Exception ignored) { return fallback; }
     }
 
