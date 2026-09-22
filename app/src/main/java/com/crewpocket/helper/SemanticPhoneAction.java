@@ -71,17 +71,23 @@ final class SemanticPhoneAction {
                 return mapped(action, "tap_element", selected);
             }
             if (ElementReferenceRuntime.isActive()) {
-                JSONObject waiting = new JSONObject()
-                        .put("success", false)
-                        .put("stepResult", "STEP_FAILED")
-                        .put("blockedByRuntime", true)
-                        .put("error", "ELEMENT_REFERENCE_CHOICE_REQUIRED")
-                        .put("taskState", "WAITING_USER")
-                        .put("visualReference", "ELEMENTS")
-                        .put("instruction",
-                                "可點擊元素標記仍在等待編號。只請使用者回答畫面上的元素編號，例如「5」或「第五個」；"
-                                        + "不要猜座標，也不要重做原本 TAP。");
-                return new Resolution(true, action, ERROR_TOOL, waiting);
+                if (ElementReferenceChoice.looksLikeChoice(target)) {
+                    JSONObject waiting = new JSONObject()
+                            .put("success", false)
+                            .put("stepResult", "STEP_FAILED")
+                            .put("blockedByRuntime", true)
+                            .put("error", "ELEMENT_REFERENCE_CHOICE_REQUIRED")
+                            .put("taskState", "WAITING_USER")
+                            .put("visualReference", "ELEMENTS")
+                            .put("instruction",
+                                    "這看起來是在回答元素編號，但目前編號無效。只請使用者重新回答畫面上的有效編號；"
+                                            + "不要猜座標。");
+                    return new Resolution(true, action, ERROR_TOOL, waiting);
+                }
+
+                // Element labels are a temporary human assist, not a sticky
+                // execution mode. A fresh semantic command supersedes it.
+                ElementReferenceRuntime.cancel();
             }
 
             String mapsConcept = GoogleMapsSemanticContract.canonicalTarget(target);
