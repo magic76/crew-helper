@@ -2559,11 +2559,6 @@ final class NativeGeminiLiveClient {
         } catch (Exception ignored) {}
     }
 
-    private void agentResponseCoordinator.clear() {
-        if (agentResponseWatchdog != null) agentWatchdogHandler.removeCallbacks(agentResponseWatchdog);
-        agentResponseWatchdog = null;
-    }
-
     /** Internal control turn: do not pollute the user-facing live transcript. */
     private void sendInternalAgentDirective(String text) {
         try {
