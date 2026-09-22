@@ -335,7 +335,7 @@ final class AccessibilityNodeRepository {
         }
     }
 
-    private static boolean isSendIntent(String label, String id) {
+    static boolean isSendIntent(String label, String id) {
         String query = ((label == null ? "" : label)
                 + " "
                 + (id == null ? "" : id))
