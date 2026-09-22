@@ -137,11 +137,12 @@ final class AgentTaskLifecyclePolicy {
         if (hasBlockedReason) return true;
 
         String state = safe(taskState).trim().toUpperCase();
-        if ("DONE".equals(state) || "ANSWER_READY".equals(state)) return true;
+        if ("DONE".equals(state)
+                || "ANSWER_READY".equals(state)
+                || "BLOCKED".equals(state)) return true;
         if ("WAITING_USER".equals(state)
                 || "WAITING_BACKGROUND".equals(state)
                 || "NEED_USER".equals(state)
-                || "BLOCKED".equals(state)
                 || "IN_PROGRESS".equals(state)) {
             return false;
         }
