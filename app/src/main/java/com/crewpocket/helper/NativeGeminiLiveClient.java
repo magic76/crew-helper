@@ -53,6 +53,8 @@ final class NativeGeminiLiveClient {
     private final NotebookToolHandler notebookToolHandler;
     private final AppPlaybookStore appPlaybookStore;
     private final TaskRecipeStore taskRecipeStore;
+    private final ConversationLoopRecipe conversationLoopRecipe =
+            new ConversationLoopRecipe();
     private volatile long taskRecipeCandidateGeneration = -1L;
     private volatile String taskRecipeCandidateId = "";
     private final PhoneRuntimeExecutor phoneRuntimeExecutor;
@@ -545,6 +547,24 @@ final class NativeGeminiLiveClient {
                             JSONObject args) throws Exception {
                         return NativeGeminiLiveClient.this
                                 .waitThenAction(args);
+                    }
+
+                    @Override public JSONObject startConversationLoop(
+                            JSONObject args) throws Exception {
+                        return NativeGeminiLiveClient.this
+                                .startConversationLoop(args);
+                    }
+
+                    @Override public JSONObject continueConversationLoop(
+                            JSONObject args) throws Exception {
+                        return NativeGeminiLiveClient.this
+                                .continueConversationLoop(args);
+                    }
+
+                    @Override public JSONObject stopConversationLoop(
+                            JSONObject args) throws Exception {
+                        return NativeGeminiLiveClient.this
+                                .stopConversationLoop(args);
                     }
                 });
 
