@@ -1506,8 +1506,12 @@ final class NativeGeminiLiveClient {
             return finalized.generation;
         }
 
-        // Fail closed. Caller sees a stale generation and rejects the tool
-        // rather than executing against the previous authoritative utterance.
+        // Fail closed while a newer spoken fragment is still unfinalized.
+        // The sentinel can never equal userIntentGeneration, so normal stale
+        // generation protection blocks the tool.
+        if (pendingInterim) {
+            return Long.MIN_VALUE;
+        }
         return queuedGeneration;
     }
 
