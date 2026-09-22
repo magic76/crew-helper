@@ -360,6 +360,7 @@ final class PhoneRuntimeExecutor {
 
         JSONArray fallbackTrace = new JSONArray();
         boolean resolvedFromNode = false;
+        final boolean hasExplicitCoordinate = targetX >= 0 && targetY >= 0;
         boolean hasSemanticTarget = !label.isEmpty()
                 || !id.isEmpty()
                 || !semanticHint.isEmpty()
@@ -382,15 +383,44 @@ final class PhoneRuntimeExecutor {
                         + semantic.optString("decision",
                                 semantic.optString("error", "UNKNOWN")));
 
+                String semanticDecision =
+                        semantic.optString("decision", "");
+                LocatorFallbackPolicy.Next semanticNext =
+                        LocatorFallbackPolicy.afterSemantic(
+                                semanticDecision,
+                                !label.isEmpty() || !id.isEmpty(),
+                                hasExplicitCoordinate);
+
                 if ("MULTIPLE_MATCHES".equals(
                                 semantic.optString("status", ""))
-                        || "AMBIGUOUS".equals(
-                                semantic.optString("decision", ""))) {
+                        || semanticNext
+                                == LocatorFallbackPolicy.Next.ASK_USER) {
                     semantic.put("resolvedFrom", "semantic_v2")
                             .put("fallbackTrace", fallbackTrace)
                             .put("stepResult", "STEP_FAILED")
-                            .put("taskState", "NEED_USER");
+                            .put("taskState", "NEED_USER")
+                            .put("instruction",
+                                    "定位候選太接近。列出 Runtime 提供的 candidates 請使用者選；不要降級猜 label 或座標。");
                     return semantic;
+                }
+
+                if (semanticNext
+                        == LocatorFallbackPolicy.Next.REOBSERVE) {
+                    return semantic
+                            .put("resolvedFrom", "semantic_v2")
+                            .put("fallbackTrace", fallbackTrace)
+                            .put("stepResult", "STEP_FAILED")
+                            .put("taskState", "IN_PROGRESS")
+                            .put("nextRequirement", "inspect_ui once")
+                            .put("instruction",
+                                    "目前定位信心不足以執行。先取得一次 fresh inspect_ui，再重新定位；不要直接降級成座標。");
+                }
+
+                if (semanticNext == LocatorFallbackPolicy.Next.STOP) {
+                    return semantic
+                            .put("resolvedFrom", "semantic_v2")
+                            .put("fallbackTrace", fallbackTrace)
+                            .put("stepResult", "STEP_FAILED");
                 }
 
                 if (semantic.optBoolean("success", false)) {
@@ -417,11 +447,14 @@ final class PhoneRuntimeExecutor {
                             .put("fallbackTrace", fallbackTrace);
                 }
 
-                // 3) Use the matched node bounds only as a deterministic
-                // coordinate fallback after semantic + label resolution failed.
+                // 3) Node-bounds degradation is allowed only for ONE
+                // deterministic structural match. Never take the first of
+                // several fuzzy matches.
                 JSONObject nodesResp = get("/nodes");
                 if (nodesResp.optBoolean("success")) {
                     JSONArray nodes = nodesResp.optJSONArray("nodes");
+                    JSONObject uniqueBounds = null;
+                    int structuralMatches = 0;
                     if (nodes != null) {
                         for (int i = 0; i < nodes.length(); i++) {
                             JSONObject node = nodes.getJSONObject(i);
@@ -436,24 +469,46 @@ final class PhoneRuntimeExecutor {
                                                 .contains(label.toLowerCase(Locale.ROOT))
                                         || desc.toLowerCase(Locale.ROOT)
                                                 .contains(label.toLowerCase(Locale.ROOT)));
-                            if (matchId || matchLabel) {
-                                JSONObject bounds =
-                                        node.optJSONObject("bounds");
-                                if (bounds != null) {
-                                    targetX = (
-                                            bounds.optDouble("left", 0)
-                                            + bounds.optDouble("right", 0))
-                                            / 2.0;
-                                    targetY = (
-                                            bounds.optDouble("top", 0)
-                                            + bounds.optDouble("bottom", 0))
-                                            / 2.0;
-                                    resolvedFromNode = true;
-                                    fallbackTrace.put("node_bounds:SUCCESS");
-                                    break;
-                                }
+                            if (!matchId && !matchLabel) continue;
+                            JSONObject bounds = node.optJSONObject("bounds");
+                            if (bounds == null) continue;
+                            structuralMatches++;
+                            if (structuralMatches == 1) {
+                                uniqueBounds = bounds;
                             }
                         }
+                    }
+
+                    if (structuralMatches > 1) {
+                        fallbackTrace.put("node_bounds:AMBIGUOUS");
+                        return new JSONObject()
+                                .put("success", false)
+                                .put("stepResult", "STEP_FAILED")
+                                .put("taskState", "NEED_USER")
+                                .put("error", "UI_TARGET_AMBIGUOUS_LEGACY")
+                                .put("fallbackTrace", fallbackTrace)
+                                .put("instruction",
+                                        "legacy label/id 也命中多個元件。不要取第一個或改猜座標；請重新 inspect_ui 或請使用者選候選。");
+                    }
+
+                    LocatorFallbackPolicy.Next afterLabel =
+                            LocatorFallbackPolicy.afterLabel(
+                                    false,
+                                    structuralMatches == 1,
+                                    hasExplicitCoordinate);
+                    if (afterLabel
+                            == LocatorFallbackPolicy.Next.EXECUTE_SEMANTIC
+                            && uniqueBounds != null) {
+                        targetX = (
+                                uniqueBounds.optDouble("left", 0)
+                                + uniqueBounds.optDouble("right", 0))
+                                / 2.0;
+                        targetY = (
+                                uniqueBounds.optDouble("top", 0)
+                                + uniqueBounds.optDouble("bottom", 0))
+                                / 2.0;
+                        resolvedFromNode = true;
+                        fallbackTrace.put("node_bounds:UNIQUE");
                     }
                 }
             } catch (Exception ignored) {
