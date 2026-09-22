@@ -13,10 +13,9 @@ public final class SendAuthorizationTest {
         current.updateFromUserText("幫我送出");
         check(current.canAttempt(), "standalone send authorizes one attempt");
         check(!current.requiresRecipientVerification(), "current chat has no recipient gate");
-        current.markTransactionHandled();
-        check(current.shouldBlockFurtherMessageMutation(), "transaction blocks duplicate mutation");
-        current.consume();
-        check(!current.canAttempt(), "authorization is one-shot");
+        current.markCommitDispatched();
+        check(current.isCommitDispatched(), "commit dispatch is remembered");
+        check(!current.canAttempt(), "dispatched authorization is one-shot");
 
         SendAuthorization named = new SendAuthorization();
         named.updateFromUserText("跟小明說我晚點到");
@@ -68,6 +67,30 @@ public final class SendAuthorizationTest {
         check(!SendAuthorization.isExplicitTypeOnlyRequest(
                         "輸入123然後按下一步"),
                 "compound type then action is not pure type-only");
+
+        SendAuthorization literalSendWord = new SendAuthorization();
+        literalSendWord.updateFromUserText("幫我輸入 send");
+        check(!literalSendWord.canAttempt(),
+                "typing the literal word send does not authorize commit");
+        check(SendAuthorization.isExplicitTypeOnlyRequest("幫我輸入 send"),
+                "literal send word remains type-only");
+
+        SendAuthorization literalZhSendWord = new SendAuthorization();
+        literalZhSendWord.updateFromUserText("幫我輸入送出");
+        check(!literalZhSendWord.canAttempt(),
+                "typing the literal word 送出 does not authorize commit");
+
+        SendAuthorization explicitTypeThenSend = new SendAuthorization();
+        explicitTypeThenSend.updateFromUserText("輸入 hello 然後送出");
+        check(explicitTypeThenSend.canAttempt(),
+                "type then explicit send authorizes commit");
+
+        SendAuthorization bodyNegation = new SendAuthorization();
+        bodyNegation.updateFromUserText("跟小明說如果下雨就不要來");
+        check(bodyNegation.canAttempt(),
+                "message body negation/hypothetical does not cancel send command");
+        check("小明".equals(bodyNegation.recipient()),
+                "recipient survives message body negation");
 
         System.out.println("PASS SendAuthorizationTest: " + assertions + " checks");
     }
