@@ -46,11 +46,11 @@ final class VoiceExecutionPolicy {
     static boolean requiresCriticalEntityConfirmation(
             String runtimeName,
             String metadata) {
-        // Conversation-loop delegation keeps one confirmation by default.
-        // The user-controlled Message Send No Confirmation preference bypasses
-        // this preflight in NativeGeminiLiveClient when explicitly enabled.
+        // Delegated chat is already bounded by the current visible chat,
+        // task-scoped SEND lease, reply count, timeout and human takeover.
+        // Do not add a second voice confirmation layer here.
         if ("start_conversation_loop".equals(runtimeName)) {
-            return true;
+            return false;
         }
         if (!"tap_screen".equals(runtimeName)
                 && !"tap_element".equals(runtimeName)) {
