@@ -59,6 +59,15 @@ final class WorkingContext {
         pendingTask = "";
     }
 
+    synchronized void mergeUserTurnSegment(String value) {
+        String previous = latestUserTurn;
+        String merged = clip(value, MAX_TURN_CHARS);
+        latestUserTurn = merged;
+        if (rootGoal.isEmpty() || rootGoal.equals(previous)) {
+            rootGoal = clip(merged, MAX_GOAL_CHARS);
+        }
+    }
+
     synchronized void setGoalHint(String value) {
         beginUserTurn(value);
     }
