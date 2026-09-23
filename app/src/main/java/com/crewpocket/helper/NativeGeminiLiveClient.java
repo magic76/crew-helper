@@ -1400,6 +1400,21 @@ final class NativeGeminiLiveClient {
 
         boolean responseHasToolCall =
                 frame.hasToolCalls();
+        boolean responseHasModelAudio = false;
+        boolean responseHasModelText = false;
+        for (GeminiLiveTurnHandler.ModelPart part
+                : frame.modelParts) {
+            if (part.hasAudio()) responseHasModelAudio = true;
+            if (part.hasText()) responseHasModelText = true;
+        }
+        boolean substantiveModelProgress =
+                LiveModelProgressPolicy.hasSubstantiveProgress(
+                        responseHasToolCall,
+                        frame.outputText,
+                        frame.modelTurnPresent,
+                        responseHasModelAudio,
+                        responseHasModelText);
+
         if (responseHasToolCall) {
             authorizationTranscript = "";
             boolean internalDirectiveToolFrame =
@@ -1476,6 +1491,14 @@ final class NativeGeminiLiveClient {
             return;
         }
 
+        if (substantiveModelProgress) {
+            agentResponseCoordinator.onModelResponse();
+        } else if (frame.modelTurnPresent) {
+            Log.d(
+                    TAG,
+                    "Empty modelTurn envelope; keep Agent response watchdog armed");
+        }
+
         if (!frame.outputText.isEmpty()
                 && !runtimeSendCurrentExecuting
                 && !shouldWithholdUnverifiedAgentReply()) {
@@ -1490,9 +1513,10 @@ final class NativeGeminiLiveClient {
 
         if (frame.modelTurnPresent) {
             authorizationTranscript = "";
-            agentResponseCoordinator.onModelResponse();
-            visualHoldUntil =
-                    System.currentTimeMillis() + 1800;
+            if (substantiveModelProgress) {
+                visualHoldUntil =
+                        System.currentTimeMillis() + 1800;
+            }
 
             boolean withholdForVerification =
                     shouldWithholdUnverifiedAgentReply()
