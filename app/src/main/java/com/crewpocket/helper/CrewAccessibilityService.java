@@ -55,6 +55,10 @@ public class CrewAccessibilityService extends AccessibilityService {
     private volatile String lastTextInputMethod = "NONE";
     private volatile String lastTextInputFailure = "";
     private volatile boolean lastTextInputVerified = false;
+    // Accessibility TYPE_VIEW_TEXT_CHANGED is also emitted for Runtime ACTION_SET_TEXT.
+    // Keep a short suppression window so Conversation Loop only treats real human edits
+    // as takeover. No input text is stored.
+    private volatile long runtimeTextMutationUntilMs = 0L;
     private final UiChangeSignal uiChangeSignal = new UiChangeSignal();
 
     public static boolean isServiceRunning() { return instance != null; }
@@ -248,14 +252,18 @@ public class CrewAccessibilityService extends AccessibilityService {
                 || type == AccessibilityEvent.TYPE_WINDOWS_CHANGED
                 || type == AccessibilityEvent.TYPE_VIEW_SCROLLED
                 || type == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) {
-            uiChangeSignal.markChanged();
+            long now = System.currentTimeMillis();
+            boolean humanTextEdit =
+                    type == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
+                            && now > runtimeTextMutationUntilMs;
+            uiChangeSignal.markChanged(type, humanTextEdit);
             NativeLiveService.markScreenDirtyFromAccessibility();
 
             CharSequence pkg = event.getPackageName();
             ScheduledTaskManager.notifyAccessibilityChanged(
                     pkg == null ? "" : pkg.toString(),
                     type,
-                    System.currentTimeMillis());
+                    now);
         }
     }
 
@@ -546,6 +554,10 @@ public class CrewAccessibilityService extends AccessibilityService {
                         .put("changed", changed || revision > afterRevision)
                         .put("revision", revision)
                         .put("beforeRevision", beforeRevision)
+                        .put("lastEventType", uiChangeSignal.lastEventType())
+                        .put("humanTextEdit",
+                                uiChangeSignal.lastHumanTextEditRevision()
+                                        > afterRevision)
                         .toString();
             } else if (path.startsWith("/status")) {
                 android.util.DisplayMetrics metrics = getResources().getDisplayMetrics();
@@ -1793,6 +1805,10 @@ public class CrewAccessibilityService extends AccessibilityService {
             }
 
             target.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
+
+            // Suppress only the Accessibility text-change event caused by this
+            // Runtime-owned edit. Delayed human edits after this window remain takeover.
+            runtimeTextMutationUntilMs = System.currentTimeMillis() + 1500L;
 
             android.os.Bundle args = new android.os.Bundle();
             args.putCharSequence(
