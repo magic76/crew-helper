@@ -180,7 +180,7 @@ final class LiveToolCatalog {
         tools.put(new JSONObject()
                 .put("name", "start_conversation_loop")
                 .put("description",
-                        "Start a bounded persistent conversation in the CURRENT visible chat only. Use for explicit delegation such as『你自己跟他聊』『幫我聊到我叫你停』. Do not search contacts, resolve names, or switch chats. Runtime verifies only that the current screen is a message composer + Send surface and bounds timeout/replies.")
+                        "Start a bounded persistent conversation in the CURRENT visible chat only when the user's current instruction delegates ongoing chatting/replies. This tool call is the semantic decision: Runtime does not parse the user's wording again. Do not call merely because a chat is visible. Do not search contacts, resolve names, or switch chats. Runtime verifies the current chat surface and enforces timeout/reply bounds.")
                 .put("parameters", new JSONObject()
                         .put("type", "OBJECT")
                         .put("properties", new JSONObject()

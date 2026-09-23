@@ -6,37 +6,6 @@ import java.util.Locale;
 final class ConversationLoopPolicy {
     private ConversationLoopPolicy() {}
 
-    static boolean isExplicitStartIntent(String rawText) {
-        String text = normalize(rawText);
-        if (text.isEmpty() || isStopIntent(rawText)) return false;
-        boolean conversation =
-                text.contains("聊天")
-                        || text.contains("聊一下")
-                        || text.contains("聊聊")
-                        || text.contains("聊")
-                        || text.contains("代聊")
-                        || text.contains("對談")
-                        || text.contains("对谈")
-                        || text.contains("對話")
-                        || text.contains("对话")
-                        || text.contains("持續回")
-                        || text.contains("持续回")
-                        || text.contains("一直回")
-                        || text.contains("自動回")
-                        || text.contains("自动回")
-                        || text.matches(".*\\b(chat|conversation|reply|talk|converse)\\b.*");
-        boolean delegation =
-                text.contains("幫我")
-                        || text.contains("帮我")
-                        || text.contains("代我")
-                        || text.contains("替我")
-                        || text.contains("跟")
-                        || text.contains("和")
-                        || text.contains("with")
-                        || text.contains("for me");
-        return conversation && delegation;
-    }
-
     static boolean hasDelegatedSendAuthority(
             boolean activeLoopCanSend,
             boolean latestTurnCanSend) {
@@ -45,11 +14,12 @@ final class ConversationLoopPolicy {
 
     /**
      * Any fresh human turn owns the foreground over a retained conversation loop.
-     * Repeating an explicit delegated-chat command keeps the existing lease.
+     * Runtime does not re-interpret conversation intent here. If the user wants
+     * ongoing delegated chat again, Gemini can call start_conversation_loop for
+     * the same fresh turn after the old lease is released.
      */
     static boolean shouldYieldToUserTurn(String rawText) {
-        String text = normalize(rawText);
-        return !text.isEmpty() && !isExplicitStartIntent(rawText);
+        return !normalize(rawText).isEmpty();
     }
 
     static boolean isStopIntent(String rawText) {
