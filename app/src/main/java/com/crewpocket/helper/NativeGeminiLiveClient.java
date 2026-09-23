@@ -1491,9 +1491,13 @@ final class NativeGeminiLiveClient {
             return;
         }
 
-        if (substantiveModelProgress) {
+        if (substantiveModelProgress
+                && !responseHasToolCall) {
+            // Tool-call frames already clear the watchdog above when Runtime
+            // accepts the tool batch. Clear here only for real model output.
             agentResponseCoordinator.onModelResponse();
-        } else if (frame.modelTurnPresent) {
+        } else if (!responseHasToolCall
+                && frame.modelTurnPresent) {
             Log.d(
                     TAG,
                     "Empty modelTurn envelope; keep Agent response watchdog armed");
@@ -1523,7 +1527,8 @@ final class NativeGeminiLiveClient {
                             || runtimeSendCurrentExecuting;
             if (!interruptedCurrentTurn
                     && !withholdForVerification) {
-                if (!aiSpeaking) {
+                if (substantiveModelProgress
+                        && !aiSpeaking) {
                     aiSpeaking = true;
                     listener.onSpeakingChanged(true);
                 }
