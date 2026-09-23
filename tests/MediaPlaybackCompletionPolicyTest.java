@@ -25,19 +25,30 @@ public final class MediaPlaybackCompletionPolicyTest {
                         "com.apple.android.music",
                         "播放",
                         true,
+                        false,
                         true,
                         false),
-                "active music after successful play completes task");
+                "inactive to active transition completes task");
         check(MediaPlaybackCompletionPolicy.shouldComplete(
                         "com.apple.android.music",
                         "播放",
                         true,
-                        false,
+                        true,
+                        true,
                         true),
-                "pause UI after successful play completes task");
+                "pause UI completes even when audio was already active");
         check(!MediaPlaybackCompletionPolicy.shouldComplete(
                         "com.apple.android.music",
                         "播放",
+                        true,
+                        true,
+                        true,
+                        false),
+                "pre-existing audio alone does not prove this tap worked");
+        check(!MediaPlaybackCompletionPolicy.shouldComplete(
+                        "com.apple.android.music",
+                        "播放",
+                        false,
                         false,
                         true,
                         true),
@@ -46,6 +57,7 @@ public final class MediaPlaybackCompletionPolicyTest {
                         "com.example.music",
                         "播放",
                         true,
+                        false,
                         true,
                         true),
                 "unknown app does not gain media completion authority");
