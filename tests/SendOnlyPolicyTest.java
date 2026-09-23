@@ -62,8 +62,8 @@ public final class SendOnlyPolicyTest {
         bodyWords.updateFromUserText("跟小明說如果下雨就不要來");
         check(bodyWords.canSend(),
                 "message body words do not clear send authorization");
-        check("小明".equals(bodyWords.authorizedRecipient()),
-                "message body keeps named recipient");
+        check(bodyWords.authorizedRecipient().isEmpty(),
+                "message body does not create recipient identity state");
 
         UserActionScope literalSend = new UserActionScope();
         literalSend.updateFromUserText("幫我輸入 send");
