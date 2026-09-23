@@ -5,14 +5,22 @@ import java.util.Locale;
 /** Explicit user command policy for the Accessibility element overlay. */
 final class ElementReferenceCommand {
     static final String MODEL_MARKER = "element_reference:open";
+    static final String LEGACY_MODEL_MARKER = "visual_reference:open";
 
     private ElementReferenceCommand() {}
 
     static boolean isOpenRequest(String value) {
-        String raw = value == null ? "" : value.trim();
-        if (MODEL_MARKER.equalsIgnoreCase(raw)) return true;
+        return isModelMarker(value) || isUserOpenRequest(value);
+    }
 
-        String normalized = normalize(raw);
+    static boolean isModelMarker(String value) {
+        String raw = value == null ? "" : value.trim();
+        return MODEL_MARKER.equalsIgnoreCase(raw)
+                || LEGACY_MODEL_MARKER.equalsIgnoreCase(raw);
+    }
+
+    static boolean isUserOpenRequest(String value) {
+        String normalized = normalize(value);
         if (normalized.isEmpty()) return false;
 
         return normalized.equals("顯示元素")
