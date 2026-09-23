@@ -3315,11 +3315,17 @@ final class NativeGeminiLiveClient {
                         == ConversationLoopRecipe.State.MESSAGE_PENDING) {
             AgentTaskRecord active =
                     agentTaskCoordinator.activeRunning();
+            ConversationLoopWakePolicy.Decision wakeDecision =
+                    ConversationLoopWakePolicy.decide(
+                            active != null,
+                            isConversationLoopOwnedTask(active));
 
             // Do not hijack an unrelated foreground task. The incoming-message
             // event is already retained as MESSAGE_PENDING, so simply wait for
             // that task to finish instead of dropping the event.
-            if (active != null && !isConversationLoopOwnedTask(active)) {
+            if (wakeDecision
+                    == ConversationLoopWakePolicy.Decision
+                            .DEFER_FOR_FOREGROUND_TASK) {
                 try {
                     Thread.sleep(250L);
                 } catch (InterruptedException interrupted) {
@@ -3330,7 +3336,9 @@ final class NativeGeminiLiveClient {
             }
 
             AgentTaskRecord task = active;
-            if (task == null) {
+            if (wakeDecision
+                    == ConversationLoopWakePolicy.Decision
+                            .CREATE_BACKGROUND_TASK) {
                 if (isFinishedIntentGeneration(userIntentGeneration)) {
                     advanceRuntimeGenerationForConversationWake();
                 }
