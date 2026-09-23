@@ -64,6 +64,16 @@ final class LiveHumanTurnBoundary {
                 hasActiveTask
                         && activeTaskGeneration == currentGeneration;
 
+        if (frameInterrupted || looksLikeExplicitTakeover(text)) {
+            return commit(
+                    Decision.NEW_INTENT,
+                    text,
+                    nowMs,
+                    frameInterrupted
+                            ? "SERVER_INTERRUPTED"
+                            : "EXPLICIT_USER_TAKEOVER");
+        }
+
         if (sameGenerationTask
                 && latestFinalizedGeneration < currentGeneration) {
             return commit(
@@ -83,16 +93,6 @@ final class LiveHumanTurnBoundary {
                     mergeText(currentText, text),
                     nowMs,
                     "RELATED_FINAL_SEGMENT");
-        }
-
-        if (frameInterrupted || looksLikeExplicitTakeover(text)) {
-            return commit(
-                    Decision.NEW_INTENT,
-                    text,
-                    nowMs,
-                    frameInterrupted
-                            ? "SERVER_INTERRUPTED"
-                            : "EXPLICIT_USER_TAKEOVER");
         }
 
         if (sameGenerationTask
