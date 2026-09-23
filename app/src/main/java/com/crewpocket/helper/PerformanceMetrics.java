@@ -67,6 +67,14 @@ final class PerformanceMetrics {
     private static long appTeachCancelled;
     private static long appTeachExpired;
     private static long appTeachToolSuppressed;
+    // Live protocol ordering diagnostics only. No transcript or tool args.
+    private static long liveTurnOrderingWaits;
+    private static long liveTurnOrderingReconciled;
+    private static long liveTurnOrderingTimeouts;
+    private static long liveTurnOrderingInternalBypass;
+    private static long liveTurnOrderingLastQueuedGeneration = -1L;
+    private static long liveTurnOrderingLastFinalizedGeneration = -1L;
+    private static long liveTurnOrderingLastWaitMs;
 
     private PerformanceMetrics() {}
 
@@ -263,6 +271,34 @@ final class PerformanceMetrics {
     static synchronized void recordAppTeachExpired() { appTeachExpired++; }
     static synchronized void recordAppTeachToolSuppressed() { appTeachToolSuppressed++; }
 
+    static synchronized void recordLiveTurnOrderingWait() {
+        liveTurnOrderingWaits++;
+    }
+
+    static synchronized void recordLiveTurnOrderingReconciled(
+            long queuedGeneration,
+            long finalizedGeneration,
+            long waitMs) {
+        liveTurnOrderingReconciled++;
+        liveTurnOrderingLastQueuedGeneration = queuedGeneration;
+        liveTurnOrderingLastFinalizedGeneration = finalizedGeneration;
+        liveTurnOrderingLastWaitMs = Math.max(0L, waitMs);
+    }
+
+    static synchronized void recordLiveTurnOrderingTimeout(
+            long queuedGeneration,
+            long finalizedGeneration,
+            long waitMs) {
+        liveTurnOrderingTimeouts++;
+        liveTurnOrderingLastQueuedGeneration = queuedGeneration;
+        liveTurnOrderingLastFinalizedGeneration = finalizedGeneration;
+        liveTurnOrderingLastWaitMs = Math.max(0L, waitMs);
+    }
+
+    static synchronized void recordLiveTurnOrderingInternalBypass() {
+        liveTurnOrderingInternalBypass++;
+    }
+
     static synchronized String buildReport() {
         return buildReportForTask("");
     }
@@ -328,6 +364,22 @@ final class PerformanceMetrics {
                 .append(" expired=").append(appTeachExpired)
                 .append(" tool-suppressed=").append(appTeachToolSuppressed)
                 .append("\n");
+        out.append("Live turn ordering: waits=")
+                .append(liveTurnOrderingWaits)
+                .append(" reconciled=").append(liveTurnOrderingReconciled)
+                .append(" timeouts=").append(liveTurnOrderingTimeouts)
+                .append(" internal-bypass=")
+                .append(liveTurnOrderingInternalBypass);
+        if (liveTurnOrderingLastQueuedGeneration >= 0L) {
+            out.append(" last=")
+                    .append(liveTurnOrderingLastQueuedGeneration)
+                    .append("→")
+                    .append(liveTurnOrderingLastFinalizedGeneration)
+                    .append(" wait=")
+                    .append(liveTurnOrderingLastWaitMs)
+                    .append("ms");
+        }
+        out.append("\n");
 
         appendAgentTrace(out, lastFinishedTrace, inspectorTaskId);
         out.append("Post-finish stale tools: blocked=").append(stalePostFinishToolsBlocked)
@@ -459,6 +511,13 @@ final class PerformanceMetrics {
         appTeachCancelled = 0L;
         appTeachExpired = 0L;
         appTeachToolSuppressed = 0L;
+        liveTurnOrderingWaits = 0L;
+        liveTurnOrderingReconciled = 0L;
+        liveTurnOrderingTimeouts = 0L;
+        liveTurnOrderingInternalBypass = 0L;
+        liveTurnOrderingLastQueuedGeneration = -1L;
+        liveTurnOrderingLastFinalizedGeneration = -1L;
+        liveTurnOrderingLastWaitMs = 0L;
     }
 
     private static AgentTrace ensureTrace(String taskId, long generation) {

@@ -26,10 +26,14 @@ final class LiveTurnCoordinator {
 
     private long finalizedGeneration = -1L;
     private String finalizedText = "";
+    private long operationalGeneration = -1L;
+    private boolean operationalOpen;
 
     synchronized void reset() {
         finalizedGeneration = -1L;
         finalizedText = "";
+        operationalGeneration = -1L;
+        operationalOpen = false;
         notifyAll();
     }
 
@@ -37,7 +41,25 @@ final class LiveTurnCoordinator {
         if (generation < finalizedGeneration) return;
         finalizedGeneration = generation;
         finalizedText = text == null ? "" : text.trim();
+        operationalGeneration = generation;
+        operationalOpen = true;
         notifyAll();
+    }
+
+    synchronized void openOperationalGeneration(long generation) {
+        operationalGeneration = generation;
+        operationalOpen = true;
+        notifyAll();
+    }
+
+    synchronized void closeOperationalGeneration(long generation) {
+        if (operationalGeneration != generation) return;
+        operationalOpen = false;
+        notifyAll();
+    }
+
+    synchronized boolean isOperationalGenerationOpen(long generation) {
+        return operationalOpen && operationalGeneration == generation;
     }
 
     synchronized FinalizedTurn latest() {

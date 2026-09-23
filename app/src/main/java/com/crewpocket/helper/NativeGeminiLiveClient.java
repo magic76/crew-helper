@@ -123,6 +123,10 @@ final class NativeGeminiLiveClient {
     // Finalized user turns are coordinated separately from model/tool frames.
     // Tool calls never grant authority; only finalized user input advances this.
     private final LiveTurnCoordinator liveTurnCoordinator = new LiveTurnCoordinator();
+    private final Object internalDirectiveTurnLock = new Object();
+    private static final long INTERNAL_DIRECTIVE_TOOL_TTL_MS = 8_000L;
+    private long pendingInternalDirectiveGeneration = -1L;
+    private long pendingInternalDirectiveUntilMs = 0L;
     private final VoiceExecutionGuard voiceExecutionGuard =
             new VoiceExecutionGuard();
     private volatile long runtimeSendCurrentHandledGeneration = -1L;
@@ -721,6 +725,8 @@ final class NativeGeminiLiveClient {
         Thread worker = activeToolThread;
         if (worker != null) worker.interrupt();
 
+        liveTurnCoordinator.closeOperationalGeneration(
+                task.intentGeneration);
         PerformanceMetrics.markAgentTaskFinished(
                 task.taskId, task.intentGeneration, "CANCELLED");
         PerformanceMetrics.recordAgentTask(
@@ -753,6 +759,10 @@ final class NativeGeminiLiveClient {
     private void beginUserIntent(
             String userText,
             boolean supersedeActiveTask) {
+        liveTurnCoordinator.closeOperationalGeneration(
+                userIntentGeneration);
+        clearPendingInternalDirectiveTurn();
+
         // Human foreground ownership always outranks a retained auto-chat lease.
         // The original start command is exempt so it can arm/reuse the loop.
         if (conversationLoopRecipe.isActive()
@@ -1192,6 +1202,8 @@ final class NativeGeminiLiveClient {
         interruptionHandler.removeCallbacks(clearInterruptedFallback);
         liveAudioController.stop();
         voiceExecutionGuard.clear();
+        liveTurnCoordinator.reset();
+        clearPendingInternalDirectiveTurn();
         liveConnection.stop();
         if (wasRunning) listener.onStopped("已結束");
     }
@@ -1209,6 +1221,9 @@ final class NativeGeminiLiveClient {
                 geminiLiveTurnHandler.parse(raw);
 
         if (!frame.interimInputText.isEmpty()) {
+            liveTurnCoordinator.closeOperationalGeneration(
+                    userIntentGeneration);
+            clearPendingInternalDirectiveTurn();
             voiceExecutionGuard.onInterimVoice(
                     frame.interimInputText);
         }
@@ -1250,6 +1265,7 @@ final class NativeGeminiLiveClient {
         // Runtime-owned SEND/Shortcut state wins protocol ordering races.
         String completeUserInput = frame.inputText;
         if (!completeUserInput.isEmpty()) {
+            clearPendingInternalDirectiveTurn();
             if (audioIncidentRecorder != null) {
                 audioIncidentRecorder.onVoiceTranscript(
                         completeUserInput);
@@ -1327,6 +1343,13 @@ final class NativeGeminiLiveClient {
                 frame.hasToolCalls();
         if (responseHasToolCall) {
             authorizationTranscript = "";
+            boolean internalDirectiveToolFrame =
+                    consumePendingInternalDirectiveToolFrame(
+                            userIntentGeneration);
+            if (internalDirectiveToolFrame) {
+                liveTurnCoordinator.openOperationalGeneration(
+                        userIntentGeneration);
+            }
             markCurrentModelTurnToolCall(
                     toolCallsAllowDeckNarrationAdvance(
                             frame.toolCalls));
@@ -1337,6 +1360,13 @@ final class NativeGeminiLiveClient {
                 JSONObject call =
                         frame.toolCalls.optJSONObject(i);
                 if (call != null) {
+                    if (internalDirectiveToolFrame) {
+                        try {
+                            call.put(
+                                    "_crew_internal_directive",
+                                    true);
+                        } catch (Exception ignored) {}
+                    }
                     executeToolAsync(call);
                 }
             }
@@ -1464,6 +1494,8 @@ final class NativeGeminiLiveClient {
             if (shouldEvaluateAgentTaskAtTurnComplete()) {
                 agentResponseCoordinator.finishIfAwaitingModel();
             }
+            closeOperationalGenerationIfIdle();
+            clearExpiredInternalDirectiveTurn();
             deckRuntimeController.onNarrationTurnComplete(
                     deckNarrationTurn,
                     deckTurnWasInterrupted);
@@ -1519,7 +1551,8 @@ final class NativeGeminiLiveClient {
     private long awaitFinalizedOperationalGeneration(
             String requestedName,
             JSONObject requestedArgs,
-            long queuedGeneration) {
+            long queuedGeneration,
+            boolean internalDirective) {
         if (!requiresFinalizedOperationalTurn(
                 requestedName, requestedArgs)) {
             return queuedGeneration;
@@ -1527,40 +1560,68 @@ final class NativeGeminiLiveClient {
 
         LiveTurnCoordinator.FinalizedTurn latest =
                 liveTurnCoordinator.latest();
+        LiveTurnOrderingPolicy.Decision decision =
+                LiveTurnOrderingPolicy.decide(
+                        internalDirective,
+                        queuedGeneration,
+                        latest.generation,
+                        liveTurnCoordinator
+                                .isOperationalGenerationOpen(
+                                        queuedGeneration));
 
-        // If a new utterance has begun but Gemini has only emitted interim
-        // transcription, the previous finalized generation must never grant
-        // authority to this tool call.
-        boolean pendingInterim =
-                voiceExecutionGuard.hasPendingInterim();
-        if (!pendingInterim
-                && latest.generation == queuedGeneration) {
+        if (decision
+                == LiveTurnOrderingPolicy.Decision
+                        .BYPASS_INTERNAL) {
+            PerformanceMetrics.recordLiveTurnOrderingInternalBypass();
             return queuedGeneration;
         }
-        if (latest.generation == queuedGeneration + 1L) {
+        if (decision
+                == LiveTurnOrderingPolicy.Decision
+                        .USE_QUEUED_GENERATION) {
+            return queuedGeneration;
+        }
+        if (decision
+                == LiveTurnOrderingPolicy.Decision
+                        .USE_NEXT_FINALIZED_GENERATION) {
+            PerformanceMetrics.recordLiveTurnOrderingReconciled(
+                    queuedGeneration,
+                    latest.generation,
+                    0L);
             return latest.generation;
         }
 
+        long waitStarted = System.currentTimeMillis();
+        PerformanceMetrics.recordLiveTurnOrderingWait();
         LiveTurnCoordinator.FinalizedTurn finalized =
                 liveTurnCoordinator.awaitNextAfter(
-                        queuedGeneration, 1400L);
+                        queuedGeneration, 2500L);
+        long waitedMs =
+                Math.max(
+                        0L,
+                        System.currentTimeMillis() - waitStarted);
         if (finalized.generation == queuedGeneration + 1L) {
+            PerformanceMetrics.recordLiveTurnOrderingReconciled(
+                    queuedGeneration,
+                    finalized.generation,
+                    waitedMs);
             Log.i(
                     TAG,
-                    "Operational tool reconciled to finalized turn generation="
+                    "Operational tool reconciled after finalized transcript wait="
+                            + waitedMs
+                            + "ms queuedGeneration="
+                            + queuedGeneration
+                            + " finalizedGeneration="
                             + finalized.generation
                             + " name="
                             + requestedName);
             return finalized.generation;
         }
 
-        // Fail closed while a newer spoken fragment is still unfinalized.
-        // The sentinel can never equal userIntentGeneration, so normal stale
-        // generation protection blocks the tool.
-        if (pendingInterim) {
-            return Long.MIN_VALUE;
-        }
-        return queuedGeneration;
+        PerformanceMetrics.recordLiveTurnOrderingTimeout(
+                queuedGeneration,
+                finalized.generation,
+                waitedMs);
+        return Long.MIN_VALUE;
     }
 
     private boolean requiresFinalizedOperationalTurn(
@@ -1582,6 +1643,15 @@ final class NativeGeminiLiveClient {
             JSONObject requestedArgs,
             long queuedGeneration) {
         if (!"send_text".equals(requestedName)) {
+            return queuedGeneration;
+        }
+
+        AgentTaskRecord delegatedTask =
+                agentTaskCoordinator.active();
+        if (delegatedTask != null
+                && conversationLoopRecipe.canSend()
+                && delegatedSendLease.canSend(
+                        delegatedTask.taskId)) {
             return queuedGeneration;
         }
 
@@ -2026,12 +2096,31 @@ final class NativeGeminiLiveClient {
         final JSONObject requestedArgs = call.optJSONObject("args") == null
                 ? new JSONObject() : call.optJSONObject("args");
         long callIntentGeneration = call.optLong("_crew_intent_generation", -1L);
+        boolean internalDirectiveTool =
+                call.optBoolean(
+                        "_crew_internal_directive",
+                        false);
 
         // Gemini Live may emit the tool frame before the authoritative
-        // finalized user transcript. Reconcile only operations whose payload
-        // can be matched deterministically to that finalized turn.
+        // finalized user transcript. User-originated operational tools must
+        // bind to an explicitly open finalized generation. Runtime internal
+        // directives are marked separately and bypass this user-turn barrier.
         long reconciledGeneration = awaitFinalizedOperationalGeneration(
-                requestedName, requestedArgs, callIntentGeneration);
+                requestedName,
+                requestedArgs,
+                callIntentGeneration,
+                internalDirectiveTool);
+        if (reconciledGeneration == Long.MIN_VALUE) {
+            try {
+                sendToolResponse(
+                        id,
+                        requestedName,
+                        runtimeBlocked(
+                                "OPERATIONAL_TURN_NOT_FINALIZED",
+                                "工具 frame 先於 authoritative finalized user turn 到達。Runtime 已阻止沿用上一輪 generation；不要向使用者宣告功能失敗，等待目前使用者語句 finalized 後由新 turn 繼續。"));
+            } catch (Exception ignored) {}
+            return;
+        }
         reconciledGeneration = awaitFinalizedSendAuthorization(
                 requestedName, requestedArgs, reconciledGeneration);
         reconciledGeneration = awaitFinalizedLiteralTypeGeneration(
@@ -2404,6 +2493,8 @@ final class NativeGeminiLiveClient {
                                 task,
                                 "WAITING_FOR_EXTERNAL_MESSAGE",
                                 "對話模式：等待外部回覆");
+                        liveTurnCoordinator.closeOperationalGeneration(
+                                task.intentGeneration);
                         reportStage(
                                 "Agent 等待外部回覆 · 同一任務暫停中");
                     } else {
@@ -2995,6 +3086,75 @@ final class NativeGeminiLiveClient {
         }
     }
 
+    private boolean sendConversationWakeDirective(
+            String text) {
+        markPendingInternalDirectiveTurn(
+                userIntentGeneration);
+        boolean sent = sendInternalAgentDirective(text);
+        if (!sent) {
+            clearPendingInternalDirectiveTurn();
+        }
+        return sent;
+    }
+
+    private void markPendingInternalDirectiveTurn(
+            long generation) {
+        synchronized (internalDirectiveTurnLock) {
+            pendingInternalDirectiveGeneration = generation;
+            pendingInternalDirectiveUntilMs =
+                    System.currentTimeMillis()
+                            + INTERNAL_DIRECTIVE_TOOL_TTL_MS;
+        }
+    }
+
+    private boolean consumePendingInternalDirectiveToolFrame(
+            long generation) {
+        synchronized (internalDirectiveTurnLock) {
+            long now = System.currentTimeMillis();
+            if (pendingInternalDirectiveGeneration != generation
+                    || now > pendingInternalDirectiveUntilMs) {
+                if (now > pendingInternalDirectiveUntilMs) {
+                    pendingInternalDirectiveGeneration = -1L;
+                    pendingInternalDirectiveUntilMs = 0L;
+                }
+                return false;
+            }
+            pendingInternalDirectiveGeneration = -1L;
+            pendingInternalDirectiveUntilMs = 0L;
+            return true;
+        }
+    }
+
+    private void clearPendingInternalDirectiveTurn() {
+        synchronized (internalDirectiveTurnLock) {
+            pendingInternalDirectiveGeneration = -1L;
+            pendingInternalDirectiveUntilMs = 0L;
+        }
+    }
+
+    private void clearExpiredInternalDirectiveTurn() {
+        synchronized (internalDirectiveTurnLock) {
+            if (pendingInternalDirectiveUntilMs > 0L
+                    && System.currentTimeMillis()
+                            > pendingInternalDirectiveUntilMs) {
+                pendingInternalDirectiveGeneration = -1L;
+                pendingInternalDirectiveUntilMs = 0L;
+            }
+        }
+    }
+
+    private void closeOperationalGenerationIfIdle() {
+        AgentTaskRecord active =
+                agentTaskCoordinator.active();
+        if (active == null
+                || active.finished
+                || active.cancelled
+                || active.suspended) {
+            liveTurnCoordinator.closeOperationalGeneration(
+                    userIntentGeneration);
+        }
+    }
+
 
 
 
@@ -3108,6 +3268,8 @@ final class NativeGeminiLiveClient {
         if (!agentTaskCoordinator.finish(task, reason, finalReply)) {
             return;
         }
+        liveTurnCoordinator.closeOperationalGeneration(
+                task.intentGeneration);
         conversationGoalTouchedAt = System.currentTimeMillis();
 
         if (shouldLearnRecipe) {
@@ -3467,7 +3629,7 @@ final class NativeGeminiLiveClient {
             }
 
             reportStage(task.status);
-            boolean sent = sendInternalAgentDirective(
+            boolean sent = sendConversationWakeDirective(
                     "【CONVERSATION LOOP WAKE】Runtime 偵測到目前聊天視窗有新的 Accessibility 變化。"
                             + "ACTIVE Conversation Loop lease 已授權在目前聊天室持續回覆；不要說無法發送，不要要求新的 user turn，也不要逐則詢問確認。"
                             + "現在只呼叫一次 inspect_ui 看 fresh screenshot。"
