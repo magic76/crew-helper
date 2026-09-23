@@ -20,13 +20,13 @@ public final class SendAuthorizationTest {
         SendAuthorization named = new SendAuthorization();
         named.updateFromUserText("跟小明說我晚點到");
         check(named.canAttempt(), "named recipient authorizes intent");
-        check(named.requiresRecipientVerification(), "named recipient requires target evidence");
-        check("小明".equals(named.recipient()), "recipient extracted");
+        check(!named.requiresRecipientVerification(), "named wording stays current-chat scoped");
+        check(named.recipient().isEmpty(), "recipient identity is not stored");
 
         SendAuthorization ambiguous = new SendAuthorization();
         ambiguous.updateFromUserText("告訴店員我晚一點退房");
-        check(!ambiguous.canAttempt(), "ambiguous recipient cannot send");
-        check(ambiguous.hasAmbiguousNamedRecipient(), "ambiguous recipient remains fail closed");
+        check(ambiguous.canAttempt(), "recipient ambiguity does not block current-chat send");
+        check(!ambiguous.hasAmbiguousNamedRecipient(), "recipient ambiguity is not a target gate");
 
         check(SendAuthorization.isStandaloneCurrentScreenSendCommand("幫我送出"),
                 "natural standalone send");
@@ -99,8 +99,8 @@ public final class SendAuthorizationTest {
         bodyNegation.updateFromUserText("跟小明說如果下雨就不要來");
         check(bodyNegation.canAttempt(),
                 "message body negation/hypothetical does not cancel send command");
-        check("小明".equals(bodyNegation.recipient()),
-                "recipient survives message body negation");
+        check(bodyNegation.recipient().isEmpty(),
+                "message body never creates recipient identity state");
 
         SendAuthorization negatedNamed = new SendAuthorization();
         negatedNamed.updateFromUserText("不要跟小明說我晚點到");

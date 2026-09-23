@@ -3,8 +3,8 @@ package com.crewpocket.helper;
 /**
  * Bounded persistent conversation TaskRecipe.
  *
- * The model may understand/compose text, but Runtime owns the lease, recipient,
- * state transitions, expiry and reply count.
+ * The model may understand/compose text, but Runtime owns the lease for the
+ * currently visible chat, state transitions, expiry and reply count.
  */
 final class ConversationLoopRecipe {
     enum State {
@@ -26,7 +26,6 @@ final class ConversationLoopRecipe {
     }
 
     private State state = State.IDLE;
-    private String recipient = "";
     private long generation = -1L;
     private long startedAtMs;
     private long expiresAtMs;
@@ -40,12 +39,8 @@ final class ConversationLoopRecipe {
             long generation,
             int requestedMaxReplies,
             int requestedTimeoutMinutes) {
-        String target = recipient == null ? "" : recipient.trim();
-        if (target.isEmpty()) {
-            return new StartResult(false, "RECIPIENT_REQUIRED");
-        }
-
-        this.recipient = target;
+        // Recipient identity is deliberately ignored. The lease is scoped to
+        // whichever chat is currently visible and verified by Runtime.
         this.generation = generation;
         this.maxReplies = Math.max(1, Math.min(20, requestedMaxReplies));
         int minutes = Math.max(1, Math.min(30, requestedTimeoutMinutes));
@@ -130,12 +125,6 @@ final class ConversationLoopRecipe {
         }
         if (state == State.READY_TO_SEND) {
             return "send_text".equals(name)
-                    || "launch_app".equals(name)
-                    || "search_current_app".equals(name)
-                    || "commit_search".equals(name)
-                    || "tap_screen".equals(name)
-                    || "tap_element".equals(name)
-                    || "press_key".equals(name)
                     || "continue_conversation_loop".equals(name);
         }
         if (state == State.MESSAGE_PENDING) {
@@ -143,11 +132,6 @@ final class ConversationLoopRecipe {
                     || "continue_conversation_loop".equals(name);
         }
         return "continue_conversation_loop".equals(name);
-    }
-
-    synchronized String recipient() {
-        expireIfNeeded();
-        return recipient;
     }
 
     synchronized long generation() {
