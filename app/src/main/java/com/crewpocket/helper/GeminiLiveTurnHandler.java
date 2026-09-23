@@ -95,6 +95,11 @@ final class GeminiLiveTurnHandler {
             }
         }
 
+        frame.interactionStatus = stringAlias(
+                response,
+                "interactionStatus",
+                "interaction_status");
+
         JSONObject server = objectAlias(
                 response, "serverContent", "server_content");
         if (server == null) return frame;
