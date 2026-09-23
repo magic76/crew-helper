@@ -154,7 +154,8 @@ final class AgentTaskCoordinator {
 
     private static String cancellationCategory(String reason) {
         String value = reason == null ? "" : reason;
-        if (value.contains("新使用者指令")) return "NEW_USER_GOAL";
+        if (value.contains("新使用者指令")) return "SUPERSEDED_BY_USER";
+        if (value.contains("使用者接管")) return "HUMAN_TAKEOVER";
         if (value.contains("使用者打斷")
                 || value.contains("使用者語音停止")
                 || value.contains("使用者停止對話")) {
