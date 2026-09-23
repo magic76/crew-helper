@@ -2323,7 +2323,9 @@ final class NativeGeminiLiveClient {
         }
 
         final AgentTaskRecord stabilityTask = peekActiveAgentTask();
-        final JSONObject stabilityBlock = agentStabilityPreflight(stabilityTask, name, args);
+        final JSONObject stabilityBlock = runtimeV2Enforced
+                ? null
+                : agentStabilityPreflight(stabilityTask, name, args);
         if (stabilityBlock != null && stabilityTask != null) {
             try {
                 stabilityTask.addStep(name, stabilityBlock);
