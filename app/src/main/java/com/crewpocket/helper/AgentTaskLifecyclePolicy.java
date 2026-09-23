@@ -42,8 +42,6 @@ final class AgentTaskLifecyclePolicy {
                                      int steps,
                                      int maxSteps,
                                      String name,
-                                     String signature,
-                                     String lastSignature,
                                      int toolCount,
                                      int mutationActions,
                                      int observationActions) {
