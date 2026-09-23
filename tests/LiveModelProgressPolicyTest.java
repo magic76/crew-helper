@@ -28,6 +28,16 @@ public final class LiveModelProgressPolicyTest {
                         false, "", true, false, true),
                 "model text is substantive progress");
 
+        check(!LiveModelProgressPolicy.shouldClearAgentWatchdog(
+                        false, true, true),
+                "speech/text alone does not clear an incomplete Agent action watchdog");
+        check(LiveModelProgressPolicy.shouldClearAgentWatchdog(
+                        true, true, true),
+                "next tool call clears an incomplete Agent action watchdog");
+        check(LiveModelProgressPolicy.shouldClearAgentWatchdog(
+                        false, true, false),
+                "final model output may clear watchdog after completion evidence");
+
         System.out.println(
                 "PASS LiveModelProgressPolicyTest: "
                         + checks + " checks");
