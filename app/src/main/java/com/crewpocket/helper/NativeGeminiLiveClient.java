@@ -1659,12 +1659,31 @@ final class NativeGeminiLiveClient {
         long waitStarted = System.currentTimeMillis();
         PerformanceMetrics.recordLiveTurnOrderingWait();
         LiveTurnCoordinator.FinalizedTurn finalized =
-                liveTurnCoordinator.awaitNextAfter(
+                liveTurnCoordinator.awaitOperationalOrNext(
                         queuedGeneration, 2500L);
         long waitedMs =
                 Math.max(
                         0L,
                         System.currentTimeMillis() - waitStarted);
+        if (finalized.generation == queuedGeneration
+                && liveTurnCoordinator
+                        .isOperationalGenerationOpen(
+                                queuedGeneration)) {
+            PerformanceMetrics.recordLiveTurnOrderingReconciled(
+                    queuedGeneration,
+                    finalized.generation,
+                    waitedMs);
+            Log.i(
+                    TAG,
+                    "Operational tool bound to finalized current generation wait="
+                            + waitedMs
+                            + "ms generation="
+                            + queuedGeneration
+                            + " name="
+                            + requestedName);
+            return queuedGeneration;
+        }
+
         if (finalized.generation == queuedGeneration + 1L) {
             PerformanceMetrics.recordLiveTurnOrderingReconciled(
                     queuedGeneration,
