@@ -72,6 +72,7 @@ public class FloatingBubbleManager {
     private FloatingPanelController compactStatusController = null;
     private Runnable compactStatusAutoHideRunnable = null;
     private String lastShownAgentStage = "";
+    private boolean conversationWaiting = false;
     private ScreenSelectionOverlay screenSelectionOverlay = null;
     private static final int BUBBLE_SIZE_DP = 48;
 
@@ -465,6 +466,25 @@ public class FloatingBubbleManager {
      * Text is reserved only for states that require user intervention or
      * explain a real failure. Agent Inspector remains the detailed timeline.
      */
+    public void setConversationWaiting(final boolean waiting) {
+        mainHandler.post(new Runnable() {
+            @Override public void run() {
+                conversationWaiting = waiting;
+                if (bubbleView != null) {
+                    bubbleView.setConversationWaiting(waiting);
+                    if (waiting) {
+                        wakeBubbleFromDock();
+                    }
+                }
+                refreshBubbleActionStripIfShowing();
+            }
+        });
+    }
+
+    public boolean isConversationWaiting() {
+        return conversationWaiting;
+    }
+
     public void updateAgentTaskStatus(final String rawStatus,
                                       final boolean activeTask) {
         mainHandler.post(new Runnable() {
@@ -756,6 +776,7 @@ public class FloatingBubbleManager {
 
                     bubbleView = new FluidBubbleView(context);
                     bubbleView.setElevation(16f);
+                    bubbleView.setConversationWaiting(conversationWaiting);
                     bubbleContainer.addView(
                             bubbleView,
                             new LinearLayout.LayoutParams(size, size));
