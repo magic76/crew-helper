@@ -3935,53 +3935,46 @@ final class NativeGeminiLiveClient {
                     .put("taskState", "IN_PROGRESS");
         }
 
+        ArrayList<SearchResultAutonomyPolicy.Candidate>
+                autonomyCandidates =
+                        new ArrayList<SearchResultAutonomyPolicy.Candidate>();
+        for (int i = 0; i < rawOptions.length(); i++) {
+            JSONObject option = rawOptions.optJSONObject(i);
+            if (option == null) continue;
+            autonomyCandidates.add(
+                    new SearchResultAutonomyPolicy.Candidate(
+                            option.optString("label", ""),
+                            option.optBoolean("exactMatch", false),
+                            option.optBoolean("strongMatch", false)));
+        }
+
+        SearchResultAutonomyPolicy.Decision autonomy =
+                SearchResultAutonomyPolicy.decide(
+                        query,
+                        userActionScope.searchContinuation(),
+                        autonomyCandidates);
+        if (autonomy.autoSelect
+                && autonomy.index >= 0
+                && autonomy.index < rawOptions.length()) {
+            JSONObject candidate =
+                    rawOptions.optJSONObject(autonomy.index);
+            if (candidate != null) {
+                return selectCommittedSearchCandidate(
+                        query,
+                        candidate,
+                        autonomy.reason);
+            }
+        }
+
         if (count == 1) {
             JSONObject only = rawOptions.optJSONObject(0);
-            boolean strong = only != null
-                    && (only.optBoolean("exactMatch", false)
-                        || only.optBoolean("strongMatch", false));
-            if (!strong) {
-                return observed
-                        .put("searchSelection", "RESULT_NOT_CONFIDENT_ENOUGH")
-                        .put("taskState", "BLOCKED")
-                        .put("candidate",
-                                only == null ? "" : only.optString("label", ""))
-                        .put("instruction",
-                                "只找到一個結果列，但名稱與查詢不夠吻合；Runtime 不會猜。請簡短請使用者確認或說更完整名稱。");
-            }
-
-            String elementId = only.optString("elementId", "");
-            String label = only.optString("label", "");
-            JSONObject beforeSelection = observationVerificationController.readSemanticScreenQuietly();
-            String beforeFingerprint = beforeSelection == null
-                    ? "" : beforeSelection.optString("fingerprint", "");
-
-            JSONObject selected = tapSemanticElement(
-                    new JSONObject().put("element_id", elementId));
-
-            boolean dispatched = selected.optBoolean("success", false);
-            if (dispatched) {
-                userActionScope.markSearchResultSelectionDispatched(label);
-            }
-            boolean opened = dispatched && verifySearchResultOpened(
-                    query, elementId, label, beforeFingerprint, selected);
-            if (opened) {
-                userActionScope.markSearchResultSelected(label);
-            }
-
-            selected.put("searchSelection", opened
-                            ? "RESULT_OPEN_VERIFIED"
-                            : (dispatched ? "SELECTION_DISPATCHED" : "SELECTION_FAILED"))
-                    .put("selectedSearchResult", label)
-                    .put("continuation", userActionScope.searchContinuation())
-                    .put("taskState", dispatched ? "IN_PROGRESS" : "BLOCKED")
+            return observed
+                    .put("searchSelection", "RESULT_NOT_CONFIDENT_ENOUGH")
+                    .put("taskState", "BLOCKED")
+                    .put("candidate",
+                            only == null ? "" : only.optString("label", ""))
                     .put("instruction",
-                            opened
-                            ? "Runtime 已驗證唯一搜尋結果頁確實開啟。可以依最新畫面繼續 continuation。"
-                            : (dispatched
-                                ? "搜尋結果點擊已送出，但尚未證明結果頁開啟。不要重新搜尋；依目前畫面確認後再繼續。"
-                                : "唯一結果無法安全點開；停止重試並回報卡點。"));
-            return selected;
+                            "唯一結果與查詢缺乏足夠文字吻合；請簡短請使用者確認或說更完整名稱。");
         }
 
         ArrayList<PendingUiChoice.Option> options =
@@ -4040,8 +4033,94 @@ final class NativeGeminiLiveClient {
                 .put("taskState", "WAITING_USER")
                 .put("searchSelection", "USER_CHOICE_PENDING")
                 .put("choices", compact)
+                .put("choiceReason", autonomy.reason)
                 .put("instruction",
-                        "不要顯示額外 Crew 選項 UI。請用語音簡短列出 choices 並詢問使用者；等待第一個/第二個/結果名稱/取消。等待期間禁止任何手機 mutation。");
+                        "只有因搜尋結果與查詢缺乏足夠文字吻合才進入人工選擇。不要顯示額外 Crew 選項 UI；用語音簡短列出 choices 並詢問使用者。等待期間禁止任何手機 mutation。");
+    }
+
+    private JSONObject selectCommittedSearchCandidate(
+            String query,
+            JSONObject candidate,
+            String autonomyReason) throws Exception {
+        String elementId =
+                candidate == null
+                        ? ""
+                        : candidate.optString("elementId", "");
+        String label =
+                candidate == null
+                        ? ""
+                        : candidate.optString("label", "");
+        if (elementId.isEmpty()) {
+            return new JSONObject()
+                    .put("success", false)
+                    .put("searchSelection", "SELECTION_FAILED")
+                    .put("taskState", "BLOCKED")
+                    .put("error", "SEARCH_RESULT_ELEMENT_MISSING");
+        }
+
+        JSONObject beforeSelection =
+                observationVerificationController
+                        .readSemanticScreenQuietly();
+        String beforeFingerprint =
+                beforeSelection == null
+                        ? ""
+                        : beforeSelection.optString(
+                                "fingerprint", "");
+
+        JSONObject selected = tapSemanticElement(
+                new JSONObject().put(
+                        "element_id", elementId));
+
+        boolean dispatched =
+                selected.optBoolean("success", false);
+        if (dispatched) {
+            userActionScope
+                    .markSearchResultSelectionDispatched(label);
+        }
+        boolean opened =
+                dispatched
+                        && verifySearchResultOpened(
+                                query,
+                                elementId,
+                                label,
+                                beforeFingerprint,
+                                selected);
+        if (opened) {
+            userActionScope.markSearchResultSelected(label);
+        }
+
+        selected.put(
+                        "searchSelection",
+                        opened
+                                ? "RESULT_OPEN_VERIFIED"
+                                : (dispatched
+                                    ? "SELECTION_DISPATCHED"
+                                    : "SELECTION_FAILED"))
+                .put("selectedSearchResult", label)
+                .put(
+                        "selectionAuthority",
+                        "LOW_RISK_AUTO")
+                .put(
+                        "selectionReason",
+                        autonomyReason == null
+                                ? ""
+                                : autonomyReason)
+                .put(
+                        "continuation",
+                        userActionScope.searchContinuation())
+                .put(
+                        "taskState",
+                        dispatched
+                                ? "IN_PROGRESS"
+                                : "BLOCKED")
+                .put(
+                        "instruction",
+                        opened
+                                ? "Runtime 已自動選定可信的低風險搜尋結果並驗證結果頁開啟；直接繼續原目標，不要詢問使用者或重新搜尋。"
+                                : (dispatched
+                                    ? "可信搜尋結果點擊已送出，但尚未證明結果頁開啟。不要重新搜尋；依目前畫面確認後繼續。"
+                                    : "可信搜尋結果無法安全點開；停止重試並回報卡點。"));
+        return selected;
     }
 
     private boolean verifySearchResultOpened(
