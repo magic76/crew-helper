@@ -1431,6 +1431,11 @@ final class NativeGeminiLiveClient {
             }
         }
 
+        liveHumanTurnBoundary.observeServerState(
+                frame.turnComplete,
+                frame.interactionStatus,
+                frame.waitingForInput);
+
         if (!frame.serverPresent) return;
 
         if (frame.interrupted) {
@@ -1562,10 +1567,6 @@ final class NativeGeminiLiveClient {
             resetCurrentModelTurnState();
         }
 
-        liveHumanTurnBoundary.observeServerState(
-                frame.turnComplete,
-                frame.interactionStatus,
-                frame.waitingForInput);
     }
 
     /**
