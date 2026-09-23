@@ -51,10 +51,14 @@ public final class ConversationLoopRecipeTest {
                 "current-chat loop must not search or switch recipients");
         check(recipe.allowsTool("send_text"),
                 "current-chat loop may send in the visible chat");
+        check(recipe.allowsTool("swipe_screen"),
+                "current-chat loop may safely scroll the visible chat");
 
         check(recipe.markSent("fp1"),
                 "first send should arm background wait");
         check(recipe.isWaiting(), "after send must wait");
+        check(recipe.allowsTool("swipe_screen"),
+                "waiting state may scroll to inspect chat history");
         check(!recipe.allowsTool("tap_screen"),
                 "waiting state must block unrelated mutation");
 
