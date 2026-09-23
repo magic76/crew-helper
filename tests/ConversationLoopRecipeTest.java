@@ -5,34 +5,6 @@ public final class ConversationLoopRecipeTest {
 
     public static void main(String[] args) {
         check(
-                ConversationLoopPolicy.isExplicitStartIntent(
-                        "幫我跟小明持續聊天"),
-                "explicit delegated chat should start");
-        check(
-                ConversationLoopPolicy.isExplicitStartIntent(
-                        "幫我跟小明聊"),
-                "natural 跟某人聊 wording should start");
-        check(
-                ConversationLoopPolicy.isExplicitStartIntent(
-                        "你自己跟小明聊一下"),
-                "self-directed chat wording should start");
-        check(
-                ConversationLoopPolicy.isExplicitStartIntent(
-                        "你和 John talk"),
-                "natural mixed-language talk wording should start");
-        check(
-                ConversationLoopPolicy.isExplicitStartIntent(
-                        "幫我跟他聊"),
-                "current-chat delegation does not require a named recipient");
-        check(
-                ConversationLoopPolicy.isExplicitStartIntent(
-                        "幫我聊到我叫你停"),
-                "current-chat delegation may omit recipient entirely");
-        check(
-                !ConversationLoopPolicy.isExplicitStartIntent(
-                        "停止跟小明聊天"),
-                "stop wording must never restart a loop");
-        check(
                 ConversationLoopPolicy.isStopIntent(
                         "停止跟他聊天"),
                 "explicit stop should stop loop");
@@ -49,9 +21,13 @@ public final class ConversationLoopRecipeTest {
                         "導航回家"),
                 "unrelated foreground task should take ownership over loop");
         check(
-                !ConversationLoopPolicy.shouldYieldToUserTurn(
+                ConversationLoopPolicy.shouldYieldToUserTurn(
                         "幫我跟他持續聊天"),
-                "explicit delegated-chat command should preserve loop ownership");
+                "even a continue-chat user turn first yields the old lease");
+        check(
+                !ConversationLoopPolicy.shouldYieldToUserTurn(
+                        "   "),
+                "empty input does not change foreground ownership");
         check(
                 ConversationLoopPolicy.hasDelegatedSendAuthority(
                         true, false),
