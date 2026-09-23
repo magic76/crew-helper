@@ -28,12 +28,11 @@ final class SendAuthorization {
             return;
         }
 
-        namedRecipientRequested = isNamedRecipientMessagingRequest(rawText);
-        recipient = namedRecipientRequested ? extractNamedRecipient(rawText) : "";
-
-        requested = namedRecipientRequested
-                ? !recipient.isEmpty()
-                : isExplicitSendRequest(rawText);
+        // Messaging is intentionally current-chat scoped. Recipient names in
+        // speech may describe message content, but never gate or reroute SEND.
+        namedRecipientRequested = false;
+        recipient = "";
+        requested = isExplicitSendRequest(rawText);
         consumed = false;
         commitDispatched = false;
     }
@@ -64,11 +63,11 @@ final class SendAuthorization {
     }
 
     synchronized boolean requiresRecipientVerification() {
-        return canAttempt() && namedRecipientRequested && !recipient.isEmpty();
+        return false;
     }
 
     synchronized boolean hasAmbiguousNamedRecipient() {
-        return namedRecipientRequested && recipient.isEmpty();
+        return false;
     }
 
     synchronized String recipient() {
@@ -237,7 +236,7 @@ final class SendAuthorization {
         if (rawText == null || rawText.trim().isEmpty()) return false;
         if (isNonExecutingDiscussion(rawText)) return false;
         if (isNamedRecipientMessagingRequest(rawText)) {
-            return !extractNamedRecipient(rawText).isEmpty();
+            return true;
         }
         if (hasTypeVerb(rawText)) {
             return hasTypeThenSendIntent(rawText);
