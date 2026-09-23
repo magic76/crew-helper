@@ -2130,9 +2130,29 @@ final class NativeGeminiLiveClient {
             return;
         }
 
+        AgentTaskRecord leaseOwnerTask =
+                agentTaskCoordinator.active();
+        String leaseOwnerTaskId =
+                leaseOwnerTask == null ? "" : leaseOwnerTask.taskId;
         final boolean conversationLeaseSend =
                 "send_text".equals(name)
-                        && conversationLoopRecipe.canSend();
+                        && conversationLoopRecipe.canSend()
+                        && delegatedSendLease.canSend(leaseOwnerTaskId);
+
+        if ("send_text".equals(name)
+                && !conversationLeaseSend
+                && !userActionScope.canSend()
+                && !SendAuthorization.isExplicitTypeOnlyRequest(
+                        liveTurnCoordinator.latest().text)) {
+            try {
+                sendToolResponse(
+                        id,
+                        requestedName,
+                        delegatedSessionRequiredResult());
+            } catch (Exception ignored) {}
+            return;
+        }
+
         final String voiceTargetMetadata =
                 args.optString("label", "") + " "
                         + args.optString("target", "") + " "
@@ -5078,6 +5098,20 @@ final class NativeGeminiLiveClient {
                 || metadata.contains("输入消息");
     }
 
+    private JSONObject delegatedSessionRequiredResult() {
+        JSONObject required = runtimeBlocked(
+                "DELEGATED_SESSION_REQUIRED",
+                "目前沒有單次 SEND authorization 或 task-scoped delegated chat lease。若使用者的當前目標是持續代聊、等待對方回覆後繼續處理，立刻呼叫 start_conversation_loop 一次，成功後再重試 send_text；不要要求使用者重複說『授權』。若使用者從未要求送訊息或代聊，則不要送。");
+        try {
+            required.put("taskState", "IN_PROGRESS")
+                    .put("recoverable", true)
+                    .put(
+                            "nextRequirement",
+                            "START_CONVERSATION_LOOP_IF_CURRENT_GOAL_IS_DELEGATED_CHAT");
+        } catch (Exception ignored) {}
+        return required;
+    }
+
     private JSONObject sendTextToPhone(JSONObject args) throws Exception {
         String text = args == null ? "" : args.optString("text", "");
         AgentTaskRecord activeTask = agentTaskCoordinator.active();
@@ -5122,15 +5156,7 @@ final class NativeGeminiLiveClient {
                 ConversationLoopPolicy.hasDelegatedSendAuthority(
                         loopSend, userActionScope.canSend());
         if (!delegatedSendAuthorized) {
-            JSONObject required = runtimeBlocked(
-                    "DELEGATED_SESSION_REQUIRED",
-                    "目前沒有單次 SEND authorization 或 task-scoped delegated chat lease。若使用者的當前目標是持續代聊、等待對方回覆後繼續處理，立刻呼叫 start_conversation_loop 一次，成功後再重試 send_text；不要要求使用者重複說『授權』。若使用者從未要求送訊息或代聊，則不要送。");
-            required.put("taskState", "IN_PROGRESS")
-                    .put("recoverable", true)
-                    .put(
-                            "nextRequirement",
-                            "START_CONVERSATION_LOOP_IF_CURRENT_GOAL_IS_DELEGATED_CHAT");
-            return required;
+            return delegatedSessionRequiredResult();
         }
 
         // Preparation stays reversible. If send_text carries new text, insert
