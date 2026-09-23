@@ -1491,16 +1491,27 @@ final class NativeGeminiLiveClient {
             return;
         }
 
-        if (substantiveModelProgress
+        boolean agentAwaitingIncompleteAction =
+                isAgentAwaitingIncompleteAction();
+        boolean clearAgentWatchdog =
+                LiveModelProgressPolicy.shouldClearAgentWatchdog(
+                        responseHasToolCall,
+                        substantiveModelProgress,
+                        agentAwaitingIncompleteAction);
+
+        if (clearAgentWatchdog
                 && !responseHasToolCall) {
-            // Tool-call frames already clear the watchdog above when Runtime
-            // accepts the tool batch. Clear here only for real model output.
+            // A completed/answer-ready task may progress via final text/audio.
+            // An incomplete phone task must produce the next tool call instead.
             agentResponseCoordinator.onModelResponse();
         } else if (!responseHasToolCall
                 && frame.modelTurnPresent) {
             Log.d(
                     TAG,
-                    "Empty modelTurn envelope; keep Agent response watchdog armed");
+                    substantiveModelProgress
+                            && agentAwaitingIncompleteAction
+                            ? "Model output without next action; keep Agent action watchdog armed"
+                            : "Empty modelTurn envelope; keep Agent response watchdog armed");
         }
 
         if (!frame.outputText.isEmpty()
@@ -2301,6 +2312,24 @@ final class NativeGeminiLiveClient {
                 requestedName,
                 requestedArgs,
                 callIntentGeneration)) {
+            return;
+        }
+
+        // Manual element overlay is a human assist, not a model recovery
+        // strategy. The finalized user turn must have explicitly requested it.
+        if (isElementReferenceOpenToolRequest(
+                requestedName, requestedArgs)
+                && !userActionScope
+                        .consumeElementReferenceAuthorization()) {
+            try {
+                sendToolResponse(
+                        id,
+                        requestedName,
+                        runtimeBlocked(
+                                "ELEMENT_REFERENCE_USER_REQUEST_REQUIRED",
+                                "顯示元素只能在使用者明確要求時開啟。不要把人工元素選擇當成一般失敗 fallback；"
+                                        + "先 inspect_ui，再用 semantic target / trusted app autonomy 繼續低風險操作。"));
+            } catch (Exception ignored) {}
             return;
         }
 
@@ -3405,6 +3434,120 @@ final class NativeGeminiLiveClient {
         return agentTaskCoordinator.shouldWithholdUnverifiedReply();
     }
 
+    private boolean isAgentAwaitingIncompleteAction() {
+        AgentTaskRecord task = agentTaskCoordinator.active();
+        if (task == null
+                || !task.awaitingModel
+                || task.finished
+                || task.cancelled) {
+            return false;
+        }
+        return !AgentTaskLifecyclePolicy.canFinishAfterModelReply(
+                task.lastTaskState,
+                task.lastToolName,
+                task.requiresPostActionInspection,
+                task.blockedReason != null,
+                task.mutationActions);
+    }
+
+    private boolean isElementReferenceOpenToolRequest(
+            String requestedName,
+            JSONObject requestedArgs) {
+        if (!SemanticPhoneAction.TOOL_NAME.equals(
+                requestedName)) {
+            return false;
+        }
+        JSONObject args = requestedArgs == null
+                ? new JSONObject()
+                : requestedArgs;
+        if (!"TAP".equalsIgnoreCase(
+                args.optString("action", ""))) {
+            return false;
+        }
+        return ElementReferenceCommand.isOpenRequest(
+                args.optString("target", ""));
+    }
+
+    private JSONObject applyMediaPlaybackCompletion(
+            JSONObject observed,
+            String targetMetadata,
+            String currentPackage,
+            boolean mediaPlayCandidate,
+            boolean musicActiveBefore) {
+        if (observed == null || !mediaPlayCandidate) {
+            return observed == null ? new JSONObject() : observed;
+        }
+
+        JSONObject after = observed.optJSONObject("after");
+        String afterPackage =
+                after == null
+                        ? currentPackage
+                        : after.optString(
+                                "package",
+                                currentPackage);
+        boolean musicActiveAfter =
+                waitForMusicActiveAfterTap(
+                        musicActiveBefore);
+        boolean uiPlaying =
+                MediaPlaybackCompletionPolicy
+                        .uiIndicatesPlaying(
+                                after == null
+                                        ? ""
+                                        : after.toString());
+        boolean actionSucceeded =
+                observed.optBoolean("success", false);
+
+        if (MediaPlaybackCompletionPolicy.shouldComplete(
+                afterPackage,
+                targetMetadata,
+                actionSucceeded,
+                musicActiveBefore,
+                musicActiveAfter,
+                uiPlaying)) {
+            try {
+                observed.put("taskState", "DONE")
+                        .put(
+                                "completionEvidence",
+                                uiPlaying
+                                        ? "MEDIA_UI_PLAYING"
+                                        : "MEDIA_PLAYBACK_BECAME_ACTIVE")
+                        .put("nextRequirement", "NONE")
+                        .put("mediaPlaybackActive", true)
+                        .put("verified", true);
+            } catch (Exception ignored) {}
+        }
+        return observed;
+    }
+
+    private boolean isMusicActive() {
+        if (appContext == null) return false;
+        try {
+            android.media.AudioManager audio =
+                    (android.media.AudioManager)
+                            appContext.getSystemService(
+                                    Context.AUDIO_SERVICE);
+            return audio != null && audio.isMusicActive();
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private boolean waitForMusicActiveAfterTap(
+            boolean activeBefore) {
+        if (activeBefore) return isMusicActive();
+        long[] delays = new long[] {120L, 220L, 360L};
+        for (long delay : delays) {
+            try {
+                Thread.sleep(delay);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+            if (isMusicActive()) return true;
+        }
+        return false;
+    }
+
     /**
      * 0045 Final Speech Contract.
      * Silent termination is rejected: either speak one short final result or
@@ -4036,12 +4179,33 @@ final class NativeGeminiLiveClient {
                     "最新任務只要求搜尋。搜尋結果出現後不要打開人、群組或聊天室；直接回報結果。");
         }
 
+        String currentPackage =
+                observationVerificationController
+                        .latestObservation().packageName;
+        boolean mediaPlayCandidate =
+                MediaPlaybackCompletionPolicy
+                        .isDefaultTrustedPackage(currentPackage)
+                        && MediaPlaybackCompletionPolicy
+                                .isPlayControl(tapMeta);
+        boolean musicActiveBefore =
+                mediaPlayCandidate && isMusicActive();
+
         JSONObject reply = phoneRuntimeExecutor.tap(args);
         workingContext.recordAction(
                 "tap_screen",
                 reply.optBoolean("success", false)
                         ? "submitted" : "failed");
-        return observationVerificationController.autoObserveAfterMutation(reply, "tap_screen");
+
+        JSONObject observed =
+                observationVerificationController
+                        .autoObserveAfterMutation(
+                                reply, "tap_screen");
+        return applyMediaPlaybackCompletion(
+                observed,
+                tapMeta,
+                currentPackage,
+                mediaPlayCandidate,
+                musicActiveBefore);
     }
 
     /**
@@ -4540,13 +4704,33 @@ final class NativeGeminiLiveClient {
                     "最新任務只要求搜尋。搜尋結果出現後不要打開人、群組或聊天室；直接回報結果。");
         }
 
+        String currentPackage =
+                observationVerificationController
+                        .latestObservation().packageName;
+        boolean mediaPlayCandidate =
+                MediaPlaybackCompletionPolicy
+                        .isDefaultTrustedPackage(currentPackage)
+                        && MediaPlaybackCompletionPolicy
+                                .isPlayControl(elementMeta);
+        boolean musicActiveBefore =
+                mediaPlayCandidate && isMusicActive();
+
         JSONObject reply = phoneRuntimeExecutor.semanticTap(elementId);
         workingContext.recordAction(
                 "tap:" + elementId,
                 reply.optBoolean("success", false)
                         ? "submitted"
                         : reply.optString("error", "failed"));
-        return observationVerificationController.autoObserveAfterMutation(reply, "tap_element");
+        JSONObject observed =
+                observationVerificationController
+                        .autoObserveAfterMutation(
+                                reply, "tap_element");
+        return applyMediaPlaybackCompletion(
+                observed,
+                elementMeta,
+                currentPackage,
+                mediaPlayCandidate,
+                musicActiveBefore);
     }
 
     private JSONObject waitForCondition(JSONObject args) throws Exception {

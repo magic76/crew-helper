@@ -31,6 +31,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/LiveTurnOrderingPolicy.java" \
   "$SRC/LiveHumanTurnBoundary.java" \
   "$SRC/LiveModelProgressPolicy.java" \
+  "$SRC/MediaPlaybackCompletionPolicy.java" \
   "$SRC/ToolCallDispatchLedger.java" \
   "$SRC/RuntimeToolRouting.java" \
   "$SRC/DeckTurnAdvancePolicy.java" \
@@ -81,6 +82,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/LiveTurnOrderingPolicyTest.java" \
   "$ROOT/tests/LiveHumanTurnBoundaryTest.java" \
   "$ROOT/tests/LiveModelProgressPolicyTest.java" \
+  "$ROOT/tests/MediaPlaybackCompletionPolicyTest.java" \
   "$ROOT/tests/ToolCallDispatchLedgerTest.java" \
   "$ROOT/tests/RuntimeToolRoutingTest.java" \
   "$ROOT/tests/DeckTurnAdvancePolicyTest.java" \
@@ -88,6 +90,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/RuntimeUiStateTest.java" \
   "$ROOT/tests/LearnedUiScopePolicyTest.java" \
   "$ROOT/tests/SendOnlyPolicyTest.java" \
+  "$ROOT/tests/UserActionScopeTest.java" \
   "$ROOT/tests/PendingActionPolicyTest.java" \
   "$ROOT/tests/PendingWaitEventPolicyTest.java" \
   "$ROOT/tests/SessionContextPromptTest.java" \
@@ -138,6 +141,7 @@ java -cp "$OUT" com.crewpocket.helper.LiveTurnCoordinatorTest
 java -cp "$OUT" com.crewpocket.helper.LiveTurnOrderingPolicyTest
 java -cp "$OUT" com.crewpocket.helper.LiveHumanTurnBoundaryTest
 java -cp "$OUT" com.crewpocket.helper.LiveModelProgressPolicyTest
+java -cp "$OUT" com.crewpocket.helper.MediaPlaybackCompletionPolicyTest
 java -cp "$OUT" com.crewpocket.helper.ToolCallDispatchLedgerTest
 java -cp "$OUT" com.crewpocket.helper.RuntimeToolRoutingTest
 java -cp "$OUT" com.crewpocket.helper.DeckTurnAdvancePolicyTest
@@ -145,6 +149,7 @@ java -cp "$OUT" com.crewpocket.helper.UiChangeSignalTest
 java -cp "$OUT" com.crewpocket.helper.RuntimeUiStateTest
 java -cp "$OUT" com.crewpocket.helper.LearnedUiScopePolicyTest
 java -cp "$OUT" com.crewpocket.helper.SendOnlyPolicyTest
+java -cp "$OUT" com.crewpocket.helper.UserActionScopeTest
 java -cp "$OUT" com.crewpocket.helper.PendingActionPolicyTest
 java -cp "$OUT" com.crewpocket.helper.PendingWaitEventPolicyTest
 java -cp "$OUT" com.crewpocket.helper.SessionContextPromptTest

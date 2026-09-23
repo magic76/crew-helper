@@ -30,6 +30,7 @@ final class UserActionScope {
     private long updatedAtMs;
     private boolean endCallAuthorized;
     private boolean appLearningAuthorized;
+    private boolean elementReferenceAuthorized;
 
     synchronized boolean consumeEndCallAuthorization() {
         expireIfNeeded();
@@ -48,10 +49,20 @@ final class UserActionScope {
     synchronized void updateFromUserText(String text) {
         TextEntryGoalGuard.updateFromUserText(text);
         update(text);
+        elementReferenceAuthorized =
+                ElementReferenceCommand.isUserOpenRequest(text);
     }
 
     synchronized void updateFromTrustedAction(String action) {
         update(action);
+        elementReferenceAuthorized = false;
+    }
+
+    synchronized boolean consumeElementReferenceAuthorization() {
+        expireIfNeeded();
+        boolean authorized = elementReferenceAuthorized;
+        elementReferenceAuthorized = false;
+        return authorized;
     }
 
     private void update(String text) {
@@ -306,6 +317,7 @@ final class UserActionScope {
         sendAuthorization.clear();
         endCallAuthorized = false;
         appLearningAuthorized = false;
+        elementReferenceAuthorized = false;
         searchIntent = false;
         openSearchResultAuthorized = false;
         searchResultSelectionRequested = false;

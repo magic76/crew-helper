@@ -28,9 +28,12 @@ final class AppAutonomyStore {
         if (prefs != null && prefs.contains(PREFIX + pkg)) {
             return prefs.getBoolean(PREFIX + pkg, false);
         }
-        // Built-in deterministic adapters are safe defaults. Users can turn
-        // them off explicitly from App Playbooks.
-        return AppRuntimeRegistry.forPackage(pkg) != null;
+        // Built-in deterministic adapters and explicitly approved low-risk
+        // media apps are safe defaults. Users can still turn them off from
+        // App Playbooks because an explicit pref always wins above.
+        return AppRuntimeRegistry.forPackage(pkg) != null
+                || MediaPlaybackCompletionPolicy
+                        .isDefaultTrustedPackage(pkg);
     }
 
     void setTrusted(String packageName, boolean trusted) {
@@ -43,6 +46,9 @@ final class AppAutonomyStore {
         HashSet<String> out = new HashSet<String>();
         for (String pkg : AppRuntimeRegistry.builtInPackages()) {
             if (isTrusted(pkg)) out.add(pkg);
+        }
+        if (isTrusted(MediaPlaybackCompletionPolicy.APPLE_MUSIC_PACKAGE)) {
+            out.add(MediaPlaybackCompletionPolicy.APPLE_MUSIC_PACKAGE);
         }
         if (prefs != null) {
             Map<String, ?> all = prefs.getAll();
