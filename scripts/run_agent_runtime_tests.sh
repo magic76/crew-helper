@@ -40,6 +40,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/PendingWaitEventPolicy.java" \
   "$SRC/SessionContextPrompt.java" \
   "$SRC/SearchTransactionPolicy.java" \
+  "$SRC/SearchResultAutonomyPolicy.java" \
   "$SRC/ScrollDirectionPolicy.java" \
   "$SRC/VisionCoordinateMapper.java" \
   "$SRC/ElementReferenceCommand.java" \
@@ -87,6 +88,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/PendingWaitEventPolicyTest.java" \
   "$ROOT/tests/SessionContextPromptTest.java" \
   "$ROOT/tests/SearchTransactionPolicyTest.java" \
+  "$ROOT/tests/SearchResultAutonomyPolicyTest.java" \
   "$ROOT/tests/ScrollDirectionPolicyTest.java" \
   "$ROOT/tests/ActionVerifierV2Test.java" \
   "$ROOT/tests/ActionRecoveryPolicyTest.java" \
@@ -141,6 +143,7 @@ java -cp "$OUT" com.crewpocket.helper.PendingActionPolicyTest
 java -cp "$OUT" com.crewpocket.helper.PendingWaitEventPolicyTest
 java -cp "$OUT" com.crewpocket.helper.SessionContextPromptTest
 java -cp "$OUT" com.crewpocket.helper.SearchTransactionPolicyTest
+java -cp "$OUT" com.crewpocket.helper.SearchResultAutonomyPolicyTest
 java -cp "$OUT" com.crewpocket.helper.ScrollDirectionPolicyTest
 java -cp "$OUT" com.crewpocket.helper.ActionVerifierV2Test
 java -cp "$OUT" com.crewpocket.helper.ActionRecoveryPolicyTest
