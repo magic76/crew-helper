@@ -17,6 +17,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/LocatorConfidencePolicy.java" \
   "$SRC/LocatorFallbackPolicy.java" \
   "$SRC/AgentTaskLifecyclePolicy.java" \
+  "$SRC/AgentTaskLifecycleClock.java" \
   "$SRC/AgentRuntimeRollout.java" \
   "$SRC/AgentEvent.java" \
   "$SRC/AgentState.java" \
@@ -67,6 +68,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/ConversationLoopPolicy.java" \
   "$SRC/ConversationLoopTakeoverPolicy.java" \
   "$SRC/ConversationLoopRecipe.java" \
+  "$SRC/DelegatedSendLease.java" \
   "$SRC/ConversationLoopWakePolicy.java" \
   "$SRC/ContextPayloadBudget.java" \
   "$SRC/ScreenItemPriorityPolicy.java" \
@@ -88,6 +90,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/ActionRecoveryPolicyTest.java" \
   "$ROOT/tests/LocatorConfidencePolicyTest.java" \
   "$ROOT/tests/AgentTaskLifecyclePolicyTest.java" \
+  "$ROOT/tests/AgentTaskLifecycleClockTest.java" \
   "$ROOT/tests/AgentRuntimeV2Test.java" \
   "$ROOT/tests/AgentRuntimeRolloutTest.java" \
   "$ROOT/tests/VisionCoordinateMapperTest.java" \
@@ -117,6 +120,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/ConversationLoopRecipeTest.java" \
   "$ROOT/tests/ConversationLoopTakeoverPolicyTest.java" \
   "$ROOT/tests/ConversationLoopWakePolicyTest.java" \
+  "$ROOT/tests/DelegatedSendLeaseTest.java" \
   "$ROOT/tests/ContextPayloadBudgetTest.java" \
   "$ROOT/tests/ScreenItemPriorityPolicyTest.java" \
   "$ROOT/tests/AgentReplayRunner.java"
@@ -139,6 +143,7 @@ java -cp "$OUT" com.crewpocket.helper.ActionVerifierV2Test
 java -cp "$OUT" com.crewpocket.helper.ActionRecoveryPolicyTest
 java -cp "$OUT" com.crewpocket.helper.LocatorConfidencePolicyTest
 java -cp "$OUT" com.crewpocket.helper.AgentTaskLifecyclePolicyTest
+java -cp "$OUT" com.crewpocket.helper.AgentTaskLifecycleClockTest
 java -cp "$OUT" com.crewpocket.helper.AgentRuntimeV2Test
 java -cp "$OUT" com.crewpocket.helper.AgentRuntimeRolloutTest
 java -cp "$OUT" com.crewpocket.helper.VisionCoordinateMapperTest
@@ -168,6 +173,7 @@ java -cp "$OUT" com.crewpocket.helper.AppAutonomyPolicyTest
 java -cp "$OUT" com.crewpocket.helper.ConversationLoopRecipeTest
 java -cp "$OUT" com.crewpocket.helper.ConversationLoopTakeoverPolicyTest
 java -cp "$OUT" com.crewpocket.helper.ConversationLoopWakePolicyTest
+java -cp "$OUT" com.crewpocket.helper.DelegatedSendLeaseTest
 java -cp "$OUT" com.crewpocket.helper.ContextPayloadBudgetTest
 java -cp "$OUT" com.crewpocket.helper.ScreenItemPriorityPolicyTest
 java -cp "$OUT" com.crewpocket.helper.AgentReplayRunner "$ROOT/tests/replay"
