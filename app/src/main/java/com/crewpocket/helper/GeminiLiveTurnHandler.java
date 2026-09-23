@@ -45,6 +45,8 @@ final class GeminiLiveTurnHandler {
         String outputText = "";
         boolean interrupted;
         boolean turnComplete;
+        boolean waitingForInput;
+        String interactionStatus = "";
 
         boolean modelTurnPresent;
         final List<ModelPart> modelParts = new ArrayList<ModelPart>();
@@ -102,6 +104,19 @@ final class GeminiLiveTurnHandler {
         frame.turnComplete = server.optBoolean(
                 "turnComplete",
                 server.optBoolean("turn_complete", false));
+        frame.waitingForInput = server.optBoolean(
+                "waitingForInput",
+                server.optBoolean("waiting_for_input", false));
+        frame.interactionStatus = stringAlias(
+                server,
+                "interactionStatus",
+                "interaction_status");
+        if (frame.interactionStatus.isEmpty()) {
+            frame.interactionStatus = stringAlias(
+                    response,
+                    "interactionStatus",
+                    "interaction_status");
+        }
 
         JSONObject inputTranscript = objectAlias(
                 server,
