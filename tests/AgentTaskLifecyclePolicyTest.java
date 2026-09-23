@@ -25,8 +25,6 @@ public final class AgentTaskLifecyclePolicyTest {
                 steps,
                 maxSteps,
                 name,
-                signature,
-                lastSignature,
                 toolCount,
                 mutationActions,
                 observationActions);
