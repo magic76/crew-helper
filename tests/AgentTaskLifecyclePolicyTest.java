@@ -121,29 +121,29 @@ public final class AgentTaskLifecyclePolicyTest {
                 "two mutation failures do not stop loop");
 
         check(!AgentTaskLifecyclePolicy.canFinishAfterModelReply(
-                        "IN_PROGRESS", "tap_screen", false, false),
+                        "IN_PROGRESS", "tap_screen", false, false, 1),
                 "mutation in progress cannot finish from model speech");
         check(!AgentTaskLifecyclePolicy.canFinishAfterModelReply(
-                        "EVIDENCE_AVAILABLE", "tap_screen", false, false),
+                        "EVIDENCE_AVAILABLE", "tap_screen", false, false, 1),
                 "fresh after mutation is step evidence, not whole-task completion");
+        check(!AgentTaskLifecyclePolicy.canFinishAfterModelReply(
+                        "EVIDENCE_AVAILABLE", "inspect_ui", false, false, 1),
+                "inspect after mutation is still only step evidence");
         check(AgentTaskLifecyclePolicy.canFinishAfterModelReply(
-                        "EVIDENCE_AVAILABLE", "inspect_ui", false, false),
-                "fresh explicit observation may close the goal");
+                        "EVIDENCE_AVAILABLE", "inspect_ui", false, false, 0),
+                "read-only observation may close the goal");
         check(AgentTaskLifecyclePolicy.canFinishAfterModelReply(
-                        "DONE", "tap_screen", false, false),
+                        "DONE", "tap_screen", false, false, 1),
                 "runtime DONE may close the goal");
         check(AgentTaskLifecyclePolicy.canFinishAfterModelReply(
-                        "ANSWER_READY", "inspect_ui", false, false),
-                "answer-ready state may close the goal");
+                        "ANSWER_READY", "inspect_ui", false, false, 2),
+                "answer-ready state may close a mutation goal");
         check(AgentTaskLifecyclePolicy.canFinishAfterModelReply(
-                        "BLOCKED", "tap_screen", false, false),
+                        "BLOCKED", "tap_screen", false, false, 1),
                 "explicit blocked state may conclude the goal");
         check(!AgentTaskLifecyclePolicy.canFinishAfterModelReply(
-                        "DONE", "tap_screen", true, false),
+                        "DONE", "tap_screen", true, false, 1),
                 "required post-action inspection still blocks completion");
-        check(AgentTaskLifecyclePolicy.canFinishAfterModelReply(
-                        "IN_PROGRESS", "tap_screen", false, true),
-                "blocked task may conclude instead of looping");
 
         System.out.println("PASS AgentTaskLifecyclePolicyTest: " + assertions + " checks");
     }
