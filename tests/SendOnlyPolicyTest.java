@@ -35,28 +35,28 @@ public final class SendOnlyPolicyTest {
         UserActionScope named = new UserActionScope();
         named.updateFromUserText("跟小明說我晚點到");
         check(named.canSend(), "named recipient send authorized");
-        check(named.requiresRecipientVerification(), "named recipient requires verification");
-        check("小明".equals(named.authorizedRecipient()), "named recipient extracted");
-        check(!named.blocksNamedRecipientMessagingAction(), "named recipient navigation allowed");
+        check(!named.requiresRecipientVerification(), "named wording does not trigger recipient verification");
+        check(named.authorizedRecipient().isEmpty(), "recipient identity is not stored");
+        check(!named.blocksNamedRecipientMessagingAction(), "named wording never blocks current-chat send");
 
         UserActionScope quoted = new UserActionScope();
         quoted.updateFromUserText("傳給老婆：「我到了」");
         check(quoted.canSend(), "quoted recipient send authorized");
-        check(quoted.requiresRecipientVerification(), "quoted recipient requires verification");
-        check("老婆".equals(quoted.authorizedRecipient()), "quoted recipient extracted");
+        check(!quoted.requiresRecipientVerification(), "quoted wording stays current-chat scoped");
+        check(quoted.authorizedRecipient().isEmpty(), "quoted recipient is not stored as a gate");
 
         UserActionScope ambiguous = new UserActionScope();
         ambiguous.updateFromUserText("告訴店員我晚一點退房");
-        check(!ambiguous.canSend(), "ambiguous recipient fails closed");
-        check(ambiguous.blocksNamedRecipientMessagingAction(), "ambiguous recipient blocked from send");
+        check(ambiguous.canSend(), "recipient ambiguity does not block current-chat send");
+        check(!ambiguous.blocksNamedRecipientMessagingAction(), "recipient ambiguity is not a SEND gate");
 
         check("john".equals(UserActionScope.extractNamedRecipient("send a message to John saying I arrived")),
                 "english recipient extracted");
         UserActionScope englishNamed = new UserActionScope();
         englishNamed.updateFromUserText("send a message to John saying I arrived");
         check(englishNamed.canSend(), "english named recipient send authorized");
-        check(englishNamed.requiresRecipientVerification(), "english named recipient requires verification");
-        check("john".equals(englishNamed.authorizedRecipient()), "english named recipient stored");
+        check(!englishNamed.requiresRecipientVerification(), "english named wording stays current-chat scoped");
+        check(englishNamed.authorizedRecipient().isEmpty(), "english recipient is not stored as a gate");
 
         UserActionScope bodyWords = new UserActionScope();
         bodyWords.updateFromUserText("跟小明說如果下雨就不要來");
