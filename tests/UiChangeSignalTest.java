@@ -34,6 +34,12 @@ public final class UiChangeSignalTest {
         check(!timedOut, "times out without UI event");
         check(elapsedMs >= 30L, "timeout waits when UI is unchanged");
 
+        long beforeHumanEdit = signal.revision();
+        signal.markChanged(16, true);
+        check(signal.lastEventType() == 16, "retains privacy-safe event type");
+        check(signal.lastHumanTextEditRevision() > beforeHumanEdit,
+                "marks human text edit revision without storing text");
+
         System.out.println("PASS UiChangeSignalTest: " + assertions + " checks");
     }
 }
