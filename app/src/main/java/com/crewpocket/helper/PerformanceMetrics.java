@@ -75,6 +75,11 @@ final class PerformanceMetrics {
     private static long liveTurnOrderingLastQueuedGeneration = -1L;
     private static long liveTurnOrderingLastFinalizedGeneration = -1L;
     private static long liveTurnOrderingLastWaitMs;
+    // Human-turn boundary counters only; no transcript text is retained.
+    private static long liveHumanTurnNewIntents;
+    private static long liveHumanTurnBoundCurrent;
+    private static long liveHumanTurnMergedSegments;
+    private static String liveHumanTurnLastReason = "";
 
     private PerformanceMetrics() {}
 
@@ -299,6 +304,21 @@ final class PerformanceMetrics {
         liveTurnOrderingInternalBypass++;
     }
 
+    static synchronized void recordLiveHumanTurnNewIntent(String reason) {
+        liveHumanTurnNewIntents++;
+        liveHumanTurnLastReason = safeReason(reason);
+    }
+
+    static synchronized void recordLiveHumanTurnBoundCurrent(String reason) {
+        liveHumanTurnBoundCurrent++;
+        liveHumanTurnLastReason = safeReason(reason);
+    }
+
+    static synchronized void recordLiveHumanTurnMergedSegment(String reason) {
+        liveHumanTurnMergedSegments++;
+        liveHumanTurnLastReason = safeReason(reason);
+    }
+
     static synchronized String buildReport() {
         return buildReportForTask("");
     }
@@ -378,6 +398,16 @@ final class PerformanceMetrics {
                     .append(" wait=")
                     .append(liveTurnOrderingLastWaitMs)
                     .append("ms");
+        }
+        out.append("\n");
+        out.append("Live human turn: new=")
+                .append(liveHumanTurnNewIntents)
+                .append(" bound-current=")
+                .append(liveHumanTurnBoundCurrent)
+                .append(" merged-segments=")
+                .append(liveHumanTurnMergedSegments);
+        if (!liveHumanTurnLastReason.isEmpty()) {
+            out.append(" last=").append(liveHumanTurnLastReason);
         }
         out.append("\n");
 
@@ -518,6 +548,10 @@ final class PerformanceMetrics {
         liveTurnOrderingLastQueuedGeneration = -1L;
         liveTurnOrderingLastFinalizedGeneration = -1L;
         liveTurnOrderingLastWaitMs = 0L;
+        liveHumanTurnNewIntents = 0L;
+        liveHumanTurnBoundCurrent = 0L;
+        liveHumanTurnMergedSegments = 0L;
+        liveHumanTurnLastReason = "";
     }
 
     private static AgentTrace ensureTrace(String taskId, long generation) {
@@ -570,6 +604,12 @@ final class PerformanceMetrics {
         int index = (int) Math.ceil(fraction * values.size()) - 1;
         index = Math.max(0, Math.min(values.size() - 1, index));
         return values.get(index);
+    }
+
+    private static String safeReason(String value) {
+        if (value == null) return "";
+        String clean = value.replaceAll("[^A-Za-z0-9_]", "");
+        return clean.length() <= 48 ? clean : clean.substring(0, 48);
     }
 
     private static String safeName(String value) {
