@@ -27,6 +27,27 @@ public final class LiveTurnCoordinatorTest {
         check(coordinator.isOperationalGenerationOpen(1L),
                 "Runtime continuation can explicitly reopen generation");
 
+        coordinator.closeOperationalGeneration(1L);
+        Thread currentProducer = new Thread(() -> {
+            try { Thread.sleep(40L); } catch (InterruptedException ignored) {}
+            coordinator.onFinalizedUserTurn(1L, "補齊同一輪");
+        });
+        currentProducer.start();
+
+        long currentStarted = System.nanoTime();
+        LiveTurnCoordinator.FinalizedTurn currentAwaited =
+                coordinator.awaitOperationalOrNext(1L, 500L);
+        long currentElapsedMs =
+                (System.nanoTime() - currentStarted) / 1_000_000L;
+        currentProducer.join();
+
+        check(currentAwaited.generation == 1L,
+                "same generation may become finalized/open while tool waits");
+        check(coordinator.isOperationalGenerationOpen(1L),
+                "same generation bind opens operational authority");
+        check(currentElapsedMs < 450L,
+                "same generation bind wakes ordering wait");
+
         Thread producer = new Thread(() -> {
             try { Thread.sleep(40L); } catch (InterruptedException ignored) {}
             coordinator.onFinalizedUserTurn(2L, "下一句");
