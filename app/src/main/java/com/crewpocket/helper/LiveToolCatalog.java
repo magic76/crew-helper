@@ -180,7 +180,7 @@ final class LiveToolCatalog {
         tools.put(new JSONObject()
                 .put("name", "start_conversation_loop")
                 .put("description",
-                        "Start a bounded persistent conversation in the CURRENT visible chat only when the user's current instruction delegates ongoing chatting/replies. This tool call is the semantic decision: Runtime does not parse the user's wording again. Do not call merely because a chat is visible. Do not search contacts, resolve names, or switch chats. Runtime verifies the current chat surface and enforces timeout/reply bounds.")
+                        "Start a bounded delegated Agent task in the CURRENT visible chat when the user's current goal requires ongoing chatting or waiting for the other party and continuing. This creates the task-scoped SEND lease; Message Send No Confirmation does not create it. Runtime does not parse the user's wording again. Do not call merely because a chat is visible. Runtime verifies the current chat surface and enforces timeout/reply bounds.")
                 .put("parameters", new JSONObject()
                         .put("type", "OBJECT")
                         .put("properties", new JSONObject()
@@ -206,7 +206,7 @@ final class LiveToolCatalog {
                         .put("properties", new JSONObject())));
 
         tools.put(new JSONObject().put("name", "send_text").put("description",
-                "MESSAGE SUBMISSION ONLY for the CURRENT visible chat. Authorization comes from either (A) this user turn explicitly asking to send, or (B) an ACTIVE Conversation Loop. Never search contacts, resolve recipient names, or switch chats for send_text. Runtime verifies the current screen is a chat composer + Send surface before every commit. If the user only asks to type/fill/paste without sending, use phone_action(TYPE). Standalone 送出/發送/send is Runtime-owned.")
+                "MESSAGE SUBMISSION ONLY for the CURRENT visible chat. Authorization comes from either (A) this user turn explicitly asking to send once, or (B) an ACTIVE task-scoped delegated SEND lease created by start_conversation_loop. Message Send No Confirmation alone is not SEND authority. If Runtime returns DELEGATED_SESSION_REQUIRED during a delegated-chat goal, call start_conversation_loop once and retry send_text once without asking the user to re-authorize. Never search contacts, resolve recipient names, or switch chats for send_text. Runtime verifies the current screen is a chat composer + Send surface before every commit. If the user only asks to type/fill/paste without sending, use phone_action(TYPE). Standalone 送出/發送/send is Runtime-owned.")
                 .put("parameters", new JSONObject().put("type", "OBJECT")
                         .put("properties", new JSONObject()
                                 .put("text", new JSONObject().put("type", "STRING")
