@@ -6,6 +6,10 @@ public final class ElementReferenceCommandTest {
         expect(true, ElementReferenceCommand.isOpenRequest("顯示可點擊元素"), "show clickable zh");
         expect(true, ElementReferenceCommand.isOpenRequest("把可點的標出來"), "mark clickable zh");
         expect(true, ElementReferenceCommand.isOpenRequest("element_reference:open"), "model marker");
+        expect(true, ElementReferenceCommand.isOpenRequest("visual_reference:open"), "legacy model marker");
+        expect(false, ElementReferenceCommand.isUserOpenRequest("element_reference:open"), "model marker is never user authorization");
+        expect(false, ElementReferenceCommand.isUserOpenRequest("visual_reference:open"), "legacy marker is never user authorization");
+        expect(true, ElementReferenceCommand.isUserOpenRequest("顯示元素"), "user phrase grants overlay authorization");
         expect(true, ElementReferenceCommand.isOpenRequest("Show clickable elements"), "show elements en");
 
         expect(false, ElementReferenceCommand.isOpenRequest("顯示方格"), "grid command must not trigger elements");
