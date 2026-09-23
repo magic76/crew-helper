@@ -3075,19 +3075,26 @@ final class NativeGeminiLiveClient {
                     "internal_directive",
                     outboundBytes,
                     ContextPayloadBudget.INTERNAL_DIRECTIVE_BYTES);
-            markPendingInternalDirectiveTurn(
-                    userIntentGeneration);
             boolean sent = liveConnection.send(payload);
             if (!sent) {
-                clearPendingInternalDirectiveTurn();
                 Log.w(TAG, "Internal directive send failed: websocket unavailable or closed");
             }
             return sent;
         } catch (Exception error) {
-            clearPendingInternalDirectiveTurn();
             Log.w(TAG, "Agent 結論指令傳送失敗：" + error.getMessage());
             return false;
         }
+    }
+
+    private boolean sendConversationWakeDirective(
+            String text) {
+        markPendingInternalDirectiveTurn(
+                userIntentGeneration);
+        boolean sent = sendInternalAgentDirective(text);
+        if (!sent) {
+            clearPendingInternalDirectiveTurn();
+        }
+        return sent;
     }
 
     private void markPendingInternalDirectiveTurn(
@@ -3622,7 +3629,7 @@ final class NativeGeminiLiveClient {
             }
 
             reportStage(task.status);
-            boolean sent = sendInternalAgentDirective(
+            boolean sent = sendConversationWakeDirective(
                     "【CONVERSATION LOOP WAKE】Runtime 偵測到目前聊天視窗有新的 Accessibility 變化。"
                             + "ACTIVE Conversation Loop lease 已授權在目前聊天室持續回覆；不要說無法發送，不要要求新的 user turn，也不要逐則詢問確認。"
                             + "現在只呼叫一次 inspect_ui 看 fresh screenshot。"
