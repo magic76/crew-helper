@@ -3940,12 +3940,15 @@ final class NativeGeminiLiveClient {
                         new ArrayList<SearchResultAutonomyPolicy.Candidate>();
         for (int i = 0; i < rawOptions.length(); i++) {
             JSONObject option = rawOptions.optJSONObject(i);
-            if (option == null) continue;
             autonomyCandidates.add(
                     new SearchResultAutonomyPolicy.Candidate(
-                            option.optString("label", ""),
-                            option.optBoolean("exactMatch", false),
-                            option.optBoolean("strongMatch", false)));
+                            option == null
+                                    ? ""
+                                    : option.optString("label", ""),
+                            option != null
+                                    && option.optBoolean("exactMatch", false),
+                            option != null
+                                    && option.optBoolean("strongMatch", false)));
         }
 
         SearchResultAutonomyPolicy.Decision autonomy =
