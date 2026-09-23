@@ -43,16 +43,16 @@ final class GoogleMapsRuntimeAdapter implements AppRuntimeAdapter {
                 + "Do not manually TAP a search box then TYPE. "
                 + "If Runtime returns SEARCH_NEEDS_QUERY, immediately retry SEARCH with text instead of ending the task. "
                 + "Autocomplete suggestions are not final place results; wait for Runtime result rows. "
-                + "When several plausible places remain, ask the user instead of guessing. "
+                + "For low-risk navigation, Runtime should auto-select a top-ranked result when its label plausibly matches the query; ask the user only when candidates remain genuinely ambiguous. "
                 + "Opening Directions only enters route planning; navigation is complete only after the actual guidance/navigation state is visible. "
                 + GoogleMapsSemanticContract.modelGuidance();
     }
 
     @Override public String displayGuidance(Context context) {
         return I18n.get(context,
-                "搜尋由 Runtime 一次完成，而且 SEARCH 必須在同一次呼叫帶搜尋文字；若收到 SEARCH_NEEDS_QUERY，要補上文字立刻重試，不要結束任務；自動完成建議不等於真正地點結果；多個可信地點要讓使用者選；只有真正進入導航指引狀態才算開始導航。\n\n"
+                "搜尋由 Runtime 一次完成，而且 SEARCH 必須在同一次呼叫帶搜尋文字；若收到 SEARCH_NEEDS_QUERY，要補上文字立刻重試，不要結束任務；自動完成建議不等於真正地點結果；低風險導航會優先自動選擇與查詢明顯吻合的排名結果，只有真正歧義才詢問使用者；只有真正進入導航指引狀態才算開始導航。\n\n"
                         + GoogleMapsSemanticContract.displayGuidance(true),
-                "Runtime owns search submission; every SEARCH must include a non-empty text query in the same call. Retry immediately after SEARCH_NEEDS_QUERY; autocomplete suggestions are not final place results; ask the user when several places are plausible; navigation is complete only after actual guidance starts.\n\n"
+                "Runtime owns search submission; every SEARCH must include a non-empty text query in the same call. Retry immediately after SEARCH_NEEDS_QUERY; autocomplete suggestions are not final place results; low-risk navigation auto-selects a top-ranked textually plausible result and asks only on genuine ambiguity; navigation is complete only after actual guidance starts.\n\n"
                         + GoogleMapsSemanticContract.displayGuidance(false));
     }
 }
