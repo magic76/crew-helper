@@ -4,8 +4,8 @@ import android.os.Handler;
 import android.os.Looper;
 
 /**
- * Owns Agent response waiting, watchdog, post-action observation requests and
- * the final-speech contract.
+ * Owns only the minimal Agent response boundaries: bounded waiting,
+ * deterministic post-action observation, and at most one continuation nudge.
  *
  * Tool execution and task persistence remain outside this class. It coordinates
  * only what should happen after Runtime has handed control back to Gemini.
@@ -193,7 +193,7 @@ final class AgentResponseCoordinator {
             host.reportStage(task.status);
             host.finishTask(
                     task,
-                    "模型未繼續目前目標",
+                    "任務未完成：模型未繼續目前目標",
                     task.finalReply);
             return;
         }
