@@ -22,7 +22,6 @@ final class AgentResponseCoordinator {
     }
 
     private static final long FINAL_RESPONSE_WAIT_MS = 12_000L;
-    private static final int FINAL_SPEECH_MAX_RETRIES = 2;
 
     private final AgentTaskCoordinator tasks;
     private final Host host;
@@ -92,23 +91,21 @@ final class AgentResponseCoordinator {
                     }
                     if (!shouldPrompt) return;
 
-                    String reason = "工具結果已回傳，但 12 秒未收到模型下一步。";
+                    String reason = "Gemini 未在工具結果後繼續目前任務";
                     synchronized (tasks.monitor()) {
                         if (!tasks.isActive(task)
                                 || task.finished
                                 || task.cancelled) {
                             return;
                         }
-                        task.awaitingModel = true;
+                        task.awaitingModel = false;
                         task.status = reason;
                     }
                     host.reportStage(reason);
-                    sendDirectiveOrFinish(task,
-                            "【Agent 系統狀態】上一個工具結果已回傳。只看目前 model-facing status："
-                                    + "DONE 代表上一步成功；WAIT 先 inspect_ui 看 fresh screenshot，不要重複操作；"
-                                    + "FAILED 換方法且不要重複同一動作；NEED_USER 只問必要選擇。"
-                                    + "只有真的完成或無替代方案時才作結論。",
-                            "工具結果 watchdog");
+                    host.finishTask(
+                            task,
+                            reason,
+                            task.finalReply);
                 }
             };
             watchdogHandler.postDelayed(
@@ -138,12 +135,9 @@ final class AgentResponseCoordinator {
             return;
         }
 
-        if (!host.isAgentMuted()
-                && !task.userVisibleReplyProducedSinceLastAction) {
-            requestFinalSpeechOrNextTool(task);
-            return;
-        }
-
+        // Completion evidence is authoritative. Do not force another model turn
+        // merely to manufacture a final spoken acknowledgement. Gemini may have
+        // already spoken; simple success may also stay quiet.
         host.finishTask(
                 task,
                 task.blockedReason == null ? "任務完成" : task.blockedReason,
@@ -175,6 +169,7 @@ final class AgentResponseCoordinator {
 
     private void requestNextToolAfterIntermediateReply(
             AgentTaskRecord task) {
+        boolean alreadyPrompted;
         synchronized (tasks.monitor()) {
             if (!tasks.isActive(task)
                     || task.finished
@@ -182,74 +177,38 @@ final class AgentResponseCoordinator {
                     || !task.awaitingModel) {
                 return;
             }
-            task.prematureModelReplies++;
-            task.userVisibleReplyProducedSinceLastAction = false;
-            task.finalSpeechRetryCount = 0;
-            task.watchdogPrompted = false;
-            clearLocked();
-            task.status = "目標尚未完成，繼續同一個 Agent 任務";
+
+            alreadyPrompted = task.prematureModelReplies > 0;
+            if (alreadyPrompted) {
+                task.awaitingModel = false;
+                task.status = "模型未繼續目前目標，停止本次 Agent task";
+                clearLocked();
+            } else {
+                task.prematureModelReplies = 1;
+                task.userVisibleReplyProducedSinceLastAction = false;
+                task.finalSpeechRetryCount = 0;
+                task.watchdogPrompted = false;
+                clearLocked();
+                task.status = "目標尚未完成，等待下一個必要動作";
+            }
+        }
+
+        if (alreadyPrompted) {
+            host.reportStage(task.status);
+            host.finishTask(
+                    task,
+                    "模型未繼續目前目標",
+                    task.finalReply);
+            return;
         }
 
         host.reportStage(task.status);
         sendDirectiveOrFinish(task,
-                "【WHOLE TASK CONTINUITY】剛才的語音/文字回覆不是 whole-task completion。"
-                        + "目前 active goal 必須保持同一個 task，不要因 STEP_OK 或 EVIDENCE_AVAILABLE 就停。"
-                        + "這個 task 已經做過手機 mutation 時，inspect_ui 只代表 fresh evidence，不代表整個目標完成。"
-                        + "不要重複剛才的說明、翻譯、地名或中間結果；保持安靜並只呼叫一個必要的下一步工具。"
-                        + "只有 Runtime taskState=DONE/ANSWER_READY/BLOCKED 才可作最後 AUDIO 結論。",
+                "【CONTINUE CURRENT GOAL】目前目標尚未完成。"
+                        + "不要敘述工具、Runtime 狀態或中間結果；"
+                        + "如果還有明確下一步，現在只呼叫一個必要工具。"
+                        + "若沒有可執行的下一步，就用一句使用者可理解的結果結束。",
                 "任務續接");
-        scheduleWatchdog(task);
-    }
-
-    private void requestFinalSpeechOrNextTool(
-            AgentTaskRecord task) {
-        int attempt;
-        synchronized (tasks.monitor()) {
-            if (!tasks.isActive(task)
-                    || task.finished
-                    || task.cancelled
-                    || !task.awaitingModel) {
-                return;
-            }
-
-            if (task.finalSpeechRetryCount
-                    >= FINAL_SPEECH_MAX_RETRIES) {
-                task.status = "Agent 操作已結束，但 Gemini 未產生最終語音";
-                host.reportStage(task.status);
-                host.finishTask(
-                        task,
-                        "最終語音未產生",
-                        task.finalReply);
-                return;
-            }
-
-            task.finalSpeechRetryCount++;
-            attempt = task.finalSpeechRetryCount;
-            task.watchdogPrompted = false;
-            clearLocked();
-            task.status =
-                    "等待最終語音或下一個必要動作（"
-                            + attempt
-                            + "/"
-                            + FINAL_SPEECH_MAX_RETRIES
-                            + "）";
-        }
-
-        host.reportStage(
-                task.status
-                        + " · audio="
-                        + host.audioOutputState()
-                        + " · pcmReceived="
-                        + host.pcmBytesReceived()
-                        + " · pcmAccepted="
-                        + host.pcmBytesAccepted());
-        sendDirectiveOrFinish(task,
-                "【FINAL TURN REQUIRED】上一個 active Agent turn 沒有產生使用者可聽見的最終回覆，"
-                        + "也沒有下一個工具動作。現在只能二選一："
-                        + "如果任務已完成，立刻用 AUDIO 說一句簡短結果，且不要再呼叫工具；"
-                        + "如果任務尚未完成，保持安靜並只呼叫一個下一步工具。"
-                        + "不得再次空白結束，也不要敘述 Runtime 中間步驟。",
-                "最終回覆");
         scheduleWatchdog(task);
     }
 
