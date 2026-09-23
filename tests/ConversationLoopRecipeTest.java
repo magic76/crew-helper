@@ -37,6 +37,22 @@ public final class ConversationLoopRecipeTest {
                         "停止跟他聊天"),
                 "explicit stop should stop loop");
         check(
+                ConversationLoopPolicy.shouldYieldToUserTurn(
+                        "我自己回"),
+                "fresh human turn should take foreground ownership");
+        check(
+                ConversationLoopPolicy.shouldYieldToUserTurn(
+                        "幫我輸入晚點到"),
+                "manual typing request should take foreground ownership");
+        check(
+                ConversationLoopPolicy.shouldYieldToUserTurn(
+                        "導航回家"),
+                "unrelated foreground task should take ownership over loop");
+        check(
+                !ConversationLoopPolicy.shouldYieldToUserTurn(
+                        "幫我跟他持續聊天"),
+                "explicit delegated-chat command should preserve loop ownership");
+        check(
                 ConversationLoopPolicy.hasDelegatedSendAuthority(
                         true, false),
                 "active loop authorizes a reply without fresh user turn");
