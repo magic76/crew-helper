@@ -50,7 +50,7 @@ final class UserActionScope {
         TextEntryGoalGuard.updateFromUserText(text);
         update(text);
         elementReferenceAuthorized =
-                ElementReferenceCommand.isOpenRequest(text);
+                ElementReferenceCommand.isUserOpenRequest(text);
     }
 
     synchronized void updateFromTrustedAction(String action) {
