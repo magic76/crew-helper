@@ -1646,6 +1646,15 @@ final class NativeGeminiLiveClient {
             return queuedGeneration;
         }
 
+        AgentTaskRecord delegatedTask =
+                agentTaskCoordinator.active();
+        if (delegatedTask != null
+                && conversationLoopRecipe.canSend()
+                && delegatedSendLease.canSend(
+                        delegatedTask.taskId)) {
+            return queuedGeneration;
+        }
+
         long currentGeneration = userIntentGeneration;
         if (queuedGeneration == currentGeneration
                 && userActionScope.canSend()) {
