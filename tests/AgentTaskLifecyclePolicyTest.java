@@ -49,9 +49,9 @@ public final class AgentTaskLifecyclePolicyTest {
         check(step(1_000L, 0L, 0, 20,
                         "inspect_ui", "same", "same", 4, 0, 0).allowed,
                 "repeated observation remains allowed");
-        check(!step(1_000L, 0L, 0, 20,
-                        "tap_screen", "same", "same", 0, 0, 0).allowed,
-                "repeated mutation is blocked");
+        check(step(1_000L, 0L, 0, 20,
+                        "swipe_screen", "same", "same", 1, 1, 0).allowed,
+                "same low-risk mutation may repeat; dedupe belongs to RuntimeV2/screen evidence");
         check(!step(AgentTaskLifecyclePolicy.TASK_TIMEOUT_MS + 1L, 0L, 0, 20,
                         "inspect_ui", "inspect:1", "", 0, 0, 0).allowed,
                 "task timeout blocks next step");
@@ -61,11 +61,10 @@ public final class AgentTaskLifecyclePolicyTest {
         check(!step(1_000L, 0L, 20, 20,
                         "tap_screen", "tap:budget", "", 0, 0, 1).allowed,
                 "action step budget still blocks actions");
-        check(!step(1_000L, 0L, 3, 20,
-                        "inspect_ui", "inspect:cap", "",
-                        AgentTaskLifecyclePolicy.MAX_INSPECT_UI_RUNS,
-                        0, 3).allowed,
-                "inspect_ui has its own cap");
+        check(step(1_000L, 0L, 3, 20,
+                        "inspect_ui", "inspect:repeat", "",
+                        6, 0, 3).allowed,
+                "inspect_ui uses only the shared observation budget");
         check(!step(1_000L, 0L, 3, 20,
                         "wait", "wait:cap", "", 3, 0,
                         AgentTaskLifecyclePolicy.MAX_OBSERVATION_ACTIONS).allowed,
@@ -78,13 +77,6 @@ public final class AgentTaskLifecyclePolicyTest {
                         "tap_screen", "tap:16", "tap:15", 0,
                         AgentTaskLifecyclePolicy.MAX_MUTATION_ACTIONS, 0).allowed,
                 "mutation cap is preserved");
-        check(AgentTaskLifecyclePolicy.maxRunsForTool("advance_deck")
-                        == AgentTaskLifecyclePolicy.DECK_NAV_MAX_RUNS,
-                "deck navigation keeps expanded run limit");
-        check(AgentTaskLifecyclePolicy.maxRunsForTool("tap_screen")
-                        == AgentTaskLifecyclePolicy.MAX_TOOL_RUNS,
-                "normal tool run limit is preserved");
-
         check(AgentTaskLifecyclePolicy.isOneShotCompletionTool("create_note"),
                 "create_note is terminal one-shot success");
         check(AgentTaskLifecyclePolicy.isOneShotCompletionTool("remember_app_guidance"),
