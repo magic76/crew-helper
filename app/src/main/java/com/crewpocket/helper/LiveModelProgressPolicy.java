@@ -24,4 +24,13 @@ final class LiveModelProgressPolicy {
         if (!modelTurnPresent) return false;
         return hasModelAudio || hasModelText;
     }
+
+    static boolean shouldClearAgentWatchdog(
+            boolean hasToolCalls,
+            boolean substantiveModelProgress,
+            boolean agentAwaitingIncompleteAction) {
+        if (hasToolCalls) return true;
+        if (agentAwaitingIncompleteAction) return false;
+        return substantiveModelProgress;
+    }
 }
