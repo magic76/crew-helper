@@ -40,12 +40,15 @@ final class MediaPlaybackCompletionPolicy {
             String packageName,
             String targetMetadata,
             boolean tapSuccess,
+            boolean musicActiveBefore,
             boolean musicActiveAfter,
             boolean uiIndicatesPlaying) {
+        boolean playbackBecameActive =
+                !musicActiveBefore && musicActiveAfter;
         return isDefaultTrustedPackage(packageName)
                 && isPlayControl(targetMetadata)
                 && tapSuccess
-                && (musicActiveAfter || uiIndicatesPlaying);
+                && (playbackBecameActive || uiIndicatesPlaying);
     }
 
     private static String clean(String value) {
