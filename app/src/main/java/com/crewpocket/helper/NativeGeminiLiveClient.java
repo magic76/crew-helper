@@ -123,6 +123,8 @@ final class NativeGeminiLiveClient {
     // Finalized user turns are coordinated separately from model/tool frames.
     // Tool calls never grant authority; only finalized user input advances this.
     private final LiveTurnCoordinator liveTurnCoordinator = new LiveTurnCoordinator();
+    private final LiveHumanTurnBoundary liveHumanTurnBoundary =
+            new LiveHumanTurnBoundary();
     private final Object internalDirectiveTurnLock = new Object();
     private static final long INTERNAL_DIRECTIVE_TOOL_TTL_MS = 8_000L;
     private long pendingInternalDirectiveGeneration = -1L;
@@ -822,6 +824,19 @@ final class NativeGeminiLiveClient {
                 + " supersede=" + supersedeActiveTask);
     }
 
+    private void mergeFinalizedVoiceSegmentIntoCurrentIntent(
+            String effectiveText,
+            String reason) {
+        conversationGoalTouchedAt = System.currentTimeMillis();
+        workingContext.mergeUserTurnSegment(effectiveText);
+        Log.d(
+                TAG,
+                "Merged finalized voice segment into generation="
+                        + userIntentGeneration
+                        + " reason="
+                        + (reason == null ? "" : reason));
+    }
+
     private boolean isCurrentUserIntent(long generation) {
         synchronized (agentLock) { return generation == userIntentGeneration; }
     }
@@ -854,6 +869,8 @@ final class NativeGeminiLiveClient {
             if (hasPendingUiChoice()) clearPendingUiChoiceSilently();
 
             beginNewUserIntent(input);
+            liveHumanTurnBoundary.forceNewTurn(
+                    input, System.currentTimeMillis());
             voiceExecutionGuard.onFinalizedTypedTurn(
                     userIntentGeneration, input);
             userActionScope.updateFromUserText(input);
@@ -1184,6 +1201,7 @@ final class NativeGeminiLiveClient {
         liveAudioController.stop();
         voiceExecutionGuard.clear();
         liveTurnCoordinator.reset();
+        liveHumanTurnBoundary.reset();
         clearPendingInternalDirectiveTurn();
         liveConnection.stop();
         if (wasRunning) listener.onStopped("已結束");
@@ -1242,8 +1260,10 @@ final class NativeGeminiLiveClient {
             return;
         }
 
-        // Finalized authoritative input is handled before same-frame tools so
-        // Runtime-owned SEND/Shortcut state wins protocol ordering races.
+        // Finalized transcription text is authoritative, but one finalized
+        // segment is not automatically a brand-new foreground intent. Gemini
+        // Live may finalize multiple speech segments while the human experiences
+        // one spoken instruction.
         String completeUserInput = frame.inputText;
         if (!completeUserInput.isEmpty()) {
             clearPendingInternalDirectiveTurn();
@@ -1263,23 +1283,81 @@ final class NativeGeminiLiveClient {
                 clearPendingUiChoiceSilently();
             }
 
-            VoiceExecutionGuard.TurnDisposition voiceDisposition =
-                    voiceExecutionGuard.onFinalizedVoiceTurn(
-                            userIntentGeneration + 1L,
-                            completeUserInput,
-                            frame.inputConfidence);
-            boolean confirmationContinuation =
-                    voiceDisposition
-                            != VoiceExecutionGuard.TurnDisposition.NORMAL;
+            String effectiveUserInput = completeUserInput;
+            VoiceExecutionGuard.TurnDisposition voiceDisposition;
 
-            if (confirmationContinuation) {
-                beginContinuationUserIntent(completeUserInput);
+            // A pending sensitive-action confirmation is intentionally a
+            // distinct human turn; preserve the existing confirmation lease.
+            boolean pendingVoiceConfirmation =
+                    !voiceExecutionGuard.pendingSummary().isEmpty();
+            if (pendingVoiceConfirmation) {
+                voiceDisposition =
+                        voiceExecutionGuard.onFinalizedVoiceTurn(
+                                userIntentGeneration + 1L,
+                                completeUserInput,
+                                frame.inputConfidence);
+                boolean confirmationContinuation =
+                        voiceDisposition
+                                != VoiceExecutionGuard.TurnDisposition.NORMAL;
+                if (confirmationContinuation) {
+                    beginContinuationUserIntent(completeUserInput);
+                } else {
+                    beginNewUserIntent(completeUserInput);
+                }
+                liveHumanTurnBoundary.forceNewTurn(
+                        completeUserInput,
+                        System.currentTimeMillis());
+                PerformanceMetrics.recordLiveHumanTurnNewIntent(
+                        confirmationContinuation
+                                ? "VOICE_CONFIRMATION"
+                                : "CONFIRMATION_REPLACED");
             } else {
-                beginNewUserIntent(completeUserInput);
+                AgentTaskRecord activeVoiceTask =
+                        agentTaskCoordinator.activeRunning();
+                LiveHumanTurnBoundary.Resolution boundary =
+                        liveHumanTurnBoundary.resolve(
+                                completeUserInput,
+                                System.currentTimeMillis(),
+                                activeVoiceTask != null,
+                                activeVoiceTask == null
+                                        ? -1L
+                                        : activeVoiceTask.intentGeneration,
+                                userIntentGeneration,
+                                liveTurnCoordinator.latest().generation,
+                                frame.interactionStatus,
+                                frame.waitingForInput,
+                                frame.interrupted);
+
+                effectiveUserInput = boundary.effectiveText;
+                if (boundary.decision
+                        == LiveHumanTurnBoundary.Decision.NEW_INTENT) {
+                    beginNewUserIntent(effectiveUserInput);
+                    PerformanceMetrics.recordLiveHumanTurnNewIntent(
+                            boundary.reason);
+                } else {
+                    mergeFinalizedVoiceSegmentIntoCurrentIntent(
+                            effectiveUserInput,
+                            boundary.reason);
+                    if (boundary.decision
+                            == LiveHumanTurnBoundary.Decision
+                                    .BIND_CURRENT_GENERATION) {
+                        PerformanceMetrics.recordLiveHumanTurnBoundCurrent(
+                                boundary.reason);
+                    } else {
+                        PerformanceMetrics.recordLiveHumanTurnMergedSegment(
+                                boundary.reason);
+                    }
+                }
+
+                voiceDisposition =
+                        voiceExecutionGuard.onFinalizedVoiceTurn(
+                                userIntentGeneration,
+                                effectiveUserInput,
+                                frame.inputConfidence);
             }
 
             authorizationTranscript =
-                    completeUserInput;
+                    effectiveUserInput;
             if (authorizationTranscript.length() > 4096) {
                 authorizationTranscript =
                         authorizationTranscript.substring(
@@ -1292,7 +1370,7 @@ final class NativeGeminiLiveClient {
                 reportStage("語音確認完成，等待執行原動作");
             } else {
                 userActionScope.updateFromUserText(
-                        completeUserInput);
+                        effectiveUserInput);
                 if (voiceDisposition
                         == VoiceExecutionGuard.TurnDisposition.CONFIRMATION_REJECTED) {
                     workingContext.setPendingTask("");
@@ -1300,22 +1378,22 @@ final class NativeGeminiLiveClient {
                 }
             }
             recordFinalizedSendAuthorization(
-                    completeUserInput);
+                    effectiveUserInput);
             if (tryHandleRuntimeAppTeaching(
-                    completeUserInput)) {
+                    effectiveUserInput)) {
                 return;
             }
             if (tryHandleRuntimeSendCurrent(
-                    completeUserInput)) {
+                    effectiveUserInput)) {
                 return;
             }
             if (isStopAgentTaskPhrase(
-                    completeUserInput)) {
+                    effectiveUserInput)) {
                 deckRuntimeController.cancelAutoAdvance();
                 cancelAgentTask(
                         "使用者語音停止任務");
             } else if (memoryRuleController.processInput(
-                    completeUserInput)) {
+                    effectiveUserInput)) {
                 return;
             }
         }
@@ -1352,6 +1430,11 @@ final class NativeGeminiLiveClient {
                 }
             }
         }
+
+        liveHumanTurnBoundary.observeServerState(
+                frame.turnComplete,
+                frame.interactionStatus,
+                frame.waitingForInput);
 
         if (!frame.serverPresent) return;
 
@@ -1436,6 +1519,7 @@ final class NativeGeminiLiveClient {
                         if (!responseHasToolCall
                                 && audioAccepted) {
                             markCurrentModelTurnSpeech();
+                            liveHumanTurnBoundary.noteModelSpeech();
                             markAgentUserVisibleReplyProduced();
                         }
                     }
@@ -1482,6 +1566,7 @@ final class NativeGeminiLiveClient {
                     deckTurnWasInterrupted);
             resetCurrentModelTurnState();
         }
+
     }
 
     /**
@@ -1574,12 +1659,31 @@ final class NativeGeminiLiveClient {
         long waitStarted = System.currentTimeMillis();
         PerformanceMetrics.recordLiveTurnOrderingWait();
         LiveTurnCoordinator.FinalizedTurn finalized =
-                liveTurnCoordinator.awaitNextAfter(
+                liveTurnCoordinator.awaitOperationalOrNext(
                         queuedGeneration, 2500L);
         long waitedMs =
                 Math.max(
                         0L,
                         System.currentTimeMillis() - waitStarted);
+        if (finalized.generation == queuedGeneration
+                && liveTurnCoordinator
+                        .isOperationalGenerationOpen(
+                                queuedGeneration)) {
+            PerformanceMetrics.recordLiveTurnOrderingReconciled(
+                    queuedGeneration,
+                    finalized.generation,
+                    waitedMs);
+            Log.i(
+                    TAG,
+                    "Operational tool bound to finalized current generation wait="
+                            + waitedMs
+                            + "ms generation="
+                            + queuedGeneration
+                            + " name="
+                            + requestedName);
+            return queuedGeneration;
+        }
+
         if (finalized.generation == queuedGeneration + 1L) {
             PerformanceMetrics.recordLiveTurnOrderingReconciled(
                     queuedGeneration,

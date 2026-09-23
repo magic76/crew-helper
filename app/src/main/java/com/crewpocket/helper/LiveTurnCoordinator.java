@@ -66,6 +66,34 @@ final class LiveTurnCoordinator {
         return new FinalizedTurn(finalizedGeneration, finalizedText);
     }
 
+    synchronized FinalizedTurn awaitOperationalOrNext(
+            long generation,
+            long timeoutMs) {
+        long boundedTimeout = Math.max(0L, timeoutMs);
+        long deadlineNanos =
+                System.nanoTime() + boundedTimeout * 1_000_000L;
+
+        while (!(operationalOpen
+                        && operationalGeneration == generation
+                        && finalizedGeneration == generation)
+                && finalizedGeneration <= generation) {
+            long remainingNanos =
+                    deadlineNanos - System.nanoTime();
+            if (remainingNanos <= 0L) break;
+
+            long waitMs =
+                    Math.max(1L, remainingNanos / 1_000_000L);
+            try {
+                wait(waitMs);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        return new FinalizedTurn(
+                finalizedGeneration, finalizedText);
+    }
+
     synchronized FinalizedTurn awaitNextAfter(
             long olderGeneration,
             long timeoutMs) {
