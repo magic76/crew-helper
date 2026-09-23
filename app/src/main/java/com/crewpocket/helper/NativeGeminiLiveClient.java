@@ -2393,16 +2393,31 @@ final class NativeGeminiLiveClient {
             if (task.blockedReason != null) {
                 agentResponseCoordinator.requestConclusion(task, task.blockedReason);
             } else if (shouldSuspendAgentForUser(result)) {
-                synchronized (agentTaskCoordinator.monitor()) {
-                    task.awaitingModel = false;
-                    task.watchdogPrompted = false;
-                    agentResponseCoordinator.clear();
-                    task.status = "WAITING_BACKGROUND".equals(
-                            result.optString("taskState", ""))
-                            ? "對話模式：背景等待新訊息"
-                            : "等待使用者選擇搜尋結果";
+                String suspendedState =
+                        result.optString("taskState", "");
+                if ("WAITING_BACKGROUND".equals(suspendedState)) {
+                    synchronized (agentTaskCoordinator.monitor()) {
+                        task.awaitingModel = false;
+                        task.watchdogPrompted = false;
+                        agentResponseCoordinator.clear();
+                        task.status =
+                                "對話模式：背景等待已交給 Runtime";
+                    }
+                    finishAgentTask(
+                            task,
+                            "背景等待交給 Runtime",
+                            "");
+                    reportStage(
+                            "自動聊天運作中 · 靜候對方訊息");
+                } else {
+                    synchronized (agentTaskCoordinator.monitor()) {
+                        task.awaitingModel = false;
+                        task.watchdogPrompted = false;
+                        agentResponseCoordinator.clear();
+                        task.status = "等待使用者選擇搜尋結果";
+                    }
+                    reportStage(task.status);
                 }
-                reportStage(task.status);
             } else {
                 task.awaitingModel = true;
                 agentResponseCoordinator.scheduleWatchdog(task);
