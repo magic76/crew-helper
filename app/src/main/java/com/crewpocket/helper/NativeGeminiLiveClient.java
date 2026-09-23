@@ -751,6 +751,15 @@ final class NativeGeminiLiveClient {
     private void beginUserIntent(
             String userText,
             boolean supersedeActiveTask) {
+        // Human foreground ownership always outranks a retained auto-chat lease.
+        // The original start command is exempt so it can arm/reuse the loop.
+        if (conversationLoopRecipe.isActive()
+                && ConversationLoopPolicy.shouldYieldToUserTurn(userText)) {
+            releaseConversationLoopForHumanTakeover(
+                    "USER_TURN_TAKEOVER",
+                    false);
+        }
+
         // A finalized user instruction supersedes any incomplete model-turn
         // bookkeeping from the previous interaction.
         resetCurrentModelTurnState();
@@ -1751,6 +1760,27 @@ final class NativeGeminiLiveClient {
             FloatingBubbleManager.getInstance(appContext)
                     .setConversationWaiting(waiting);
         } catch (Exception ignored) {}
+    }
+
+    private void releaseConversationLoopForHumanTakeover(
+            String reason,
+            boolean cancelLoopOwnedTask) {
+        if (!conversationLoopRecipe.isActive()) return;
+
+        AgentTaskRecord active = agentTaskCoordinator.activeRunning();
+        boolean loopOwnedTask = isConversationLoopOwnedTask(active);
+
+        conversationLoopRecipe.stop(
+                reason == null || reason.isEmpty()
+                        ? "HUMAN_TAKEOVER"
+                        : reason);
+        setConversationWaitingVisual(false);
+        workingContext.setPendingTask("");
+
+        if (cancelLoopOwnedTask && loopOwnedTask) {
+            cancelAgentTask("使用者接管自動聊天");
+        }
+        reportStage("自動聊天已讓出控制");
     }
 
     private String tryArmRuntimeConversationLoop(
@@ -3304,6 +3334,13 @@ final class NativeGeminiLiveClient {
                     if (event == null) continue;
                     revision = event.optLong("revision", revision);
                     if (!event.optBoolean("changed", false)) continue;
+
+                    if (event.optBoolean("humanTextEdit", false)) {
+                        releaseConversationLoopForHumanTakeover(
+                                "USER_MANUAL_TEXT_EDIT",
+                                true);
+                        return;
+                    }
 
                     try { Thread.sleep(350L); }
                     catch (InterruptedException interrupted) {

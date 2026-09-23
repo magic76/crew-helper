@@ -43,6 +43,15 @@ final class ConversationLoopPolicy {
         return activeLoopCanSend || latestTurnCanSend;
     }
 
+    /**
+     * Any fresh human turn owns the foreground over a retained conversation loop.
+     * Repeating an explicit delegated-chat command keeps the existing lease.
+     */
+    static boolean shouldYieldToUserTurn(String rawText) {
+        String text = normalize(rawText);
+        return !text.isEmpty() && !isExplicitStartIntent(rawText);
+    }
+
     static boolean isStopIntent(String rawText) {
         String text = normalize(rawText);
         if (text.isEmpty()) return false;

@@ -9,15 +9,31 @@ package com.crewpocket.helper;
  */
 final class UiChangeSignal {
     private long revision;
+    private int lastEventType;
+    private long lastHumanTextEditRevision = -1L;
 
     synchronized long revision() {
         return revision;
     }
 
     synchronized long markChanged() {
+        return markChanged(0, false);
+    }
+
+    synchronized long markChanged(int eventType, boolean humanTextEdit) {
         revision++;
+        lastEventType = eventType;
+        if (humanTextEdit) lastHumanTextEditRevision = revision;
         notifyAll();
         return revision;
+    }
+
+    synchronized int lastEventType() {
+        return lastEventType;
+    }
+
+    synchronized long lastHumanTextEditRevision() {
+        return lastHumanTextEditRevision;
     }
 
     synchronized boolean awaitChange(long afterRevision, long timeoutMs) {

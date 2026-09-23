@@ -109,6 +109,7 @@ final class AgentPerformanceStore {
         int recovered = 0;
         int partial = 0;
         int cancelled = 0;
+        int excludedFromSuccessRate = 0;
         int hardFailure = 0;
         LinkedHashMap<String, Integer> cancelCategories =
                 new LinkedHashMap<String, Integer>();
@@ -133,6 +134,9 @@ final class AgentPerformanceStore {
                 cancelled++;
                 String category = item.optString("cancelCategory", "").trim();
                 if (category.isEmpty()) category = "UNKNOWN";
+                if (isExcludedFromSuccessRate(category)) {
+                    excludedFromSuccessRate++;
+                }
                 Integer count = cancelCategories.get(category);
                 cancelCategories.put(category, count == null ? 1 : count + 1);
             } else hardFailure++;
@@ -172,8 +176,20 @@ final class AgentPerformanceStore {
             }
             out.append("\n");
         }
-        out.append("Full-success rate: ")
-                .append(Math.round(fullSuccess * 100.0 / total)).append("%\n");
+        int evaluatedTotal = Math.max(0, total - excludedFromSuccessRate);
+        out.append("Full-success rate: ");
+        if (evaluatedTotal == 0) {
+            out.append("n/a");
+        } else {
+            out.append(Math.round(fullSuccess * 100.0 / evaluatedTotal))
+                    .append("%");
+        }
+        out.append(" · evaluated=").append(evaluatedTotal);
+        if (excludedFromSuccessRate > 0) {
+            out.append(" · user-controlled exclusions=")
+                    .append(excludedFromSuccessRate);
+        }
+        out.append("\n");
         if (taskSamples > 0) out.append("Avg task time: ").append(taskTotal / taskSamples).append(" ms\n");
         if (toolSamples > 0) out.append("Avg Runtime tool time: ").append(toolTotal / toolSamples).append(" ms\n");
         if (geminiSamples > 0) out.append("Avg Gemini wait between tools: ").append(geminiTotal / geminiSamples).append(" ms\n");
@@ -202,6 +218,14 @@ final class AgentPerformanceStore {
         if (item.optBoolean("recovered", false)) return "RECOVERED_SUCCESS";
         if (item.optBoolean("success", false)) return "SUCCESS";
         return "HARD_FAILURE";
+    }
+
+    static boolean isExcludedFromSuccessRate(String category) {
+        String value = category == null ? "" : category.trim();
+        return "SUPERSEDED_BY_USER".equals(value)
+                || "NEW_USER_GOAL".equals(value) // legacy persisted samples
+                || "USER_INTERRUPTED".equals(value)
+                || "HUMAN_TAKEOVER".equals(value);
     }
 
     private static boolean containsTask(JSONArray tasks, String taskId) {
