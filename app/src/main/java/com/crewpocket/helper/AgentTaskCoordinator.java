@@ -288,9 +288,13 @@ final class AgentTaskCoordinator {
                             active.blockedReason != null,
                             active.mutationActions);
 
-            // For a mutation task, do not let intermediate model narration leak
-            // to the user before Runtime reaches an explicit completion boundary.
-            return active.mutationActions > 0 && !completionReady;
+            // Suppress only the first premature narration for a mutation task.
+            // Runtime gets one chance to nudge Gemini back to tool use. If Gemini
+            // still chooses speech on the next turn, let that single reply through
+            // and stop instead of creating an internal-prompt loop.
+            return active.mutationActions > 0
+                    && !completionReady
+                    && active.prematureModelReplies == 0;
         }
     }
 }
