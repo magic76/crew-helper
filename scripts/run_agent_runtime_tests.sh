@@ -65,6 +65,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/VoiceExecutionPolicy.java" \
   "$SRC/BubbleLogoStatePolicy.java" \
   "$SRC/ConversationLoopPolicy.java" \
+  "$SRC/ConversationLoopTakeoverPolicy.java" \
   "$SRC/ConversationLoopRecipe.java" \
   "$SRC/ConversationLoopWakePolicy.java" \
   "$SRC/ContextPayloadBudget.java" \
@@ -114,6 +115,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/CommitGuardTest.java" \
   "$ROOT/tests/AppAutonomyPolicyTest.java" \
   "$ROOT/tests/ConversationLoopRecipeTest.java" \
+  "$ROOT/tests/ConversationLoopTakeoverPolicyTest.java" \
   "$ROOT/tests/ConversationLoopWakePolicyTest.java" \
   "$ROOT/tests/ContextPayloadBudgetTest.java" \
   "$ROOT/tests/ScreenItemPriorityPolicyTest.java" \
@@ -164,6 +166,7 @@ java -cp "$OUT" com.crewpocket.helper.BubbleLogoStatePolicyTest
 java -cp "$OUT" com.crewpocket.helper.CommitGuardTest
 java -cp "$OUT" com.crewpocket.helper.AppAutonomyPolicyTest
 java -cp "$OUT" com.crewpocket.helper.ConversationLoopRecipeTest
+java -cp "$OUT" com.crewpocket.helper.ConversationLoopTakeoverPolicyTest
 java -cp "$OUT" com.crewpocket.helper.ConversationLoopWakePolicyTest
 java -cp "$OUT" com.crewpocket.helper.ContextPayloadBudgetTest
 java -cp "$OUT" com.crewpocket.helper.ScreenItemPriorityPolicyTest
