@@ -56,6 +56,8 @@ final class NativeGeminiLiveClient {
     private final TaskRecipeStore taskRecipeStore;
     private final ConversationLoopRecipe conversationLoopRecipe =
             new ConversationLoopRecipe();
+    private final DelegatedSendLease delegatedSendLease =
+            new DelegatedSendLease();
     private volatile long taskRecipeCandidateGeneration = -1L;
     private volatile String taskRecipeCandidateId = "";
     private final PhoneRuntimeExecutor phoneRuntimeExecutor;
@@ -1169,8 +1171,7 @@ final class NativeGeminiLiveClient {
 
     void stop() {
         contextPayloadAudit.flushTurn();
-        conversationLoopRecipe.stop("LIVE_SESSION_STOPPED");
-        setConversationWaitingVisual(false);
+        stopConversationDelegation("LIVE_SESSION_STOPPED");
         workingContext.setPendingTask("");
 
         boolean wasRunning = running;
@@ -1742,20 +1743,32 @@ final class NativeGeminiLiveClient {
         } catch (Exception ignored) {}
     }
 
+    private void stopConversationDelegation(String reason) {
+        String stopReason =
+                reason == null || reason.isEmpty()
+                        ? "CONVERSATION_DELEGATION_STOPPED"
+                        : reason;
+        conversationLoopRecipe.stop(stopReason);
+        delegatedSendLease.revoke(stopReason);
+        setConversationWaitingVisual(false);
+        workingContext.setPendingTask("");
+    }
+
     private void releaseConversationLoopForHumanTakeover(
             String reason,
             boolean cancelLoopOwnedTask) {
-        if (!conversationLoopRecipe.isActive()) return;
+        if (!conversationLoopRecipe.isActive()
+                && !delegatedSendLease.isActive()) {
+            return;
+        }
 
         AgentTaskRecord active = agentTaskCoordinator.activeRunning();
         boolean loopOwnedTask = isConversationLoopOwnedTask(active);
 
-        conversationLoopRecipe.stop(
+        stopConversationDelegation(
                 reason == null || reason.isEmpty()
                         ? "HUMAN_TAKEOVER"
                         : reason);
-        setConversationWaitingVisual(false);
-        workingContext.setPendingTask("");
 
         if (cancelLoopOwnedTask && loopOwnedTask) {
             cancelAgentTask("使用者接管自動聊天");
@@ -2360,19 +2373,34 @@ final class NativeGeminiLiveClient {
                 String suspendedState =
                         result.optString("taskState", "");
                 if ("WAITING_BACKGROUND".equals(suspendedState)) {
-                    synchronized (agentTaskCoordinator.monitor()) {
-                        task.awaitingModel = false;
-                        task.watchdogPrompted = false;
+                    boolean conversationExternalWait =
+                            conversationLoopRecipe.isActive()
+                                    && delegatedSendLease.isActive()
+                                    && ("send_text".equals(name)
+                                            || "continue_conversation_loop".equals(name));
+                    if (conversationExternalWait) {
                         agentResponseCoordinator.clear();
-                        task.status =
-                                "對話模式：背景等待已交給 Runtime";
+                        agentTaskCoordinator.suspendForExternalWait(
+                                task,
+                                "WAITING_FOR_EXTERNAL_MESSAGE",
+                                "對話模式：等待外部回覆");
+                        reportStage(
+                                "Agent 等待外部回覆 · 同一任務暫停中");
+                    } else {
+                        synchronized (agentTaskCoordinator.monitor()) {
+                            task.awaitingModel = false;
+                            task.watchdogPrompted = false;
+                            agentResponseCoordinator.clear();
+                            task.status =
+                                    "背景等待已交給 Runtime";
+                        }
+                        finishAgentTask(
+                                task,
+                                "背景等待交給 Runtime",
+                                "");
+                        reportStage(
+                                "背景等待已交給 Runtime");
                     }
-                    finishAgentTask(
-                            task,
-                            "背景等待交給 Runtime",
-                            "");
-                    reportStage(
-                            "自動聊天運作中 · 靜候對方訊息");
                 } else {
                     synchronized (agentTaskCoordinator.monitor()) {
                         task.awaitingModel = false;
@@ -2569,7 +2597,9 @@ final class NativeGeminiLiveClient {
             AgentTaskLifecyclePolicy.StepDecision decision =
                     AgentTaskLifecyclePolicy.evaluateStep(
                             nowMs,
-                            loopOwnedTool ? nowMs : task.startedAt,
+                            loopOwnedTool
+                                    ? nowMs
+                                    : task.effectiveStartedAt(nowMs),
                             loopOwnedTool ? 0 : task.steps,
                             maxSteps,
                             name,
@@ -3117,6 +3147,16 @@ final class NativeGeminiLiveClient {
                     "請先停留在要聊天的聊天室畫面，再啟動自動聊天。Runtime 不會搜尋或切換對象。");
         }
 
+        AgentTaskRecord ownerTask =
+                agentTaskCoordinator.active();
+        if (ownerTask == null
+                || ownerTask.finished
+                || ownerTask.cancelled) {
+            return runtimeBlocked(
+                    "DELEGATED_TASK_MISSING",
+                    "目前沒有可綁定的 Agent task；不要送訊息，重新從使用者目前目標建立任務。");
+        }
+
         ConversationLoopRecipe.StartResult started =
                 conversationLoopRecipe.start(
                         "",
@@ -3128,6 +3168,11 @@ final class NativeGeminiLiveClient {
                     started.code,
                     "無法建立目前聊天室的持續對話模式。");
         }
+        delegatedSendLease.start(
+                ownerTask.taskId,
+                ownerTask.intentGeneration,
+                maxReplies,
+                timeoutMinutes);
 
         workingContext.setPendingTask("CONVERSATION_LOOP");
         setConversationWaitingVisual(false);
@@ -3156,10 +3201,13 @@ final class NativeGeminiLiveClient {
 
     private JSONObject continueConversationLoop(JSONObject args)
             throws Exception {
-        if (!conversationLoopRecipe.isActive()) {
+        AgentTaskRecord ownerTask = agentTaskCoordinator.active();
+        String ownerTaskId = ownerTask == null ? "" : ownerTask.taskId;
+        if (!conversationLoopRecipe.isActive()
+                || !delegatedSendLease.canSend(ownerTaskId)) {
             return runtimeBlocked(
-                    "CONVERSATION_LOOP_NOT_ACTIVE",
-                    "目前沒有持續對話租約，不要自行建立背景送訊息循環。");
+                    "DELEGATED_SESSION_REQUIRED",
+                    "目前沒有有效的 delegated chat lease。若使用者的當前目標仍是持續代聊，呼叫 start_conversation_loop 建立 task-scoped lease；不要要求使用者重複授權。");
         }
 
         JSONObject semantic =
@@ -3184,10 +3232,10 @@ final class NativeGeminiLiveClient {
 
     private JSONObject stopConversationLoop(JSONObject args)
             throws Exception {
-        boolean wasActive = conversationLoopRecipe.isActive();
-        conversationLoopRecipe.stop("MODEL_OR_USER_STOP");
-        setConversationWaitingVisual(false);
-        workingContext.setPendingTask("");
+        boolean wasActive =
+                conversationLoopRecipe.isActive()
+                        || delegatedSendLease.isActive();
+        stopConversationDelegation("MODEL_OR_USER_STOP");
         return conversationLoopStatusJson()
                 .put("success", true)
                 .put("taskState", "DONE")
@@ -3215,7 +3263,16 @@ final class NativeGeminiLiveClient {
                             conversationLoopRecipe.maxReplies())
                     .put(
                             "expiresAtMs",
-                            conversationLoopRecipe.expiresAtMs());
+                            conversationLoopRecipe.expiresAtMs())
+                    .put(
+                            "sendLeaseActive",
+                            delegatedSendLease.isActive())
+                    .put(
+                            "sendLeaseSent",
+                            delegatedSendLease.sentSends())
+                    .put(
+                            "sendLeaseMax",
+                            delegatedSendLease.maxSends());
         } catch (Exception ignored) {}
         return out;
     }
@@ -3372,14 +3429,21 @@ final class NativeGeminiLiveClient {
                 continue;
             }
 
-            synchronized (agentTaskCoordinator.monitor()) {
-                if (task.finished || task.cancelled) continue;
-                task.awaitingModel = true;
-                task.watchdogPrompted = false;
-                task.userVisibleReplyProducedSinceLastAction = false;
-                task.finalSpeechRetryCount = 0;
-                task.status =
-                        "對話模式：偵測到聊天室變化，等待檢查新訊息";
+            AgentTaskRecord resumed =
+                    agentTaskCoordinator.resumeExternalWait(
+                            "對話模式：外部回覆已到，恢復同一 Agent 任務");
+            if (resumed != null) {
+                task = resumed;
+            } else {
+                synchronized (agentTaskCoordinator.monitor()) {
+                    if (task.finished || task.cancelled) continue;
+                    task.awaitingModel = true;
+                    task.watchdogPrompted = false;
+                    task.userVisibleReplyProducedSinceLastAction = false;
+                    task.finalSpeechRetryCount = 0;
+                    task.status =
+                            "對話模式：偵測到聊天室變化，等待檢查新訊息";
+                }
             }
 
             reportStage(task.status);
@@ -3400,6 +3464,10 @@ final class NativeGeminiLiveClient {
                     conversationLoopRecipe.baselineFingerprint();
             if (conversationLoopRecipe.rearmWait(fingerprint)) {
                 setConversationWaitingVisual(true);
+                agentTaskCoordinator.suspendForExternalWait(
+                        task,
+                        "WAKE_DIRECTIVE_FAILED",
+                        "對話模式：喚醒失敗，重新等待外部回覆");
                 reportStage("對話模式：喚醒失敗，已重新等待");
                 armConversationLoopWaitAsync();
             }
@@ -5012,7 +5080,12 @@ final class NativeGeminiLiveClient {
 
     private JSONObject sendTextToPhone(JSONObject args) throws Exception {
         String text = args == null ? "" : args.optString("text", "");
-        boolean loopSend = conversationLoopRecipe.canSend();
+        AgentTaskRecord activeTask = agentTaskCoordinator.active();
+        String activeTaskId =
+                activeTask == null ? "" : activeTask.taskId;
+        boolean loopSend =
+                conversationLoopRecipe.canSend()
+                        && delegatedSendLease.canSend(activeTaskId);
         LiveTurnCoordinator.FinalizedTurn finalized =
                 liveTurnCoordinator.latest();
 
@@ -5049,9 +5122,15 @@ final class NativeGeminiLiveClient {
                 ConversationLoopPolicy.hasDelegatedSendAuthority(
                         loopSend, userActionScope.canSend());
         if (!delegatedSendAuthorized) {
-            return runtimeBlocked(
-                    "CURRENT_SCREEN_SEND_NOT_AUTHORIZED",
-                    "訊息提交需要最新一句明確 SEND intent，或 ACTIVE Conversation Loop 租約。Loop active 時，Runtime wake 本身就是後續回覆授權，不需要新的 user turn。TYPE/草稿輸入不需要這份授權。");
+            JSONObject required = runtimeBlocked(
+                    "DELEGATED_SESSION_REQUIRED",
+                    "目前沒有單次 SEND authorization 或 task-scoped delegated chat lease。若使用者的當前目標是持續代聊、等待對方回覆後繼續處理，立刻呼叫 start_conversation_loop 一次，成功後再重試 send_text；不要要求使用者重複說『授權』。若使用者從未要求送訊息或代聊，則不要送。");
+            required.put("taskState", "IN_PROGRESS")
+                    .put("recoverable", true)
+                    .put(
+                            "nextRequirement",
+                            "START_CONVERSATION_LOOP_IF_CURRENT_GOAL_IS_DELEGATED_CHAT");
+            return required;
         }
 
         // Preparation stays reversible. If send_text carries new text, insert
@@ -5076,8 +5155,7 @@ final class NativeGeminiLiveClient {
                                 "草稿尚未輸入成功；SEND 尚未 dispatch。可以重新聚焦或改用其他 TYPE 方法，但不要假裝已送出。");
                 workingContext.recordAction("type_for_send", "failed");
                 if (loopSend) {
-                    conversationLoopRecipe.stop("TYPE_FAILED");
-                    workingContext.setPendingTask("");
+                    stopConversationDelegation("TYPE_FAILED");
                     failure.put("conversationLoop", "STOPPED");
                 }
                 return failure;
@@ -5090,7 +5168,7 @@ final class NativeGeminiLiveClient {
         JSONObject chatVerification = verifyCurrentChatOnScreen();
         if (!chatVerification.optBoolean("success", false)) {
             if (loopSend) {
-                conversationLoopRecipe.stop(
+                stopConversationDelegation(
                         "CURRENT_CHAT_VERIFICATION_FAILED");
                 chatVerification.put("conversationLoop", "STOPPED");
             }
@@ -5161,9 +5239,7 @@ final class NativeGeminiLiveClient {
 
         if (loopSend) {
             if (!reply.optBoolean("success", false)) {
-                conversationLoopRecipe.stop("SEND_FAILED");
-                setConversationWaitingVisual(false);
-                workingContext.setPendingTask("");
+                stopConversationDelegation("SEND_FAILED");
                 reply.put("conversationLoop", "STOPPED")
                         .put("instruction",
                                 "持續對話送出失敗，Runtime 已停止 loop，避免自動重試造成重複訊息。");
@@ -5180,8 +5256,12 @@ final class NativeGeminiLiveClient {
                 }
             } catch (Exception ignored) {}
 
-            boolean keepWaiting =
+            boolean leaseKeepWaiting =
+                    delegatedSendLease.recordSend(activeTaskId);
+            boolean loopKeepWaiting =
                     conversationLoopRecipe.markSent(baseline);
+            boolean keepWaiting =
+                    leaseKeepWaiting && loopKeepWaiting;
             if (keepWaiting) {
                 workingContext.setPendingTask("CONVERSATION_LOOP_WAIT");
                 setConversationWaitingVisual(true);
@@ -5192,8 +5272,7 @@ final class NativeGeminiLiveClient {
                                 "訊息已送出。Runtime 已接手等待下一個聊天室 Accessibility 事件；不要輪詢、不要再次 send_text，直到 Runtime 喚醒。");
                 armConversationLoopWaitAsync();
             } else {
-                setConversationWaitingVisual(false);
-                workingContext.setPendingTask("");
+                stopConversationDelegation("DELEGATED_REPLY_LIMIT_REACHED");
                 reply.put("conversationLoop", "STOPPED")
                         .put("loopStatus", conversationLoopStatusJson())
                         .put("message",
@@ -5356,8 +5435,7 @@ final class NativeGeminiLiveClient {
     private synchronized void fail(String message, Throwable error) {
         if (!running) return;
         contextPayloadAudit.flushTurn();
-        conversationLoopRecipe.stop("LIVE_SESSION_FAILED");
-        workingContext.setPendingTask("");
+        stopConversationDelegation("LIVE_SESSION_FAILED");
         if (error != null) Log.e(TAG, message, error); else Log.e(TAG, message);
         running = false;
         interruptionHandler.removeCallbacks(clearInterruptedFallback);
