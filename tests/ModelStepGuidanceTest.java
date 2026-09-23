@@ -4,6 +4,7 @@ public final class ModelStepGuidanceTest {
     public static void main(String[] args) {
         targetNotFoundSuggestsDifferentMethod();
         sendAuthorizationStops();
+        delegatedSessionRecoversWithoutUser();
         machineReadableErrorSurvives();
         freeFormFailureIsNotLeaked();
         successfulTypeReturnsUsefulEffect();
@@ -28,6 +29,14 @@ public final class ModelStepGuidanceTest {
                 "CURRENT_SCREEN_SEND_NOT_AUTHORIZED", "", "", false);
         expect("SEND_NOT_AUTHORIZED", g.reason);
         expect("STOP_AND_WAIT_FOR_USER", g.next);
+    }
+
+    private static void delegatedSessionRecoversWithoutUser() {
+        ModelStepGuidance.Guidance g = ModelStepGuidance.from(
+                "send_text", "FAILED", "", "send_text",
+                "DELEGATED_SESSION_REQUIRED", "IN_PROGRESS", "", false);
+        expect("DELEGATED_SESSION_REQUIRED", g.reason);
+        expect("START_CONVERSATION_LOOP", g.next);
     }
 
     private static void machineReadableErrorSurvives() {

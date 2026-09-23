@@ -139,6 +139,9 @@ final class ModelStepGuidance {
 
     private static String reason(String status, String error) {
         String value = upper(error);
+        if (value.contains("DELEGATED_SESSION_REQUIRED")) {
+            return "DELEGATED_SESSION_REQUIRED";
+        }
         if (value.contains("SEND_NOT_AUTHORIZED")
                 || value.contains("CURRENT_SCREEN_SEND_NOT_AUTHORIZED")) {
             return "SEND_NOT_AUTHORIZED";
@@ -186,6 +189,9 @@ final class ModelStepGuidance {
         if (NEED_USER.equals(status)) return "ASK_USER";
         if (WAIT.equals(status)) return "OBSERVE";
         if (FAILED.equals(status)) {
+            if ("DELEGATED_SESSION_REQUIRED".equals(reason)) {
+                return "START_CONVERSATION_LOOP";
+            }
             if ("SEND_NOT_AUTHORIZED".equals(reason)) return "STOP_AND_WAIT_FOR_USER";
             if ("POLICY_BLOCKED".equals(reason)
                     || "SCOPE_BLOCKED".equals(reason)

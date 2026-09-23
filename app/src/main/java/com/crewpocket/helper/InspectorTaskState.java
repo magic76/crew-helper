@@ -5,6 +5,7 @@ import java.util.Locale;
 /** Privacy-safe terminal state classifier for Agent Inspector. */
 final class InspectorTaskState {
     static final String ACTIVE = "ACTIVE";
+    static final String WAITING_EXTERNAL = "WAITING_EXTERNAL";
     static final String COMPLETED = "COMPLETED";
     static final String CANCELLED = "CANCELLED";
     static final String FAILED = "FAILED";
