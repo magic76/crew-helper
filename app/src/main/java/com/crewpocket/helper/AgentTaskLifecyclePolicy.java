@@ -9,12 +9,9 @@ package com.crewpocket.helper;
  */
 final class AgentTaskLifecyclePolicy {
     static final long TASK_TIMEOUT_MS = 180_000L;
-    static final int MAX_TOOL_RUNS = 8;
     static final int MAX_MUTATION_ACTIONS = 15;
     static final int MAX_OBSERVATION_ACTIONS = 8;
-    static final int MAX_INSPECT_UI_RUNS = 5;
     static final int MAX_SCREENSHOTS = 3;
-    static final int DECK_NAV_MAX_RUNS = 16;
 
     static final class StepDecision {
         final boolean allowed;
@@ -62,18 +59,8 @@ final class AgentTaskLifecyclePolicy {
         if (observation && observationActions >= MAX_OBSERVATION_ACTIONS) {
             return blocked("已達本次畫面觀察上限（" + MAX_OBSERVATION_ACTIONS + " 次）；不要再重複 inspect，請改用現有證據、fallback 或作結論。");
         }
-        if ("inspect_ui".equals(name) && toolCount >= MAX_INSPECT_UI_RUNS) {
-            return blocked("inspect_ui 已達本次任務上限（" + MAX_INSPECT_UI_RUNS + " 次）；請改用 Runtime fallback，不要繼續看同一畫面。");
-        }
-        if (!observation && safe(signature).equals(safe(lastSignature))) {
-            return blocked("偵測到相同動作與參數連續重複呼叫，請先重新觀察畫面並改用替代方案。");
-        }
         if ("take_screenshot".equals(name) && toolCount >= MAX_SCREENSHOTS) {
             return blocked("截圖已達本次任務上限，請改用 Accessibility 畫面狀態或作結論。");
-        }
-        int maxRuns = maxRunsForTool(name);
-        if (!observation && toolCount >= maxRuns) {
-            return blocked("工具「" + name + "」已達本次任務最多 " + maxRuns + " 次執行限制，請改用替代方案或作結論。");
         }
         if (mutation && mutationActions >= MAX_MUTATION_ACTIONS) {
             return blocked("已達本次任務實際操作上限（" + MAX_MUTATION_ACTIONS + " 次），請以目前結果作結論。");
@@ -169,11 +156,6 @@ final class AgentTaskLifecyclePolicy {
                 || "remember_app_guidance".equals(name)
                 || "cancel_schedule".equals(name)
                 || "stop_conversation_loop".equals(name);
-    }
-
-    static int maxRunsForTool(String name) {
-        return "advance_deck".equals(name) || "present_deck_card".equals(name)
-                ? DECK_NAV_MAX_RUNS : MAX_TOOL_RUNS;
     }
 
     static boolean isObservationTool(String name) {
