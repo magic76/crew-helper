@@ -180,20 +180,16 @@ final class LiveToolCatalog {
         tools.put(new JSONObject()
                 .put("name", "start_conversation_loop")
                 .put("description",
-                        "Start a bounded persistent conversation TaskRecipe for an explicit named-recipient delegation such as『幫我跟小明聊』『你自己跟小明聊』『代我回小明直到我喊停』. If Runtime already says the Conversation Loop is armed, do NOT call this again. Otherwise call it directly; never ask the user to trigger a Runtime condition and never claim automatic chat cannot be authorized. Runtime verifies the same recipient before every send and bounds timeout/replies.")
+                        "Start a bounded persistent conversation in the CURRENT visible chat only. Use for explicit delegation such as『你自己跟他聊』『幫我聊到我叫你停』. Do not search contacts, resolve names, or switch chats. Runtime verifies only that the current screen is a message composer + Send surface and bounds timeout/replies.")
                 .put("parameters", new JSONObject()
                         .put("type", "OBJECT")
                         .put("properties", new JSONObject()
-                                .put("recipient", new JSONObject()
-                                        .put("type", "STRING")
-                                        .put("description", "Exact named recipient from the user's request. Never infer a different person."))
                                 .put("max_replies", new JSONObject()
                                         .put("type", "INTEGER")
                                         .put("description", "Maximum automatic replies, default 10, Runtime hard max 20."))
                                 .put("timeout_minutes", new JSONObject()
                                         .put("type", "INTEGER")
-                                        .put("description", "Lease duration, default 15 minutes, Runtime hard max 30.")))
-                        .put("required", new JSONArray().put("recipient"))));
+                                        .put("description", "Lease duration, default 15 minutes, Runtime hard max 30.")))));
         tools.put(new JSONObject()
                 .put("name", "continue_conversation_loop")
                 .put("description",
@@ -210,7 +206,7 @@ final class LiveToolCatalog {
                         .put("properties", new JSONObject())));
 
         tools.put(new JSONObject().put("name", "send_text").put("description",
-                "MESSAGE SUBMISSION ONLY. Authorization comes from either (A) THIS user turn explicitly asking to send one message, or (B) an ACTIVE Conversation Loop lease that already delegates future replies to its bound recipient. In case B, Runtime wake + active lease is sufficient: do not require a fresh user turn or ask approval for each reply. For an already-visible chat, pass the exact new message text once. For an explicit named-recipient one-shot request such as『跟小明說…』or『傳給小明：「…」』, first use normal semantic phone navigation to reach that recipient; do not infer a different person. Runtime verifies the recipient before every loop send. If the user only asks to type/fill/paste without sending, use phone_action(TYPE). Standalone 送出/發送/send is Runtime-owned.")
+                "MESSAGE SUBMISSION ONLY for the CURRENT visible chat. Authorization comes from either (A) this user turn explicitly asking to send, or (B) an ACTIVE Conversation Loop. Never search contacts, resolve recipient names, or switch chats for send_text. Runtime verifies the current screen is a chat composer + Send surface before every commit. If the user only asks to type/fill/paste without sending, use phone_action(TYPE). Standalone 送出/發送/send is Runtime-owned.")
                 .put("parameters", new JSONObject().put("type", "OBJECT")
                         .put("properties", new JSONObject()
                                 .put("text", new JSONObject().put("type", "STRING")
