@@ -860,7 +860,7 @@ final class NativeGeminiLiveClient {
                 listener.onTranscript("你", input);
                 return true;
             }
-            String runtimeLoopRecipient =
+            String runtimeLoopScope =
                     tryArmRuntimeConversationLoop(input);
             if (tryHandleRuntimeSendCurrent(input)) {
                 listener.onTranscript("你", input);
@@ -881,9 +881,8 @@ final class NativeGeminiLiveClient {
                         ContextPayloadBudget.utf8Bytes(text.trim()),
                         ContextPayloadBudget.utf8Bytes(payload));
                 listener.onTranscript("你", text.trim());
-                if (!runtimeLoopRecipient.isEmpty()) {
-                    sendRuntimeConversationLoopArmedDirective(
-                            runtimeLoopRecipient);
+                if (!runtimeLoopScope.isEmpty()) {
+                    sendRuntimeConversationLoopArmedDirective();
                 }
             }
             return sent;
@@ -1303,12 +1302,11 @@ final class NativeGeminiLiveClient {
                     completeUserInput)) {
                 return;
             }
-            String runtimeLoopRecipient =
+            String runtimeLoopScope =
                     tryArmRuntimeConversationLoop(
                             completeUserInput);
-            if (!runtimeLoopRecipient.isEmpty()) {
-                sendRuntimeConversationLoopArmedDirective(
-                        runtimeLoopRecipient);
+            if (!runtimeLoopScope.isEmpty()) {
+                sendRuntimeConversationLoopArmedDirective();
             }
             if (tryHandleRuntimeSendCurrent(
                     completeUserInput)) {
@@ -1756,15 +1754,18 @@ final class NativeGeminiLiveClient {
             return "";
         }
 
-        String recipient =
-                ConversationLoopPolicy.extractRecipient(inputText);
-        if (recipient.isEmpty()) {
+        try {
+            JSONObject chat = verifyCurrentChatOnScreen();
+            if (!chat.optBoolean("success", false)) {
+                return "";
+            }
+        } catch (Exception ignored) {
             return "";
         }
 
         ConversationLoopRecipe.StartResult started =
                 conversationLoopRecipe.start(
-                        recipient,
+                        "",
                         userIntentGeneration,
                         10,
                         15);
@@ -1775,29 +1776,26 @@ final class NativeGeminiLiveClient {
         workingContext.setPendingTask("CONVERSATION_LOOP");
         workingContext.recordAction(
                 "conversation_loop",
-                "runtime_armed");
-        reportStage("✓ 已啟動自動聊天：" + recipient);
+                "runtime_armed_current_chat");
+        reportStage("✓ 已啟動目前聊天室自動聊天");
         try {
             FloatingBubbleManager.getInstance(appContext)
                     .showRuntimeUiState(
                             RuntimeUiState.success(
                                     "自動聊天已啟動",
-                                    recipient + " · 15 分鐘 / 最多 10 則"));
+                                    "目前聊天室 · 15 分鐘 / 最多 10 則"));
         } catch (Exception ignored) {}
-        return recipient;
+        return "CURRENT_CHAT";
     }
 
-    private void sendRuntimeConversationLoopArmedDirective(
-            String recipient) {
-        if (recipient == null || recipient.trim().isEmpty()) return;
+    private void sendRuntimeConversationLoopArmedDirective() {
         try {
             sendInternalAgentDirective(
                     "【Runtime Conversation Loop 已啟動】"
-                            + "recipient=" + recipient.trim()
-                            + "。這不是待觸發條件，也不需要再呼叫 start_conversation_loop。"
-                            + "不要向使用者解釋 Runtime 條件或授權限制。"
-                            + "直接使用正常手機操作前往這個 recipient 的聊天室並開始自然對話；"
-                            + "ACTIVE lease 已授權後續回覆。每次真正 SEND 前 Runtime 仍會驗證聊天畫面。");
+                            + "scope=CURRENT_CHAT。這不是待觸發條件，也不需要再呼叫 start_conversation_loop。"
+                            + "不要搜尋聯絡人、不要切換聊天室、不要解釋 recipient 限制。"
+                            + "直接在目前已開啟的聊天視窗自然回覆。"
+                            + "ACTIVE lease 已授權後續回覆；每次真正 SEND 前 Runtime 只驗證目前仍是聊天畫面。");
         } catch (Exception ignored) {}
     }
 
@@ -3130,7 +3128,6 @@ final class NativeGeminiLiveClient {
     private JSONObject startConversationLoop(JSONObject args)
             throws Exception {
         JSONObject safe = args == null ? new JSONObject() : args;
-        String recipient = safe.optString("recipient", "").trim();
         int maxReplies = safe.optInt("max_replies", 10);
         int timeoutMinutes = safe.optInt("timeout_minutes", 15);
 
@@ -3144,27 +3141,29 @@ final class NativeGeminiLiveClient {
                 ConversationLoopPolicy.isExplicitStartIntent(latest.text)
                         || ConversationLoopPolicy.isExplicitStartIntent(
                                 rootGoal);
-        boolean recipientBound =
-                ConversationLoopPolicy.mentionsRecipient(
-                        latest.text, recipient)
-                        || ConversationLoopPolicy.mentionsRecipient(
-                                rootGoal, recipient);
-        if (!explicit || !recipientBound) {
+        if (!explicit) {
             return runtimeBlocked(
                     "CONVERSATION_LOOP_NOT_EXPLICIT",
-                    "持續代聊需要使用者明確委託並指定 recipient。『跟 X 聊』『自己跟 X 聊』『持續跟 X 聊』『代我回 X』都算明確委託；不要把這些自然說法誤判成無法授權。一般單次傳訊息則不可推斷成對話模式。");
+                    "持續代聊需要使用者明確委託。目前聊天室就是唯一作用範圍，不需要指定或驗證聊天對象名稱。");
+        }
+
+        JSONObject chat = verifyCurrentChatOnScreen();
+        if (!chat.optBoolean("success", false)) {
+            return chat.put(
+                    "instruction",
+                    "請先停留在要聊天的聊天室畫面，再啟動自動聊天。Runtime 不會搜尋或切換對象。");
         }
 
         ConversationLoopRecipe.StartResult started =
                 conversationLoopRecipe.start(
-                        recipient,
+                        "",
                         userIntentGeneration,
                         maxReplies,
                         timeoutMinutes);
         if (!started.success) {
             return runtimeBlocked(
                     started.code,
-                    "無法建立持續對話模式；請確認收件人。");
+                    "無法建立目前聊天室的持續對話模式。");
         }
 
         workingContext.setPendingTask("CONVERSATION_LOOP");
@@ -3173,7 +3172,7 @@ final class NativeGeminiLiveClient {
                 .put("taskState", "IN_PROGRESS")
                 .put("conversationLoop", "READY_TO_SEND")
                 .put("instruction",
-                        "持續對話租約已啟用。ACTIVE lease 已授權對綁定 recipient 的後續自動回覆；不需要每則再取得新的 user turn 或詢問使用者。先確認/開啟指定 recipient 的聊天室；每次 send_text 後 Runtime 會自動背景等待新訊息，不要輪詢。");
+                        "持續對話已綁定目前聊天視窗。不要搜尋聯絡人或切換聊天室；ACTIVE lease 已授權在目前聊天室後續回覆。");
     }
 
     private JSONObject continueConversationLoop(JSONObject args)
@@ -3225,8 +3224,8 @@ final class NativeGeminiLiveClient {
                             "state",
                             conversationLoopRecipe.state().name())
                     .put(
-                            "recipient",
-                            conversationLoopRecipe.recipient())
+                            "scope",
+                            "CURRENT_CHAT")
                     .put(
                             "sentReplies",
                             conversationLoopRecipe.sentReplies())
@@ -4799,50 +4798,37 @@ final class NativeGeminiLiveClient {
     }
 
     /**
-     * Named-recipient SEND boundary.
+     * Current-chat SEND boundary.
      *
-     * Navigation is allowed after an explicit named-recipient request, but the
-     * actual submit stays fail-closed until Accessibility proves both:
-     * 1) a non-search chat composer is visible, and
-     * 2) the requested recipient appears in the header region above it.
-     *
-     * This intentionally uses only the current semantic screen. No contact
-     * history, prior conversation memory, screenshots, or model inference can
-     * satisfy the target check.
+     * Crew never resolves or verifies a recipient name. The user chooses the
+     * chat by opening it; Runtime only proves that the current screen exposes a
+     * non-search message composer and a semantic Send surface.
      */
-    private JSONObject verifyAuthorizedRecipientOnCurrentScreen()
+    private JSONObject verifyCurrentChatOnScreen()
             throws Exception {
-        return verifyRecipientOnCurrentScreen(
-                userActionScope.authorizedRecipient());
-    }
-
-    private JSONObject verifyRecipientOnCurrentScreen(String recipient)
-            throws Exception {
-        if (recipient == null || recipient.trim().isEmpty()) {
-            return runtimeBlocked("RECIPIENT_TARGET_UNKNOWN",
-                    "缺少可驗證的收件人；不要猜測或直接送出。");
-        }
-
         JSONObject semantic = phoneRuntimeExecutor.get("/semantic_screen");
         if (semantic == null || !semantic.optBoolean("success", false)) {
-            return runtimeBlocked("RECIPIENT_SCREEN_UNAVAILABLE",
-                    "Runtime 目前無法讀取畫面來確認收件人；不要送出，先 inspect_ui 或等待畫面可讀。");
+            return runtimeBlocked(
+                    "CURRENT_CHAT_UNAVAILABLE",
+                    "Runtime 目前無法讀取聊天畫面；這不是收件人或隱私限制。");
         }
 
         JSONArray elements = semantic.optJSONArray("elements");
         if (elements == null || elements.length() == 0) {
-            return runtimeBlocked("RECIPIENT_CHAT_NOT_VERIFIED",
-                    "目前沒有足夠的 Accessibility 結構來確認聊天室；不要送出。");
+            return runtimeBlocked(
+                    "CURRENT_CHAT_NOT_VERIFIED",
+                    "目前沒有足夠的 Accessibility 結構證明這是聊天畫面。");
         }
 
-        int composerTop = Integer.MAX_VALUE;
         boolean composerFound = false;
         boolean composerLooksChatLike = false;
         boolean sendControlVisible = false;
 
         for (int i = 0; i < elements.length(); i++) {
             JSONObject element = elements.optJSONObject(i);
-            if (element == null || element.optBoolean("sensitive", false)) continue;
+            if (element == null || element.optBoolean("sensitive", false)) {
+                continue;
+            }
 
             String role = element.optString("role", "");
             String label = element.optString("label", "");
@@ -4862,52 +4848,21 @@ final class NativeGeminiLiveClient {
             if (isSearchLikeMessagingField(element)) continue;
 
             composerFound = true;
-            if (looksLikeChatComposer(element)) composerLooksChatLike = true;
-            JSONObject bounds = element.optJSONObject("bounds");
-            if (bounds != null) {
-                int top = bounds.optInt("top", Integer.MAX_VALUE);
-                if (top >= 0 && top < composerTop) composerTop = top;
+            if (looksLikeChatComposer(element)) {
+                composerLooksChatLike = true;
             }
         }
 
-        // An unlabeled composer is still acceptable when the current screen
-        // exposes a semantic Send control. This preserves support for apps with
-        // minimal Accessibility metadata while staying stricter than "any EditText".
-        if (!composerFound || (!composerLooksChatLike && !sendControlVisible)) {
-            return runtimeBlocked("RECIPIENT_CHAT_NOT_VERIFIED",
-                    "尚未確認目前畫面是可傳訊息的聊天室。請先搜尋/開啟指定對象，再呼叫 send_text；不要把搜尋框或一般表單當成聊天輸入框。");
-        }
-
-        if (composerTop == Integer.MAX_VALUE) {
-            composerTop = 1600;
-        }
-        int headerBottomLimit = Math.max(360, (int) (composerTop * 0.25d));
-        boolean recipientMatched = false;
-
-        for (int i = 0; i < elements.length(); i++) {
-            JSONObject element = elements.optJSONObject(i);
-            if (element == null || element.optBoolean("sensitive", false)) continue;
-            if (element.optBoolean("editable", false)) continue;
-
-            String label = element.optString("label", "");
-            if (!recipientLabelMatches(label, recipient)) continue;
-
-            JSONObject bounds = element.optJSONObject("bounds");
-            int bottom = bounds == null ? 0 : bounds.optInt("bottom", 0);
-            if (bottom <= 0 || bottom <= headerBottomLimit) {
-                recipientMatched = true;
-                break;
-            }
-        }
-
-        if (!recipientMatched) {
-            return runtimeBlocked("RECIPIENT_TARGET_NOT_VERIFIED",
-                    "目前畫面尚未證明是指定收件人的聊天室。請先用 phone_action(SEARCH) 或語意 TAP 開啟該對象；Runtime 驗證成功前不要送出，也不要改猜其他收件人。");
+        if (!composerFound
+                || (!composerLooksChatLike && !sendControlVisible)) {
+            return runtimeBlocked(
+                    "CURRENT_CHAT_NOT_VERIFIED",
+                    "目前畫面尚未證明是可傳訊息的聊天室。Crew 不會搜尋或猜聊天對象；請停留在聊天視窗。");
         }
 
         return new JSONObject()
                 .put("success", true)
-                .put("recipientVerified", true)
+                .put("currentChatVerified", true)
                 .put("verificationSource", "ACCESSIBILITY_CURRENT_SCREEN");
     }
 
@@ -4977,15 +4932,8 @@ final class NativeGeminiLiveClient {
             return executeTypeOnlyFromSendMisroute(text);
         }
 
-        if (!loopSend && (!userActionScope.canSend()
-                || userActionScope.blocksNamedRecipientMessagingAction())) {
+        if (!loopSend && !userActionScope.canSend()) {
             ensureSendAuthorizationFromFinalized(finalized, args);
-        }
-        if (!loopSend
-                && userActionScope.blocksNamedRecipientMessagingAction()) {
-            return runtimeBlocked(
-                    "RECIPIENT_TARGET_UNKNOWN",
-                    "這一輪看起來要傳給特定對象，但 Runtime 無法從原始指令抽出可驗證的收件人。不要猜收件人；請使用者用『跟 X 說…』或『傳給 X：「…」』明確指定。");
         }
 
         // Duplicate suppression is a commit concern, not a TYPE concern.
@@ -5041,27 +4989,20 @@ final class NativeGeminiLiveClient {
         }
 
         boolean targetVerified = false;
-        boolean targetVerificationRequired =
-                loopSend || userActionScope.requiresRecipientVerification();
+        boolean targetVerificationRequired = true;
 
-        if (targetVerificationRequired) {
-            JSONObject recipientVerification =
-                    loopSend
-                            ? verifyRecipientOnCurrentScreen(
-                                    conversationLoopRecipe.recipient())
-                            : verifyAuthorizedRecipientOnCurrentScreen();
-            if (!recipientVerification.optBoolean("success", false)) {
-                if (loopSend) {
-                    conversationLoopRecipe.stop(
-                            "RECIPIENT_VERIFICATION_FAILED");
-                    recipientVerification.put("conversationLoop", "STOPPED");
-                }
-                return recipientVerification.put(
-                        "instruction",
-                        "草稿可以保留，但 commit target 尚未驗證；不要送出，也不要猜收件人。");
+        JSONObject chatVerification = verifyCurrentChatOnScreen();
+        if (!chatVerification.optBoolean("success", false)) {
+            if (loopSend) {
+                conversationLoopRecipe.stop(
+                        "CURRENT_CHAT_VERIFICATION_FAILED");
+                chatVerification.put("conversationLoop", "STOPPED");
             }
-            targetVerified = true;
+            return chatVerification.put(
+                    "instruction",
+                    "草稿可以保留，但目前畫面不是可驗證的聊天視窗，因此不送出。");
         }
+        targetVerified = true;
 
         CommitGuard.Result commitDecision = CommitGuard.evaluate(
                 delegatedSendAuthorized,
