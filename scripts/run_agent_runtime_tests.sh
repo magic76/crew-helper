@@ -90,6 +90,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/RuntimeUiStateTest.java" \
   "$ROOT/tests/LearnedUiScopePolicyTest.java" \
   "$ROOT/tests/SendOnlyPolicyTest.java" \
+  "$ROOT/tests/UserActionScopeTest.java" \
   "$ROOT/tests/PendingActionPolicyTest.java" \
   "$ROOT/tests/PendingWaitEventPolicyTest.java" \
   "$ROOT/tests/SessionContextPromptTest.java" \
@@ -148,6 +149,7 @@ java -cp "$OUT" com.crewpocket.helper.UiChangeSignalTest
 java -cp "$OUT" com.crewpocket.helper.RuntimeUiStateTest
 java -cp "$OUT" com.crewpocket.helper.LearnedUiScopePolicyTest
 java -cp "$OUT" com.crewpocket.helper.SendOnlyPolicyTest
+java -cp "$OUT" com.crewpocket.helper.UserActionScopeTest
 java -cp "$OUT" com.crewpocket.helper.PendingActionPolicyTest
 java -cp "$OUT" com.crewpocket.helper.PendingWaitEventPolicyTest
 java -cp "$OUT" com.crewpocket.helper.SessionContextPromptTest
