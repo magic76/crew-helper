@@ -3301,32 +3301,142 @@ final class NativeGeminiLiveClient {
                         continue;
                     }
 
-                    final AgentTaskRecord task =
-                            agentTaskCoordinator.active();
-                    if (task != null) {
-                        synchronized (agentTaskCoordinator.monitor()) {
-                            if (!task.finished && !task.cancelled) {
-                                task.awaitingModel = true;
-                                task.watchdogPrompted = false;
-                                task.status =
-                                        "對話模式：偵測到聊天室變化，等待檢查新訊息";
-                            }
-                        }
-                        reportStage(task.status);
-                        sendInternalAgentDirective(
-                                "【CONVERSATION LOOP WAKE】Runtime 偵測到目前聊天視窗有新的 Accessibility 變化。"
-                                        + "ACTIVE Conversation Loop lease 已授權在目前聊天室持續回覆；不要說無法發送，不要要求新的 user turn，也不要逐則詢問確認。"
-                                        + "現在只呼叫一次 inspect_ui 看 fresh screenshot。"
-                                        + "若確實有新的對方訊息，自行理解上下文、自然組一則簡短回覆並用 send_text 送出；"
-                                        + "若只是自己的訊息、typing indicator 或其他 UI noise，呼叫 continue_conversation_loop 重新等待。"
-                                        + "不要搜尋聯絡人、不要切換聊天室、不要輪詢。");
-                        agentResponseCoordinator
-                                .scheduleWatchdog(task);
-                    }
+                    dispatchConversationLoopWakeWhenAgentAvailable();
                     return;
                 }
             }
         }, "crew-conversation-loop-wait").start();
+    }
+
+    private void dispatchConversationLoopWakeWhenAgentAvailable() {
+        while (running
+                && conversationLoopRecipe.isActive()
+                && conversationLoopRecipe.state()
+                        == ConversationLoopRecipe.State.MESSAGE_PENDING) {
+            AgentTaskRecord active =
+                    agentTaskCoordinator.activeRunning();
+
+            // Do not hijack an unrelated foreground task. The incoming-message
+            // event is already retained as MESSAGE_PENDING, so simply wait for
+            // that task to finish instead of dropping the event.
+            if (active != null && !isConversationLoopOwnedTask(active)) {
+                try {
+                    Thread.sleep(250L);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+                continue;
+            }
+
+            AgentTaskRecord task = active;
+            if (task == null) {
+                if (isFinishedIntentGeneration(userIntentGeneration)) {
+                    advanceRuntimeGenerationForConversationWake();
+                }
+
+                synchronized (agentTaskCoordinator.monitor()) {
+                    task = agentTaskCoordinator.activeRunning();
+                    if (task == null) {
+                        touchConversationGoal("Conversation Loop wake");
+                        conversationGoalTaskIndex++;
+
+                        JSONObject context = workingContext.toJson();
+                        AgentTaskCoordinator.StartResult started =
+                                agentTaskCoordinator.ensureActive(
+                                        userIntentGeneration,
+                                        conversationGoalId,
+                                        conversationGoalTaskIndex,
+                                        "CONVERSATION_LOOP_WAKE",
+                                        context.optString("currentApp", ""));
+                        task = started.task;
+                        if (task != null && started.created) {
+                            task.recipeEligible = false;
+                            task.recipeIneligibleReason =
+                                    "BACKGROUND_CONVERSATION_WAKE";
+                            reportStage(
+                                    "對話模式：建立背景喚醒任務");
+                        }
+                    }
+                }
+            }
+
+            if (task == null || task.finished || task.cancelled) {
+                try {
+                    Thread.sleep(100L);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+                continue;
+            }
+
+            synchronized (agentTaskCoordinator.monitor()) {
+                if (task.finished || task.cancelled) continue;
+                task.awaitingModel = true;
+                task.watchdogPrompted = false;
+                task.userVisibleReplyProducedSinceLastAction = false;
+                task.finalSpeechRetryCount = 0;
+                task.status =
+                        "對話模式：偵測到聊天室變化，等待檢查新訊息";
+            }
+
+            reportStage(task.status);
+            boolean sent = sendInternalAgentDirective(
+                    "【CONVERSATION LOOP WAKE】Runtime 偵測到目前聊天視窗有新的 Accessibility 變化。"
+                            + "ACTIVE Conversation Loop lease 已授權在目前聊天室持續回覆；不要說無法發送，不要要求新的 user turn，也不要逐則詢問確認。"
+                            + "現在只呼叫一次 inspect_ui 看 fresh screenshot。"
+                            + "若確實有新的對方訊息，自行理解上下文、自然組一則簡短回覆並用 send_text 送出；"
+                            + "若只是自己的訊息、typing indicator 或其他 UI noise，呼叫 continue_conversation_loop 重新等待。"
+                            + "不要搜尋聯絡人、不要切換聊天室、不要輪詢。");
+            if (sent) {
+                agentResponseCoordinator.scheduleWatchdog(task);
+                return;
+            }
+
+            // Keep the loop alive if Live temporarily cannot accept the wake.
+            String fingerprint =
+                    conversationLoopRecipe.baselineFingerprint();
+            if (conversationLoopRecipe.rearmWait(fingerprint)) {
+                reportStage("對話模式：喚醒失敗，已重新等待");
+                armConversationLoopWaitAsync();
+            }
+            return;
+        }
+    }
+
+    private boolean isConversationLoopOwnedTask(AgentTaskRecord task) {
+        if (task == null || task.finished || task.cancelled) return false;
+        if (task.status != null
+                && task.status.contains("對話模式")) {
+            return true;
+        }
+        return "WAITING_BACKGROUND".equals(task.lastTaskState)
+                && ("send_text".equals(task.lastToolName)
+                        || "continue_conversation_loop".equals(
+                                task.lastToolName));
+    }
+
+    private void advanceRuntimeGenerationForConversationWake() {
+        synchronized (agentLock) {
+            userIntentGeneration++;
+            contextPayloadAudit.beginTurn(userIntentGeneration);
+            toolCallDispatcher.resetForNewIntent();
+        }
+        shadowAgentRuntime.onUserIntent(
+                userIntentGeneration,
+                conversationGoalId,
+                "",
+                false);
+        agentRuntimeV2.onUserIntent(
+                userIntentGeneration,
+                conversationGoalId,
+                "",
+                false);
+        Log.d(
+                TAG,
+                "Conversation Loop background wake generation="
+                        + userIntentGeneration);
     }
 
     private JSONObject waitThenAction(JSONObject args) throws Exception {
