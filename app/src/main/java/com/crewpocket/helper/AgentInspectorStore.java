@@ -440,12 +440,19 @@ final class AgentInspectorStore {
                 safe.put("taskId", "…" + suffix);
             }
             safe.put("active", activeTask);
-            safe.put("state", InspectorTaskState.classify(
-                    activeTask,
-                    raw.optBoolean("cancelled", false),
-                    raw.optString("status", ""),
-                    raw.optString("endReason", ""),
-                    raw.optString("blockedReason", "")));
+            boolean suspended =
+                    activeTask && raw.optBoolean("suspended", false);
+            safe.put(
+                    "state",
+                    suspended
+                            ? InspectorTaskState.WAITING_EXTERNAL
+                            : InspectorTaskState.classify(
+                                    activeTask,
+                                    raw.optBoolean("cancelled", false),
+                                    raw.optString("status", ""),
+                                    raw.optString("endReason", ""),
+                                    raw.optString("blockedReason", "")));
+            if (suspended) safe.put("suspended", true);
             safe.put("startedAt", raw.optLong("startedAt", 0L));
             safe.put("stepCount", raw.optInt("stepCount", 0));
             safe.put("mutationActions", raw.optInt("mutationActions", 0));
