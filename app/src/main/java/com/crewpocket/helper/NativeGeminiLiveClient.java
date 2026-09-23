@@ -1514,6 +1514,7 @@ final class NativeGeminiLiveClient {
                         if (!responseHasToolCall
                                 && audioAccepted) {
                             markCurrentModelTurnSpeech();
+                            liveHumanTurnBoundary.noteModelSpeech();
                             markAgentUserVisibleReplyProduced();
                         }
                     }
@@ -1560,6 +1561,11 @@ final class NativeGeminiLiveClient {
                     deckTurnWasInterrupted);
             resetCurrentModelTurnState();
         }
+
+        liveHumanTurnBoundary.observeServerState(
+                frame.turnComplete,
+                frame.interactionStatus,
+                frame.waitingForInput);
     }
 
     /**
