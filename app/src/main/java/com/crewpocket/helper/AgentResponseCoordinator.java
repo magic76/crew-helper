@@ -12,13 +12,9 @@ import android.os.Looper;
  */
 final class AgentResponseCoordinator {
     interface Host {
-        boolean isAgentMuted();
         void reportStage(String text);
         boolean sendInternalDirective(String text);
         void finishTask(AgentTaskRecord task, String reason, String finalReply);
-        String audioOutputState();
-        long pcmBytesReceived();
-        long pcmBytesAccepted();
     }
 
     private static final long FINAL_RESPONSE_WAIT_MS = 12_000L;
@@ -91,7 +87,7 @@ final class AgentResponseCoordinator {
                     }
                     if (!shouldPrompt) return;
 
-                    String reason = "Gemini 未在工具結果後繼續目前任務";
+                    String reason = "任務未完成：Gemini 未在工具結果後繼續";
                     synchronized (tasks.monitor()) {
                         if (!tasks.isActive(task)
                                 || task.finished
@@ -181,7 +177,7 @@ final class AgentResponseCoordinator {
             alreadyPrompted = task.prematureModelReplies > 0;
             if (alreadyPrompted) {
                 task.awaitingModel = false;
-                task.status = "模型未繼續目前目標，停止本次 Agent task";
+                task.status = "任務未完成：模型未繼續目前目標";
                 clearLocked();
             } else {
                 task.prematureModelReplies = 1;
