@@ -131,7 +131,8 @@ final class AgentResponseCoordinator {
                         task.lastTaskState,
                         task.lastToolName,
                         task.requiresPostActionInspection,
-                        task.blockedReason != null);
+                        task.blockedReason != null,
+                        task.mutationActions);
         if (!completionReady) {
             requestNextToolAfterIntermediateReply(task);
             return;
@@ -193,9 +194,9 @@ final class AgentResponseCoordinator {
         sendDirectiveOrFinish(task,
                 "【WHOLE TASK CONTINUITY】剛才的語音/文字回覆不是 whole-task completion。"
                         + "目前 active goal 必須保持同一個 task，不要因 STEP_OK 或 EVIDENCE_AVAILABLE 就停。"
-                        + "若還有明確下一步，保持安靜並只呼叫下一個工具；"
-                        + "若你認為目標真的完成，先用 inspect_ui 取得 fresh 畫面證據，再給最後一句 AUDIO。"
-                        + "只有 Runtime taskState=DONE/ANSWER_READY，或 fresh observation 後的結論，才可結束。",
+                        + "這個 task 已經做過手機 mutation 時，inspect_ui 只代表 fresh evidence，不代表整個目標完成。"
+                        + "不要重複剛才的說明、翻譯、地名或中間結果；保持安靜並只呼叫一個必要的下一步工具。"
+                        + "只有 Runtime taskState=DONE/ANSWER_READY/BLOCKED 才可作最後 AUDIO 結論。",
                 "任務續接");
         scheduleWatchdog(task);
     }

@@ -272,10 +272,25 @@ final class AgentTaskCoordinator {
 
     boolean shouldWithholdUnverifiedReply() {
         synchronized (monitor) {
-            return active != null
-                    && !active.finished
-                    && !active.cancelled
-                    && active.requiresPostActionInspection;
+            if (active == null
+                    || active.finished
+                    || active.cancelled
+                    || !active.awaitingModel) {
+                return false;
+            }
+            if (active.requiresPostActionInspection) return true;
+
+            boolean completionReady =
+                    AgentTaskLifecyclePolicy.canFinishAfterModelReply(
+                            active.lastTaskState,
+                            active.lastToolName,
+                            active.requiresPostActionInspection,
+                            active.blockedReason != null,
+                            active.mutationActions);
+
+            // For a mutation task, do not let intermediate model narration leak
+            // to the user before Runtime reaches an explicit completion boundary.
+            return active.mutationActions > 0 && !completionReady;
         }
     }
 }
