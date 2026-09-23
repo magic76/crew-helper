@@ -132,7 +132,8 @@ final class AgentTaskLifecyclePolicy {
             String taskState,
             String lastToolName,
             boolean requiresPostActionInspection,
-            boolean hasBlockedReason) {
+            boolean hasBlockedReason,
+            int mutationActions) {
         if (requiresPostActionInspection) return false;
         if (hasBlockedReason) return true;
 
@@ -147,14 +148,20 @@ final class AgentTaskLifecyclePolicy {
             return false;
         }
 
-        // EVIDENCE_AVAILABLE after a mutation is only step evidence. After an
-        // explicit observation, however, a spoken conclusion may close the task.
+        // EVIDENCE_AVAILABLE is only step evidence for any task that has already
+        // mutated the phone. An inspect after search/tap/type proves the screen,
+        // not that the whole user goal is complete. Runtime must emit DONE or
+        // ANSWER_READY for those tasks.
         if ("EVIDENCE_AVAILABLE".equals(state)) {
-            return isObservationTool(lastToolName);
+            return mutationActions <= 0
+                    && isObservationTool(lastToolName);
         }
 
         // Read/inspect-only tasks can legitimately end after their observation.
-        return isObservationTool(lastToolName);
+        // Once a task has mutated the phone, a plain observation is never enough
+        // to infer whole-task completion.
+        return mutationActions <= 0
+                && isObservationTool(lastToolName);
     }
 
     static int maxRunsForTool(String name) {
