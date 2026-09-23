@@ -123,6 +123,8 @@ final class NativeGeminiLiveClient {
     // Finalized user turns are coordinated separately from model/tool frames.
     // Tool calls never grant authority; only finalized user input advances this.
     private final LiveTurnCoordinator liveTurnCoordinator = new LiveTurnCoordinator();
+    private final LiveHumanTurnBoundary liveHumanTurnBoundary =
+            new LiveHumanTurnBoundary();
     private final Object internalDirectiveTurnLock = new Object();
     private static final long INTERNAL_DIRECTIVE_TOOL_TTL_MS = 8_000L;
     private long pendingInternalDirectiveGeneration = -1L;
@@ -822,6 +824,19 @@ final class NativeGeminiLiveClient {
                 + " supersede=" + supersedeActiveTask);
     }
 
+    private void mergeFinalizedVoiceSegmentIntoCurrentIntent(
+            String effectiveText,
+            String reason) {
+        conversationGoalTouchedAt = System.currentTimeMillis();
+        workingContext.mergeUserTurnSegment(effectiveText);
+        Log.d(
+                TAG,
+                "Merged finalized voice segment into generation="
+                        + userIntentGeneration
+                        + " reason="
+                        + (reason == null ? "" : reason));
+    }
+
     private boolean isCurrentUserIntent(long generation) {
         synchronized (agentLock) { return generation == userIntentGeneration; }
     }
@@ -854,6 +869,8 @@ final class NativeGeminiLiveClient {
             if (hasPendingUiChoice()) clearPendingUiChoiceSilently();
 
             beginNewUserIntent(input);
+            liveHumanTurnBoundary.forceNewTurn(
+                    input, System.currentTimeMillis());
             voiceExecutionGuard.onFinalizedTypedTurn(
                     userIntentGeneration, input);
             userActionScope.updateFromUserText(input);
@@ -1184,6 +1201,7 @@ final class NativeGeminiLiveClient {
         liveAudioController.stop();
         voiceExecutionGuard.clear();
         liveTurnCoordinator.reset();
+        liveHumanTurnBoundary.reset();
         clearPendingInternalDirectiveTurn();
         liveConnection.stop();
         if (wasRunning) listener.onStopped("已結束");
