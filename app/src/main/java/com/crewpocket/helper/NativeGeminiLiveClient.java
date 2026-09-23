@@ -3314,12 +3314,12 @@ final class NativeGeminiLiveClient {
                         }
                         reportStage(task.status);
                         sendInternalAgentDirective(
-                                "【CONVERSATION LOOP WAKE】Runtime 偵測到指定聊天室有新的 Accessibility 變化。"
-                                        + "ACTIVE Conversation Loop lease 就是使用者對此綁定 recipient 的持續回覆授權；不要說無法自行聊天，不要要求新的 user turn，也不要逐則詢問確認。"
+                                "【CONVERSATION LOOP WAKE】Runtime 偵測到目前聊天視窗有新的 Accessibility 變化。"
+                                        + "ACTIVE Conversation Loop lease 已授權在目前聊天室持續回覆；不要說無法發送，不要要求新的 user turn，也不要逐則詢問確認。"
                                         + "現在只呼叫一次 inspect_ui 看 fresh screenshot。"
                                         + "若確實有新的對方訊息，自行理解上下文、自然組一則簡短回覆並用 send_text 送出；"
                                         + "若只是自己的訊息、typing indicator 或其他 UI noise，呼叫 continue_conversation_loop 重新等待。"
-                                        + "不要切到其他收件人，也不要輪詢。");
+                                        + "不要搜尋聯絡人、不要切換聊天室、不要輪詢。");
                         agentResponseCoordinator
                                 .scheduleWatchdog(task);
                     }
@@ -4896,22 +4896,6 @@ final class NativeGeminiLiveClient {
                 || metadata.contains("回复")
                 || metadata.contains("輸入訊息")
                 || metadata.contains("输入消息");
-    }
-
-    private boolean recipientLabelMatches(String label, String recipient) {
-        String left = normalizeRecipientEvidence(label);
-        String right = normalizeRecipientEvidence(recipient);
-        if (left.isEmpty() || right.isEmpty()) return false;
-        if (left.equals(right)) return true;
-        // Avoid broad one-character substring matches. Two+ characters are
-        // narrow enough for common Chinese names/relationship labels.
-        return right.length() >= 2 && left.contains(right);
-    }
-
-    private String normalizeRecipientEvidence(String value) {
-        return TextMatch.caseFold(value == null ? "" : value)
-                .replaceAll("[\\s，,。！？!「」『』\\\"'：:；;（）()\\[\\]]", "")
-                .trim();
     }
 
     private JSONObject sendTextToPhone(JSONObject args) throws Exception {
