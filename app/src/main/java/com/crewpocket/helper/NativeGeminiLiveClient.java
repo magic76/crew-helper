@@ -1260,8 +1260,10 @@ final class NativeGeminiLiveClient {
             return;
         }
 
-        // Finalized authoritative input is handled before same-frame tools so
-        // Runtime-owned SEND/Shortcut state wins protocol ordering races.
+        // Finalized transcription text is authoritative, but one finalized
+        // segment is not automatically a brand-new foreground intent. Gemini
+        // Live may finalize multiple speech segments while the human experiences
+        // one spoken instruction.
         String completeUserInput = frame.inputText;
         if (!completeUserInput.isEmpty()) {
             clearPendingInternalDirectiveTurn();
@@ -1281,23 +1283,81 @@ final class NativeGeminiLiveClient {
                 clearPendingUiChoiceSilently();
             }
 
-            VoiceExecutionGuard.TurnDisposition voiceDisposition =
-                    voiceExecutionGuard.onFinalizedVoiceTurn(
-                            userIntentGeneration + 1L,
-                            completeUserInput,
-                            frame.inputConfidence);
-            boolean confirmationContinuation =
-                    voiceDisposition
-                            != VoiceExecutionGuard.TurnDisposition.NORMAL;
+            String effectiveUserInput = completeUserInput;
+            VoiceExecutionGuard.TurnDisposition voiceDisposition;
 
-            if (confirmationContinuation) {
-                beginContinuationUserIntent(completeUserInput);
+            // A pending sensitive-action confirmation is intentionally a
+            // distinct human turn; preserve the existing confirmation lease.
+            boolean pendingVoiceConfirmation =
+                    !voiceExecutionGuard.pendingSummary().isEmpty();
+            if (pendingVoiceConfirmation) {
+                voiceDisposition =
+                        voiceExecutionGuard.onFinalizedVoiceTurn(
+                                userIntentGeneration + 1L,
+                                completeUserInput,
+                                frame.inputConfidence);
+                boolean confirmationContinuation =
+                        voiceDisposition
+                                != VoiceExecutionGuard.TurnDisposition.NORMAL;
+                if (confirmationContinuation) {
+                    beginContinuationUserIntent(completeUserInput);
+                } else {
+                    beginNewUserIntent(completeUserInput);
+                }
+                liveHumanTurnBoundary.forceNewTurn(
+                        completeUserInput,
+                        System.currentTimeMillis());
+                PerformanceMetrics.recordLiveHumanTurnNewIntent(
+                        confirmationContinuation
+                                ? "VOICE_CONFIRMATION"
+                                : "CONFIRMATION_REPLACED");
             } else {
-                beginNewUserIntent(completeUserInput);
+                AgentTaskRecord activeVoiceTask =
+                        agentTaskCoordinator.activeRunning();
+                LiveHumanTurnBoundary.Resolution boundary =
+                        liveHumanTurnBoundary.resolve(
+                                completeUserInput,
+                                System.currentTimeMillis(),
+                                activeVoiceTask != null,
+                                activeVoiceTask == null
+                                        ? -1L
+                                        : activeVoiceTask.intentGeneration,
+                                userIntentGeneration,
+                                liveTurnCoordinator.latest().generation,
+                                frame.interactionStatus,
+                                frame.waitingForInput,
+                                frame.interrupted);
+
+                effectiveUserInput = boundary.effectiveText;
+                if (boundary.decision
+                        == LiveHumanTurnBoundary.Decision.NEW_INTENT) {
+                    beginNewUserIntent(effectiveUserInput);
+                    PerformanceMetrics.recordLiveHumanTurnNewIntent(
+                            boundary.reason);
+                } else {
+                    mergeFinalizedVoiceSegmentIntoCurrentIntent(
+                            effectiveUserInput,
+                            boundary.reason);
+                    if (boundary.decision
+                            == LiveHumanTurnBoundary.Decision
+                                    .BIND_CURRENT_GENERATION) {
+                        PerformanceMetrics.recordLiveHumanTurnBoundCurrent(
+                                boundary.reason);
+                    } else {
+                        PerformanceMetrics.recordLiveHumanTurnMergedSegment(
+                                boundary.reason);
+                    }
+                }
+
+                voiceDisposition =
+                        voiceExecutionGuard.onFinalizedVoiceTurn(
+                                userIntentGeneration,
+                                effectiveUserInput,
+                                frame.inputConfidence);
             }
 
             authorizationTranscript =
-                    completeUserInput;
+                    effectiveUserInput;
             if (authorizationTranscript.length() > 4096) {
                 authorizationTranscript =
                         authorizationTranscript.substring(
@@ -1310,7 +1370,7 @@ final class NativeGeminiLiveClient {
                 reportStage("語音確認完成，等待執行原動作");
             } else {
                 userActionScope.updateFromUserText(
-                        completeUserInput);
+                        effectiveUserInput);
                 if (voiceDisposition
                         == VoiceExecutionGuard.TurnDisposition.CONFIRMATION_REJECTED) {
                     workingContext.setPendingTask("");
@@ -1318,22 +1378,22 @@ final class NativeGeminiLiveClient {
                 }
             }
             recordFinalizedSendAuthorization(
-                    completeUserInput);
+                    effectiveUserInput);
             if (tryHandleRuntimeAppTeaching(
-                    completeUserInput)) {
+                    effectiveUserInput)) {
                 return;
             }
             if (tryHandleRuntimeSendCurrent(
-                    completeUserInput)) {
+                    effectiveUserInput)) {
                 return;
             }
             if (isStopAgentTaskPhrase(
-                    completeUserInput)) {
+                    effectiveUserInput)) {
                 deckRuntimeController.cancelAutoAdvance();
                 cancelAgentTask(
                         "使用者語音停止任務");
             } else if (memoryRuleController.processInput(
-                    completeUserInput)) {
+                    effectiveUserInput)) {
                 return;
             }
         }
