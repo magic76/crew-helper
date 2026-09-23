@@ -21,25 +21,13 @@ public final class ConversationLoopRecipeTest {
                         "你和 John talk"),
                 "natural mixed-language talk wording should start");
         check(
-                ConversationLoopPolicy.mentionsRecipient(
-                        "幫我跟小明持續聊天", "小明"),
-                "recipient must be present");
+                ConversationLoopPolicy.isExplicitStartIntent(
+                        "幫我跟他聊"),
+                "current-chat delegation does not require a named recipient");
         check(
-                "小明".equals(ConversationLoopPolicy.extractRecipient(
-                        "幫我跟小明聊")),
-                "runtime extracts recipient from natural chat request");
-        check(
-                "小明".equals(ConversationLoopPolicy.extractRecipient(
-                        "你自己跟小明聊一下")),
-                "runtime extracts recipient from self-directed chat request");
-        check(
-                "John".equals(ConversationLoopPolicy.extractRecipient(
-                        "chat with John")),
-                "runtime extracts english recipient");
-        check(
-                ConversationLoopPolicy.extractRecipient(
-                        "幫我跟他聊").isEmpty(),
-                "pronoun is not accepted as bound recipient");
+                ConversationLoopPolicy.isExplicitStartIntent(
+                        "幫我聊到我叫你停"),
+                "current-chat delegation may omit recipient entirely");
         check(
                 !ConversationLoopPolicy.isExplicitStartIntent(
                         "停止跟小明聊天"),
@@ -64,11 +52,13 @@ public final class ConversationLoopRecipeTest {
         ConversationLoopRecipe recipe =
                 new ConversationLoopRecipe();
         ConversationLoopRecipe.StartResult started =
-                recipe.start("小明", 7L, 3, 10);
+                recipe.start("", 7L, 3, 10);
         check(started.success, "recipe should start");
         check(recipe.canSend(), "initial state may send");
-        check(recipe.allowsTool("search_current_app"),
-                "initial state may navigate to recipient");
+        check(!recipe.allowsTool("search_current_app"),
+                "current-chat loop must not search or switch recipients");
+        check(recipe.allowsTool("send_text"),
+                "current-chat loop may send in the visible chat");
 
         check(recipe.markSent("fp1"),
                 "first send should arm background wait");
