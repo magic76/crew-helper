@@ -18,6 +18,14 @@ public final class LiveTurnCoordinatorTest {
         LiveTurnCoordinator.FinalizedTurn first = coordinator.latest();
         check(first.generation == 1L, "records finalized generation");
         check("幫我送出".equals(first.text), "trims finalized text");
+        check(coordinator.isOperationalGenerationOpen(1L),
+                "finalized user turn opens its operational generation");
+        coordinator.closeOperationalGeneration(1L);
+        check(!coordinator.isOperationalGenerationOpen(1L),
+                "closed generation cannot authorize later tool frames");
+        coordinator.openOperationalGeneration(1L);
+        check(coordinator.isOperationalGenerationOpen(1L),
+                "Runtime continuation can explicitly reopen generation");
 
         Thread producer = new Thread(() -> {
             try { Thread.sleep(40L); } catch (InterruptedException ignored) {}
