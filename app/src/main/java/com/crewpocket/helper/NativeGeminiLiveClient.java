@@ -3468,6 +3468,57 @@ final class NativeGeminiLiveClient {
                 args.optString("target", ""));
     }
 
+    private JSONObject applyMediaPlaybackCompletion(
+            JSONObject observed,
+            String targetMetadata,
+            String currentPackage,
+            boolean mediaPlayCandidate,
+            boolean musicActiveBefore) {
+        if (observed == null || !mediaPlayCandidate) {
+            return observed == null ? new JSONObject() : observed;
+        }
+
+        JSONObject after = observed.optJSONObject("after");
+        String afterPackage =
+                after == null
+                        ? currentPackage
+                        : after.optString(
+                                "package",
+                                currentPackage);
+        boolean musicActiveAfter =
+                waitForMusicActiveAfterTap(
+                        musicActiveBefore);
+        boolean uiPlaying =
+                MediaPlaybackCompletionPolicy
+                        .uiIndicatesPlaying(
+                                after == null
+                                        ? ""
+                                        : after.toString());
+        boolean actionSucceeded =
+                observed.optBoolean("success", false);
+
+        if (MediaPlaybackCompletionPolicy.shouldComplete(
+                afterPackage,
+                targetMetadata,
+                actionSucceeded,
+                musicActiveBefore,
+                musicActiveAfter,
+                uiPlaying)) {
+            try {
+                observed.put("taskState", "DONE")
+                        .put(
+                                "completionEvidence",
+                                uiPlaying
+                                        ? "MEDIA_UI_PLAYING"
+                                        : "MEDIA_PLAYBACK_BECAME_ACTIVE")
+                        .put("nextRequirement", "NONE")
+                        .put("mediaPlaybackActive", true)
+                        .put("verified", true);
+            } catch (Exception ignored) {}
+        }
+        return observed;
+    }
+
     private boolean isMusicActive() {
         if (appContext == null) return false;
         try {
@@ -4149,48 +4200,12 @@ final class NativeGeminiLiveClient {
                 observationVerificationController
                         .autoObserveAfterMutation(
                                 reply, "tap_screen");
-
-        if (mediaPlayCandidate) {
-            JSONObject after = observed.optJSONObject("after");
-            String afterPackage =
-                    after == null
-                            ? currentPackage
-                            : after.optString(
-                                    "package",
-                                    currentPackage);
-            boolean musicActiveAfter =
-                    waitForMusicActiveAfterTap(
-                            musicActiveBefore);
-            boolean uiPlaying =
-                    MediaPlaybackCompletionPolicy
-                            .uiIndicatesPlaying(
-                                    after == null
-                                            ? ""
-                                            : after.toString());
-            boolean actionSucceeded =
-                    observed.optBoolean(
-                            "success",
-                            reply.optBoolean("success", false));
-
-            if (MediaPlaybackCompletionPolicy.shouldComplete(
-                    afterPackage,
-                    tapMeta,
-                    actionSucceeded,
-                    musicActiveBefore,
-                    musicActiveAfter,
-                    uiPlaying)) {
-                observed.put("taskState", "DONE")
-                        .put(
-                                "completionEvidence",
-                                uiPlaying
-                                        ? "MEDIA_UI_PLAYING"
-                                        : "MEDIA_PLAYBACK_BECAME_ACTIVE")
-                        .put("nextRequirement", "NONE")
-                        .put("mediaPlaybackActive", true)
-                        .put("verified", true);
-            }
-        }
-        return observed;
+        return applyMediaPlaybackCompletion(
+                observed,
+                tapMeta,
+                currentPackage,
+                mediaPlayCandidate,
+                musicActiveBefore);
     }
 
     /**
@@ -4689,13 +4704,33 @@ final class NativeGeminiLiveClient {
                     "最新任務只要求搜尋。搜尋結果出現後不要打開人、群組或聊天室；直接回報結果。");
         }
 
+        String currentPackage =
+                observationVerificationController
+                        .latestObservation().packageName;
+        boolean mediaPlayCandidate =
+                MediaPlaybackCompletionPolicy
+                        .isDefaultTrustedPackage(currentPackage)
+                        && MediaPlaybackCompletionPolicy
+                                .isPlayControl(elementMeta);
+        boolean musicActiveBefore =
+                mediaPlayCandidate && isMusicActive();
+
         JSONObject reply = phoneRuntimeExecutor.semanticTap(elementId);
         workingContext.recordAction(
                 "tap:" + elementId,
                 reply.optBoolean("success", false)
                         ? "submitted"
                         : reply.optString("error", "failed"));
-        return observationVerificationController.autoObserveAfterMutation(reply, "tap_element");
+        JSONObject observed =
+                observationVerificationController
+                        .autoObserveAfterMutation(
+                                reply, "tap_element");
+        return applyMediaPlaybackCompletion(
+                observed,
+                elementMeta,
+                currentPackage,
+                mediaPlayCandidate,
+                musicActiveBefore);
     }
 
     private JSONObject waitForCondition(JSONObject args) throws Exception {
