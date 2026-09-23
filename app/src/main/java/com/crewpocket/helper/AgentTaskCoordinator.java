@@ -212,6 +212,41 @@ final class AgentTaskCoordinator {
         }
     }
 
+    boolean suspendForExternalWait(
+            AgentTaskRecord task,
+            String reason,
+            String status) {
+        synchronized (monitor) {
+            if (task == null
+                    || active != task
+                    || task.finished
+                    || task.cancelled) {
+                return false;
+            }
+            task.suspendForExternalWait(reason);
+            task.status = status == null
+                    ? "Agent 正在等待外部事件"
+                    : status;
+            return task.suspended;
+        }
+    }
+
+    AgentTaskRecord resumeExternalWait(String status) {
+        synchronized (monitor) {
+            if (active == null
+                    || active.finished
+                    || active.cancelled
+                    || !active.suspended) {
+                return null;
+            }
+            active.resumeFromExternalWait(
+                    status == null
+                            ? "外部事件已發生，恢復 Agent 任務"
+                            : status);
+            return active;
+        }
+    }
+
     void appendFinalText(String text) {
         if (text == null || text.isEmpty()) return;
         synchronized (monitor) {
