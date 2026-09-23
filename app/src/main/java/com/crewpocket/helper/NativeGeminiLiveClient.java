@@ -361,10 +361,6 @@ final class NativeGeminiLiveClient {
         this.agentResponseCoordinator = new AgentResponseCoordinator(
                 this.agentTaskCoordinator,
                 new AgentResponseCoordinator.Host() {
-                    @Override public boolean isAgentMuted() {
-                        return NativeGeminiLiveClient.this.agentMuted;
-                    }
-
                     @Override public void reportStage(String text) {
                         NativeGeminiLiveClient.this.reportStage(text);
                     }
@@ -380,21 +376,6 @@ final class NativeGeminiLiveClient {
                             String finalReply) {
                         NativeGeminiLiveClient.this
                                 .finishAgentTask(task, reason, finalReply);
-                    }
-
-                    @Override public String audioOutputState() {
-                        return NativeGeminiLiveClient.this.liveAudioController
-                                .getLastAudioOutputState();
-                    }
-
-                    @Override public long pcmBytesReceived() {
-                        return NativeGeminiLiveClient.this.liveAudioController
-                                .getPcmBytesReceived();
-                    }
-
-                    @Override public long pcmBytesAccepted() {
-                        return NativeGeminiLiveClient.this.liveAudioController
-                                .getPcmBytesAccepted();
                     }
                 });
 
@@ -2760,6 +2741,14 @@ final class NativeGeminiLiveClient {
             boolean succeeded = result.optBoolean("success", false)
                     || "STEP_OK".equals(result.optString("stepResult", ""));
             try {
+                if (succeeded
+                        && AgentTaskLifecyclePolicy.isOneShotCompletionTool(name)
+                        && !result.has("taskState")) {
+                    result.put("taskState", "DONE")
+                            .put("completionEvidence", "ONE_SHOT_TOOL_COMPLETED")
+                            .put("nextRequirement", "NONE");
+                }
+
                 if (isMutationTool(name) && succeeded) {
                     JSONObject after = result.optJSONObject("after");
                     boolean freshAfter = after != null && after.optBoolean("fresh", false)

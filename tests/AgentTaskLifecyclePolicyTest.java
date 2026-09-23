@@ -85,6 +85,17 @@ public final class AgentTaskLifecyclePolicyTest {
                         == AgentTaskLifecyclePolicy.MAX_TOOL_RUNS,
                 "normal tool run limit is preserved");
 
+        check(AgentTaskLifecyclePolicy.isOneShotCompletionTool("create_note"),
+                "create_note is terminal one-shot success");
+        check(AgentTaskLifecyclePolicy.isOneShotCompletionTool("remember_app_guidance"),
+                "remember_app_guidance is terminal one-shot success");
+        check(AgentTaskLifecyclePolicy.isOneShotCompletionTool("cancel_schedule"),
+                "cancel_schedule is terminal one-shot success");
+        check(!AgentTaskLifecyclePolicy.isOneShotCompletionTool("start_conversation_loop"),
+                "conversation start remains a continuing task");
+        check(!AgentTaskLifecyclePolicy.isOneShotCompletionTool("search_current_app"),
+                "phone search remains a continuing task");
+
         AgentTaskLifecyclePolicy.StabilityDecision observe =
                 AgentTaskLifecyclePolicy.evaluateStability(
                         false, false, "tap_screen",

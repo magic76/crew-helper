@@ -164,6 +164,13 @@ final class AgentTaskLifecyclePolicy {
                 && isObservationTool(lastToolName);
     }
 
+    static boolean isOneShotCompletionTool(String name) {
+        return "create_note".equals(name)
+                || "remember_app_guidance".equals(name)
+                || "cancel_schedule".equals(name)
+                || "stop_conversation_loop".equals(name);
+    }
+
     static int maxRunsForTool(String name) {
         return "advance_deck".equals(name) || "present_deck_card".equals(name)
                 ? DECK_NAV_MAX_RUNS : MAX_TOOL_RUNS;
