@@ -2447,8 +2447,12 @@ final class NativeGeminiLiveClient {
                 applyV2VerificationContract(result, verification);
             }
             if (isPhoneContextTool(name)) attachCurrentAppPlaybook(result);
-            updateTaskCompletionContract(task, name, result);
-            updateAgentStabilityAfterResult(task, name, args, result);
+            updateTaskCompletionContract(
+                    task, name, result, runtimeV2Enforced);
+            if (!runtimeV2Enforced) {
+                updateAgentStabilityAfterResult(
+                        task, name, args, result);
+            }
             task.lastToolName = name == null ? "" : name;
             task.lastTaskState = result.optString("taskState", "").trim();
             task.lastCompletionEvidence =
@@ -2736,7 +2740,11 @@ final class NativeGeminiLiveClient {
      * evidence. An explicit inspect_ui remains the fallback if that view is
      * unavailable or a failed action demands another observation.
      */
-    private void updateTaskCompletionContract(AgentTaskRecord task, String name, JSONObject result) {
+    private void updateTaskCompletionContract(
+            AgentTaskRecord task,
+            String name,
+            JSONObject result,
+            boolean runtimeV2Enforced) {
         if (task == null || result == null) return;
         synchronized (agentTaskCoordinator.monitor()) {
             if (task.cancelled || task.finished) return;
@@ -2759,9 +2767,22 @@ final class NativeGeminiLiveClient {
                     String domainState = result.optString("taskState", "").trim();
                     boolean waitingUser = "WAITING_USER".equals(domainState);
                     boolean blocked = "BLOCKED".equals(domainState);
+                    String v2Verification =
+                            result.optString("verificationStatus", "").trim();
+                    boolean v2Pending =
+                            runtimeV2Enforced
+                                    && "PENDING".equals(v2Verification);
 
+                    // RuntimeV2 owns verification when enforced. Legacy task
+                    // flags only mirror its explicit PENDING decision; they no
+                    // longer invent an extra inspect requirement after a V2
+                    // VERIFIED/LIKELY result.
                     task.requiresPostActionInspection =
-                            waitingUser || blocked ? false : !freshAfter;
+                            runtimeV2Enforced
+                                    ? v2Pending
+                                    : (waitingUser || blocked
+                                        ? false
+                                        : !freshAfter);
                     task.postActionInspectionPrompted = false;
 
                     if (!result.has("actionStatus")) result.put("actionStatus", "EXECUTED");
@@ -2782,18 +2803,31 @@ final class NativeGeminiLiveClient {
                         task.requiresPostActionInspection = false;
                     } else {
                         if (!result.has("taskState")) {
-                            result.put("taskState",
-                                    freshAfter ? "EVIDENCE_AVAILABLE" : "IN_PROGRESS");
+                            result.put(
+                                    "taskState",
+                                    runtimeV2Enforced && !v2Pending
+                                            ? "EVIDENCE_AVAILABLE"
+                                            : (freshAfter
+                                                ? "EVIDENCE_AVAILABLE"
+                                                : "IN_PROGRESS"));
                         }
                         if (!result.has("completionEvidence")) {
-                            result.put("completionEvidence", freshAfter
-                                    ? "AUTO_AFTER_ACTION"
-                                    : "PENDING_POST_ACTION_INSPECTION");
+                            result.put(
+                                    "completionEvidence",
+                                    runtimeV2Enforced && !v2Pending
+                                            ? "RUNTIME_V2_VERIFIED"
+                                            : (freshAfter
+                                                ? "AUTO_AFTER_ACTION"
+                                                : "PENDING_POST_ACTION_INSPECTION"));
                         }
                         if (!result.has("nextRequirement")) {
-                            result.put("nextRequirement", freshAfter
-                                    ? "Use the fresh compact after state to choose the next action; STEP_OK is not whole-task completion."
-                                    : "Call inspect_ui once and use the actual post-action screen before concluding.");
+                            result.put(
+                                    "nextRequirement",
+                                    runtimeV2Enforced && !v2Pending
+                                            ? "Continue the original goal from this verified result; do not add a redundant inspect step."
+                                            : (freshAfter
+                                                ? "Use the fresh compact after state to choose the next action; STEP_OK is not whole-task completion."
+                                                : "Call inspect_ui once and use the actual post-action screen before concluding."));
                         }
                     }
                 }
