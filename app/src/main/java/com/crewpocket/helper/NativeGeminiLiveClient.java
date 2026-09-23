@@ -869,8 +869,6 @@ final class NativeGeminiLiveClient {
                 listener.onTranscript("你", input);
                 return true;
             }
-            String runtimeLoopScope =
-                    tryArmRuntimeConversationLoop(input);
             if (tryHandleRuntimeSendCurrent(input)) {
                 listener.onTranscript("你", input);
                 return true;
@@ -890,9 +888,6 @@ final class NativeGeminiLiveClient {
                         ContextPayloadBudget.utf8Bytes(text.trim()),
                         ContextPayloadBudget.utf8Bytes(payload));
                 listener.onTranscript("你", text.trim());
-                if (!runtimeLoopScope.isEmpty()) {
-                    sendRuntimeConversationLoopArmedDirective();
-                }
             }
             return sent;
         } catch (Exception error) {
@@ -1312,26 +1307,11 @@ final class NativeGeminiLiveClient {
                     completeUserInput)) {
                 return;
             }
-            String runtimeLoopScope =
-                    tryArmRuntimeConversationLoop(
-                            completeUserInput);
-            if (!runtimeLoopScope.isEmpty()) {
-                sendRuntimeConversationLoopArmedDirective();
-            }
             if (tryHandleRuntimeSendCurrent(
                     completeUserInput)) {
                 return;
             }
-            if (conversationLoopRecipe.isActive()
-                    && ConversationLoopPolicy.isStopIntent(
-                            completeUserInput)) {
-                conversationLoopRecipe.stop(
-                        "使用者停止對話模式");
-                setConversationWaitingVisual(false);
-                reportStage("✓ 已停止持續對話模式");
-                cancelAgentTask(
-                        "使用者停止對話模式");
-            } else if (isStopAgentTaskPhrase(
+            if (isStopAgentTaskPhrase(
                     completeUserInput)) {
                 deckRuntimeController.cancelAutoAdvance();
                 cancelAgentTask(
@@ -1781,62 +1761,6 @@ final class NativeGeminiLiveClient {
             cancelAgentTask("使用者接管自動聊天");
         }
         reportStage("自動聊天已讓出控制");
-    }
-
-    private String tryArmRuntimeConversationLoop(
-            String inputText) {
-        if (!AppConfig.isMessageSendNoConfirmationEnabled(appContext)) {
-            return "";
-        }
-        if (conversationLoopRecipe.isActive()
-                || !ConversationLoopPolicy.isExplicitStartIntent(inputText)) {
-            return "";
-        }
-
-        try {
-            JSONObject chat = verifyCurrentChatOnScreen();
-            if (!chat.optBoolean("success", false)) {
-                return "";
-            }
-        } catch (Exception ignored) {
-            return "";
-        }
-
-        ConversationLoopRecipe.StartResult started =
-                conversationLoopRecipe.start(
-                        "",
-                        userIntentGeneration,
-                        10,
-                        15);
-        if (!started.success) {
-            return "";
-        }
-
-        workingContext.setPendingTask("CONVERSATION_LOOP");
-        setConversationWaitingVisual(false);
-        workingContext.recordAction(
-                "conversation_loop",
-                "runtime_armed_current_chat");
-        reportStage("✓ 已啟動目前聊天室自動聊天");
-        try {
-            FloatingBubbleManager.getInstance(appContext)
-                    .showRuntimeUiState(
-                            RuntimeUiState.success(
-                                    "自動聊天已啟動",
-                                    "目前聊天室 · 15 分鐘 / 最多 10 則"));
-        } catch (Exception ignored) {}
-        return "CURRENT_CHAT";
-    }
-
-    private void sendRuntimeConversationLoopArmedDirective() {
-        try {
-            sendInternalAgentDirective(
-                    "【Runtime Conversation Loop 已啟動】"
-                            + "scope=CURRENT_CHAT。這不是待觸發條件，也不需要再呼叫 start_conversation_loop。"
-                            + "不要搜尋聯絡人、不要切換聊天室、不要解釋 recipient 限制。"
-                            + "直接在目前已開啟的聊天視窗自然回覆。"
-                            + "ACTIVE lease 已授權後續回覆；每次真正 SEND 前 Runtime 只驗證目前仍是聊天畫面。");
-        } catch (Exception ignored) {}
     }
 
     private boolean tryHandleRuntimeSendCurrent(String inputText) {
@@ -3185,22 +3109,6 @@ final class NativeGeminiLiveClient {
         JSONObject safe = args == null ? new JSONObject() : args;
         int maxReplies = safe.optInt("max_replies", 10);
         int timeoutMinutes = safe.optInt("timeout_minutes", 15);
-
-        LiveTurnCoordinator.FinalizedTurn latest =
-                liveTurnCoordinator.latest();
-        JSONObject context = workingContext.toJson();
-        String rootGoal = context.optString(
-                "rootGoal",
-                context.optString("latestUserTurn", ""));
-        boolean explicit =
-                ConversationLoopPolicy.isExplicitStartIntent(latest.text)
-                        || ConversationLoopPolicy.isExplicitStartIntent(
-                                rootGoal);
-        if (!explicit) {
-            return runtimeBlocked(
-                    "CONVERSATION_LOOP_NOT_EXPLICIT",
-                    "持續代聊需要使用者明確委託。目前聊天室就是唯一作用範圍，不需要指定或驗證聊天對象名稱。");
-        }
 
         JSONObject chat = verifyCurrentChatOnScreen();
         if (!chat.optBoolean("success", false)) {
