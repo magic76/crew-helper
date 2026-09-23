@@ -1775,11 +1775,7 @@ final class NativeGeminiLiveClient {
                         ? "HUMAN_TAKEOVER"
                         : reason);
         setConversationWaitingVisual(false);
-        if ("CONVERSATION_LOOP".equals(
-                workingContext.toProgressJson()
-                        .optString("pendingTask", ""))) {
-            workingContext.setPendingTask("");
-        }
+        workingContext.setPendingTask("");
 
         if (cancelLoopOwnedTask && loopOwnedTask) {
             cancelAgentTask("使用者接管自動聊天");
@@ -2184,12 +2180,7 @@ final class NativeGeminiLiveClient {
         final String name = semantic.runtimeName;
         final JSONObject args = semantic.runtimeArgs;
 
-        AgentTaskRecord loopGateTask =
-                agentTaskCoordinator.activeRunning();
-        boolean loopOwnsCurrentTask =
-                isConversationLoopOwnedTask(loopGateTask);
         if (conversationLoopRecipe.isActive()
-                && loopOwnsCurrentTask
                 && !conversationLoopRecipe.allowsTool(name)) {
             try {
                 sendToolResponse(
