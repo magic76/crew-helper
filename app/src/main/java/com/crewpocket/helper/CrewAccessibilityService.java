@@ -253,9 +253,32 @@ public class CrewAccessibilityService extends AccessibilityService {
                 || type == AccessibilityEvent.TYPE_VIEW_SCROLLED
                 || type == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) {
             long now = System.currentTimeMillis();
+            boolean sourceEditable = false;
+            boolean sourceFocused = false;
+            AccessibilityNodeInfo eventSource = null;
+            try {
+                if (type == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) {
+                    eventSource = event.getSource();
+                    if (eventSource != null) {
+                        sourceEditable =
+                                AccessibilityNodeRepository
+                                        .isEditableCandidate(eventSource);
+                        sourceFocused = eventSource.isFocused();
+                    }
+                }
+            } catch (Exception ignored) {
+            } finally {
+                if (eventSource != null) {
+                    try { eventSource.recycle(); } catch (Exception ignored) {}
+                }
+            }
+
             boolean humanTextEdit =
-                    type == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
-                            && now > runtimeTextMutationUntilMs;
+                    ConversationLoopTakeoverPolicy.isHumanComposerEdit(
+                            type == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED,
+                            sourceEditable,
+                            sourceFocused,
+                            now <= runtimeTextMutationUntilMs);
             uiChangeSignal.markChanged(type, humanTextEdit);
             NativeLiveService.markScreenDirtyFromAccessibility();
 
@@ -1808,7 +1831,7 @@ public class CrewAccessibilityService extends AccessibilityService {
 
             // Suppress only the Accessibility text-change event caused by this
             // Runtime-owned edit. Delayed human edits after this window remain takeover.
-            runtimeTextMutationUntilMs = System.currentTimeMillis() + 1500L;
+            runtimeTextMutationUntilMs = System.currentTimeMillis() + 800L;
 
             android.os.Bundle args = new android.os.Bundle();
             args.putCharSequence(
