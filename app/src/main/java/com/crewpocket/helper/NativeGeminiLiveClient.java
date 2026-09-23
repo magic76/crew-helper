@@ -2701,8 +2701,6 @@ final class NativeGeminiLiveClient {
                             loopOwnedTool ? 0 : task.steps,
                             maxSteps,
                             name,
-                            signature,
-                            loopOwnedTool ? "" : task.lastSignature,
                             loopOwnedTool ? 0 : task.getToolCount(name),
                             loopOwnedTool ? 0 : task.mutationActions,
                             loopOwnedTool ? 0 : task.observationActions);
