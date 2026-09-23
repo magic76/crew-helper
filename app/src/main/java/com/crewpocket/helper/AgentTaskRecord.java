@@ -46,9 +46,51 @@ final class AgentTaskRecord {
     boolean postActionInspectionPrompted;
     boolean cancelled;
     String cancelCategory = "";
+    boolean suspended;
+    String suspensionReason = "";
+    long suspendedAtMs;
+    long accumulatedSuspendedMs;
     boolean finished;
 
     AgentTaskRecord(String id) { taskId = id; }
+
+    void suspendForExternalWait(String reason) {
+        if (finished || cancelled || suspended) return;
+        suspended = true;
+        suspensionReason = safe(reason);
+        suspendedAtMs = System.currentTimeMillis();
+        awaitingModel = false;
+        watchdogPrompted = false;
+        userVisibleReplyProducedSinceLastAction = false;
+        finalSpeechRetryCount = 0;
+    }
+
+    void resumeFromExternalWait(String status) {
+        if (finished || cancelled || !suspended) return;
+        long now = System.currentTimeMillis();
+        accumulatedSuspendedMs =
+                AgentTaskLifecycleClock.accumulatedAfterResume(
+                        accumulatedSuspendedMs,
+                        suspendedAtMs,
+                        now);
+        suspended = false;
+        suspendedAtMs = 0L;
+        suspensionReason = "";
+        awaitingModel = true;
+        watchdogPrompted = false;
+        userVisibleReplyProducedSinceLastAction = false;
+        finalSpeechRetryCount = 0;
+        this.status = safe(status);
+    }
+
+    long effectiveStartedAt(long nowMs) {
+        return AgentTaskLifecycleClock.effectiveStartedAt(
+                startedAt,
+                accumulatedSuspendedMs,
+                suspendedAtMs,
+                suspended,
+                nowMs);
+    }
 
     int getToolCount(String name) {
         Integer value = toolCounts.get(name);
@@ -271,6 +313,10 @@ final class AgentTaskRecord {
                     .put("lastCompletionEvidence", lastCompletionEvidence)
                     .put("prematureModelReplies", prematureModelReplies)
                     .put("cancelCategory", cancelCategory)
+                    .put("suspended", suspended)
+                    .put("suspensionReason", suspensionReason)
+                    .put("suspendedAtMs", suspendedAtMs)
+                    .put("accumulatedSuspendedMs", accumulatedSuspendedMs)
                     .put("recipeEligible", recipeEligible)
                     .put("recipeStepCount", recipeSteps.size());
         } catch (Exception ignored) {}
