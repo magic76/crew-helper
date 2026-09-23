@@ -2760,6 +2760,14 @@ final class NativeGeminiLiveClient {
             boolean succeeded = result.optBoolean("success", false)
                     || "STEP_OK".equals(result.optString("stepResult", ""));
             try {
+                if (succeeded
+                        && AgentTaskLifecyclePolicy.isOneShotCompletionTool(name)
+                        && !result.has("taskState")) {
+                    result.put("taskState", "DONE")
+                            .put("completionEvidence", "ONE_SHOT_TOOL_COMPLETED")
+                            .put("nextRequirement", "NONE");
+                }
+
                 if (isMutationTool(name) && succeeded) {
                     JSONObject after = result.optJSONObject("after");
                     boolean freshAfter = after != null && after.optBoolean("fresh", false)
