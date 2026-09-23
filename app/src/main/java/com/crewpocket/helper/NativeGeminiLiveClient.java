@@ -4186,7 +4186,8 @@ final class NativeGeminiLiveClient {
                                         ? "MEDIA_UI_PLAYING"
                                         : "MEDIA_PLAYBACK_BECAME_ACTIVE")
                         .put("nextRequirement", "NONE")
-                        .put("mediaPlaybackActive", true);
+                        .put("mediaPlaybackActive", true)
+                        .put("verified", true);
             }
         }
         return observed;
