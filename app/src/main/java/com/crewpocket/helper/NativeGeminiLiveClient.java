@@ -3131,6 +3131,21 @@ final class NativeGeminiLiveClient {
 
         workingContext.setPendingTask("CONVERSATION_LOOP");
         setConversationWaitingVisual(false);
+        workingContext.recordAction(
+                "conversation_loop",
+                "model_started_current_chat");
+        reportStage("✓ 已啟動目前聊天室自動聊天");
+        try {
+            FloatingBubbleManager.getInstance(appContext)
+                    .showRuntimeUiState(
+                            RuntimeUiState.success(
+                                    "自動聊天已啟動",
+                                    "目前聊天室 · "
+                                            + timeoutMinutes
+                                            + " 分鐘 / 最多 "
+                                            + maxReplies
+                                            + " 則"));
+        } catch (Exception ignored) {}
         return conversationLoopStatusJson()
                 .put("success", true)
                 .put("taskState", "IN_PROGRESS")
