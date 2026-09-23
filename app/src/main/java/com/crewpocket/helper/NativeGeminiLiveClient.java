@@ -1166,6 +1166,7 @@ final class NativeGeminiLiveClient {
     void stop() {
         contextPayloadAudit.flushTurn();
         conversationLoopRecipe.stop("LIVE_SESSION_STOPPED");
+        setConversationWaitingVisual(false);
         workingContext.setPendingTask("");
 
         boolean wasRunning = running;
@@ -1317,6 +1318,7 @@ final class NativeGeminiLiveClient {
                             completeUserInput)) {
                 conversationLoopRecipe.stop(
                         "使用者停止對話模式");
+                setConversationWaitingVisual(false);
                 reportStage("✓ 已停止持續對話模式");
                 cancelAgentTask(
                         "使用者停止對話模式");
@@ -1744,6 +1746,13 @@ final class NativeGeminiLiveClient {
         return restored;
     }
 
+    private void setConversationWaitingVisual(boolean waiting) {
+        try {
+            FloatingBubbleManager.getInstance(appContext)
+                    .setConversationWaiting(waiting);
+        } catch (Exception ignored) {}
+    }
+
     private String tryArmRuntimeConversationLoop(
             String inputText) {
         if (!AppConfig.isMessageSendNoConfirmationEnabled(appContext)) {
@@ -1774,6 +1783,7 @@ final class NativeGeminiLiveClient {
         }
 
         workingContext.setPendingTask("CONVERSATION_LOOP");
+        setConversationWaitingVisual(false);
         workingContext.recordAction(
                 "conversation_loop",
                 "runtime_armed_current_chat");
@@ -3182,6 +3192,7 @@ final class NativeGeminiLiveClient {
         }
 
         workingContext.setPendingTask("CONVERSATION_LOOP");
+        setConversationWaitingVisual(false);
         return conversationLoopStatusJson()
                 .put("success", true)
                 .put("taskState", "IN_PROGRESS")
@@ -3208,6 +3219,7 @@ final class NativeGeminiLiveClient {
                     "對話租約已停止或到期。");
         }
 
+        setConversationWaitingVisual(true);
         armConversationLoopWaitAsync();
         return conversationLoopStatusJson()
                 .put("success", true)
@@ -3221,6 +3233,7 @@ final class NativeGeminiLiveClient {
             throws Exception {
         boolean wasActive = conversationLoopRecipe.isActive();
         conversationLoopRecipe.stop("MODEL_OR_USER_STOP");
+        setConversationWaitingVisual(false);
         workingContext.setPendingTask("");
         return conversationLoopStatusJson()
                 .put("success", true)
@@ -3316,8 +3329,13 @@ final class NativeGeminiLiveClient {
                         continue;
                     }
 
+                    setConversationWaitingVisual(false);
                     dispatchConversationLoopWakeWhenAgentAvailable();
                     return;
+                }
+
+                if (!conversationLoopRecipe.isActive()) {
+                    setConversationWaitingVisual(false);
                 }
             }
         }, "crew-conversation-loop-wait").start();
@@ -3421,6 +3439,7 @@ final class NativeGeminiLiveClient {
             String fingerprint =
                     conversationLoopRecipe.baselineFingerprint();
             if (conversationLoopRecipe.rearmWait(fingerprint)) {
+                setConversationWaitingVisual(true);
                 reportStage("對話模式：喚醒失敗，已重新等待");
                 armConversationLoopWaitAsync();
             }
@@ -5183,6 +5202,7 @@ final class NativeGeminiLiveClient {
         if (loopSend) {
             if (!reply.optBoolean("success", false)) {
                 conversationLoopRecipe.stop("SEND_FAILED");
+                setConversationWaitingVisual(false);
                 workingContext.setPendingTask("");
                 reply.put("conversationLoop", "STOPPED")
                         .put("instruction",
@@ -5204,6 +5224,7 @@ final class NativeGeminiLiveClient {
                     conversationLoopRecipe.markSent(baseline);
             if (keepWaiting) {
                 workingContext.setPendingTask("CONVERSATION_LOOP_WAIT");
+                setConversationWaitingVisual(true);
                 reply.put("taskState", "WAITING_BACKGROUND")
                         .put("conversationLoop", "WAITING_FOR_MESSAGE")
                         .put("loopStatus", conversationLoopStatusJson())
@@ -5211,6 +5232,7 @@ final class NativeGeminiLiveClient {
                                 "訊息已送出。Runtime 已接手等待下一個聊天室 Accessibility 事件；不要輪詢、不要再次 send_text，直到 Runtime 喚醒。");
                 armConversationLoopWaitAsync();
             } else {
+                setConversationWaitingVisual(false);
                 workingContext.setPendingTask("");
                 reply.put("conversationLoop", "STOPPED")
                         .put("loopStatus", conversationLoopStatusJson())
