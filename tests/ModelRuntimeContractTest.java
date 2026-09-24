@@ -14,6 +14,7 @@ public final class ModelRuntimeContractTest {
         delegatedChatNamesRequiredTool();
         verifiedSendCanWaitForRuntime();
         blockedLoopToolContinuesGoal();
+        explicitContinueGoalWinsOverWait();
         System.out.println(
                 "ModelRuntimeContractTest passed " + checks + " checks");
     }
@@ -96,6 +97,16 @@ public final class ModelRuntimeContractTest {
                 "SEND_TEXT_OR_CONTINUE_CONVERSATION_LOOP",
                 "WAIT",
                 "CONVERSATION_LOOP_TOOL_BLOCKED",
+                "OBSERVE");
+        expect(ModelRuntimeContract.NEXT_CONTINUE, g.next);
+    }
+
+    private static void explicitContinueGoalWinsOverWait() {
+        ModelRuntimeContract.Goal g = ModelRuntimeContract.deriveGoal(
+                "IN_PROGRESS",
+                "CONTINUE_GOAL",
+                "WAIT",
+                "ASYNC_UI_PENDING",
                 "OBSERVE");
         expect(ModelRuntimeContract.NEXT_CONTINUE, g.next);
     }
