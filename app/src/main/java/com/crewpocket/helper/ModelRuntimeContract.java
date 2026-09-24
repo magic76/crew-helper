@@ -84,6 +84,9 @@ final class ModelRuntimeContract {
         if ("CONTINUE_GOAL".equals(requirement)) {
             return new Goal(GOAL_IN_PROGRESS, NEXT_CONTINUE, "");
         }
+        if ("TRY_ALTERNATIVE".equals(requirement)) {
+            return new Goal(GOAL_IN_PROGRESS, NEXT_TRY_ALTERNATIVE, "");
+        }
         if ("COMMIT_SEARCH".equals(requirement)) {
             return new Goal(
                     GOAL_IN_PROGRESS,
