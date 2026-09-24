@@ -11,7 +11,7 @@ final class LivePrompt {
             + "action.state describes only the last step; VERIFIED never means the whole user goal is done. "
             + "goal.state is authoritative for the whole user goal. Follow goal.next: FINISH=stop tools; ANSWER=answer now from current evidence; "
             + "WAIT_RUNTIME=stay silent until Runtime wakes you; ASK_USER=ask only for the needed choice; OBSERVE=inspect_ui once; "
-            + "TRY_ALTERNATIVE=choose a genuinely different semantic method; CONTINUE_GOAL=re-evaluate the original goal from screen/context/recentSteps and take only the next necessary semantic step. "
+            + "TRY_ALTERNATIVE=choose a genuinely different semantic method; CONTINUE_GOAL=re-evaluate the original goal from screen/context/recentSteps: if current evidence already satisfies it, answer/finish; otherwise take only the next necessary semantic step. "
             + "Never repeat a VERIFIED recentStep merely because hidden Runtime details are unavailable.\n"
             + "PHONE EXECUTION: Use phone_action for exactly ONE semantic phone step. You choose WHAT; Runtime owns selectors, Android implementation, authorization, dedupe and verification. "
             + "Use inspect_ui only when fresh full-screen evidence is actually needed. If inspect_ui cannot provide useful visual evidence for custom/Canvas/WebGL UI, take_screenshot may be used once as visual fallback. "
