@@ -29,6 +29,7 @@ final class ReflectionLessonStore {
     static final String STATE_CANDIDATE = "CANDIDATE";
     static final String STATE_VERIFIED = "VERIFIED";
     static final String STATE_SUSPECT = "SUSPECT";
+    static final String STATE_STALE = "STALE";
 
     private final Context context;
     private final SharedPreferences prefs;
@@ -130,7 +131,8 @@ final class ReflectionLessonStore {
                                  ReflectionRuleEvidence.Candidate candidate,
                                  String lesson,
                                  double confidence) throws Exception {
-        JSONObject existing = find(items, pkg, candidate.ruleKey);
+        JSONObject existing = findCurrent(
+                items, pkg, candidate.ruleKey);
         long now = System.currentTimeMillis();
 
         if (existing == null) {
@@ -139,6 +141,8 @@ final class ReflectionLessonStore {
                     .put("package", pkg)
                     .put("app", appLabel)
                     .put("ruleKey", candidate.ruleKey)
+                    .put("policyRevision",
+                            ExperiencePolicyEpoch.CURRENT_REVISION)
                     .put("kind", candidate.kind)
                     .put("scope", candidate.scope)
                     .put("condition", candidate.condition)
@@ -398,6 +402,10 @@ final class ReflectionLessonStore {
             }
             if (STATE_VERIFIED.equals(state)) {
                 out.append("\nPromoted to App Playbook");
+            } else if (STATE_STALE.equals(state)) {
+                out.append("\nOutdated after Runtime policy revision ")
+                        .append(ExperiencePolicyEpoch.CURRENT_REVISION)
+                        .append("; retained for history and excluded from confirmation/promotion.");
             } else if (STATE_CANDIDATE.equals(state)) {
                 int remaining = Math.max(0,
                         ReflectionLearningPolicy.CONFIRMATIONS_TO_VERIFY - confirmations);
@@ -414,13 +422,14 @@ final class ReflectionLessonStore {
         try {
             JSONArray source = new JSONArray(prefs.getString(KEY_ITEMS, "[]"));
             JSONArray kept = new JSONArray();
-            boolean pruned = false;
+            boolean changed = false;
+            long now = System.currentTimeMillis();
             for (int i = 0; i < source.length(); i++) {
                 JSONObject item = source.optJSONObject(i);
                 if (item == null) continue;
                 String condition = collapse(item.optString("condition", ""));
                 if (ReflectionRuleEvidence.isRuntimeInternalFailure(condition)) {
-                    pruned = true;
+                    changed = true;
                     String pkg = cleanPackage(item.optString("package", ""));
                     String playbookRuleId = item.optString("playbookRuleId", "");
                     if (!pkg.isEmpty() && !playbookRuleId.isEmpty()) {
@@ -428,9 +437,26 @@ final class ReflectionLessonStore {
                     }
                     continue;
                 }
+
+                int revision = item.optInt("policyRevision", 0);
+                if (ExperiencePolicyEpoch.shouldStale(revision)
+                        && !STATE_STALE.equals(
+                                item.optString("state", STATE_CANDIDATE))) {
+                    String pkg = cleanPackage(item.optString("package", ""));
+                    String playbookRuleId = item.optString("playbookRuleId", "");
+                    if (!pkg.isEmpty() && !playbookRuleId.isEmpty()) {
+                        playbookStore.delete(pkg, playbookRuleId);
+                    }
+                    item.put("state", STATE_STALE)
+                            .put("staleAt", now)
+                            .put("staleReason",
+                                    ExperiencePolicyEpoch.STALE_REASON);
+                    item.remove("playbookRuleId");
+                    changed = true;
+                }
                 kept.put(item);
             }
-            if (pruned) save(kept);
+            if (changed) save(kept);
             return kept;
         } catch (Exception ignored) {
             return new JSONArray();
@@ -442,11 +468,20 @@ final class ReflectionLessonStore {
         prefs.edit().putString(KEY_ITEMS, items.toString()).apply();
     }
 
-    private static JSONObject find(JSONArray items, String pkg, String ruleKey) {
+    private static JSONObject findCurrent(
+            JSONArray items,
+            String pkg,
+            String ruleKey) {
         if (items == null || ruleKey == null || ruleKey.isEmpty()) return null;
         for (int i = items.length() - 1; i >= 0; i--) {
             JSONObject item = items.optJSONObject(i);
-            if (item == null) continue;
+            if (item == null
+                    || !ExperiencePolicyEpoch.isCurrent(
+                            item.optInt("policyRevision", 0))
+                    || STATE_STALE.equals(
+                            item.optString("state", STATE_CANDIDATE))) {
+                continue;
+            }
             if (pkg.equals(item.optString("package", ""))
                     && ruleKey.equals(item.optString("ruleKey", ""))) {
                 return item;
