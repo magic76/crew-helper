@@ -30,11 +30,21 @@ final class ModelRuntimeContract {
         final String state;
         final String next;
         final String requiredTool;
+        final String requiredAction;
 
         Goal(String state, String next, String requiredTool) {
+            this(state, next, requiredTool, "");
+        }
+
+        Goal(
+                String state,
+                String next,
+                String requiredTool,
+                String requiredAction) {
             this.state = safeToken(state, GOAL_IN_PROGRESS);
             this.next = safeToken(next, NEXT_CONTINUE);
             this.requiredTool = safeTool(requiredTool);
+            this.requiredAction = safeAction(requiredAction);
         }
     }
 
@@ -73,6 +83,13 @@ final class ModelRuntimeContract {
 
         if ("CONTINUE_GOAL".equals(requirement)) {
             return new Goal(GOAL_IN_PROGRESS, NEXT_CONTINUE, "");
+        }
+        if ("COMMIT_SEARCH".equals(requirement)) {
+            return new Goal(
+                    GOAL_IN_PROGRESS,
+                    NEXT_CONTINUE,
+                    "phone_action",
+                    "COMMIT_SEARCH");
         }
         if (requirement.contains("INSPECT_UI")) {
             return new Goal(GOAL_IN_PROGRESS, NEXT_OBSERVE, "inspect_ui");
@@ -175,5 +192,10 @@ final class ModelRuntimeContract {
     private static String safeTool(String value) {
         String out = value == null ? "" : value.trim();
         return out.matches("[a-z0-9_]{1,64}") ? out : "";
+    }
+
+    private static String safeAction(String value) {
+        String out = upper(value);
+        return out.matches("[A-Z0-9_]{1,64}") ? out : "";
     }
 }
