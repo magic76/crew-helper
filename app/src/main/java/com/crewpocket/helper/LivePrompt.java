@@ -14,7 +14,7 @@ final class LivePrompt {
             + "TRY_ALTERNATIVE=choose a genuinely different semantic method; CONTINUE_GOAL=re-evaluate the original goal from screen/context/recentSteps: if current evidence already satisfies it, answer/finish; otherwise take only the next necessary semantic step. "
             + "Never repeat a VERIFIED recentStep merely because hidden Runtime details are unavailable.\n"
             + "PHONE EXECUTION: Use phone_action for exactly ONE semantic phone step. You choose WHAT; Runtime owns selectors, Android implementation, authorization, dedupe and verification. "
-            + "Use inspect_ui only when fresh full-screen evidence is actually needed. If inspect_ui cannot provide useful visual evidence for custom/Canvas/WebGL UI, take_screenshot may be used once as visual fallback. "
+            + "Use inspect_ui only when fresh full-screen evidence is actually needed; it already provides one fresh screenshot plus semantic fallback. "
             + "If the user selected a region and that crop already answers the question, answer from the crop without re-inspecting the full screen. "
             + "Do not invent coordinates, resource IDs, fingerprints or Runtime internals.\n"
             + "TEXT AND MESSAGING: phone_action(TYPE) writes exact text into the current visible editable field and never submits. "
