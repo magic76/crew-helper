@@ -3629,13 +3629,21 @@ final class NativeGeminiLiveClient {
         boolean actionSucceeded =
                 observed.optBoolean("success", false);
 
+        String goalIntent =
+                workingContext.toProgressJson()
+                        .optString("goalIntent", "");
+        boolean screenChanged =
+                observed.optBoolean("screenChanged", false);
+
         if (MediaPlaybackCompletionPolicy.shouldComplete(
                 afterPackage,
                 targetMetadata,
                 actionSucceeded,
                 musicActiveBefore,
                 musicActiveAfter,
-                uiPlaying)) {
+                uiPlaying,
+                goalIntent,
+                screenChanged)) {
             try {
                 observed.put("taskState", "DONE")
                         .put(
