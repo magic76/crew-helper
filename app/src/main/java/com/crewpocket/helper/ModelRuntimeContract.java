@@ -71,6 +71,9 @@ final class ModelRuntimeContract {
             return new Goal(GOAL_BLOCKED, NEXT_STOP, "");
         }
 
+        if ("CONTINUE_GOAL".equals(requirement)) {
+            return new Goal(GOAL_IN_PROGRESS, NEXT_CONTINUE, "");
+        }
         if (requirement.contains("INSPECT_UI")) {
             return new Goal(GOAL_IN_PROGRESS, NEXT_OBSERVE, "inspect_ui");
         }
