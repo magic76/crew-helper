@@ -74,6 +74,11 @@ final class ModelToolResponseAdapter {
             if (action.length() > 0) out.put("action", action);
 
             JSONObject goalJson = goal(goal);
+            String goalIntent = progressContext == null
+                    ? "" : progressContext.optString("goalIntent", "").trim();
+            if (goalIntent.matches("[A-Z0-9:_-]{1,64}")) {
+                goalJson.put("intent", goalIntent);
+            }
             if (goalJson.length() > 0) out.put("goal", goalJson);
 
             String message = message(toolName, source, status);
