@@ -699,7 +699,13 @@ final class NativeGeminiLiveClient {
 
     /** Cancels queued work and disconnects the currently blocking local bridge request. */
     boolean cancelAgentTask(String reason) {
-        AgentTaskRecord task = agentTaskCoordinator.cancelActive(reason);
+        return cancelAgentTask(reason, "");
+    }
+
+    private boolean cancelAgentTask(String reason, String category) {
+        AgentTaskRecord task = category == null || category.trim().isEmpty()
+                ? agentTaskCoordinator.cancelActive(reason)
+                : agentTaskCoordinator.cancelActive(reason, category);
         if (task == null) return false;
 
         toolCallDispatcher.clearPending();
@@ -720,10 +726,35 @@ final class NativeGeminiLiveClient {
         return true;
     }
 
-    private void supersedeActiveAgentTaskForNewUserInstruction() {
-        if (hasActiveAgentTask()) {
-            cancelAgentTask("新使用者指令取代舊任務");
+    private void supersedeActiveAgentTaskForNewUserInstruction(
+            String previousUserTurn,
+            String newUserTurn) {
+        AgentTaskRecord active = agentTaskCoordinator.activeRunning();
+        if (active == null) return;
+
+        UserRetryAfterUnconfirmedOutcomePolicy.Decision retry =
+                UserRetryAfterUnconfirmedOutcomePolicy.evaluate(
+                        previousUserTurn,
+                        newUserTurn,
+                        System.currentTimeMillis(),
+                        active.lastSuccessfulMutationAtMs,
+                        active.mutationActions,
+                        active.lastTaskState);
+        if (retry.retry) {
+            synchronized (agentTaskCoordinator.monitor()) {
+                if (agentTaskCoordinator.isActive(active)
+                        && !active.finished
+                        && !active.cancelled) {
+                    active.retryIntentFamily = retry.intentFamily;
+                }
+            }
+            cancelAgentTask(
+                    "使用者重試尚未確認完成的操作",
+                    UserRetryAfterUnconfirmedOutcomePolicy.CATEGORY);
+            return;
         }
+
+        cancelAgentTask("新使用者指令取代舊任務");
     }
 
     /**
@@ -742,6 +773,9 @@ final class NativeGeminiLiveClient {
     private void beginUserIntent(
             String userText,
             boolean supersedeActiveTask) {
+        String previousUserTurn =
+                workingContext.toJson().optString("latestUserTurn", "");
+
         liveTurnCoordinator.closeOperationalGeneration(
                 userIntentGeneration);
         clearPendingInternalDirectiveTurn();
@@ -817,7 +851,9 @@ final class NativeGeminiLiveClient {
                 userIntentGeneration, conversationGoalId, shadowTaskId, startNewCapsule);
 
         if (supersedeActiveTask) {
-            supersedeActiveAgentTaskForNewUserInstruction();
+            supersedeActiveAgentTaskForNewUserInstruction(
+                    previousUserTurn,
+                    userText);
         }
         Log.d(TAG, "新的使用者意圖：generation=" + userIntentGeneration
                 + " capsule=" + (startNewCapsule ? "NEW" : "CONTINUE")
@@ -2352,12 +2388,20 @@ final class NativeGeminiLiveClient {
         if (conversationLoopRecipe.isActive()
                 && !conversationLoopRecipe.allowsTool(name)) {
             try {
-                sendToolResponse(
-                        id,
-                        requestedName,
-                        runtimeBlocked(
-                                "CONVERSATION_LOOP_TOOL_BLOCKED",
-                                "持續對話租約進行中。Runtime 已縮小可用操作範圍；不要離開指定聊天室或做無關 mutation。若使用者要做其他任務，先停止 conversation loop。"));
+                JSONObject blocked = runtimeBlocked(
+                        "CONVERSATION_LOOP_TOOL_BLOCKED",
+                        "持續對話租約仍有效，但這個工具不屬於目前聊天室的允許操作。"
+                                + "工具沒有執行。不要把 guard/error code 告訴使用者；"
+                                + "若確實有新訊息，只用 send_text 並直接帶回覆文字，"
+                                + "不要先 TYPE、不要另外點送出；若只是 UI noise，"
+                                + "用 continue_conversation_loop；需要畫面資訊時只用 inspect_ui。");
+                if (conversationLoopRecipe.canSend()) {
+                    blocked.put("taskState", "IN_PROGRESS")
+                            .put("recoverable", true)
+                            .put("nextRequirement",
+                                    "SEND_TEXT_OR_CONTINUE_CONVERSATION_LOOP");
+                }
+                sendToolResponse(id, requestedName, blocked);
             } catch (Exception ignored) {}
             return;
         }
@@ -2444,7 +2488,7 @@ final class NativeGeminiLiveClient {
                             "上一個相同操作仍待驗證或剛失敗。先 inspect_ui 一次；不要原樣重做 mutation。");
                     try {
                         blocked.put("taskState", "IN_PROGRESS");
-                        blocked.put("nextRequirement", "inspect_ui once");
+                        blocked.put("nextRequirement", "INSPECT_UI");
                         sendToolResponse(id, requestedName, blocked);
                     } catch (Exception ignored) {}
                     return;
@@ -2499,6 +2543,37 @@ final class NativeGeminiLiveClient {
                     agentResponseCoordinator.scheduleWatchdog(stabilityTask);
                     reportStage("Runtime 要求先重新觀察畫面，再改用不同方法");
                 }
+            } catch (Exception ignored) {}
+            return;
+        }
+
+        final AgentTaskRecord visualTask =
+                agentTaskCoordinator.activeRunning();
+        if (visualTask != null
+                && AgentTaskLifecyclePolicy
+                        .shouldSuppressRepeatedVisualObservation(
+                                name,
+                                visualTask.consecutiveVisualObservations)) {
+            try {
+                JSONObject blocked = runtimeBlocked(
+                        "REPEATED_VISUAL_OBSERVATION",
+                        "目前 goal 已連續取得兩次 visual observation，Runtime 不再重複截同一階段的畫面。"
+                                + "請使用現有 screen/context/recentSteps 選下一個不同語意動作；"
+                                + "若目前證據確實無法完成 goal，簡短回報缺少的控制，不要再 inspect。");
+                blocked.put("taskState", "IN_PROGRESS")
+                        .put("recoverable", true)
+                        .put("nextRequirement", "TRY_ALTERNATIVE");
+                sendToolResponse(id, requestedName, blocked);
+                synchronized (agentTaskCoordinator.monitor()) {
+                    if (agentTaskCoordinator.isActive(visualTask)
+                            && !visualTask.finished
+                            && !visualTask.cancelled) {
+                        visualTask.awaitingModel = true;
+                        visualTask.watchdogPrompted = false;
+                    }
+                }
+                agentResponseCoordinator.scheduleWatchdog(visualTask);
+                reportStage("Runtime 已阻止重複看同一階段畫面，改用目前證據繼續");
             } catch (Exception ignored) {}
             return;
         }
@@ -2600,6 +2675,14 @@ final class NativeGeminiLiveClient {
                 if (!semanticTarget.isEmpty()) {
                     result.put("semanticTarget", semanticTarget);
                 }
+                String modelTarget =
+                        modelTargetForSemanticStep(
+                                semantic.semanticAction,
+                                name,
+                                semantic.runtimeArgs);
+                if (!modelTarget.isEmpty()) {
+                    result.put("modelTarget", modelTarget);
+                }
             }
             if (runtimeV2Enforced) {
                 ExecutionEvidence evidence = executionEvidenceFromResult(name, result);
@@ -2619,6 +2702,11 @@ final class NativeGeminiLiveClient {
             task.lastTaskState = result.optString("taskState", "").trim();
             task.lastCompletionEvidence =
                     result.optString("completionEvidence", "").trim();
+            if (isMutationTool(name)
+                    && (result.optBoolean("success", false)
+                        || "STEP_OK".equals(result.optString("stepResult", "")))) {
+                task.lastSuccessfulMutationAtMs = System.currentTimeMillis();
+            }
             task.prematureModelReplies = 0;
             task.captureRecipeStep(name, args, result, recipeBeforeContext);
             task.addStep(name, result);
@@ -2870,8 +2958,15 @@ final class NativeGeminiLiveClient {
 
             if (task.blockedReason == null) {
                 boolean observation = isObservationTool(name);
+                boolean visualObservation =
+                        AgentTaskLifecyclePolicy.isVisualObservationTool(name);
                 if (observation) task.observationActions++;
                 else task.steps++;
+                if (visualObservation) {
+                    task.consecutiveVisualObservations++;
+                } else {
+                    task.consecutiveVisualObservations = 0;
+                }
                 task.lastSignature = signature;
                 task.incrementTool(name);
                 if (isMutationTool(name)) task.mutationActions++;
@@ -2984,10 +3079,10 @@ final class NativeGeminiLiveClient {
                             result.put(
                                     "nextRequirement",
                                     runtimeV2Enforced && !v2Pending
-                                            ? "Continue the original goal from this verified result; do not add a redundant inspect step."
+                                            ? "CONTINUE_GOAL"
                                             : (freshAfter
-                                                ? "Use the fresh compact after state to choose the next action; STEP_OK is not whole-task completion."
-                                                : "Call inspect_ui once and use the actual post-action screen before concluding."));
+                                                ? "CONTINUE_GOAL"
+                                                : "INSPECT_UI"));
                         }
                     }
                 }
@@ -3163,6 +3258,43 @@ final class NativeGeminiLiveClient {
         }
     }
 
+    private String modelTargetForSemanticStep(
+            String semanticAction,
+            String runtimeName,
+            JSONObject args) {
+        String action = semanticAction == null
+                ? "" : semanticAction.trim().toUpperCase();
+        JSONObject safe = args == null ? new JSONObject() : args;
+
+        String semanticTarget =
+                safe.optString("semantic_target", "").trim();
+        if (!semanticTarget.isEmpty()) return semanticTarget;
+
+        if ("SEARCH".equals(action)) return "QUERY";
+        if ("TYPE".equals(action)) return "EDITABLE_FIELD";
+        if ("SCROLL".equals(action)) {
+            String direction = safe.optString("direction", "").trim();
+            return direction.isEmpty() ? "SCREEN" : "SCROLL:" + direction;
+        }
+        if ("BACK".equals(action) || "HOME".equals(action)) {
+            return action;
+        }
+        if ("OPEN_APP".equals(action)
+                || "launch_app".equals(runtimeName)) {
+            return AgentTapDiagnostic.sanitizeTarget(
+                    safe.optString("app", safe.optString("target", "")));
+        }
+        if ("TAP".equals(action)
+                || "tap_screen".equals(runtimeName)
+                || "tap_element".equals(runtimeName)) {
+            return AgentTapDiagnostic.sanitizeTarget(
+                    safe.optString(
+                            "label",
+                            safe.optString("target", "")));
+        }
+        return "";
+    }
+
     private String buildAgentSignature(String name, JSONObject args) {
         // Each advance has a different logical position, so it is not a model loop.
         if ("advance_deck".equals(name)) {
@@ -3230,7 +3362,7 @@ final class NativeGeminiLiveClient {
                 result.put("success", true).put("stepResult", "STEP_PENDING")
                         .put("taskState", "IN_PROGRESS")
                         .put("verification", "PENDING")
-                        .put("nextRequirement", "Call inspect_ui once before another mutation.");
+                        .put("nextRequirement", "INSPECT_UI");
             } else {
                 result.put("success", false).put("stepResult", "STEP_FAILED");
             }
@@ -3675,6 +3807,7 @@ final class NativeGeminiLiveClient {
         return conversationLoopStatusJson()
                 .put("success", true)
                 .put("taskState", "IN_PROGRESS")
+                .put("nextRequirement", "CONTINUE_GOAL")
                 .put("conversationLoop", "READY_TO_SEND")
                 .put("instruction",
                         "持續對話已綁定目前聊天視窗。不要搜尋聯絡人或切換聊天室；ACTIVE lease 已授權在目前聊天室後續回覆。");
@@ -3931,9 +4064,11 @@ final class NativeGeminiLiveClient {
             boolean sent = sendConversationWakeDirective(
                     "【CONVERSATION LOOP WAKE】Runtime 偵測到目前聊天視窗有新的 Accessibility 變化。"
                             + "ACTIVE Conversation Loop lease 已授權在目前聊天室持續回覆；不要說無法發送，不要要求新的 user turn，也不要逐則詢問確認。"
-                            + "現在只呼叫一次 inspect_ui 看 fresh screenshot。"
-                            + "若確實有新的對方訊息，自行理解上下文、自然組一則簡短回覆並用 send_text 送出；"
+                            + "現在只呼叫一次 inspect_ui；它已同時提供 fresh screenshot 與 semantic fallback。"
+                            + "若確實有新的對方訊息，自行理解上下文、自然組一則簡短回覆並直接用 send_text 送出；"
+                            + "send_text 會完成輸入與送出，不要先 TYPE、不要另外點送出按鈕。"
                             + "若只是自己的訊息、typing indicator 或其他 UI noise，呼叫 continue_conversation_loop 重新等待。"
+                            + "若 Runtime 擋下一個工具，依回傳提示改用 send_text 或 continue_conversation_loop，不要把 guard code 告訴使用者。"
                             + "不要搜尋聯絡人、不要切換聊天室、不要輪詢。");
             if (sent) {
                 agentResponseCoordinator.scheduleWatchdog(task);
@@ -4252,8 +4387,7 @@ final class NativeGeminiLiveClient {
                     .put("searchSelection", "WAITING_RESULTS")
                     .put("taskState", "IN_PROGRESS")
                     .put("completionEvidence", "SEARCH_COMMITTED_RESULTS_NOT_READY")
-                    .put("nextRequirement",
-                            "等待實際搜尋結果出現；不要把 autocomplete suggestion 當結果，也不要因 TAP 失敗顯示選擇卡。")
+                    .put("nextRequirement", "INSPECT_UI")
                     .put("instruction",
                             "Runtime 尚未看到可信的 Maps 結果列。可以等待畫面更新；不要重複搜尋或盲點座標。");
         }
@@ -5382,8 +5516,7 @@ final class NativeGeminiLiveClient {
                             commit.optString("error", "SEARCH_COMMIT_FAILED"))
                     .put("taskState", "IN_PROGRESS")
                     .put("completionEvidence", "SEARCH_QUERY_TYPED_NOT_COMMITTED")
-                    .put("nextRequirement",
-                            "搜尋文字已輸入但尚未提交；只可使用明確 Search/Go/Enter 提交控制，或回報 Runtime 無法提交。")
+                    .put("nextRequirement", "COMMIT_SEARCH")
                     .put("instruction",
                             "不要把 autocomplete suggestion 當成已完成搜尋，也不要因為搜尋而進聊天室或傳訊息。");
             return observed;
@@ -5567,8 +5700,7 @@ final class NativeGeminiLiveClient {
                     .put("taskState", "IN_PROGRESS")
                     .put("completionEvidence",
                             "SEARCH_COMMIT_DISPATCHED_RESULTS_NOT_CONFIRMED")
-                    .put("nextRequirement",
-                            "等待搜尋結果畫面變化；不要再次送出 Search/Enter。")
+                    .put("nextRequirement", "INSPECT_UI")
                     .put("instruction",
                             "Runtime 已送出搜尋提交，但尚未觀察到結果內容。請先 wait(screen_change) 或依 fresh after 觀察；不要重複 SEARCH/COMMIT_SEARCH，也不要盲點結果。");
         }
@@ -5953,6 +6085,13 @@ final class NativeGeminiLiveClient {
         final JSONObject modelResult =
                 ModelToolResponseAdapter.forModel(
                         name, result, progressContext);
+        JSONObject modelAction = modelResult.optJSONObject("action");
+        if (modelAction != null) {
+            workingContext.recordModelStep(
+                    modelAction.optString("type", ""),
+                    modelAction.optString("target", ""),
+                    modelAction.optString("effect", ""));
+        }
         int coreModelBytes =
                 ContextPayloadBudget.utf8Bytes(modelResult.toString());
 

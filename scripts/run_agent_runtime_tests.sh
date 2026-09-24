@@ -50,6 +50,8 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/ElementReferenceChoice.java" \
   "$SRC/ElementReferenceLayout.java" \
   "$SRC/GoalTaskContinuityPolicy.java" \
+  "$SRC/GoalIntentKey.java" \
+  "$SRC/UserRetryAfterUnconfirmedOutcomePolicy.java" \
   "$SRC/InspectorTaskState.java" \
   "$SRC/InspectorTraceScope.java" \
   "$SRC/ReflectionLearningPolicy.java" \
@@ -61,6 +63,8 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/GoogleMapsSemanticContract.java" \
   "$SRC/AgentTapDiagnostic.java" \
   "$SRC/ModelStepGuidance.java" \
+  "$SRC/ModelRuntimeContract.java" \
+  "$SRC/LivePrompt.java" \
   "$SRC/ModelScreenPriorityPolicy.java" \
   "$SRC/InformationAnswerFastPathPolicy.java" \
   "$SRC/AppPlaybookRelevance.java" \
@@ -110,6 +114,8 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/ElementReferenceChoiceTest.java" \
   "$ROOT/tests/ElementReferenceLayoutTest.java" \
   "$ROOT/tests/GoalTaskContinuityPolicyTest.java" \
+  "$ROOT/tests/GoalIntentKeyTest.java" \
+  "$ROOT/tests/UserRetryAfterUnconfirmedOutcomePolicyTest.java" \
   "$ROOT/tests/InspectorTaskStateTest.java" \
   "$ROOT/tests/InspectorTraceScopeTest.java" \
   "$ROOT/tests/ReflectionLearningPolicyTest.java" \
@@ -121,6 +127,8 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/GoogleMapsSemanticContractTest.java" \
   "$ROOT/tests/AgentTapDiagnosticTest.java" \
   "$ROOT/tests/ModelStepGuidanceTest.java" \
+  "$ROOT/tests/ModelRuntimeContractTest.java" \
+  "$ROOT/tests/LivePromptTest.java" \
   "$ROOT/tests/ModelScreenPriorityPolicyTest.java" \
   "$ROOT/tests/InformationAnswerFastPathPolicyTest.java" \
   "$ROOT/tests/AppPlaybookRelevanceTest.java" \
@@ -170,6 +178,8 @@ java -cp "$OUT" com.crewpocket.helper.ElementReferenceCommandTest
 java -cp "$OUT" com.crewpocket.helper.ElementReferenceChoiceTest
 java -cp "$OUT" com.crewpocket.helper.ElementReferenceLayoutTest
 java -cp "$OUT" com.crewpocket.helper.GoalTaskContinuityPolicyTest
+java -cp "$OUT" com.crewpocket.helper.GoalIntentKeyTest
+java -cp "$OUT" com.crewpocket.helper.UserRetryAfterUnconfirmedOutcomePolicyTest
 java -cp "$OUT" com.crewpocket.helper.InspectorTaskStateTest
 java -cp "$OUT" com.crewpocket.helper.InspectorTraceScopeTest
 java -cp "$OUT" com.crewpocket.helper.ReflectionLearningPolicyTest
@@ -181,6 +191,8 @@ java -cp "$OUT" com.crewpocket.helper.TextEntryGoalGuardTest
 java -cp "$OUT" com.crewpocket.helper.GoogleMapsSemanticContractTest
 java -cp "$OUT" com.crewpocket.helper.AgentTapDiagnosticTest
 java -cp "$OUT" com.crewpocket.helper.ModelStepGuidanceTest
+java -cp "$OUT" com.crewpocket.helper.ModelRuntimeContractTest
+java -cp "$OUT" com.crewpocket.helper.LivePromptTest
 java -cp "$OUT" com.crewpocket.helper.ModelScreenPriorityPolicyTest
 java -cp "$OUT" com.crewpocket.helper.InformationAnswerFastPathPolicyTest
 java -cp "$OUT" com.crewpocket.helper.AppPlaybookRelevanceTest

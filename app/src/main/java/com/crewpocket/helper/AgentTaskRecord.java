@@ -24,6 +24,7 @@ final class AgentTaskRecord {
     int steps;
     int mutationActions;
     int observationActions;
+    int consecutiveVisualObservations;
     int consecutiveMutationFailures;
     int stabilityBlocks;
     boolean requireObservationAfterFailure;
@@ -41,6 +42,8 @@ final class AgentTaskRecord {
     String lastToolName = "";
     String lastTaskState = "";
     String lastCompletionEvidence = "";
+    long lastSuccessfulMutationAtMs;
+    String retryIntentFamily = "";
     int prematureModelReplies;
     boolean requiresPostActionInspection;
     boolean postActionInspectionPrompted;
@@ -300,6 +303,7 @@ final class AgentTaskRecord {
                     .put("stepDiagnostics", new JSONArray(stepDiagnostics))
                     .put("stepCount", steps)
                     .put("mutationActions", mutationActions)
+                    .put("consecutiveVisualObservations", consecutiveVisualObservations)
                     .put("blockedReason", blockedReason == null ? "" : blockedReason)
                     .put("endReason", endReason)
                     .put("finalReply", finalReply)
@@ -311,6 +315,8 @@ final class AgentTaskRecord {
                     .put("lastToolName", lastToolName)
                     .put("lastTaskState", lastTaskState)
                     .put("lastCompletionEvidence", lastCompletionEvidence)
+                    .put("lastSuccessfulMutationAtMs", lastSuccessfulMutationAtMs)
+                    .put("retryIntentFamily", retryIntentFamily)
                     .put("prematureModelReplies", prematureModelReplies)
                     .put("cancelCategory", cancelCategory)
                     .put("suspended", suspended)

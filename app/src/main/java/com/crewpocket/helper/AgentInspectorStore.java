@@ -234,6 +234,11 @@ final class AgentInspectorStore {
             if (!cancelCategory.isEmpty()) {
                 out.append("Cancel category: ").append(cancelCategory).append("\n");
             }
+            String retryIntentFamily = task.optString("retryIntentFamily", "");
+            if (!retryIntentFamily.isEmpty()) {
+                out.append("Retry signal: ").append(retryIntentFamily)
+                        .append(" · previous action had no terminal goal outcome\n");
+            }
             out.append("Visual observations: ")
                     .append(task.optInt("visualObservations", 0)).append("\n");
 
@@ -459,6 +464,10 @@ final class AgentInspectorStore {
             String cancelCategory = raw.optString("cancelCategory", "").trim();
             if (!cancelCategory.isEmpty()) {
                 safe.put("cancelCategory", cancelCategory);
+            }
+            String retryIntentFamily = raw.optString("retryIntentFamily", "").trim();
+            if (SAFE_SEMANTIC_TARGET.matcher(retryIntentFamily).matches()) {
+                safe.put("retryIntentFamily", retryIntentFamily);
             }
 
             String blockCategory = classifyBlock(raw.optString("blockedReason", ""));

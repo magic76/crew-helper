@@ -145,6 +145,30 @@ public final class AgentTaskLifecyclePolicyTest {
         check(!AgentTaskLifecyclePolicy.canFinishAfterModelReply(
                         "DONE", "tap_screen", true, false, 1),
                 "required post-action inspection still blocks completion");
+        check(AgentTaskLifecyclePolicy.isObservationTool("take_screenshot"),
+                "take_screenshot should be observation");
+        check(!AgentTaskLifecyclePolicy.shouldSuppressRepeatedVisualObservation(
+                        "inspect_ui", 1),
+                "second consecutive visual observation remains available");
+        check(AgentTaskLifecyclePolicy.shouldSuppressRepeatedVisualObservation(
+                        "inspect_ui",
+                        AgentTaskLifecyclePolicy.MAX_CONSECUTIVE_VISUAL_OBSERVATIONS),
+                "third consecutive visual observation is suppressed");
+        check(AgentTaskLifecyclePolicy.shouldSuppressRepeatedVisualObservation(
+                        "take_screenshot",
+                        AgentTaskLifecyclePolicy.MAX_CONSECUTIVE_VISUAL_OBSERVATIONS),
+                "screenshot fallback shares the same visual loop budget");
+        check(!AgentTaskLifecyclePolicy.shouldSuppressRepeatedVisualObservation(
+                        "wait",
+                        AgentTaskLifecyclePolicy.MAX_CONSECUTIVE_VISUAL_OBSERVATIONS),
+                "non-visual observation is not suppressed by visual loop budget");
+        check(AgentTaskLifecyclePolicy.canFinishAfterModelReply(
+                        "EVIDENCE_AVAILABLE",
+                        "take_screenshot",
+                        false,
+                        false,
+                        0),
+                "read-only screenshot task may finish from fresh evidence");
 
         System.out.println("PASS AgentTaskLifecyclePolicyTest: " + assertions + " checks");
     }

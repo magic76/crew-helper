@@ -9,12 +9,14 @@ import java.util.Locale;
  * 0079: small model-facing projection of full Runtime tool results.
  *
  * Runtime, logs, verification and task history keep the full internal result.
- * Gemini Live sees only:
- *   status = DONE | WAIT | NEED_USER | FAILED
- *   message = one short instruction/result
+ * Gemini Live sees one canonical contract:
+ *   action = what just happened, whether that action is verified/pending/failed
+ *   goal = whole-user-goal state plus exactly one next directive
  *   screen = small current-screen projection when useful
- *   step = authoritative effect/reason/next hint for this Runtime step
- *   progress = compact goal continuity without debug/authorization state
+ *   context = compact causal continuity (goal + recent semantic steps)
+ *
+ * Internal taskState / verificationStatus / completionEvidence remain Runtime
+ * implementation details and are never exposed as competing state languages.
  *
  * Deck tools are deliberately left untouched because their structured card data
  * is presentation content, not phone-control debug metadata.
@@ -50,14 +52,6 @@ final class ModelToolResponseAdapter {
         JSONObject out = new JSONObject();
         try {
             String status = status(source);
-            out.put("status", status);
-
-            String message = message(toolName, source, status);
-            if (!message.isEmpty()) out.put("message", clip(message, MAX_MESSAGE));
-
-            JSONObject screen = screen(source);
-            if (screen.length() > 0) out.put("screen", screen);
-
             ModelStepGuidance.Guidance guidance = ModelStepGuidance.from(
                     toolName,
                     status,
@@ -67,11 +61,36 @@ final class ModelToolResponseAdapter {
                     source.optString("taskState", ""),
                     source.optString("searchTransaction", ""),
                     isVerifiedSend(source));
-            JSONObject step = step(guidance);
-            if (step.length() > 0) out.put("step", step);
 
-            JSONObject progress = progress(progressContext, status);
-            if (progress.length() > 0) out.put("progress", progress);
+            ModelRuntimeContract.Goal goal =
+                    ModelRuntimeContract.deriveGoal(
+                            source.optString("taskState", ""),
+                            source.optString("nextRequirement", ""),
+                            status,
+                            guidance.reason,
+                            guidance.next);
+
+            JSONObject action = action(source, guidance, status);
+            if (action.length() > 0) out.put("action", action);
+
+            JSONObject goalJson = goal(goal);
+            String goalIntent = progressContext == null
+                    ? "" : progressContext.optString("goalIntent", "").trim();
+            if (goalIntent.matches("[A-Z0-9:_-]{1,64}")) {
+                goalJson.put("intent", goalIntent);
+            }
+            if (goalJson.length() > 0) out.put("goal", goalJson);
+
+            String message = message(toolName, source, status);
+            if (!message.isEmpty()) {
+                out.put("message", clip(message, MAX_MESSAGE));
+            }
+
+            JSONObject screen = screen(source);
+            if (screen.length() > 0) out.put("screen", screen);
+
+            JSONObject context = context(progressContext, action);
+            if (context.length() > 0) out.put("context", context);
         } catch (Exception ignored) {}
         return enforceBudget(toolName, out);
     }
@@ -86,21 +105,21 @@ final class ModelToolResponseAdapter {
         }
 
         JSONObject screen = out.optJSONObject("screen");
-        JSONObject progress = out.optJSONObject("progress");
+        JSONObject context = out.optJSONObject("context");
 
         trimArray(screen, "items", 10);
         trimArray(screen, "choices", 12);
-        trimArray(progress, "recentActions", 2);
+        trimTailArray(context, "recentSteps", 2);
         clipInPlace(out, "message", 170);
-        clipInPlace(progress, "goal", 260);
-        clipInPlace(progress, "rootGoal", 260);
+        clipInPlace(context, "goal", 260);
+        clipInPlace(context, "rootGoal", 260);
 
         if (ContextPayloadBudget.utf8Bytes(out.toString()) <= budget) {
             return out;
         }
 
-        if (progress != null) {
-            trimArray(progress, "recentActions", 1);
+        if (context != null) {
+            trimTailArray(context, "recentSteps", 1);
         }
         trimArray(screen, "items", 8);
         trimArray(screen, "choices", 8);
@@ -114,17 +133,17 @@ final class ModelToolResponseAdapter {
         // of what the user was actually looking at.
         trimArray(screen, "items", 6);
         trimArray(screen, "choices", 4);
-        if (progress != null) {
-            progress.remove("recentActions");
-            String goal = progress.optString("goal", "");
-            String rootGoal = progress.optString("rootGoal", "");
+        if (context != null) {
+            context.remove("recentSteps");
+            String goal = context.optString("goal", "");
+            String rootGoal = context.optString("rootGoal", "");
             if (!goal.isEmpty() && goal.equals(rootGoal)) {
-                progress.remove("rootGoal");
+                context.remove("rootGoal");
             }
-            clipInPlace(progress, "goal", 180);
-            clipInPlace(progress, "rootGoal", 180);
-            clipInPlace(progress, "currentApp", 64);
-            clipInPlace(progress, "pendingTask", 64);
+            clipInPlace(context, "goal", 180);
+            clipInPlace(context, "rootGoal", 180);
+            clipInPlace(context, "currentApp", 64);
+            clipInPlace(context, "pendingTask", 64);
         }
         clipInPlace(out, "message", 120);
         return out;
@@ -144,6 +163,21 @@ final class ModelToolResponseAdapter {
         try { owner.put(key, trimmed); } catch (Exception ignored) {}
     }
 
+    private static void trimTailArray(
+            JSONObject owner,
+            String key,
+            int maxItems) {
+        if (owner == null) return;
+        JSONArray source = owner.optJSONArray(key);
+        if (source == null || source.length() <= maxItems) return;
+        JSONArray trimmed = new JSONArray();
+        int start = Math.max(0, source.length() - maxItems);
+        for (int i = start; i < source.length(); i++) {
+            trimmed.put(source.opt(i));
+        }
+        try { owner.put(key, trimmed); } catch (Exception ignored) {}
+    }
+
     private static void clipInPlace(
             JSONObject owner,
             String key,
@@ -155,42 +189,124 @@ final class ModelToolResponseAdapter {
         catch (Exception ignored) {}
     }
 
-    private static JSONObject step(ModelStepGuidance.Guidance guidance) {
+    private static JSONObject action(
+            JSONObject source,
+            ModelStepGuidance.Guidance guidance,
+            String status) {
         JSONObject out = new JSONObject();
         if (guidance == null) return out;
         try {
-            if (!guidance.action.isEmpty()) out.put("action", guidance.action);
-            out.put("outcome", guidance.effect.isEmpty() ? "UNKNOWN" : guidance.effect);
-            if (!guidance.reason.isEmpty()) out.put("reason", guidance.reason);
-            if (!guidance.next.isEmpty()) out.put("next", guidance.next);
+            if (!guidance.action.isEmpty()) {
+                out.put("type", guidance.action);
+            }
+            boolean pendingVerification =
+                    "PENDING".equals(upper(
+                            source.optString("verificationStatus", "")))
+                    || containsAny(
+                            upper(source.optString("error", "")),
+                            "OBSERVE_REQUIRED",
+                            "PENDING_VERIFICATION");
+            out.put(
+                    "state",
+                    ModelRuntimeContract.actionState(
+                            status,
+                            source.optBoolean("success", false),
+                            isVerifiedSend(source),
+                            pendingVerification,
+                            source.optBoolean("blockedByRuntime", false)));
+            if (!guidance.effect.isEmpty()) {
+                out.put("effect", guidance.effect);
+            }
+            String target = modelTarget(source);
+            if (!target.isEmpty()) out.put("target", target);
+            if (!guidance.reason.isEmpty()) {
+                out.put("reason", guidance.reason);
+            }
         } catch (Exception ignored) {}
         return out;
     }
 
-    private static JSONObject progress(JSONObject source, String status) {
+    private static JSONObject goal(ModelRuntimeContract.Goal goal) {
         JSONObject out = new JSONObject();
+        if (goal == null) return out;
         try {
-            out.put("state", ModelStepGuidance.progressState(status));
-            if (source == null) return out;
-
-            copyClipped(source, out, "goal", MAX_GOAL);
-            copyClipped(source, out, "rootGoal", MAX_GOAL);
-            copyClipped(source, out, "currentApp", MAX_LABEL);
-            copyClipped(source, out, "pendingTask", MAX_LABEL);
-
-            JSONArray sourceActions = source.optJSONArray("recentActions");
-            if (sourceActions == null) sourceActions = source.optJSONArray("lastActions");
-            if (sourceActions != null && sourceActions.length() > 0) {
-                JSONArray actions = new JSONArray();
-                int start = Math.max(0, sourceActions.length() - MAX_PROGRESS_ACTIONS);
-                for (int i = start; i < sourceActions.length(); i++) {
-                    String value = clip(sourceActions.optString(i, ""), MAX_LABEL);
-                    if (!value.isEmpty()) actions.put(value);
-                }
-                if (actions.length() > 0) out.put("recentActions", actions);
+            out.put("state", goal.state);
+            out.put("next", goal.next);
+            if (!goal.requiredTool.isEmpty()) {
+                out.put("requiredTool", goal.requiredTool);
+            }
+            if (!goal.requiredAction.isEmpty()) {
+                out.put("requiredAction", goal.requiredAction);
             }
         } catch (Exception ignored) {}
         return out;
+    }
+
+    private static JSONObject context(
+            JSONObject source,
+            JSONObject currentAction) {
+        JSONObject out = new JSONObject();
+        try {
+            if (source != null) {
+                copyClipped(source, out, "goal", MAX_GOAL);
+                copyClipped(source, out, "rootGoal", MAX_GOAL);
+                copyClipped(source, out, "currentApp", MAX_LABEL);
+                copyClipped(source, out, "pendingTask", MAX_LABEL);
+            }
+
+            JSONArray steps = new JSONArray();
+            JSONArray previous =
+                    source == null ? null : source.optJSONArray("recentSteps");
+            if (previous != null) {
+                int start = Math.max(
+                        0,
+                        previous.length() - (MAX_PROGRESS_ACTIONS - 1));
+                for (int i = start; i < previous.length(); i++) {
+                    JSONObject item = compactRecentStep(
+                            previous.optJSONObject(i));
+                    if (item.length() > 0) steps.put(item);
+                }
+            }
+
+            JSONObject current = compactRecentStep(currentAction);
+            if (current.length() > 0) steps.put(current);
+            if (steps.length() > 0) out.put("recentSteps", steps);
+        } catch (Exception ignored) {}
+        return out;
+    }
+
+    private static JSONObject compactRecentStep(JSONObject source) {
+        JSONObject out = new JSONObject();
+        if (source == null) return out;
+        try {
+            String action = source.optString(
+                    "action",
+                    source.optString("type", "")).trim();
+            String target = source.optString("target", "").trim();
+            String effect = source.optString("effect", "").trim();
+            if (!action.isEmpty()) {
+                out.put("action", clip(action, 48));
+            }
+            if (!target.isEmpty()) {
+                out.put("target", clip(target, 80));
+            }
+            if (!effect.isEmpty()) {
+                out.put("effect", clip(effect, 64));
+            }
+        } catch (Exception ignored) {}
+        return out;
+    }
+
+    private static String modelTarget(JSONObject result) {
+        if (result == null) return "";
+        String target = result.optString("modelTarget", "").trim();
+        if (target.isEmpty()) {
+            target = result.optString("semanticTarget", "").trim();
+        }
+        if (target.length() > 80) return "";
+        return target.matches("[A-Za-z0-9:_*\\-\\p{L} ]{1,80}")
+                ? target
+                : "";
     }
 
     private static boolean shouldCompact(String toolName) {
@@ -222,6 +338,10 @@ final class ModelToolResponseAdapter {
 
         String error = upper(result.optString("error", ""));
         String verificationStatus = upper(result.optString("verificationStatus", ""));
+        if ("IN_PROGRESS".equals(taskState)
+                && containsAny(error, "CONVERSATION_LOOP_TOOL_BLOCKED")) {
+            return WAIT;
+        }
         if (containsAny(error, "OBSERVE_REQUIRED", "PENDING_VERIFICATION")
                 || "PENDING".equals(verificationStatus)) {
             return WAIT;
@@ -279,8 +399,13 @@ final class ModelToolResponseAdapter {
                     upper(result.optString("taskState", "")))) {
                 return "Runtime 已掛上背景 Accessibility event wait；不要輪詢或重複操作，等 Runtime 喚醒。";
             }
+            if (containsAny(error, "CONVERSATION_LOOP_TOOL_BLOCKED")) {
+                return result.optString(
+                        "instruction",
+                        "conversation loop 仍有效；若有新訊息用 send_text，若只是 UI noise 用 continue_conversation_loop。");
+            }
             if ("start_conversation_loop".equals(toolName)) {
-                return "持續對話租約已啟用；繼續完成指定收件人的聊天室定位與第一則送出，不要提前作結論。";
+                return "持續對話租約已啟用；繼續目前聊天室任務，不要提前作結論。";
             }
             if (containsAny(error, "OBSERVE_REQUIRED", "PENDING_VERIFICATION")) {
                 return "Runtime 已阻止重複操作；先重新觀察目前畫面一次，再決定下一步。";
@@ -382,15 +507,15 @@ final class ModelToolResponseAdapter {
         if ("TAP".equals(semantic)
                 || "tap_screen".equals(runtime)
                 || "tap_element".equals(runtime)) {
-            return "操作完成。";
+            return "這一步已驗證。";
         }
         if ("BACK".equals(semantic) || "HOME".equals(semantic)
                 || "press_key".equals(runtime)) {
-            return "操作完成。";
+            return "這一步已驗證。";
         }
 
         String existing = result.optString("message", "").trim();
-        return existing.isEmpty() ? "操作完成。" : existing;
+        return existing.isEmpty() ? "這一步已驗證。" : existing;
     }
 
     private static JSONObject screen(JSONObject result) {

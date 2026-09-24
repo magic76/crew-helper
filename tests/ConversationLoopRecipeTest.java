@@ -53,6 +53,10 @@ public final class ConversationLoopRecipeTest {
                 "current-chat loop may send in the visible chat");
         check(recipe.allowsTool("swipe_screen"),
                 "current-chat loop may safely scroll the visible chat");
+        check(!recipe.allowsTool("take_screenshot"),
+                "conversation loop keeps one visual observation path through inspect_ui");
+        check(!recipe.allowsTool("type_text"),
+                "loop replies stay atomic through send_text instead of draft-only TYPE");
 
         check(recipe.markSent("fp1"),
                 "first send should arm background wait");

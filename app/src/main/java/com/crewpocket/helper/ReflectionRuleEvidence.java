@@ -123,6 +123,43 @@ final class ReflectionRuleEvidence {
         return null;
     }
 
+    /**
+     * Human repeated the same intent shortly after Runtime accepted a mutation
+     * but before whole-goal completion was confirmed. This is medium friction:
+     * track it immediately, but require repetition before asking the model to
+     * compress it into a reusable lesson.
+     */
+    static Candidate implicitUserRetry(
+            String intentFamily,
+            List<Step> current) {
+        Step mutation = lastMutation(current);
+        if (mutation == null || !mutation.succeeded()) return null;
+
+        String scope = safeSemanticTarget(intentFamily);
+        if (scope.isEmpty()) {
+            scope = safeSemanticTarget(mutation.semanticTarget);
+        }
+        if (scope.isEmpty()) {
+            scope = actionToken(mutation);
+        }
+        if (scope.isEmpty()) return null;
+
+        LinkedHashMap<String, Candidate> one =
+                new LinkedHashMap<String, Candidate>();
+        add(
+                one,
+                KIND_FRICTION,
+                scope,
+                UserRetryAfterUnconfirmedOutcomePolicy.CONDITION,
+                "VERIFY_GOAL_OUTCOME",
+                actionToken(mutation)
+                        + " SUCCESS -> USER RETRY BEFORE GOAL CONFIRMED",
+                4,
+                "USER_RETRY|UNCONFIRMED_OUTCOME");
+        if (one.isEmpty()) return null;
+        return one.values().iterator().next();
+    }
+
     private static void deriveFailureRecovery(List<Step> steps,
                                               LinkedHashMap<String, Candidate> out) {
         if (steps == null) return;

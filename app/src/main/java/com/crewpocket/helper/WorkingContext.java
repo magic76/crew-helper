@@ -17,9 +17,23 @@ final class WorkingContext {
     private static final int MAX_GOAL_CHARS = 480;
     private static final int MAX_TURN_CHARS = 320;
     private static final int MAX_SELECTED_CHARS = 280;
+    private static final int MAX_RECENT_STEPS = 3;
+
+    private static final class RecentStep {
+        final String action;
+        final String target;
+        final String effect;
+
+        RecentStep(String action, String target, String effect) {
+            this.action = clip(action, 48);
+            this.target = clip(target, 80);
+            this.effect = clip(effect, 64);
+        }
+    }
 
     private String rootGoal = "";
     private String latestUserTurn = "";
+    private String goalIntent = "";
     private String currentApp = "";
     private String currentScreenFingerprint = "";
     private String currentStableScreenKey = "";
@@ -29,6 +43,8 @@ final class WorkingContext {
     private String selectedSourcePackage = "";
     private String selectedReference = "";
     private final ArrayDeque<String> lastActions = new ArrayDeque<String>();
+    private final ArrayDeque<RecentStep> recentSteps =
+            new ArrayDeque<RecentStep>();
 
     synchronized void observe(String app, String fingerprint) {
         observe(app, fingerprint, "");
@@ -47,22 +63,31 @@ final class WorkingContext {
     synchronized void startNewGoal(String value) {
         rootGoal = clip(value, MAX_GOAL_CHARS);
         latestUserTurn = clip(value, MAX_TURN_CHARS);
+        goalIntent = GoalIntentKey.derive(value);
         previousScreenFingerprint = "";
         lastResult = "";
         pendingTask = "";
         lastActions.clear();
+        recentSteps.clear();
     }
 
     synchronized void beginUserTurn(String value) {
         latestUserTurn = clip(value, MAX_TURN_CHARS);
-        if (rootGoal.isEmpty()) rootGoal = clip(value, MAX_GOAL_CHARS);
+        goalIntent = GoalIntentKey.derive(value);
+        // A finalized human instruction is authoritative. Live conversation
+        // history already carries linguistic continuity; keeping a 45-second
+        // operational root goal here can leak an old action intent into an
+        // unrelated follow-up and incorrectly disable answer/finish fast paths.
+        rootGoal = clip(value, MAX_GOAL_CHARS);
         pendingTask = "";
+        recentSteps.clear();
     }
 
     synchronized void mergeUserTurnSegment(String value) {
         String previous = latestUserTurn;
         String merged = clip(value, MAX_TURN_CHARS);
         latestUserTurn = merged;
+        goalIntent = GoalIntentKey.derive(merged);
         if (rootGoal.isEmpty() || rootGoal.equals(previous)) {
             rootGoal = clip(merged, MAX_GOAL_CHARS);
         }
@@ -99,6 +124,22 @@ final class WorkingContext {
         lastResult = clip(result, MAX_FIELD_CHARS);
     }
 
+    /**
+     * Privacy-bounded causal trail for Gemini. Never store TYPE/SEARCH/message
+     * text here. Targets are already sanitized model labels or semantic ids.
+     */
+    synchronized void recordModelStep(
+            String action,
+            String target,
+            String effect) {
+        RecentStep step = new RecentStep(action, target, effect);
+        if (step.action.isEmpty() && step.effect.isEmpty()) return;
+        recentSteps.addLast(step);
+        while (recentSteps.size() > MAX_RECENT_STEPS) {
+            recentSteps.removeFirst();
+        }
+    }
+
     synchronized JSONObject toJson() {
         JSONObject out = new JSONObject();
         try {
@@ -106,6 +147,7 @@ final class WorkingContext {
             for (String a : lastActions) actions.put(a);
             out.put("rootGoal", rootGoal)
                .put("latestUserTurn", latestUserTurn)
+               .put("goalIntent", goalIntent)
                .put("currentApp", currentApp)
                .put("currentScreen", currentScreenFingerprint)
                .put("stableScreen", currentStableScreenKey)
@@ -123,6 +165,7 @@ final class WorkingContext {
         JSONObject out = new JSONObject();
         try {
             if (!latestUserTurn.isEmpty()) out.put("goal", latestUserTurn);
+            if (!goalIntent.isEmpty()) out.put("goalIntent", goalIntent);
             if (!rootGoal.isEmpty() && !rootGoal.equals(latestUserTurn)) {
                 out.put("rootGoal", rootGoal);
             }
@@ -147,6 +190,8 @@ final class WorkingContext {
             }
 
             if (!pendingTask.isEmpty()) out.put("pendingTask", pendingTask);
+            JSONArray steps = recentStepsJson();
+            if (steps.length() > 0) out.put("recentSteps", steps);
         } catch (Exception ignored) {}
         return out;
     }
@@ -162,6 +207,7 @@ final class WorkingContext {
         JSONObject out = new JSONObject();
         try {
             if (!latestUserTurn.isEmpty()) out.put("goal", latestUserTurn);
+            if (!goalIntent.isEmpty()) out.put("goalIntent", goalIntent);
             if (!rootGoal.isEmpty() && !rootGoal.equals(latestUserTurn)) {
                 out.put("rootGoal", rootGoal);
             }
@@ -180,6 +226,8 @@ final class WorkingContext {
 
             if (!lastResult.isEmpty()) out.put("lastResult", lastResult);
             if (!pendingTask.isEmpty()) out.put("pendingTask", pendingTask);
+            JSONArray steps = recentStepsJson();
+            if (steps.length() > 0) out.put("recentSteps", steps);
         } catch (Exception ignored) {}
         return out;
     }
@@ -187,17 +235,20 @@ final class WorkingContext {
     synchronized void resetTransientForNewGoal() {
         rootGoal = "";
         latestUserTurn = "";
+        goalIntent = "";
         previousScreenFingerprint = "";
         lastResult = "";
         pendingTask = "";
         selectedSourcePackage = "";
         selectedReference = "";
         lastActions.clear();
+        recentSteps.clear();
     }
 
     synchronized void clear() {
         rootGoal = "";
         latestUserTurn = "";
+        goalIntent = "";
         currentApp = "";
         currentScreenFingerprint = "";
         currentStableScreenKey = "";
@@ -207,6 +258,21 @@ final class WorkingContext {
         selectedSourcePackage = "";
         selectedReference = "";
         lastActions.clear();
+        recentSteps.clear();
+    }
+
+    private JSONArray recentStepsJson() {
+        JSONArray out = new JSONArray();
+        try {
+            for (RecentStep step : recentSteps) {
+                JSONObject item = new JSONObject();
+                if (!step.action.isEmpty()) item.put("action", step.action);
+                if (!step.target.isEmpty()) item.put("target", step.target);
+                if (!step.effect.isEmpty()) item.put("effect", step.effect);
+                if (item.length() > 0) out.put(item);
+            }
+        } catch (Exception ignored) {}
+        return out;
     }
 
     private static String progressAction(String value) {
