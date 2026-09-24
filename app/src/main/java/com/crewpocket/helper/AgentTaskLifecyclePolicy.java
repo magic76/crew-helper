@@ -158,6 +158,7 @@ final class AgentTaskLifecyclePolicy {
 
     static boolean isObservationTool(String name) {
         return "inspect_ui".equals(name)
+                || "take_screenshot".equals(name)
                 || "get_selected_region".equals(name)
                 || "read_web_page".equals(name)
                 || "list_app_guidance".equals(name)
