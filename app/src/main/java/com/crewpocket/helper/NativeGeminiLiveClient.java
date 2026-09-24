@@ -2547,6 +2547,37 @@ final class NativeGeminiLiveClient {
             return;
         }
 
+        final AgentTaskRecord visualTask =
+                agentTaskCoordinator.activeRunning();
+        if (visualTask != null
+                && AgentTaskLifecyclePolicy
+                        .shouldSuppressRepeatedVisualObservation(
+                                name,
+                                visualTask.consecutiveVisualObservations)) {
+            try {
+                JSONObject blocked = runtimeBlocked(
+                        "REPEATED_VISUAL_OBSERVATION",
+                        "目前 goal 已連續取得兩次 visual observation，Runtime 不再重複截同一階段的畫面。"
+                                + "請使用現有 screen/context/recentSteps 選下一個不同語意動作；"
+                                + "若目前證據確實無法完成 goal，簡短回報缺少的控制，不要再 inspect。");
+                blocked.put("taskState", "IN_PROGRESS")
+                        .put("recoverable", true)
+                        .put("nextRequirement", "TRY_ALTERNATIVE");
+                sendToolResponse(id, requestedName, blocked);
+                synchronized (agentTaskCoordinator.monitor()) {
+                    if (agentTaskCoordinator.isActive(visualTask)
+                            && !visualTask.finished
+                            && !visualTask.cancelled) {
+                        visualTask.awaitingModel = true;
+                        visualTask.watchdogPrompted = false;
+                    }
+                }
+                agentResponseCoordinator.scheduleWatchdog(visualTask);
+                reportStage("Runtime 已阻止重複看同一階段畫面，改用目前證據繼續");
+            } catch (Exception ignored) {}
+            return;
+        }
+
         final AgentTaskRecord task = beginAgentStep(name, args);
         if (task == null) {
             sendBlockedToolResponse(id, requestedName, "Agent 任務已停止，請以目前資訊作結論。");
@@ -2927,8 +2958,15 @@ final class NativeGeminiLiveClient {
 
             if (task.blockedReason == null) {
                 boolean observation = isObservationTool(name);
+                boolean visualObservation =
+                        AgentTaskLifecyclePolicy.isVisualObservationTool(name);
                 if (observation) task.observationActions++;
                 else task.steps++;
+                if (visualObservation) {
+                    task.consecutiveVisualObservations++;
+                } else {
+                    task.consecutiveVisualObservations = 0;
+                }
                 task.lastSignature = signature;
                 task.incrementTool(name);
                 if (isMutationTool(name)) task.mutationActions++;
