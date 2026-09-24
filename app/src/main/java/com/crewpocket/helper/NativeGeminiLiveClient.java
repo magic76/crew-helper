@@ -3041,10 +3041,10 @@ final class NativeGeminiLiveClient {
                             result.put(
                                     "nextRequirement",
                                     runtimeV2Enforced && !v2Pending
-                                            ? "Continue the original goal from this verified result; do not add a redundant inspect step."
+                                            ? "CONTINUE_GOAL"
                                             : (freshAfter
-                                                ? "Use the fresh compact after state to choose the next action; STEP_OK is not whole-task completion."
-                                                : "Call inspect_ui once and use the actual post-action screen before concluding."));
+                                                ? "CONTINUE_GOAL"
+                                                : "INSPECT_UI"));
                         }
                     }
                 }
@@ -3324,7 +3324,7 @@ final class NativeGeminiLiveClient {
                 result.put("success", true).put("stepResult", "STEP_PENDING")
                         .put("taskState", "IN_PROGRESS")
                         .put("verification", "PENDING")
-                        .put("nextRequirement", "Call inspect_ui once before another mutation.");
+                        .put("nextRequirement", "INSPECT_UI");
             } else {
                 result.put("success", false).put("stepResult", "STEP_FAILED");
             }
@@ -4349,8 +4349,7 @@ final class NativeGeminiLiveClient {
                     .put("searchSelection", "WAITING_RESULTS")
                     .put("taskState", "IN_PROGRESS")
                     .put("completionEvidence", "SEARCH_COMMITTED_RESULTS_NOT_READY")
-                    .put("nextRequirement",
-                            "等待實際搜尋結果出現；不要把 autocomplete suggestion 當結果，也不要因 TAP 失敗顯示選擇卡。")
+                    .put("nextRequirement", "INSPECT_UI")
                     .put("instruction",
                             "Runtime 尚未看到可信的 Maps 結果列。可以等待畫面更新；不要重複搜尋或盲點座標。");
         }
@@ -5479,8 +5478,7 @@ final class NativeGeminiLiveClient {
                             commit.optString("error", "SEARCH_COMMIT_FAILED"))
                     .put("taskState", "IN_PROGRESS")
                     .put("completionEvidence", "SEARCH_QUERY_TYPED_NOT_COMMITTED")
-                    .put("nextRequirement",
-                            "搜尋文字已輸入但尚未提交；只可使用明確 Search/Go/Enter 提交控制，或回報 Runtime 無法提交。")
+                    .put("nextRequirement", "COMMIT_SEARCH")
                     .put("instruction",
                             "不要把 autocomplete suggestion 當成已完成搜尋，也不要因為搜尋而進聊天室或傳訊息。");
             return observed;
@@ -5664,8 +5662,7 @@ final class NativeGeminiLiveClient {
                     .put("taskState", "IN_PROGRESS")
                     .put("completionEvidence",
                             "SEARCH_COMMIT_DISPATCHED_RESULTS_NOT_CONFIRMED")
-                    .put("nextRequirement",
-                            "等待搜尋結果畫面變化；不要再次送出 Search/Enter。")
+                    .put("nextRequirement", "INSPECT_UI")
                     .put("instruction",
                             "Runtime 已送出搜尋提交，但尚未觀察到結果內容。請先 wait(screen_change) 或依 fresh after 觀察；不要重複 SEARCH/COMMIT_SEARCH，也不要盲點結果。");
         }
