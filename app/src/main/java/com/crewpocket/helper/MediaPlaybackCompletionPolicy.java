@@ -43,12 +43,38 @@ final class MediaPlaybackCompletionPolicy {
             boolean musicActiveBefore,
             boolean musicActiveAfter,
             boolean uiIndicatesPlaying) {
+        return shouldComplete(
+                packageName,
+                targetMetadata,
+                tapSuccess,
+                musicActiveBefore,
+                musicActiveAfter,
+                uiIndicatesPlaying,
+                "",
+                false);
+    }
+
+    static boolean shouldComplete(
+            String packageName,
+            String targetMetadata,
+            boolean tapSuccess,
+            boolean musicActiveBefore,
+            boolean musicActiveAfter,
+            boolean uiIndicatesPlaying,
+            String goalIntent,
+            boolean screenChanged) {
         boolean playbackBecameActive =
                 !musicActiveBefore && musicActiveAfter;
+        boolean explicitPlayGoalEffect =
+                "MEDIA:PLAY".equals(clean(goalIntent))
+                        && musicActiveAfter
+                        && screenChanged;
         return isDefaultTrustedPackage(packageName)
                 && isPlayControl(targetMetadata)
                 && tapSuccess
-                && (playbackBecameActive || uiIndicatesPlaying);
+                && (playbackBecameActive
+                        || uiIndicatesPlaying
+                        || explicitPlayGoalEffect);
     }
 
     private static String clean(String value) {
