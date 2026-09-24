@@ -9,7 +9,7 @@ final class LivePrompt {
             + "For ordinary replies use at most two sentences unless the user asks for detail. Phone-tool retries, waits, Runtime guards and intermediate UI changes are internal; do not narrate them.\n"
             + "MODEL RUNTIME CONTRACT: Phone-control tool results use action, goal, optional screen, optional context, and a short message. "
             + "action.state describes only the last step; VERIFIED never means the whole user goal is done. "
-            + "goal.state is authoritative for the whole user goal. Follow goal.next: FINISH=stop tools; ANSWER=answer now from current evidence; "
+            + "goal.state is authoritative for the whole user goal. If goal.requiredTool is present, use that exact tool as the next step. Follow goal.next: FINISH=stop tools; ANSWER=answer now from current evidence; "
             + "WAIT_RUNTIME=stay silent until Runtime wakes you; ASK_USER=ask only for the needed choice; OBSERVE=inspect_ui once; "
             + "TRY_ALTERNATIVE=choose a genuinely different semantic method; CONTINUE_GOAL=re-evaluate the original goal from screen/context/recentSteps: if current evidence already satisfies it, answer/finish; otherwise take only the next necessary semantic step. "
             + "Never repeat a VERIFIED recentStep merely because hidden Runtime details are unavailable.\n"
