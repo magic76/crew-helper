@@ -15,6 +15,7 @@ public final class ModelRuntimeContractTest {
         verifiedSendCanWaitForRuntime();
         blockedLoopToolContinuesGoal();
         explicitContinueGoalWinsOverWait();
+        commitSearchIsExactAction();
         System.out.println(
                 "ModelRuntimeContractTest passed " + checks + " checks");
     }
@@ -109,6 +110,18 @@ public final class ModelRuntimeContractTest {
                 "ASYNC_UI_PENDING",
                 "OBSERVE");
         expect(ModelRuntimeContract.NEXT_CONTINUE, g.next);
+    }
+
+    private static void commitSearchIsExactAction() {
+        ModelRuntimeContract.Goal g = ModelRuntimeContract.deriveGoal(
+                "IN_PROGRESS",
+                "COMMIT_SEARCH",
+                "WAIT",
+                "ASYNC_UI_PENDING",
+                "OBSERVE");
+        expect(ModelRuntimeContract.NEXT_CONTINUE, g.next);
+        expect("phone_action", g.requiredTool);
+        expect("COMMIT_SEARCH", g.requiredAction);
     }
 
     private static void expect(String expected, String actual) {
