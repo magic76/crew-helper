@@ -12,6 +12,7 @@ final class AgentTaskLifecyclePolicy {
     static final int MAX_MUTATION_ACTIONS = 15;
     static final int MAX_OBSERVATION_ACTIONS = 8;
     static final int MAX_SCREENSHOTS = 3;
+    static final int MAX_CONSECUTIVE_VISUAL_OBSERVATIONS = 2;
 
     static final class StepDecision {
         final boolean allowed;
@@ -154,6 +155,19 @@ final class AgentTaskLifecyclePolicy {
                 || "remember_app_guidance".equals(name)
                 || "cancel_schedule".equals(name)
                 || "stop_conversation_loop".equals(name);
+    }
+
+    static boolean isVisualObservationTool(String name) {
+        return "inspect_ui".equals(name)
+                || "take_screenshot".equals(name);
+    }
+
+    static boolean shouldSuppressRepeatedVisualObservation(
+            String name,
+            int consecutiveVisualObservations) {
+        return isVisualObservationTool(name)
+                && consecutiveVisualObservations
+                        >= MAX_CONSECUTIVE_VISUAL_OBSERVATIONS;
     }
 
     static boolean isObservationTool(String name) {
