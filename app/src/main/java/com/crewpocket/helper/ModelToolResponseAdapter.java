@@ -179,7 +179,21 @@ final class ModelToolResponseAdapter {
             if (!guidance.action.isEmpty()) {
                 out.put("type", guidance.action);
             }
-            out.put("state", ModelRuntimeContract.actionState(status));
+            boolean pendingVerification =
+                    "PENDING".equals(upper(
+                            source.optString("verificationStatus", "")))
+                    || containsAny(
+                            upper(source.optString("error", "")),
+                            "OBSERVE_REQUIRED",
+                            "PENDING_VERIFICATION");
+            out.put(
+                    "state",
+                    ModelRuntimeContract.actionState(
+                            status,
+                            source.optBoolean("success", false),
+                            isVerifiedSend(source),
+                            pendingVerification,
+                            source.optBoolean("blockedByRuntime", false)));
             if (!guidance.effect.isEmpty()) {
                 out.put("effect", guidance.effect);
             }
