@@ -41,6 +41,8 @@ final class AgentTaskRecord {
     String lastToolName = "";
     String lastTaskState = "";
     String lastCompletionEvidence = "";
+    long lastSuccessfulMutationAtMs;
+    String retryIntentFamily = "";
     int prematureModelReplies;
     boolean requiresPostActionInspection;
     boolean postActionInspectionPrompted;
@@ -311,6 +313,8 @@ final class AgentTaskRecord {
                     .put("lastToolName", lastToolName)
                     .put("lastTaskState", lastTaskState)
                     .put("lastCompletionEvidence", lastCompletionEvidence)
+                    .put("lastSuccessfulMutationAtMs", lastSuccessfulMutationAtMs)
+                    .put("retryIntentFamily", retryIntentFamily)
                     .put("prematureModelReplies", prematureModelReplies)
                     .put("cancelCategory", cancelCategory)
                     .put("suspended", suspended)
