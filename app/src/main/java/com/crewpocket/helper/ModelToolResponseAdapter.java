@@ -230,6 +230,9 @@ final class ModelToolResponseAdapter {
             if (!goal.requiredTool.isEmpty()) {
                 out.put("requiredTool", goal.requiredTool);
             }
+            if (!goal.requiredAction.isEmpty()) {
+                out.put("requiredAction", goal.requiredAction);
+            }
         } catch (Exception ignored) {}
         return out;
     }
