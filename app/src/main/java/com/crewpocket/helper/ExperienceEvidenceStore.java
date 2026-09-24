@@ -55,13 +55,16 @@ final class ExperienceEvidenceStore {
                     continue;
                 }
 
-                JSONObject item = find(items, pkg, candidate.ruleKey);
+                JSONObject item = findCurrent(
+                        items, pkg, candidate.ruleKey);
                 int occurrences = 1;
                 try {
                     if (item == null) {
                         item = new JSONObject()
                                 .put("package", pkg)
                                 .put("ruleKey", safeRuleKey(candidate.ruleKey))
+                                .put("policyRevision",
+                                        ExperiencePolicyEpoch.CURRENT_REVISION)
                                 .put("occurrences", 1)
                                 .put("maxScore", candidate.frictionScore)
                                 .put("signals", safeSignals(candidate.frictionSignals))
@@ -104,6 +107,7 @@ final class ExperienceEvidenceStore {
         int tracked = 0;
         int repeated = 0;
         int strongestScore = 0;
+        int stale = 0;
         if (context != null) {
             try {
                 SharedPreferences prefs = context.getApplicationContext()
@@ -113,6 +117,11 @@ final class ExperienceEvidenceStore {
                 for (int i = 0; i < items.length(); i++) {
                     JSONObject item = items.optJSONObject(i);
                     if (item == null) continue;
+                    if (!ExperiencePolicyEpoch.isCurrent(
+                            item.optInt("policyRevision", 0))) {
+                        stale++;
+                        continue;
+                    }
                     int occurrences = item.optInt("occurrences", 0);
                     if (occurrences >= ExperienceTriggerPolicy.REPEATED_FRICTION_OCCURRENCES) {
                         repeated++;
@@ -122,7 +131,9 @@ final class ExperienceEvidenceStore {
             } catch (Exception ignored) {}
         }
         return "Status: Healthy"
-                + "\nFriction patterns: " + tracked
+                + "\nPolicy revision: " + ExperiencePolicyEpoch.CURRENT_REVISION
+                + "\nFriction patterns: " + (tracked - stale)
+                + "\nStale friction patterns: " + stale
                 + "\nRepeated patterns: " + repeated
                 + "\nHighest friction score: " + strongestScore;
     }
@@ -131,6 +142,7 @@ final class ExperienceEvidenceStore {
         int tracked = 0;
         int strongestScore = 0;
         int repeated = 0;
+        int stale = 0;
         long latestAt = 0L;
 
         if (context != null) {
@@ -143,6 +155,11 @@ final class ExperienceEvidenceStore {
                 for (int i = 0; i < items.length(); i++) {
                     JSONObject item = items.optJSONObject(i);
                     if (item == null) continue;
+                    if (!ExperiencePolicyEpoch.isCurrent(
+                            item.optInt("policyRevision", 0))) {
+                        stale++;
+                        continue;
+                    }
                     int occurrences = item.optInt("occurrences", 0);
                     strongestScore = Math.max(
                             strongestScore,
@@ -167,7 +184,12 @@ final class ExperienceEvidenceStore {
                 .append("Medium friction: repeat ")
                 .append(ExperienceTriggerPolicy.REPEATED_FRICTION_OCCURRENCES)
                 .append("x for the same pattern\n")
-                .append("Tracked friction patterns: ").append(tracked).append("\n")
+                .append("Policy revision: ")
+                .append(ExperiencePolicyEpoch.CURRENT_REVISION)
+                .append("\n")
+                .append("Tracked friction patterns: ")
+                .append(Math.max(0, tracked - stale)).append("\n")
+                .append("Stale friction patterns: ").append(stale).append("\n")
                 .append("Repeated patterns: ").append(repeated).append("\n")
                 .append("Highest friction score: ").append(strongestScore).append("\n")
                 .append("Last friction evidence: ")
@@ -175,11 +197,18 @@ final class ExperienceEvidenceStore {
         return out.toString();
     }
 
-    private static JSONObject find(JSONArray items, String pkg, String ruleKey) {
+    private static JSONObject findCurrent(
+            JSONArray items,
+            String pkg,
+            String ruleKey) {
         if (items == null || ruleKey == null || ruleKey.isEmpty()) return null;
         for (int i = items.length() - 1; i >= 0; i--) {
             JSONObject item = items.optJSONObject(i);
-            if (item == null) continue;
+            if (item == null
+                    || !ExperiencePolicyEpoch.isCurrent(
+                            item.optInt("policyRevision", 0))) {
+                continue;
+            }
             if (pkg.equals(item.optString("package", ""))
                     && ruleKey.equals(item.optString("ruleKey", ""))) {
                 return item;
