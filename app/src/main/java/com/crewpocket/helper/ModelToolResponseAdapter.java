@@ -104,7 +104,7 @@ final class ModelToolResponseAdapter {
 
         trimArray(screen, "items", 10);
         trimArray(screen, "choices", 12);
-        trimArray(context, "recentSteps", 2);
+        trimTailArray(context, "recentSteps", 2);
         clipInPlace(out, "message", 170);
         clipInPlace(context, "goal", 260);
         clipInPlace(context, "rootGoal", 260);
@@ -114,7 +114,7 @@ final class ModelToolResponseAdapter {
         }
 
         if (context != null) {
-            trimArray(context, "recentSteps", 1);
+            trimTailArray(context, "recentSteps", 1);
         }
         trimArray(screen, "items", 8);
         trimArray(screen, "choices", 8);
@@ -153,6 +153,21 @@ final class ModelToolResponseAdapter {
         if (source == null || source.length() <= maxItems) return;
         JSONArray trimmed = new JSONArray();
         for (int i = 0; i < source.length() && i < maxItems; i++) {
+            trimmed.put(source.opt(i));
+        }
+        try { owner.put(key, trimmed); } catch (Exception ignored) {}
+    }
+
+    private static void trimTailArray(
+            JSONObject owner,
+            String key,
+            int maxItems) {
+        if (owner == null) return;
+        JSONArray source = owner.optJSONArray(key);
+        if (source == null || source.length() <= maxItems) return;
+        JSONArray trimmed = new JSONArray();
+        int start = Math.max(0, source.length() - maxItems);
+        for (int i = start; i < source.length(); i++) {
             trimmed.put(source.opt(i));
         }
         try { owner.put(key, trimmed); } catch (Exception ignored) {}
