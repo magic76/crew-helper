@@ -222,6 +222,10 @@ final class ModelToolResponseAdapter {
 
         String error = upper(result.optString("error", ""));
         String verificationStatus = upper(result.optString("verificationStatus", ""));
+        if ("IN_PROGRESS".equals(taskState)
+                && containsAny(error, "CONVERSATION_LOOP_TOOL_BLOCKED")) {
+            return WAIT;
+        }
         if (containsAny(error, "OBSERVE_REQUIRED", "PENDING_VERIFICATION")
                 || "PENDING".equals(verificationStatus)) {
             return WAIT;
@@ -278,6 +282,11 @@ final class ModelToolResponseAdapter {
             if ("WAITING_BACKGROUND".equals(
                     upper(result.optString("taskState", "")))) {
                 return "Runtime 已掛上背景 Accessibility event wait；不要輪詢或重複操作，等 Runtime 喚醒。";
+            }
+            if (containsAny(error, "CONVERSATION_LOOP_TOOL_BLOCKED")) {
+                return result.optString(
+                        "instruction",
+                        "目前 conversation loop 仍有效；不要向使用者報錯。若有新訊息直接用 send_text，若只是 UI noise 用 continue_conversation_loop。");
             }
             if ("start_conversation_loop".equals(toolName)) {
                 return "持續對話租約已啟用；繼續完成指定收件人的聊天室定位與第一則送出，不要提前作結論。";

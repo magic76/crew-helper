@@ -2352,12 +2352,20 @@ final class NativeGeminiLiveClient {
         if (conversationLoopRecipe.isActive()
                 && !conversationLoopRecipe.allowsTool(name)) {
             try {
-                sendToolResponse(
-                        id,
-                        requestedName,
-                        runtimeBlocked(
-                                "CONVERSATION_LOOP_TOOL_BLOCKED",
-                                "持續對話租約進行中。Runtime 已縮小可用操作範圍；不要離開指定聊天室或做無關 mutation。若使用者要做其他任務，先停止 conversation loop。"));
+                JSONObject blocked = runtimeBlocked(
+                        "CONVERSATION_LOOP_TOOL_BLOCKED",
+                        "持續對話租約仍有效，但這個工具不屬於目前聊天室的允許操作。"
+                                + "工具沒有執行。不要把 guard/error code 告訴使用者；"
+                                + "若確實有新訊息，只用 send_text 並直接帶回覆文字，"
+                                + "不要先 TYPE、不要另外點送出；若只是 UI noise，"
+                                + "用 continue_conversation_loop；需要更多畫面資訊時只用 inspect_ui 或 take_screenshot。");
+                if (conversationLoopRecipe.canSend()) {
+                    blocked.put("taskState", "IN_PROGRESS")
+                            .put("recoverable", true)
+                            .put("nextRequirement",
+                                    "SEND_TEXT_OR_CONTINUE_CONVERSATION_LOOP");
+                }
+                sendToolResponse(id, requestedName, blocked);
             } catch (Exception ignored) {}
             return;
         }
@@ -3931,9 +3939,11 @@ final class NativeGeminiLiveClient {
             boolean sent = sendConversationWakeDirective(
                     "【CONVERSATION LOOP WAKE】Runtime 偵測到目前聊天視窗有新的 Accessibility 變化。"
                             + "ACTIVE Conversation Loop lease 已授權在目前聊天室持續回覆；不要說無法發送，不要要求新的 user turn，也不要逐則詢問確認。"
-                            + "現在只呼叫一次 inspect_ui 看 fresh screenshot。"
-                            + "若確實有新的對方訊息，自行理解上下文、自然組一則簡短回覆並用 send_text 送出；"
+                            + "現在先呼叫一次 inspect_ui 看 fresh screenshot；若 inspect_ui 無法提供足夠畫面資訊，可改用一次 take_screenshot。"
+                            + "若確實有新的對方訊息，自行理解上下文、自然組一則簡短回覆並直接用 send_text 送出；"
+                            + "send_text 會完成輸入與送出，不要先 TYPE、不要另外點送出按鈕。"
                             + "若只是自己的訊息、typing indicator 或其他 UI noise，呼叫 continue_conversation_loop 重新等待。"
+                            + "若 Runtime 擋下一個工具，依回傳提示改用 send_text 或 continue_conversation_loop，不要把 guard code 告訴使用者。"
                             + "不要搜尋聯絡人、不要切換聊天室、不要輪詢。");
             if (sent) {
                 agentResponseCoordinator.scheduleWatchdog(task);
