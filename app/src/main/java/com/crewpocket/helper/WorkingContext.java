@@ -73,6 +73,10 @@ final class WorkingContext {
         latestUserTurn = clip(value, MAX_TURN_CHARS);
         if (rootGoal.isEmpty()) rootGoal = clip(value, MAX_GOAL_CHARS);
         pendingTask = "";
+        // A finalized human turn is the new decision boundary. Keep Runtime's
+        // broader capsule internally, but do not present previous-turn actions
+        // as if they belonged to this turn's causal chain.
+        recentSteps.clear();
     }
 
     synchronized void mergeUserTurnSegment(String value) {
