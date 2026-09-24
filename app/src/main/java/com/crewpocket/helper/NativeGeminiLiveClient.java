@@ -2636,6 +2636,14 @@ final class NativeGeminiLiveClient {
                 if (!semanticTarget.isEmpty()) {
                     result.put("semanticTarget", semanticTarget);
                 }
+                String modelTarget =
+                        modelTargetForSemanticStep(
+                                semantic.semanticAction,
+                                name,
+                                semantic.runtimeArgs);
+                if (!modelTarget.isEmpty()) {
+                    result.put("modelTarget", modelTarget);
+                }
             }
             if (runtimeV2Enforced) {
                 ExecutionEvidence evidence = executionEvidenceFromResult(name, result);
@@ -3202,6 +3210,43 @@ final class NativeGeminiLiveClient {
                 task.blockedReason = "連續 3 次手機操作失敗，Runtime 已停止繼續試錯；請回報目前畫面與卡點，不要再呼叫工具。";
             }
         }
+    }
+
+    private String modelTargetForSemanticStep(
+            String semanticAction,
+            String runtimeName,
+            JSONObject args) {
+        String action = semanticAction == null
+                ? "" : semanticAction.trim().toUpperCase();
+        JSONObject safe = args == null ? new JSONObject() : args;
+
+        String semanticTarget =
+                safe.optString("semantic_target", "").trim();
+        if (!semanticTarget.isEmpty()) return semanticTarget;
+
+        if ("SEARCH".equals(action)) return "QUERY";
+        if ("TYPE".equals(action)) return "EDITABLE_FIELD";
+        if ("SCROLL".equals(action)) {
+            String direction = safe.optString("direction", "").trim();
+            return direction.isEmpty() ? "SCREEN" : "SCROLL:" + direction;
+        }
+        if ("BACK".equals(action) || "HOME".equals(action)) {
+            return action;
+        }
+        if ("OPEN_APP".equals(action)
+                || "launch_app".equals(runtimeName)) {
+            return AgentTapDiagnostic.sanitizeTarget(
+                    safe.optString("app", safe.optString("target", "")));
+        }
+        if ("TAP".equals(action)
+                || "tap_screen".equals(runtimeName)
+                || "tap_element".equals(runtimeName)) {
+            return AgentTapDiagnostic.sanitizeTarget(
+                    safe.optString(
+                            "label",
+                            safe.optString("target", "")));
+        }
+        return "";
     }
 
     private String buildAgentSignature(String name, JSONObject args) {
@@ -5994,6 +6039,13 @@ final class NativeGeminiLiveClient {
         final JSONObject modelResult =
                 ModelToolResponseAdapter.forModel(
                         name, result, progressContext);
+        JSONObject modelAction = modelResult.optJSONObject("action");
+        if (modelAction != null) {
+            workingContext.recordModelStep(
+                    modelAction.optString("type", ""),
+                    modelAction.optString("target", ""),
+                    modelAction.optString("effect", ""));
+        }
         int coreModelBytes =
                 ContextPayloadBudget.utf8Bytes(modelResult.toString());
 
