@@ -145,6 +145,15 @@ public final class AgentTaskLifecyclePolicyTest {
         check(!AgentTaskLifecyclePolicy.canFinishAfterModelReply(
                         "DONE", "tap_screen", true, false, 1),
                 "required post-action inspection still blocks completion");
+        check(AgentTaskLifecyclePolicy.isObservationTool("take_screenshot"),
+                "take_screenshot should be observation");
+        check(AgentTaskLifecyclePolicy.canFinishAfterModelReply(
+                        "EVIDENCE_AVAILABLE",
+                        "take_screenshot",
+                        false,
+                        false,
+                        0),
+                "read-only screenshot task may finish from fresh evidence");
 
         System.out.println("PASS AgentTaskLifecyclePolicyTest: " + assertions + " checks");
     }
