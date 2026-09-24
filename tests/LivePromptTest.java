@@ -11,6 +11,8 @@ public final class LivePromptTest {
         check(LivePrompt.CORE.contains("action.state")
                         && LivePrompt.CORE.contains("goal.state"),
                 "prompt must separate action state from goal state");
+        check(LivePrompt.CORE.contains("goal.requiredTool"),
+                "prompt must honor exact Runtime-required tool hints");
         check(!LivePrompt.CORE.contains("get_selected_region"),
                 "core prompt must not reference hidden selected-region tools");
         check(!LivePrompt.CORE.contains("taskState=")
