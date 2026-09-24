@@ -33,6 +33,7 @@ final class WorkingContext {
 
     private String rootGoal = "";
     private String latestUserTurn = "";
+    private String goalIntent = "";
     private String currentApp = "";
     private String currentScreenFingerprint = "";
     private String currentStableScreenKey = "";
@@ -62,6 +63,7 @@ final class WorkingContext {
     synchronized void startNewGoal(String value) {
         rootGoal = clip(value, MAX_GOAL_CHARS);
         latestUserTurn = clip(value, MAX_TURN_CHARS);
+        goalIntent = GoalIntentKey.derive(value);
         previousScreenFingerprint = "";
         lastResult = "";
         pendingTask = "";
@@ -71,6 +73,7 @@ final class WorkingContext {
 
     synchronized void beginUserTurn(String value) {
         latestUserTurn = clip(value, MAX_TURN_CHARS);
+        goalIntent = GoalIntentKey.derive(value);
         // A finalized human instruction is authoritative. Live conversation
         // history already carries linguistic continuity; keeping a 45-second
         // operational root goal here can leak an old action intent into an
@@ -84,6 +87,7 @@ final class WorkingContext {
         String previous = latestUserTurn;
         String merged = clip(value, MAX_TURN_CHARS);
         latestUserTurn = merged;
+        goalIntent = GoalIntentKey.derive(merged);
         if (rootGoal.isEmpty() || rootGoal.equals(previous)) {
             rootGoal = clip(merged, MAX_GOAL_CHARS);
         }
@@ -143,6 +147,7 @@ final class WorkingContext {
             for (String a : lastActions) actions.put(a);
             out.put("rootGoal", rootGoal)
                .put("latestUserTurn", latestUserTurn)
+               .put("goalIntent", goalIntent)
                .put("currentApp", currentApp)
                .put("currentScreen", currentScreenFingerprint)
                .put("stableScreen", currentStableScreenKey)
@@ -160,6 +165,7 @@ final class WorkingContext {
         JSONObject out = new JSONObject();
         try {
             if (!latestUserTurn.isEmpty()) out.put("goal", latestUserTurn);
+            if (!goalIntent.isEmpty()) out.put("goalIntent", goalIntent);
             if (!rootGoal.isEmpty() && !rootGoal.equals(latestUserTurn)) {
                 out.put("rootGoal", rootGoal);
             }
@@ -201,6 +207,7 @@ final class WorkingContext {
         JSONObject out = new JSONObject();
         try {
             if (!latestUserTurn.isEmpty()) out.put("goal", latestUserTurn);
+            if (!goalIntent.isEmpty()) out.put("goalIntent", goalIntent);
             if (!rootGoal.isEmpty() && !rootGoal.equals(latestUserTurn)) {
                 out.put("rootGoal", rootGoal);
             }
@@ -228,6 +235,7 @@ final class WorkingContext {
     synchronized void resetTransientForNewGoal() {
         rootGoal = "";
         latestUserTurn = "";
+        goalIntent = "";
         previousScreenFingerprint = "";
         lastResult = "";
         pendingTask = "";
@@ -240,6 +248,7 @@ final class WorkingContext {
     synchronized void clear() {
         rootGoal = "";
         latestUserTurn = "";
+        goalIntent = "";
         currentApp = "";
         currentScreenFingerprint = "";
         currentStableScreenKey = "";
