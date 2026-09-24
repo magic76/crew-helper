@@ -71,11 +71,12 @@ final class WorkingContext {
 
     synchronized void beginUserTurn(String value) {
         latestUserTurn = clip(value, MAX_TURN_CHARS);
-        if (rootGoal.isEmpty()) rootGoal = clip(value, MAX_GOAL_CHARS);
+        // A finalized human instruction is authoritative. Live conversation
+        // history already carries linguistic continuity; keeping a 45-second
+        // operational root goal here can leak an old action intent into an
+        // unrelated follow-up and incorrectly disable answer/finish fast paths.
+        rootGoal = clip(value, MAX_GOAL_CHARS);
         pendingTask = "";
-        // A finalized human turn is the new decision boundary. Keep Runtime's
-        // broader capsule internally, but do not present previous-turn actions
-        // as if they belonged to this turn's causal chain.
         recentSteps.clear();
     }
 
