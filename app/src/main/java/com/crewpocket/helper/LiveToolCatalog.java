@@ -43,7 +43,7 @@ final class LiveToolCatalog {
                         .put("description", "Optional SCROLL distance."));
         tools.put(new JSONObject().put("name", "phone_action")
                 .put("description",
-                        "Perform exactly ONE semantic phone step. Available actions: OPEN_APP, SEARCH, COMMIT_SEARCH, TAP, TYPE, SCROLL, BACK, HOME. TYPE is generic text entry into the current visible editable field, including settings/system prompts/forms/search/chat composers, and never submits. COMMIT_SEARCH presses the current keyboard search/IME button only. Runtime owns selectors, focus, Android implementation and verification. For vertical SCROLL, use direction=forward to continue to later/below content or the next page, and direction=backward to return to earlier/above content or the previous page; never reason about physical finger direction. SEARCH is one Runtime transaction; do not manually TAP search then TYPE. Message submission is separate through send_text. For an explicit named-recipient request, navigation may first reach that chat; Runtime still verifies the requested recipient on the current conversation screen before allowing SEND.")
+                        "Perform exactly ONE semantic phone step. Choose WHAT: OPEN_APP, SEARCH, COMMIT_SEARCH, TAP, TYPE, SCROLL, BACK or HOME; Runtime owns HOW, selectors and verification. TYPE never submits. SEARCH owns query entry; do not manually TAP+TYPE a search. Use send_text only for message submission. SCROLL direction describes content direction, not finger motion.")
                 .put("parameters", new JSONObject().put("type", "OBJECT")
                         .put("properties", phoneActionProperties)
                         .put("required", new JSONArray().put("action"))));
@@ -58,7 +58,7 @@ final class LiveToolCatalog {
                                         .put("description", "Public http/https URL to read")))
                         .put("required", new JSONArray().put("url"))));
         tools.put(new JSONObject().put("name", "create_note").put("description",
-                "PERSISTENT CREW NOTEBOOK ONLY. Use when the user explicitly asks to save/note/remember content; unqualified 記一下/記下來/remember this means Crew Notebook unless another notes app is named. Do NOT use create_note to put text into a visible UI field such as settings, a system prompt editor, a form, search box, or chat composer; use phone_action(TYPE) for those. App-operational learning such as how the current App behaves belongs to remember_app_guidance, not Notebook. If a selected URL must be parsed and saved: get_selected_region -> read_web_page -> create_note.")
+                "Save persistent Crew Notebook content only when the user explicitly asks to remember/note it. Visible UI fields belong to phone_action(TYPE), not Notebook. App-operation knowledge belongs to remember_app_guidance. Do not invent missing note content.")
                 .put("parameters", new JSONObject().put("type", "OBJECT")
                         .put("properties", new JSONObject()
                                 .put("title", new JSONObject().put("type", "STRING"))
@@ -106,7 +106,7 @@ final class LiveToolCatalog {
                         .put("required", new JSONArray().put("note_id"))));
 
         tools.put(new JSONObject().put("name", "remember_app_guidance").put("description",
-                "CURRENT APP ONLY. Use only when THIS turn explicitly asks Crew to learn/remember an operational fact, workflow hint, UI convention, or pitfall about the currently visible App. Runtime chooses the foreground package; never provide or infer a package. This stores guidance only, not executable code or authorization. Do not store personal facts, message bodies, credentials, OTPs, payment data, or Notebook content.")
+                "Store reusable operational guidance for the CURRENT foreground App only when the user explicitly asks Crew to learn/remember it. This is guidance, never authorization or executable code. Do not store personal facts, message text, credentials, OTPs, payment data, or Notebook content.")
                 .put("parameters", new JSONObject().put("type", "OBJECT")
                         .put("properties", new JSONObject()
                                 .put("title", new JSONObject().put("type", "STRING")
@@ -115,10 +115,10 @@ final class LiveToolCatalog {
                                         .put("description", "Concise reusable operational guidance for this app")))
                         .put("required", new JSONArray().put("guidance"))));
         tools.put(new JSONObject().put("name", "list_app_guidance").put("description",
-                "READ ONLY. Read built-in and user-learned operational guidance for the CURRENT foreground App only when the user asks what Crew already knows/learned. NEVER use this for a request to remember/teach a new rule; teaching is a write operation owned by Runtime/remember_app_guidance. Do not use it as a required pre-step for normal phone actions."));
+                "Read operational guidance already known for the CURRENT foreground App when the user asks what Crew has learned. Do not call this as a required pre-step for ordinary phone actions; use remember_app_guidance for explicit teaching."));
 
         tools.put(new JSONObject().put("name", "inspect_ui").put("description",
-                "FULL-SCREEN VISUAL FALLBACK. Captures a fresh phone screenshot while Runtime separately keeps Accessibility state for execution. Normally use it for current full-screen prices, charts, WebView/custom UI, images or visually rendered text. SELECTED-REGION EXCEPTION: when the user just framed a region and that frozen crop can answer the question, do NOT call inspect_ui merely to see it again; answer from the crop. Call inspect_ui only if the user asks about content outside that selection or the crop genuinely lacks required evidence. Call once when needed; do not SEARCH merely because a value was absent from prior semantic tool text."));
+                "Get one fresh full-screen visual observation when current evidence is insufficient. Use for rendered text, charts, WebView/custom UI or post-action verification. If a user-selected crop already answers the question, answer from that crop instead. Do not repeatedly inspect an unchanged screen."));
         tools.put(new JSONObject().put("name", "wait").put("description",
                 "Wait for a screen condition after an asynchronous action. Runtime polls and returns the latest state.")
                 .put("parameters", new JSONObject().put("type", "OBJECT").put("properties", new JSONObject()
@@ -132,7 +132,7 @@ final class LiveToolCatalog {
         tools.put(new JSONObject()
                 .put("name", "wait_then_action")
                 .put("description",
-                        "Create ONE background Crew Watcher only when the user explicitly asks to wait for a future phone condition and then act or notify. Runtime reacts to Accessibility events immediately, debounces event bursts, and keeps a slow polling fallback; Gemini does not stay active. Use app_opened + NOTIFY for『地圖打開就告訴我』, button_appears for『按鈕出現就叫我』, and element_enabled for『下一步可以按時通知我』. Mutating follow-ups remain same-app only. The follow-up is limited to one low-risk TAP/TYPE/BACK/HOME/COMMIT_SEARCH/NOTIFY action. Never use for sending messages, payments, purchases, deletion, account changes, or other high-risk commits. TAP must use a semantic target, never coordinates.")
+                        "Create one background watcher only when the user explicitly asks to wait for a future phone condition. Runtime waits without Gemini polling, then performs one same-app low-risk action or NOTIFY. Never use it for message sending, payment, purchase, deletion, account changes, credentials, or other sensitive commits. TAP targets stay semantic, never coordinates.")
                 .put("parameters", new JSONObject()
                         .put("type", "OBJECT")
                         .put("properties", new JSONObject()
@@ -180,7 +180,7 @@ final class LiveToolCatalog {
         tools.put(new JSONObject()
                 .put("name", "start_conversation_loop")
                 .put("description",
-                        "Start a bounded delegated Agent task in the CURRENT visible chat when the user's current goal requires ongoing chatting or waiting for the other party and continuing. This creates the task-scoped SEND lease; Message Send No Confirmation does not create it. Runtime does not parse the user's wording again. Do not call merely because a chat is visible. Runtime verifies the current chat surface and enforces timeout/reply bounds.")
+                        "Start bounded delegated chatting in the CURRENT visible chat only when the user asks Crew to keep chatting or wait-and-continue. This creates the task-scoped SEND lease. Runtime verifies the current chat and enforces timeout/reply limits; a visible chat alone is not authority.")
                 .put("parameters", new JSONObject()
                         .put("type", "OBJECT")
                         .put("properties", new JSONObject()
@@ -206,7 +206,7 @@ final class LiveToolCatalog {
                         .put("properties", new JSONObject())));
 
         tools.put(new JSONObject().put("name", "send_text").put("description",
-                "MESSAGE SUBMISSION ONLY for the CURRENT visible chat. Authorization comes from either (A) this user turn explicitly asking to send once, or (B) an ACTIVE task-scoped delegated SEND lease created by start_conversation_loop. Message Send No Confirmation alone is not SEND authority. If Runtime returns DELEGATED_SESSION_REQUIRED during a delegated-chat goal, call start_conversation_loop once and retry send_text once without asking the user to re-authorize. Never search contacts, resolve recipient names, or switch chats for send_text. Runtime verifies the current screen is a chat composer + Send surface before every commit. If the user only asks to type/fill/paste without sending, use phone_action(TYPE). Standalone 送出/發送/send is Runtime-owned.")
+                "Submit one message in the CURRENT visible chat. Authority comes from this turn's explicit send request or an active conversation-loop lease. Runtime verifies the chat composer and send surface. For delegated chat, if Runtime requires a loop, start it once then retry. Never search/switch recipients for send_text. TYPE-only requests use phone_action(TYPE).")
                 .put("parameters", new JSONObject().put("type", "OBJECT")
                         .put("properties", new JSONObject()
                                 .put("text", new JSONObject().put("type", "STRING")
@@ -333,6 +333,7 @@ final class LiveToolCatalog {
     private static boolean isNormalPhoneModelTool(String name) {
         return "phone_action".equals(name)
                 || "inspect_ui".equals(name)
+                || "take_screenshot".equals(name)
                 // 0103: Crew Notebook is a first-class normal-mode capability.
                 // Keep the surface intentionally small: create/search/list only.
                 || "create_note".equals(name)
@@ -377,6 +378,24 @@ final class LiveToolCatalog {
     }
 
 
+    private static String compactDescription(
+            String text,
+            int max) {
+        if (text == null) return "";
+        String value = text.trim();
+        if (value.length() <= max) return value;
+        int limit = Math.max(1, max - 1);
+        int cut = value.lastIndexOf(' ', limit);
+        int sentence = Math.max(
+                value.lastIndexOf(". ", limit),
+                value.lastIndexOf("; ", limit));
+        if (sentence >= Math.max(80, limit / 2)) {
+            cut = sentence + 1;
+        }
+        if (cut < Math.max(40, limit / 2)) cut = limit;
+        return value.substring(0, cut).trim() + "…";
+    }
+
     private static void compactDescriptions(
             Object value,
             int depth) throws Exception {
@@ -395,7 +414,7 @@ final class LiveToolCatalog {
                             : MAX_NESTED_DESCRIPTION_CHARS;
                     String text = ((String) child).trim();
                     if (text.length() > max) {
-                        object.put(key, text.substring(0, max));
+                        object.put(key, compactDescription(text, max));
                     }
                     continue;
                 }
