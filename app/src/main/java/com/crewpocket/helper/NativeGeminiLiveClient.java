@@ -2394,7 +2394,7 @@ final class NativeGeminiLiveClient {
                                 + "工具沒有執行。不要把 guard/error code 告訴使用者；"
                                 + "若確實有新訊息，只用 send_text 並直接帶回覆文字，"
                                 + "不要先 TYPE、不要另外點送出；若只是 UI noise，"
-                                + "用 continue_conversation_loop；需要更多畫面資訊時只用 inspect_ui 或 take_screenshot。");
+                                + "用 continue_conversation_loop；需要畫面資訊時只用 inspect_ui。");
                 if (conversationLoopRecipe.canSend()) {
                     blocked.put("taskState", "IN_PROGRESS")
                             .put("recoverable", true)
@@ -4064,7 +4064,7 @@ final class NativeGeminiLiveClient {
             boolean sent = sendConversationWakeDirective(
                     "【CONVERSATION LOOP WAKE】Runtime 偵測到目前聊天視窗有新的 Accessibility 變化。"
                             + "ACTIVE Conversation Loop lease 已授權在目前聊天室持續回覆；不要說無法發送，不要要求新的 user turn，也不要逐則詢問確認。"
-                            + "現在先呼叫一次 inspect_ui 看 fresh screenshot；若 inspect_ui 無法提供足夠畫面資訊，可改用一次 take_screenshot。"
+                            + "現在只呼叫一次 inspect_ui；它已同時提供 fresh screenshot 與 semantic fallback。"
                             + "若確實有新的對方訊息，自行理解上下文、自然組一則簡短回覆並直接用 send_text 送出；"
                             + "send_text 會完成輸入與送出，不要先 TYPE、不要另外點送出按鈕。"
                             + "若只是自己的訊息、typing indicator 或其他 UI noise，呼叫 continue_conversation_loop 重新等待。"
