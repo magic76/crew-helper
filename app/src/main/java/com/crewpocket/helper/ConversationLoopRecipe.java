@@ -121,7 +121,6 @@ final class ConversationLoopRecipe {
         if ("stop_conversation_loop".equals(name)
                 || "end_voice_session".equals(name)
                 || "inspect_ui".equals(name)
-                || "take_screenshot".equals(name)
                 || "swipe_screen".equals(name)) {
             return true;
         }
