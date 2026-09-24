@@ -333,7 +333,6 @@ final class LiveToolCatalog {
     private static boolean isNormalPhoneModelTool(String name) {
         return "phone_action".equals(name)
                 || "inspect_ui".equals(name)
-                || "take_screenshot".equals(name)
                 // 0103: Crew Notebook is a first-class normal-mode capability.
                 // Keep the surface intentionally small: create/search/list only.
                 || "create_note".equals(name)
