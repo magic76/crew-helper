@@ -45,6 +45,36 @@ public final class MediaPlaybackCompletionPolicyTest {
                         true,
                         false),
                 "pre-existing audio alone does not prove this tap worked");
+        check(MediaPlaybackCompletionPolicy.shouldComplete(
+                        "com.apple.android.music",
+                        "播放",
+                        true,
+                        true,
+                        true,
+                        false,
+                        "MEDIA:PLAY",
+                        true),
+                "explicit play goal plus active audio and changed screen completes");
+        check(!MediaPlaybackCompletionPolicy.shouldComplete(
+                        "com.apple.android.music",
+                        "播放",
+                        true,
+                        true,
+                        true,
+                        false,
+                        "MEDIA:PLAY",
+                        false),
+                "explicit play goal still needs observable UI effect when audio was already active");
+        check(!MediaPlaybackCompletionPolicy.shouldComplete(
+                        "com.apple.android.music",
+                        "播放",
+                        true,
+                        true,
+                        true,
+                        false,
+                        "SEARCH:RESULT",
+                        true),
+                "unrelated terminal goal cannot use the relaxed play completion path");
         check(!MediaPlaybackCompletionPolicy.shouldComplete(
                         "com.apple.android.music",
                         "播放",
