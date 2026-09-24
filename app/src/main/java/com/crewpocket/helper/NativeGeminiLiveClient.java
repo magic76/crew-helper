@@ -699,7 +699,13 @@ final class NativeGeminiLiveClient {
 
     /** Cancels queued work and disconnects the currently blocking local bridge request. */
     boolean cancelAgentTask(String reason) {
-        AgentTaskRecord task = agentTaskCoordinator.cancelActive(reason);
+        return cancelAgentTask(reason, "");
+    }
+
+    private boolean cancelAgentTask(String reason, String category) {
+        AgentTaskRecord task = category == null || category.trim().isEmpty()
+                ? agentTaskCoordinator.cancelActive(reason)
+                : agentTaskCoordinator.cancelActive(reason, category);
         if (task == null) return false;
 
         toolCallDispatcher.clearPending();
@@ -720,10 +726,35 @@ final class NativeGeminiLiveClient {
         return true;
     }
 
-    private void supersedeActiveAgentTaskForNewUserInstruction() {
-        if (hasActiveAgentTask()) {
-            cancelAgentTask("新使用者指令取代舊任務");
+    private void supersedeActiveAgentTaskForNewUserInstruction(
+            String previousUserTurn,
+            String newUserTurn) {
+        AgentTaskRecord active = agentTaskCoordinator.activeRunning();
+        if (active == null) return;
+
+        UserRetryAfterUnconfirmedOutcomePolicy.Decision retry =
+                UserRetryAfterUnconfirmedOutcomePolicy.evaluate(
+                        previousUserTurn,
+                        newUserTurn,
+                        System.currentTimeMillis(),
+                        active.lastSuccessfulMutationAtMs,
+                        active.mutationActions,
+                        active.lastTaskState);
+        if (retry.retry) {
+            synchronized (agentTaskCoordinator.monitor()) {
+                if (agentTaskCoordinator.isActive(active)
+                        && !active.finished
+                        && !active.cancelled) {
+                    active.retryIntentFamily = retry.intentFamily;
+                }
+            }
+            cancelAgentTask(
+                    "使用者重試尚未確認完成的操作",
+                    UserRetryAfterUnconfirmedOutcomePolicy.CATEGORY);
+            return;
         }
+
+        cancelAgentTask("新使用者指令取代舊任務");
     }
 
     /**
@@ -742,6 +773,9 @@ final class NativeGeminiLiveClient {
     private void beginUserIntent(
             String userText,
             boolean supersedeActiveTask) {
+        String previousUserTurn =
+                workingContext.toJson().optString("latestUserTurn", "");
+
         liveTurnCoordinator.closeOperationalGeneration(
                 userIntentGeneration);
         clearPendingInternalDirectiveTurn();
@@ -817,7 +851,9 @@ final class NativeGeminiLiveClient {
                 userIntentGeneration, conversationGoalId, shadowTaskId, startNewCapsule);
 
         if (supersedeActiveTask) {
-            supersedeActiveAgentTaskForNewUserInstruction();
+            supersedeActiveAgentTaskForNewUserInstruction(
+                    previousUserTurn,
+                    userText);
         }
         Log.d(TAG, "新的使用者意圖：generation=" + userIntentGeneration
                 + " capsule=" + (startNewCapsule ? "NEW" : "CONTINUE")
@@ -2619,6 +2655,11 @@ final class NativeGeminiLiveClient {
             task.lastTaskState = result.optString("taskState", "").trim();
             task.lastCompletionEvidence =
                     result.optString("completionEvidence", "").trim();
+            if (isMutationTool(name)
+                    && (result.optBoolean("success", false)
+                        || "STEP_OK".equals(result.optString("stepResult", "")))) {
+                task.lastSuccessfulMutationAtMs = System.currentTimeMillis();
+            }
             task.prematureModelReplies = 0;
             task.captureRecipeStep(name, args, result, recipeBeforeContext);
             task.addStep(name, result);
