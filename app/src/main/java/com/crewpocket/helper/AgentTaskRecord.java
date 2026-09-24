@@ -24,6 +24,7 @@ final class AgentTaskRecord {
     int steps;
     int mutationActions;
     int observationActions;
+    int consecutiveVisualObservations;
     int consecutiveMutationFailures;
     int stabilityBlocks;
     boolean requireObservationAfterFailure;
@@ -302,6 +303,7 @@ final class AgentTaskRecord {
                     .put("stepDiagnostics", new JSONArray(stepDiagnostics))
                     .put("stepCount", steps)
                     .put("mutationActions", mutationActions)
+                    .put("consecutiveVisualObservations", consecutiveVisualObservations)
                     .put("blockedReason", blockedReason == null ? "" : blockedReason)
                     .put("endReason", endReason)
                     .put("finalReply", finalReply)
