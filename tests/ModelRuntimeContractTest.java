@@ -12,6 +12,8 @@ public final class ModelRuntimeContractTest {
         blockedPolicyStops();
         recoverableFailureUsesAlternative();
         delegatedChatNamesRequiredTool();
+        verifiedSendCanWaitForRuntime();
+        blockedLoopToolContinuesGoal();
         System.out.println(
                 "ModelRuntimeContractTest passed " + checks + " checks");
     }
@@ -76,6 +78,26 @@ public final class ModelRuntimeContractTest {
                 "START_CONVERSATION_LOOP");
         expect(ModelRuntimeContract.NEXT_CONTINUE, g.next);
         expect("start_conversation_loop", g.requiredTool);
+    }
+
+    private static void verifiedSendCanWaitForRuntime() {
+        expect(
+                "VERIFIED",
+                ModelRuntimeContract.actionState(
+                        "WAIT", true, true, false, false));
+        ModelRuntimeContract.Goal g = ModelRuntimeContract.deriveGoal(
+                "WAITING_BACKGROUND", "", "WAIT", "", "WAIT_FOR_RUNTIME");
+        expect(ModelRuntimeContract.GOAL_WAITING_RUNTIME, g.state);
+    }
+
+    private static void blockedLoopToolContinuesGoal() {
+        ModelRuntimeContract.Goal g = ModelRuntimeContract.deriveGoal(
+                "IN_PROGRESS",
+                "SEND_TEXT_OR_CONTINUE_CONVERSATION_LOOP",
+                "WAIT",
+                "CONVERSATION_LOOP_TOOL_BLOCKED",
+                "OBSERVE");
+        expect(ModelRuntimeContract.NEXT_CONTINUE, g.next);
     }
 
     private static void expect(String expected, String actual) {
