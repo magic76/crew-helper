@@ -3769,6 +3769,7 @@ final class NativeGeminiLiveClient {
         return conversationLoopStatusJson()
                 .put("success", true)
                 .put("taskState", "IN_PROGRESS")
+                .put("nextRequirement", "CONTINUE_GOAL")
                 .put("conversationLoop", "READY_TO_SEND")
                 .put("instruction",
                         "持續對話已綁定目前聊天視窗。不要搜尋聯絡人或切換聊天室；ACTIVE lease 已授權在目前聊天室後續回覆。");
