@@ -106,12 +106,14 @@ public class CrewExperienceActivity extends Activity {
         int candidate = 0;
         int verified = 0;
         int suspect = 0;
+        int stale = 0;
         for (int i = 0; i < items.length(); i++) {
             JSONObject item = items.optJSONObject(i);
             if (item == null) continue;
             String state = item.optString("state", ReflectionLessonStore.STATE_CANDIDATE);
             if (ReflectionLessonStore.STATE_VERIFIED.equals(state)) verified++;
             else if (ReflectionLessonStore.STATE_SUSPECT.equals(state)) suspect++;
+            else if (ReflectionLessonStore.STATE_STALE.equals(state)) stale++;
             else candidate++;
         }
 
@@ -119,10 +121,12 @@ public class CrewExperienceActivity extends Activity {
                 I18n.get(this,
                         items.length() + " 條 · " + verified + " 已驗證 · "
                                 + candidate + " 候選"
-                                + (suspect > 0 ? " · " + suspect + " 待確認" : ""),
+                                + (suspect > 0 ? " · " + suspect + " 待確認" : "")
+                                + (stale > 0 ? " · " + stale + " 已過期" : ""),
                         items.length() + " lessons · " + verified + " verified · "
                                 + candidate + " candidates"
-                                + (suspect > 0 ? " · " + suspect + " suspect" : "")),
+                                + (suspect > 0 ? " · " + suspect + " suspect" : "")
+                                + (stale > 0 ? " · " + stale + " stale" : "")),
                 10.5f, CrewTheme.TEAL_300, true);
         stats.setPadding(dp(12), dp(9), dp(12), dp(9));
         stats.setBackground(CrewTheme.createCard(
@@ -223,7 +227,10 @@ public class CrewExperienceActivity extends Activity {
         int statusColor = ReflectionLessonStore.STATE_VERIFIED.equals(state)
                 ? CrewTheme.EMERALD_400
                 : ReflectionLessonStore.STATE_SUSPECT.equals(state)
-                        ? CrewTheme.ROSE_400 : CrewTheme.INDIGO_400;
+                        ? CrewTheme.ROSE_400
+                        : ReflectionLessonStore.STATE_STALE.equals(state)
+                                ? CrewTheme.TEXT_MUTED
+                                : CrewTheme.INDIGO_400;
         TextView chip = text(friendlyState(state), 9, statusColor, true);
         chip.setPadding(dp(8), dp(3), dp(8), dp(3));
         chip.setBackground(CrewTheme.createCard(
@@ -265,6 +272,16 @@ public class CrewExperienceActivity extends Activity {
         if (updatedAt > 0L) meta += " · " + formatTime(updatedAt);
 
         card.addView(text(meta, 9.5f, CrewTheme.TEXT_MUTED, false));
+
+        if (ReflectionLessonStore.STATE_STALE.equals(state)) {
+            TextView staleNote = text(
+                    I18n.get(this,
+                            "這條 Experience 來自舊 Runtime 策略；保留歷史，但不會再累積確認或升級到 App Playbook。",
+                            "This Experience belongs to an older Runtime policy. It is kept for history but cannot gain confirmations or promote to App Playbook."),
+                    9.5f, CrewTheme.TEXT_MUTED, false);
+            staleNote.setPadding(0, dp(5), 0, 0);
+            card.addView(staleNote);
+        }
 
         if (!item.optString("playbookRuleId", "").isEmpty()) {
             TextView promoted = text(
@@ -398,6 +415,9 @@ public class CrewExperienceActivity extends Activity {
         }
         if (ReflectionLessonStore.STATE_SUSPECT.equals(state)) {
             return I18n.get(this, "待確認", "SUSPECT");
+        }
+        if (ReflectionLessonStore.STATE_STALE.equals(state)) {
+            return I18n.get(this, "已過期", "STALE");
         }
         return I18n.get(this, "候選", "CANDIDATE");
     }
