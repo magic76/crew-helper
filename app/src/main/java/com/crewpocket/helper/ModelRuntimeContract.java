@@ -74,6 +74,9 @@ final class ModelRuntimeContract {
         if (requirement.contains("INSPECT_UI")) {
             return new Goal(GOAL_IN_PROGRESS, NEXT_OBSERVE, "inspect_ui");
         }
+        if (requirement.contains("SEND_TEXT_OR_CONTINUE_CONVERSATION_LOOP")) {
+            return new Goal(GOAL_IN_PROGRESS, NEXT_CONTINUE, "");
+        }
         if (requirement.contains("START_CONVERSATION_LOOP")) {
             return new Goal(
                     GOAL_IN_PROGRESS, NEXT_CONTINUE, "start_conversation_loop");
@@ -126,10 +129,22 @@ final class ModelRuntimeContract {
     }
 
     static String actionState(String modelStatus) {
+        return actionState(modelStatus, false, false, false, false);
+    }
+
+    static String actionState(
+            String modelStatus,
+            boolean success,
+            boolean verifiedCommit,
+            boolean pendingVerification,
+            boolean blocked) {
         String status = upper(modelStatus);
-        if ("DONE".equals(status)) return "VERIFIED";
+        if (blocked || "NEED_USER".equals(status)) return "BLOCKED";
+        if (pendingVerification) return "PENDING";
+        if (verifiedCommit || success || "DONE".equals(status)) {
+            return "VERIFIED";
+        }
         if ("WAIT".equals(status)) return "PENDING";
-        if ("NEED_USER".equals(status)) return "BLOCKED";
         return "FAILED";
     }
 
