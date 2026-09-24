@@ -11,6 +11,8 @@ public final class LivePromptTest {
         check(LivePrompt.CORE.contains("action.state")
                         && LivePrompt.CORE.contains("goal.state"),
                 "prompt must separate action state from goal state");
+        check(LivePrompt.CORE.contains("goal.intent"),
+                "prompt must preserve bounded terminal intent");
         check(LivePrompt.CORE.contains("goal.requiredTool"),
                 "prompt must honor exact Runtime-required tool hints");
         check(LivePrompt.CORE.contains("goal.requiredAction"),
@@ -20,8 +22,10 @@ public final class LivePromptTest {
         check(!LivePrompt.CORE.contains("taskState=")
                         && !LivePrompt.CORE.contains("nextRequirement="),
                 "prompt must not teach internal Runtime state languages");
-        check(LivePrompt.CORE.contains("take_screenshot"),
-                "visual fallback mentioned by prompt must be model-facing");
+        check(!LivePrompt.CORE.contains("take_screenshot"),
+                "core prompt should keep one visual observation path");
+        check(LivePrompt.CORE.contains("fresh screenshot plus semantic fallback"),
+                "inspect_ui should explain its complete visual evidence");
 
         System.out.println(
                 "LivePromptTest passed " + checks + " checks");
