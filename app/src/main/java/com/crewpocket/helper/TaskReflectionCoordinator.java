@@ -37,7 +37,11 @@ final class TaskReflectionCoordinator {
                              JSONObject sanitizedTask,
                              boolean activeTask) {
         if (context == null || sanitizedTask == null || activeTask) return;
-        if (!String.valueOf(rawStatus).contains("Agent 任務結束")) return;
+        boolean retryFriction = isImplicitUserRetry(sanitizedTask);
+        if (!String.valueOf(rawStatus).contains("Agent 任務結束")
+                && !retryFriction) {
+            return;
+        }
 
         final Context appContext = context.getApplicationContext();
         final JSONObject task;
@@ -70,7 +74,9 @@ final class TaskReflectionCoordinator {
             String packageName = currentPackage();
             JSONArray currentSteps = task.optJSONArray("steps");
             boolean usedSendText = usedTool(currentSteps, "send_text");
-            boolean cancelled = ReflectionLearningPolicy.looksCancelled(rawStatus);
+            boolean retryFriction = isImplicitUserRetry(task);
+            boolean cancelled = ReflectionLearningPolicy.looksCancelled(rawStatus)
+                    && !retryFriction;
 
             if (!ReflectionLearningPolicy.allowsExperienceLearning(
                     false, cancelled, usedSendText, packageName)) {
@@ -97,7 +103,8 @@ final class TaskReflectionCoordinator {
             String appLabel = AppRuntimeRegistry.displayName(context, packageName);
             String outcome = AgentInspectorStore.isSuccessfulTaskEnd(rawStatus)
                     ? "SUCCESS" : "FAILED";
-            if (task.optBoolean("partialOutcome", false)
+            if (retryFriction
+                    || task.optBoolean("partialOutcome", false)
                     || task.optBoolean("modelRefusal", false)) {
                 outcome = "PARTIAL";
             }
@@ -164,7 +171,24 @@ final class TaskReflectionCoordinator {
                 ? new ArrayList<ReflectionRuleEvidence.Step>()
                 : steps(previousTask.optJSONArray("steps"));
         List<ReflectionRuleEvidence.Step> current = steps(task.optJSONArray("steps"));
-        return ReflectionRuleEvidence.derive(previous, current);
+        ArrayList<ReflectionRuleEvidence.Candidate> out =
+                new ArrayList<ReflectionRuleEvidence.Candidate>(
+                        ReflectionRuleEvidence.derive(previous, current));
+
+        if (isImplicitUserRetry(task)) {
+            ReflectionRuleEvidence.Candidate retry =
+                    ReflectionRuleEvidence.implicitUserRetry(
+                            task.optString("retryIntentFamily", ""),
+                            current);
+            if (retry != null) out.add(retry);
+        }
+        return out;
+    }
+
+    private static boolean isImplicitUserRetry(JSONObject task) {
+        return task != null
+                && UserRetryAfterUnconfirmedOutcomePolicy.CATEGORY.equals(
+                        task.optString("cancelCategory", ""));
     }
 
     private static List<ReflectionRuleEvidence.Candidate> limitCandidates(
