@@ -2488,7 +2488,7 @@ final class NativeGeminiLiveClient {
                             "上一個相同操作仍待驗證或剛失敗。先 inspect_ui 一次；不要原樣重做 mutation。");
                     try {
                         blocked.put("taskState", "IN_PROGRESS");
-                        blocked.put("nextRequirement", "inspect_ui once");
+                        blocked.put("nextRequirement", "INSPECT_UI");
                         sendToolResponse(id, requestedName, blocked);
                     } catch (Exception ignored) {}
                     return;
