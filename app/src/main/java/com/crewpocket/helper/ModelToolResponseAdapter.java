@@ -470,15 +470,15 @@ final class ModelToolResponseAdapter {
         if ("TAP".equals(semantic)
                 || "tap_screen".equals(runtime)
                 || "tap_element".equals(runtime)) {
-            return "操作完成。";
+            return "這一步已驗證。";
         }
         if ("BACK".equals(semantic) || "HOME".equals(semantic)
                 || "press_key".equals(runtime)) {
-            return "操作完成。";
+            return "這一步已驗證。";
         }
 
         String existing = result.optString("message", "").trim();
-        return existing.isEmpty() ? "操作完成。" : existing;
+        return existing.isEmpty() ? "這一步已驗證。" : existing;
     }
 
     private static JSONObject screen(JSONObject result) {
