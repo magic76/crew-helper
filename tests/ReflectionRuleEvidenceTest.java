@@ -119,6 +119,23 @@ public final class ReflectionRuleEvidenceTest {
                         && mediumFriction.get(0).frictionScore == 4,
                 "direct retry should carry medium friction score");
 
+        List<ReflectionRuleEvidence.Step> userRetry =
+                new ArrayList<ReflectionRuleEvidence.Step>();
+        userRetry.add(step(
+                "tap_screen", "SUCCESS", "", "", "TAP"));
+        ReflectionRuleEvidence.Candidate implicitRetry =
+                ReflectionRuleEvidence.implicitUserRetry(
+                        "CONTROL:PAUSE",
+                        userRetry);
+        check(implicitRetry != null
+                        && ReflectionRuleEvidence.KIND_FRICTION.equals(implicitRetry.kind)
+                        && "CONTROL:PAUSE".equals(implicitRetry.scope)
+                        && UserRetryAfterUnconfirmedOutcomePolicy.CONDITION.equals(
+                                implicitRetry.condition)
+                        && "VERIFY_GOAL_OUTCOME".equals(implicitRetry.response)
+                        && implicitRetry.frictionScore == 4,
+                "human retry after unconfirmed success should be medium friction");
+
         check("route_mode:*".equals(
                 ReflectionRuleEvidence.semanticFamily("route_mode:WALKING")),
                 "semantic family should normalize concept values");
