@@ -50,6 +50,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/ElementReferenceChoice.java" \
   "$SRC/ElementReferenceLayout.java" \
   "$SRC/GoalTaskContinuityPolicy.java" \
+  "$SRC/GoalIntentKey.java" \
   "$SRC/UserRetryAfterUnconfirmedOutcomePolicy.java" \
   "$SRC/InspectorTaskState.java" \
   "$SRC/InspectorTraceScope.java" \
@@ -113,6 +114,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/ElementReferenceChoiceTest.java" \
   "$ROOT/tests/ElementReferenceLayoutTest.java" \
   "$ROOT/tests/GoalTaskContinuityPolicyTest.java" \
+  "$ROOT/tests/GoalIntentKeyTest.java" \
   "$ROOT/tests/UserRetryAfterUnconfirmedOutcomePolicyTest.java" \
   "$ROOT/tests/InspectorTaskStateTest.java" \
   "$ROOT/tests/InspectorTraceScopeTest.java" \
@@ -176,6 +178,7 @@ java -cp "$OUT" com.crewpocket.helper.ElementReferenceCommandTest
 java -cp "$OUT" com.crewpocket.helper.ElementReferenceChoiceTest
 java -cp "$OUT" com.crewpocket.helper.ElementReferenceLayoutTest
 java -cp "$OUT" com.crewpocket.helper.GoalTaskContinuityPolicyTest
+java -cp "$OUT" com.crewpocket.helper.GoalIntentKeyTest
 java -cp "$OUT" com.crewpocket.helper.UserRetryAfterUnconfirmedOutcomePolicyTest
 java -cp "$OUT" com.crewpocket.helper.InspectorTaskStateTest
 java -cp "$OUT" com.crewpocket.helper.InspectorTraceScopeTest
