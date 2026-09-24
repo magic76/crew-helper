@@ -109,6 +109,7 @@ final class AgentPerformanceStore {
         int recovered = 0;
         int partial = 0;
         int cancelled = 0;
+        int implicitUserRetries = 0;
         int excludedFromSuccessRate = 0;
         int hardFailure = 0;
         LinkedHashMap<String, Integer> cancelCategories =
@@ -134,6 +135,9 @@ final class AgentPerformanceStore {
                 cancelled++;
                 String category = item.optString("cancelCategory", "").trim();
                 if (category.isEmpty()) category = "UNKNOWN";
+                if (UserRetryAfterUnconfirmedOutcomePolicy.CATEGORY.equals(category)) {
+                    implicitUserRetries++;
+                }
                 if (isExcludedFromSuccessRate(category)) {
                     excludedFromSuccessRate++;
                 }
@@ -175,6 +179,11 @@ final class AgentPerformanceStore {
                 out.append(entry.getKey()).append("=").append(entry.getValue());
             }
             out.append("\n");
+        }
+        if (implicitUserRetries > 0) {
+            out.append("User retries after unconfirmed outcome: ")
+                    .append(implicitUserRetries)
+                    .append(" · included in success-rate evaluation\n");
         }
         int evaluatedTotal = Math.max(0, total - excludedFromSuccessRate);
         out.append("Full-success rate: ");
