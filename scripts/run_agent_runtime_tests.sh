@@ -32,6 +32,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/LiveHumanTurnBoundary.java" \
   "$SRC/LiveModelProgressPolicy.java" \
   "$SRC/MediaPlaybackCompletionPolicy.java" \
+  "$SRC/MediaGoalUiPolicy.java" \
   "$SRC/ToolCallDispatchLedger.java" \
   "$SRC/RuntimeToolRouting.java" \
   "$SRC/ToolIntentRoutingPolicy.java" \
@@ -90,6 +91,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/LiveHumanTurnBoundaryTest.java" \
   "$ROOT/tests/LiveModelProgressPolicyTest.java" \
   "$ROOT/tests/MediaPlaybackCompletionPolicyTest.java" \
+  "$ROOT/tests/MediaGoalUiPolicyTest.java" \
   "$ROOT/tests/ToolCallDispatchLedgerTest.java" \
   "$ROOT/tests/RuntimeToolRoutingTest.java" \
   "$ROOT/tests/ToolIntentRoutingPolicyTest.java" \
@@ -156,6 +158,7 @@ java -cp "$OUT" com.crewpocket.helper.LiveTurnOrderingPolicyTest
 java -cp "$OUT" com.crewpocket.helper.LiveHumanTurnBoundaryTest
 java -cp "$OUT" com.crewpocket.helper.LiveModelProgressPolicyTest
 java -cp "$OUT" com.crewpocket.helper.MediaPlaybackCompletionPolicyTest
+java -cp "$OUT" com.crewpocket.helper.MediaGoalUiPolicyTest
 java -cp "$OUT" com.crewpocket.helper.ToolCallDispatchLedgerTest
 java -cp "$OUT" com.crewpocket.helper.RuntimeToolRoutingTest
 java -cp "$OUT" com.crewpocket.helper.ToolIntentRoutingPolicyTest
