@@ -88,11 +88,17 @@ final class UserActionScope {
 
         boolean navigation = hasNavigationIntent(value);
         boolean search = hasSearchIntent(value) || navigation;
+        String terminalIntent = GoalIntentKey.derive(text);
+        boolean mediaPlayContinuation =
+                "MEDIA:PLAY".equals(terminalIntent);
         // Runtime's deterministic result-selection adapter is currently Maps-only.
-        // Reserve it for navigation flows. Generic "search then open/select" stays
-        // authorized but returns the fresh result screen to Live for a semantic TAP.
+        // Reserve it for navigation flows. Generic executable continuations such
+        // as "search artist then play" stay authorized but return the fresh result
+        // screen to Live for a semantic TAP. Pure search remains search-only.
         boolean resultSelection = navigation;
-        boolean openResult = navigation || hasPostSearchOpenIntent(value);
+        boolean openResult = navigation
+                || mediaPlayContinuation
+                || hasPostSearchOpenIntent(value);
 
         sendAuthorization.updateFromUserText(text);
 
@@ -100,7 +106,9 @@ final class UserActionScope {
         searchResultSelectionRequested = resultSelection;
         searchContinuation = navigation
                 ? "NAVIGATE"
-                : (openResult ? "OPEN_RESULT" : "RESULT_DETAILS");
+                : (mediaPlayContinuation
+                        ? "MEDIA:PLAY"
+                        : (openResult ? "OPEN_RESULT" : "RESULT_DETAILS"));
         openSearchResultAuthorized = openResult;
         searchQueryEntered = false;
         searchCommitted = false;
