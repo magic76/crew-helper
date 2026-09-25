@@ -50,11 +50,21 @@ public final class MediaPlaybackCompletionPolicyTest {
                         "播放",
                         true,
                         true,
-                        true,
+                        false,
                         false,
                         "MEDIA:PLAY",
                         true),
-                "explicit play goal plus active audio and changed screen completes");
+                "explicit play goal plus verified screen effect completes without waiting for AudioManager");
+        check(MediaPlaybackCompletionPolicy.shouldComplete(
+                        "com.example.music",
+                        "播放",
+                        true,
+                        false,
+                        false,
+                        false,
+                        "MEDIA:PLAY",
+                        true),
+                "generic explicit media play goal may complete from verified low-risk play-control effect");
         check(!MediaPlaybackCompletionPolicy.shouldComplete(
                         "com.apple.android.music",
                         "播放",
@@ -64,7 +74,7 @@ public final class MediaPlaybackCompletionPolicyTest {
                         false,
                         "MEDIA:PLAY",
                         false),
-                "explicit play goal still needs observable UI effect when audio was already active");
+                "explicit play goal still needs observable action effect");
         check(!MediaPlaybackCompletionPolicy.shouldComplete(
                         "com.apple.android.music",
                         "播放",
@@ -90,7 +100,7 @@ public final class MediaPlaybackCompletionPolicyTest {
                         false,
                         true,
                         true),
-                "unknown app does not gain media completion authority");
+                "unknown app without explicit MEDIA:PLAY goal does not gain completion authority");
 
         System.out.println(
                 "PASS MediaPlaybackCompletionPolicyTest: "

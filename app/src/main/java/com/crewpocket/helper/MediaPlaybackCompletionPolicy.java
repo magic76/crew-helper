@@ -67,14 +67,23 @@ final class MediaPlaybackCompletionPolicy {
                 !musicActiveBefore && musicActiveAfter;
         boolean explicitPlayGoalEffect =
                 "MEDIA:PLAY".equals(clean(goalIntent))
-                        && musicActiveAfter
                         && screenChanged;
+
+        if (!isPlayControl(targetMetadata) || !tapSuccess) {
+            return false;
+        }
+
+        // Strong playback evidence stays available for the default trusted
+        // package. But when the user's terminal goal is explicitly MEDIA:PLAY,
+        // a verified Play-control tap that produced an observable screen effect
+        // is already sufficient proof that the app accepted the requested
+        // low-risk action. Do not wait on AudioManager/UI state and then time out.
+        if (explicitPlayGoalEffect) {
+            return true;
+        }
+
         return isDefaultTrustedPackage(packageName)
-                && isPlayControl(targetMetadata)
-                && tapSuccess
-                && (playbackBecameActive
-                        || uiIndicatesPlaying
-                        || explicitPlayGoalEffect);
+                && (playbackBecameActive || uiIndicatesPlaying);
     }
 
     private static String clean(String value) {
