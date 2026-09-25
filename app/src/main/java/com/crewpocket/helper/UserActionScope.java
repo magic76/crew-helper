@@ -320,7 +320,19 @@ final class UserActionScope {
         return isSearchOnlyLocked() && searchQueryEntered;
     }
 
-    synchronized boolean shouldBlockTapForSearch(String metadata, boolean coordinateOnly) {
+    synchronized boolean shouldBlockTapForSearch(
+            String metadata,
+            boolean coordinateOnly) {
+        return shouldBlockTapForSearch(
+                metadata,
+                coordinateOnly,
+                false);
+    }
+
+    synchronized boolean shouldBlockTapForSearch(
+            String metadata,
+            boolean coordinateOnly,
+            boolean allowLowRiskResultBrowse) {
         expireIfNeeded();
         if (!isSearchOnlyLocked() || openSearchResultAuthorized) return false;
 
@@ -330,6 +342,15 @@ final class UserActionScope {
         if (!searchQueryEntered) {
             if (isSearchControl(meta)) return false;
             return !coordinateOnly;
+        }
+
+        // Some low-risk content apps expose a suggestion/result row as the
+        // required next step after typing a query. Runtime may allow opening
+        // that result without granting any higher-risk action or playback.
+        if (allowLowRiskResultBrowse
+                && !coordinateOnly
+                && !isSearchControl(meta)) {
+            return false;
         }
 
         // Query text is not completion. Until Runtime commits the search, only
