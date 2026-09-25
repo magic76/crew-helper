@@ -28,6 +28,8 @@ public final class UserActionScopeTest {
         scope.markSearchCommitted();
         check("COMMIT_DISPATCHED".equals(scope.modelSearchPhase()),
                 "commit-dispatched phase is explicit before result evidence");
+        check(scope.shouldSuppressSearchCommit(),
+                "already dispatched commit is suppressed");
         check(scope.shouldBlockTapForSearch("蔡依林", false),
                 "pure search still blocks opening a result");
 
@@ -40,6 +42,8 @@ public final class UserActionScopeTest {
         scope.markSearchResultsObserved();
         check("RESULTS_OBSERVED".equals(scope.modelSearchPhase()),
                 "result evidence has its own persistent search phase");
+        check(scope.shouldSuppressSearchCommit(),
+                "result phase also suppresses duplicate commit");
         check(!scope.shouldBlockTapForSearch("蔡依林", false),
                 "search then play may open the artist result");
 
