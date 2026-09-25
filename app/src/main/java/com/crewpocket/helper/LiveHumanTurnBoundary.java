@@ -105,12 +105,16 @@ final class LiveHumanTurnBoundary {
                     !modelSpokenSinceFinalized
                             && elapsed <= SEGMENT_MERGE_WINDOW_MS;
 
-            if (interactionStillOpen || silentSegmentGrace) {
+            boolean boundedLiveContinuation =
+                    interactionStillOpen
+                            && elapsed <= SEGMENT_MERGE_WINDOW_MS;
+
+            if (boundedLiveContinuation || silentSegmentGrace) {
                 return commit(
                         Decision.MERGE_CURRENT_SEGMENT,
                         mergeText(currentText, text),
                         nowMs,
-                        interactionStillOpen
+                        boundedLiveContinuation
                                 ? "LIVE_INTERACTION_CONTINUES"
                                 : "SILENT_SEGMENT_GRACE");
             }
@@ -208,7 +212,11 @@ final class LiveHumanTurnBoundary {
         return containsAny(
                 text,
                 "停止", "取消", "等等", "等一下", "不要", "不是", "改成", "換成", "换成",
-                "stop", "cancel", "wait", "wrong", "instead", "changeto");
+                "錯了", "错了", "不對", "不对", "搞錯", "搞错", "弄錯", "弄错",
+                "你做錯", "你做错", "我是說", "我是说", "我說的是", "我说的是",
+                "我要的是", "應該是", "应该是", "重新來", "重新来",
+                "stop", "cancel", "wait", "wrong", "that'swrong", "thatswrong",
+                "imeant", "notthat", "instead", "changeto");
     }
 
     private static boolean containsAny(String value, String... terms) {
