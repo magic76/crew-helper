@@ -32,7 +32,9 @@ final class LiveToolCatalog {
                                 .put("SCROLL").put("BACK").put("HOME"))
                         .put("description", "Choose exactly one semantic next action; Runtime decides Android implementation."))
                 .put("target", new JSONObject().put("type", "STRING")
-                        .put("description", "Human semantic target or App name. Examples: Google, Search, Wi-Fi, first result. Do not pass coordinates/resource IDs."))
+                        .put("description", "Human semantic target or App name. Examples: Google, Search, Wi-Fi, first result. Never pass coordinates or Android resource IDs."))
+                .put("element_id", new JSONObject().put("type", "STRING")
+                        .put("description", "For TAP only: exact opaque screen.items[].id from the latest inspect/tool screen when available. Never invent or reuse it after the screen changes. Prefer this over label-only TAP for a specific visible item."))
                 .put("text", new JSONObject().put("type", "STRING")
                         .put("description", "For TYPE: exact text to put into the current visible editable field (settings, system prompt, form, note field, search box, or chat composer). TYPE never submits. For SEARCH: the query."))
                 .put("direction", new JSONObject().put("type", "STRING")
@@ -43,7 +45,7 @@ final class LiveToolCatalog {
                         .put("description", "Optional SCROLL distance."));
         tools.put(new JSONObject().put("name", "phone_action")
                 .put("description",
-                        "Perform exactly ONE semantic phone step. Choose WHAT: OPEN_APP, SEARCH, COMMIT_SEARCH, TAP, TYPE, SCROLL, BACK or HOME; Runtime owns HOW, selectors and verification. TYPE never submits. SEARCH owns query entry; do not manually TAP+TYPE a search. Use send_text only for message submission. SCROLL direction describes content direction, not finger motion.")
+                        "Perform exactly ONE semantic phone step. Choose WHAT: OPEN_APP, SEARCH, COMMIT_SEARCH, TAP, TYPE, SCROLL, BACK or HOME; Runtime owns HOW and verification. For a specific visible TAP item, pass its latest screen.items[].id as element_id when available; otherwise use target. TYPE never submits. SEARCH owns query entry; do not manually TAP+TYPE a search. Use send_text only for message submission.")
                 .put("parameters", new JSONObject().put("type", "OBJECT")
                         .put("properties", phoneActionProperties)
                         .put("required", new JSONArray().put("action"))));
