@@ -2378,19 +2378,32 @@ final class NativeGeminiLiveClient {
         // 0034: model-facing semantic action -> existing trusted Runtime tool.
         final SemanticPhoneAction.Resolution semantic;
         try {
+            JSONObject progress =
+                    workingContext.toProgressJson();
+            String goalIntent =
+                    progress.optString("goalIntent", "");
+            String goalText =
+                    progress.optString(
+                            "goal",
+                            progress.optString("rootGoal", ""));
+
+            JSONObject semanticInputArgs =
+                    recoverMediaPlayTapArgs(
+                            requestedName,
+                            requestedArgs,
+                            goalIntent,
+                            goalText);
+
             SemanticPhoneAction.Resolution resolved =
                     SemanticPhoneAction.resolve(
                             requestedName,
-                            requestedArgs);
+                            semanticInputArgs);
 
             // Tool-intent correction must happen BEFORE preflight / Inspector /
             // verification so every layer agrees on what actually executed.
             // Weak Live turns sometimes choose TYPE while pursuing a search or
             // MEDIA:PLAY goal. Treat that as SEARCH instead of executing a
             // hidden late remap that still reports TYPE back to the model.
-            String goalIntent = workingContext
-                    .toProgressJson()
-                    .optString("goalIntent", "");
             boolean typeShouldBeSearch =
                     ToolIntentRoutingPolicy.shouldRemapTypeToSearch(
                             resolved.runtimeName,
@@ -2826,6 +2839,11 @@ final class NativeGeminiLiveClient {
                 ActionVerificationResult verification = agentRuntimeV2.verifyAndRecord(
                         id, evidence, observationVerificationController.latestObservation());
                 applyV2VerificationContract(result, verification);
+                reconcileMediaPlayCompletionAfterV2(
+                        result,
+                        semantic,
+                        name,
+                        verification);
             }
             if (isPhoneContextTool(name)) attachCurrentAppPlaybook(result);
             updateTaskCompletionContract(
