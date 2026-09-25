@@ -5513,9 +5513,15 @@ final class NativeGeminiLiveClient {
             if (commit.optBoolean("success", false)) {
                 workingContext.recordAction("search_commit", "submitted");
                 JSONObject observed = observationVerificationController.autoObserveAfterMutation(commit, "search_commit");
-                boolean searchOnlyBoundary = userActionScope.markSearchCommitted();
+                boolean searchOnlyBoundary =
+                        commit.optBoolean("resultsObserved", false)
+                                ? userActionScope.markSearchResultsObserved()
+                                : userActionScope.markSearchCommitted();
 
-                observed.put("searchTransaction", "COMMITTED")
+                observed.put("searchTransaction",
+                                commit.optBoolean("resultsObserved", false)
+                                        ? "RESULTS_OBSERVED"
+                                        : "COMMIT_DISPATCHED")
                         .put("typed", true)
                         .put("committed", true)
                         .put("searchCommitMethod", commit.optString("method", "RUNTIME"));
@@ -5705,7 +5711,7 @@ final class NativeGeminiLiveClient {
                         reply.optString("commitMethod", "NONE"));
 
         if (resultsObserved) {
-            userActionScope.markSearchCommitted();
+            userActionScope.markSearchResultsObserved();
             observed.put("taskState", "EVIDENCE_AVAILABLE")
                     .put("completionEvidence",
                             reply.optString("resultEvidence",
@@ -6067,7 +6073,11 @@ final class NativeGeminiLiveClient {
         workingContext.recordAction("search_commit",
                 reply.optBoolean("success", false) ? "submitted" : "failed");
         if (reply.optBoolean("success", false)) {
-            userActionScope.markSearchCommitted();
+            if (reply.optBoolean("resultsObserved", false)) {
+                userActionScope.markSearchResultsObserved();
+            } else {
+                userActionScope.markSearchCommitted();
+            }
         }
         if (!reply.optBoolean("success", false)) {
             reply.put("instruction",
@@ -6108,6 +6118,10 @@ final class NativeGeminiLiveClient {
         // projection. Fingerprints, authorization state and other debug fields
         // remain Runtime-internal.
         JSONObject progressContext = workingContext.toProgressJson();
+        JSONObject searchProgress = userActionScope.toModelProgressJson();
+        if (searchProgress.length() > 0) {
+            progressContext.put("search", searchProgress);
+        }
         final JSONObject modelResult =
                 ModelToolResponseAdapter.forModel(
                         name, result, progressContext);
