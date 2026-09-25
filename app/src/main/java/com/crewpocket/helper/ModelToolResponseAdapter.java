@@ -556,6 +556,9 @@ final class ModelToolResponseAdapter {
 
             if (source != null) {
                 copyString(source, out, "package");
+                if (source.optBoolean("fresh", false)) {
+                    out.put("fresh", true);
+                }
                 JSONArray important = source.optJSONArray("important");
                 if (important != null && important.length() > 0) {
                     JSONArray items = balancedImportantItems(
