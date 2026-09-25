@@ -26,6 +26,8 @@ final class ObservationVerificationController {
     private volatile ActionObservation latestActionObservation =
             ActionObservation.unavailable();
     private volatile boolean semanticObserveRequired;
+    private volatile AgentRuntimeV2.ReverificationSummary lastReverification =
+            AgentRuntimeV2.ReverificationSummary.empty();
 
     // Legacy /screen_state verification state retained for compatibility.
     private volatile String lastObservedScreenFingerprint = "";
@@ -86,6 +88,7 @@ final class ObservationVerificationController {
     void clearSemanticTransient() {
         semanticObserveRequired = false;
         latestSemanticFingerprint = "";
+        lastReverification = AgentRuntimeV2.ReverificationSummary.empty();
     }
 
     void resetNoProgress() {
@@ -112,7 +115,9 @@ final class ObservationVerificationController {
         latestSemanticFingerprint = fp;
         latestActionObservation = toActionObservation(screen);
         agentRuntimeV2.onScreenObserved(latestActionObservation);
-        agentRuntimeV2.reverifyPending(latestActionObservation);
+        lastReverification =
+                agentRuntimeV2.reverifyPendingDetailed(
+                        latestActionObservation);
         shadowAgentRuntime.onScreenObserved(
                 fp,
                 screen.optString("stableScreenKey", ""),
@@ -123,6 +128,26 @@ final class ObservationVerificationController {
                 fp,
                 screen.optString("stableScreenKey", ""));
         return latestActionObservation;
+    }
+
+    synchronized JSONObject consumeReverificationSummary() {
+        AgentRuntimeV2.ReverificationSummary summary = lastReverification;
+        lastReverification = AgentRuntimeV2.ReverificationSummary.empty();
+        if (summary == null || !summary.hasAny()) return null;
+
+        JSONObject out = new JSONObject();
+        try {
+            out.put("committed", summary.committed)
+                    .put("failed", summary.failed)
+                    .put("pending", summary.pending);
+            if (!summary.failedRuntimeName.isEmpty()) {
+                out.put("failedRuntime", summary.failedRuntimeName);
+            }
+            if (!summary.failedCode.isEmpty()) {
+                out.put("failedCode", summary.failedCode);
+            }
+        } catch (Exception ignored) {}
+        return out;
     }
 
     /**

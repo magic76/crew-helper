@@ -5307,6 +5307,10 @@ final class NativeGeminiLiveClient {
                     .recordSemanticObservation(semantic);
         }
 
+        JSONObject reverification =
+                observationVerificationController
+                        .consumeReverificationSummary();
+
         JSONObject out = new JSONObject();
         out.put("success", semantic.optBoolean("success", false))
                 .put("visualSent", false)
@@ -5321,6 +5325,20 @@ final class NativeGeminiLiveClient {
         }
         if (semantic.has("stableScreenKey")) {
             out.put("stableScreenKey", semantic.optString("stableScreenKey", ""));
+        }
+
+        if (reverification != null) {
+            out.put("previousActionReverification", reverification);
+            if (reverification.optInt("failed", 0) > 0) {
+                out.put("taskState", "IN_PROGRESS")
+                        .put(
+                                "completionEvidence",
+                                "PREVIOUS_ACTION_FAILED_AFTER_OBSERVE")
+                        .put("nextRequirement", "TRY_ALTERNATIVE")
+                        .put(
+                                "message",
+                                "上一個操作已由最新畫面確認沒有生效；不要把它當成功，也不要原樣重試。請改用不同 locator 或不同語意方法。");
+            }
         }
 
         if (semanticScreenContainsSensitiveElement(semantic)) {

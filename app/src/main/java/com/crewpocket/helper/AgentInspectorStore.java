@@ -38,6 +38,8 @@ final class AgentInspectorStore {
             "TYPE_LENGTH_MISMATCH_EXPECTED_(\\d{1,5})_ACTUAL_(\\d{1,5})");
     private static final Pattern SAFE_SEMANTIC_TARGET =
             Pattern.compile("[A-Za-z0-9:_-]{1,80}");
+    private static final Pattern SAFE_RUNTIME_TOKEN =
+            Pattern.compile("[A-Za-z0-9:_-]{1,80}");
 
     private AgentInspectorStore() {}
 
@@ -319,6 +321,47 @@ final class AgentInspectorStore {
 
             out.append(" · ")
                     .append(step.optString("outcome", "UNKNOWN"));
+
+            String locatorDecision = step.optString("locatorDecision", "");
+            String resolvedFrom = step.optString("resolvedFrom", "");
+            String verificationStatus = step.optString("verificationStatus", "");
+            String verificationCode = step.optString("verificationCode", "");
+            if (!locatorDecision.isEmpty()
+                    || !resolvedFrom.isEmpty()
+                    || !verificationStatus.isEmpty()) {
+                out.append(" · locator=");
+                if (!locatorDecision.isEmpty()) {
+                    out.append(locatorDecision);
+                    if (step.has("locatorConfidence")) {
+                        out.append(" ")
+                                .append(String.format(
+                                        Locale.ROOT,
+                                        "%.2f",
+                                        step.optDouble(
+                                                "locatorConfidence", 0.0)));
+                    }
+                    if (step.has("locatorMargin")) {
+                        out.append(" Δ")
+                                .append(String.format(
+                                        Locale.ROOT,
+                                        "%.2f",
+                                        step.optDouble(
+                                                "locatorMargin", 0.0)));
+                    }
+                }
+                if (!resolvedFrom.isEmpty()) {
+                    if (!locatorDecision.isEmpty()) out.append("/");
+                    out.append(resolvedFrom);
+                }
+                if (!verificationStatus.isEmpty()) {
+                    out.append(" · verify=")
+                            .append(verificationStatus);
+                    if (!verificationCode.isEmpty()) {
+                        out.append("/").append(verificationCode);
+                    }
+                }
+            }
+
             String failureCode = step.optString("failureCode", "");
             if ("TYPE_LENGTH_MISMATCH".equals(failureCode)) {
                 out.append(" · TYPE_LENGTH_MISMATCH expected=")
@@ -493,7 +536,8 @@ final class AgentInspectorStore {
                     if (!SAFE_TOOL.matcher(tool).matches()) continue;
 
                     String outcome;
-                    if (line.contains("成功")) outcome = "SUCCESS";
+                    if (line.contains("待確認")) outcome = "PENDING";
+                    else if (line.contains("成功")) outcome = "SUCCESS";
                     else if (line.contains("已取消")) outcome = "CANCELLED";
                     else if (line.contains("失敗")) outcome = "FAILED";
                     else outcome = "UNKNOWN";
@@ -517,6 +561,41 @@ final class AgentInspectorStore {
                             String semanticTarget = diagnostic.optString("semanticTarget", "").trim();
                             if (SAFE_SEMANTIC_TARGET.matcher(semanticTarget).matches()) {
                                 step.put("semanticTarget", semanticTarget);
+                            }
+
+                            String locatorDecision =
+                                    diagnostic.optString("locatorDecision", "").trim();
+                            String resolvedFrom =
+                                    diagnostic.optString("resolvedFrom", "").trim();
+                            String verificationStatus =
+                                    diagnostic.optString("verificationStatus", "").trim();
+                            String verificationCode =
+                                    diagnostic.optString("verificationCode", "").trim();
+                            if (SAFE_RUNTIME_TOKEN.matcher(locatorDecision).matches()) {
+                                step.put("locatorDecision", locatorDecision);
+                            }
+                            if (SAFE_RUNTIME_TOKEN.matcher(resolvedFrom).matches()) {
+                                step.put("resolvedFrom", resolvedFrom);
+                            }
+                            if (SAFE_RUNTIME_TOKEN.matcher(verificationStatus).matches()) {
+                                step.put("verificationStatus", verificationStatus);
+                            }
+                            if (SAFE_RUNTIME_TOKEN.matcher(verificationCode).matches()) {
+                                step.put("verificationCode", verificationCode);
+                            }
+                            if (diagnostic.has("locatorConfidence")) {
+                                step.put(
+                                        "locatorConfidence",
+                                        boundedUnit(
+                                                diagnostic.optDouble(
+                                                        "locatorConfidence", 0.0)));
+                            }
+                            if (diagnostic.has("locatorMargin")) {
+                                step.put(
+                                        "locatorMargin",
+                                        boundedUnit(
+                                                diagnostic.optDouble(
+                                                        "locatorMargin", 0.0)));
                             }
                         }
                     }
@@ -589,6 +668,11 @@ final class AgentInspectorStore {
                 "我不能", "不能幫", "不能帮", "我無法", "我无法",
                 "can't help", "cannot help", "can't do", "cannot do",
                 "not allowed", "safety restriction", "safety reasons");
+    }
+
+    private static double boundedUnit(double value) {
+        if (Double.isNaN(value) || Double.isInfinite(value)) return 0.0;
+        return Math.max(0.0, Math.min(1.0, value));
     }
 
     private static int safeBoundedInt(String value) {

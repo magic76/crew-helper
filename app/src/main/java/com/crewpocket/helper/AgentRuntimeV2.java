@@ -33,6 +33,34 @@ final class AgentRuntimeV2 {
         REQUIRE_OBSERVE
     }
 
+    static final class ReverificationSummary {
+        final int committed;
+        final int failed;
+        final int pending;
+        final String failedRuntimeName;
+        final String failedCode;
+
+        ReverificationSummary(
+                int committed,
+                int failed,
+                int pending,
+                String failedRuntimeName,
+                String failedCode) {
+            this.committed = Math.max(0, committed);
+            this.failed = Math.max(0, failed);
+            this.pending = Math.max(0, pending);
+            this.failedRuntimeName = safeName(failedRuntimeName);
+            this.failedCode = safeCode(failedCode);
+        }
+
+        static ReverificationSummary empty() {
+            return new ReverificationSummary(0, 0, 0, "", "");
+        }
+
+        boolean hasFailure() { return failed > 0; }
+        boolean hasAny() { return committed > 0 || failed > 0 || pending > 0; }
+    }
+
     static final class PreflightResult {
         final PreflightDecision decision;
         final String code;
@@ -277,9 +305,21 @@ final class AgentRuntimeV2 {
 
     /** Re-runs only pending transactions after an explicit inspect/wait observation. */
     synchronized int reverifyPending(ActionObservation observation) {
-        if (observation == null || !observation.available) return 0;
+        return reverifyPendingDetailed(observation).committed;
+    }
+
+    synchronized ReverificationSummary reverifyPendingDetailed(
+            ActionObservation observation) {
+        if (observation == null || !observation.available) {
+            return ReverificationSummary.empty();
+        }
         latestObservation = observation;
         int committed = 0;
+        int failed = 0;
+        int pending = 0;
+        String failedRuntimeName = "";
+        String failedCode = "";
+
         for (ActionTransaction tx : transactions.values()) {
             if (!tx.isPendingVerification()) continue;
             ExecutionEvidence evidence = tx.executionEvidence();
@@ -289,7 +329,9 @@ final class AgentRuntimeV2 {
                     tx.runtimeName, tx.expectedEffect, evidence,
                     tx.beforeObservation(), observation);
             if (verification.pending()) {
-                long pendingAge = Math.max(0L, System.currentTimeMillis() - tx.updatedAtMs());
+                long pendingAge = Math.max(
+                        0L,
+                        System.currentTimeMillis() - tx.updatedAtMs());
                 if (!evidence.allowDelayedUi) {
                     verification = new ActionVerificationResult(
                             ActionVerificationResult.Status.FAILED,
@@ -307,13 +349,27 @@ final class AgentRuntimeV2 {
                             verification.packageChanged,
                             verification.focusChanged);
                 } else {
+                    pending++;
                     continue;
                 }
             }
             applyVerification(tx, verification, observation, true);
-            if (verification.committed()) committed++;
+            if (verification.committed()) {
+                committed++;
+            } else if (verification.failed()) {
+                failed++;
+                if (failedRuntimeName.isEmpty()) {
+                    failedRuntimeName = tx.runtimeName;
+                    failedCode = verification.code;
+                }
+            }
         }
-        return committed;
+        return new ReverificationSummary(
+                committed,
+                failed,
+                pending,
+                failedRuntimeName,
+                failedCode);
     }
 
     synchronized void onScreenObserved(ActionObservation observation) {

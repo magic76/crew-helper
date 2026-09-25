@@ -253,9 +253,12 @@ final class AgentTaskRecord {
     }
 
     void addStep(String name, JSONObject result) {
-        String outcome = result.optBoolean("success")
-                ? "成功"
-                : (result.optBoolean("cancelled") ? "已取消" : "失敗");
+        String stepResult = result.optString("stepResult", "");
+        String outcome = "STEP_PENDING".equals(stepResult)
+                ? "待確認"
+                : (result.optBoolean("success")
+                        ? "成功"
+                        : (result.optBoolean("cancelled") ? "已取消" : "失敗"));
         String detail = result.optString("message", result.optString("error", ""));
         stepsSummary.add(name + "：" + outcome
                 + (detail.isEmpty() ? "" : "（" + detail + "）"));
@@ -274,6 +277,41 @@ final class AgentTaskRecord {
                         name, semanticAction, lastSignature);
                 if (!semanticTarget.isEmpty()) {
                     diagnostic.put("semanticTarget", semanticTarget);
+                }
+
+                String locatorDecision =
+                        result.optString("decision", "").trim();
+                String resolvedFrom =
+                        result.optString("resolvedFrom", "").trim();
+                String verificationStatus =
+                        result.optString("verificationStatus", "").trim();
+                String verificationCode =
+                        result.optString("verificationCode", "").trim();
+                if (!locatorDecision.isEmpty()) {
+                    diagnostic.put("locatorDecision", locatorDecision);
+                }
+                if (!resolvedFrom.isEmpty()) {
+                    diagnostic.put("resolvedFrom", resolvedFrom);
+                }
+                if (result.has("confidence")) {
+                    diagnostic.put(
+                            "locatorConfidence",
+                            result.optDouble("confidence", 0.0));
+                }
+                if (result.has("confidenceMargin")) {
+                    diagnostic.put(
+                            "locatorMargin",
+                            result.optDouble("confidenceMargin", 0.0));
+                }
+                if (!verificationStatus.isEmpty()) {
+                    diagnostic.put(
+                            "verificationStatus",
+                            verificationStatus);
+                }
+                if (!verificationCode.isEmpty()) {
+                    diagnostic.put(
+                            "verificationCode",
+                            verificationCode);
                 }
             }
         } catch (Exception ignored) {}
