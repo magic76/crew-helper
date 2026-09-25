@@ -16,6 +16,31 @@ public final class UserActionScopeTest {
         check(!scope.consumeElementReferenceAuthorization(),
                 "ordinary task never grants element overlay");
 
+
+        scope.updateFromUserText("搜尋蔡依林");
+        check(scope.shouldAutoCommitSearch(),
+                "pure search enables search transaction");
+        scope.markSearchQueryEntered();
+        scope.markSearchCommitted();
+        check(scope.shouldBlockTapForSearch("蔡依林", false),
+                "pure search still blocks opening a result");
+
+        scope.updateFromUserText("搜尋蔡依林播放");
+        check(scope.shouldAutoCommitSearch(),
+                "search then play enables search transaction");
+        check("MEDIA:PLAY".equals(scope.searchContinuation()),
+                "media play is preserved as post-search continuation");
+        scope.markSearchQueryEntered();
+        scope.markSearchCommitted();
+        check(!scope.shouldBlockTapForSearch("蔡依林", false),
+                "search then play may open the artist result");
+
+        scope.updateFromUserText("搜尋大皇宮導航");
+        scope.markSearchQueryEntered();
+        scope.markSearchCommitted();
+        check(!scope.shouldBlockTapForSearch("大皇宮", false),
+                "navigation continuation remains allowed after search");
+
         scope.updateFromUserText("element_reference:open");
         check(!scope.consumeElementReferenceAuthorization(),
                 "model marker text is not user authorization");
