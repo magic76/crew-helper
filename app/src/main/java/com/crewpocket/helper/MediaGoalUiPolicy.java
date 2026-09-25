@@ -29,12 +29,14 @@ final class MediaGoalUiPolicy {
             score += 500;
         }
 
+        boolean actionable =
+                ScreenItemPriorityPolicy.isActionable(
+                        role, label, semanticHint, can);
         if (isGoalEntityLabel(label, goalText)) {
-            score += 260;
+            score += actionable ? 700 : 60;
         }
 
-        if (ScreenItemPriorityPolicy.isActionable(
-                role, label, semanticHint, can)) {
+        if (actionable) {
             score += 40;
         }
         return score;
