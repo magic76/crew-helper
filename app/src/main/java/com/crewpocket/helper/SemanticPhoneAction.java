@@ -32,6 +32,9 @@ final class SemanticPhoneAction {
 
         String action = args.optString("action", "").trim().toUpperCase(Locale.ROOT);
         String target = args.optString("target", "").trim();
+        String elementId = args.optString(
+                "element_id",
+                args.optString("elementId", "")).trim();
         String text = args.optString("text", "");
         String direction = args.optString("direction", "").trim().toLowerCase(Locale.ROOT);
         String distance = args.optString("distance", "").trim().toLowerCase(Locale.ROOT);
@@ -49,8 +52,26 @@ final class SemanticPhoneAction {
         }
 
         if ("TAP".equals(action)) {
-            if (target.isEmpty()) return error(action, "TARGET_REQUIRED",
-                    "TAP 需要目前畫面上的語意 target。這是可重試的參數錯誤；補上 target 後立刻重試，不要結束任務。");
+            if (target.isEmpty() && elementId.isEmpty()) {
+                return error(
+                        action,
+                        "TARGET_REQUIRED",
+                        "TAP 需要目前畫面上的語意 target 或最新 screen.items[].id。這是可重試的參數錯誤；補上其中一個後立刻重試，不要結束任務。");
+            }
+
+            if (!elementId.isEmpty()) {
+                if (!elementId.matches("e_[0-9a-fA-F]{8,32}")) {
+                    return error(
+                            action,
+                            "BAD_ELEMENT_ID",
+                            "element_id 必須直接來自最新 screen.items[].id；不要自行產生或猜測。請改用目前畫面提供的 id 或只用 target。");
+                }
+                JSONObject selected = new JSONObject()
+                        .put("element_id", elementId)
+                        .put("semantic_action", action);
+                if (!target.isEmpty()) selected.put("label", target);
+                return mapped(action, "tap_element", selected);
+            }
 
             // Manual visual assist: label real Accessibility clickables.
             if (ElementReferenceCommand.isOpenRequest(target)) {
@@ -189,6 +210,7 @@ final class SemanticPhoneAction {
         if ("OPEN_APP_NEEDS_TARGET".equals(code) || "TARGET_REQUIRED".equals(code)) {
             return "target";
         }
+        if ("BAD_ELEMENT_ID".equals(code)) return "element_id";
         if ("TYPE_NEEDS_TEXT".equals(code) || "SEARCH_NEEDS_QUERY".equals(code)) {
             return "text";
         }
