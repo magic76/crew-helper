@@ -59,6 +59,7 @@ final class UserActionScope {
     synchronized void updateFromTrustedAction(String action) {
         update(action);
         elementReferenceAuthorized = false;
+        futureWaitAuthorized = false;
     }
 
     synchronized boolean consumeElementReferenceAuthorization() {
