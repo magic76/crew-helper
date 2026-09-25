@@ -178,6 +178,29 @@ final class UserActionScope {
         return searchIntent;
     }
 
+    synchronized void ensureSearchForGoal(String goalIntent) {
+        expireIfNeeded();
+        if (searchIntent) return;
+        if (!"MEDIA:PLAY".equals(goalIntent)) return;
+
+        searchIntent = true;
+        openSearchResultAuthorized = true;
+        searchResultSelectionRequested = false;
+        searchContinuation = "MEDIA:PLAY";
+        searchQueryEntered = false;
+        searchCommitted = false;
+        searchSubmissionDispatched = false;
+        searchTransactionQuery = "";
+        searchTransactionPackage = "";
+        searchTransactionGeneration = -1L;
+        searchResultSelected = false;
+        searchResultsObserved = false;
+        searchResultSelectionDispatched = false;
+        selectedSearchResult = "";
+        dispatchedSearchResult = "";
+        updatedAtMs = System.currentTimeMillis();
+    }
+
     /** Search suggestions are not results and must never trigger a result picker. */
     synchronized boolean isSearchInProgress() {
         expireIfNeeded();
