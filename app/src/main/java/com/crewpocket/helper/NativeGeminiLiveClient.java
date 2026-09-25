@@ -3754,6 +3754,93 @@ final class NativeGeminiLiveClient {
                 args.optString("target", ""));
     }
 
+    private String uniqueGoalEntityTargetFromSemanticScreen(
+            JSONObject semanticScreen,
+            String goalText) {
+        if (semanticScreen == null
+                || !semanticScreen.optBoolean("success", false)) {
+            return "";
+        }
+        JSONArray elements =
+                semanticScreen.optJSONArray("elements");
+        if (elements == null) return "";
+
+        String target = "";
+        int matches = 0;
+        for (int i = 0; i < elements.length(); i++) {
+            JSONObject item = elements.optJSONObject(i);
+            if (item == null
+                    || item.optBoolean("sensitive", false)
+                    || !item.optBoolean("enabled", true)
+                    || !item.optBoolean("clickable", false)) {
+                continue;
+            }
+
+            String label =
+                    item.optString("label", "").trim();
+            if (!MediaGoalUiPolicy.isGoalEntityLabel(
+                    label, goalText)) {
+                continue;
+            }
+
+            double confidence =
+                    item.optDouble("confidence", 0.0);
+            if (confidence < 0.85) continue;
+
+            matches++;
+            if (matches > 1) return "";
+            target = label;
+        }
+        return matches == 1 ? target : "";
+    }
+
+    private String uniquePlayTargetFromSemanticScreen(
+            JSONObject semanticScreen,
+            String goalText) {
+        if (semanticScreen == null
+                || !semanticScreen.optBoolean("success", false)) {
+            return "";
+        }
+        JSONArray elements =
+                semanticScreen.optJSONArray("elements");
+        if (elements == null) return "";
+
+        // If a goal-mentioned actionable entity is still visible, complete
+        // that selection first instead of jumping to a generic Play control.
+        if (!uniqueGoalEntityTargetFromSemanticScreen(
+                semanticScreen, goalText).isEmpty()) {
+            return "";
+        }
+
+        String target = "";
+        int matches = 0;
+        for (int i = 0; i < elements.length(); i++) {
+            JSONObject item = elements.optJSONObject(i);
+            if (item == null) continue;
+
+            String label =
+                    item.optString("label", "").trim();
+            String hint =
+                    item.optString(
+                            "semanticHint", "").trim();
+            if (!MediaGoalUiPolicy.isEligiblePlayCandidate(
+                    item.optString("role", ""),
+                    label,
+                    hint,
+                    item.optBoolean("clickable", false),
+                    item.optBoolean("enabled", true),
+                    item.optBoolean("sensitive", false),
+                    item.optDouble("confidence", 0.0))) {
+                continue;
+            }
+
+            matches++;
+            if (matches > 1) return "";
+            target = !label.isEmpty() ? label : hint;
+        }
+        return matches == 1 ? target : "";
+    }
+
     private JSONObject recoverMediaPlayTapArgs(
             String requestedName,
             JSONObject requestedArgs,
@@ -3794,11 +3881,11 @@ final class NativeGeminiLiveClient {
                 observationVerificationController
                         .readSemanticScreenQuietly();
         String recovered =
-                MediaGoalUiPolicy.uniqueGoalEntityTarget(
+                uniqueGoalEntityTargetFromSemanticScreen(
                         current, goalText);
         if (recovered.isEmpty()) {
             recovered =
-                    MediaGoalUiPolicy.uniquePlayTarget(
+                    uniquePlayTargetFromSemanticScreen(
                             current, goalText);
         }
 
