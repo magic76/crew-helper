@@ -2501,7 +2501,19 @@ final class NativeGeminiLiveClient {
                 } catch (Exception ignored) {}
                 return;
             }
-            args.put("visual_lease_validated", true);
+            try {
+                args.put("visual_lease_validated", true);
+            } catch (Exception ignored) {
+                try {
+                    JSONObject blocked = runtimeBlocked(
+                            "VISUAL_TAP_VALIDATION_STATE_FAILED",
+                            "Runtime 無法建立 visual tap 驗證狀態；不執行座標操作。請重新 inspect_ui。");
+                    blocked.put("taskState", "IN_PROGRESS")
+                            .put("nextRequirement", "INSPECT_UI");
+                    sendToolResponse(id, requestedName, blocked);
+                } catch (Exception ignoredAgain) {}
+                return;
+            }
         }
 
         if (conversationLoopRecipe.isActive()
