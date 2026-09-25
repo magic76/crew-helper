@@ -3680,14 +3680,24 @@ final class NativeGeminiLiveClient {
                 goalIntent,
                 screenChanged)) {
             try {
+                String completionEvidence;
+                if (uiPlaying) {
+                    completionEvidence = "MEDIA_UI_PLAYING";
+                } else if (musicActiveAfter) {
+                    completionEvidence = "MEDIA_PLAYBACK_BECAME_ACTIVE";
+                } else {
+                    completionEvidence = "MEDIA_PLAY_CONTROL_EFFECT";
+                }
+
                 observed.put("taskState", "DONE")
                         .put(
                                 "completionEvidence",
-                                uiPlaying
-                                        ? "MEDIA_UI_PLAYING"
-                                        : "MEDIA_PLAYBACK_BECAME_ACTIVE")
+                                completionEvidence)
                         .put("nextRequirement", "NONE")
-                        .put("mediaPlaybackActive", true)
+                        .put("mediaPlaybackAccepted", true)
+                        .put(
+                                "mediaPlaybackActive",
+                                musicActiveAfter || uiPlaying)
                         .put("verified", true);
             } catch (Exception ignored) {}
         }
