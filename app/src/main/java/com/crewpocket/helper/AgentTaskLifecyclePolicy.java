@@ -12,7 +12,9 @@ final class AgentTaskLifecyclePolicy {
     static final int MAX_MUTATION_ACTIONS = 15;
     static final int MAX_OBSERVATION_ACTIONS = 8;
     static final int MAX_SCREENSHOTS = 3;
-    static final int MAX_CONSECUTIVE_VISUAL_OBSERVATIONS = 2;
+    // Consecutive observations are model workflow, not a safety boundary.
+    // Total observation budget still prevents runaway loops.
+    static final int MAX_CONSECUTIVE_VISUAL_OBSERVATIONS = Integer.MAX_VALUE;
 
     static final class StepDecision {
         final boolean allowed;
@@ -79,12 +81,9 @@ final class AgentTaskLifecyclePolicy {
         if (taskFinished || taskCancelled || !isMutationTool(name)) {
             return new StabilityDecision(false, "", "");
         }
-        if (requireObservationAfterFailure || semanticObserveRequired) {
-            return new StabilityDecision(
-                    true,
-                    "OBSERVE_REQUIRED_AFTER_FAILURE",
-                    "上一個操作失敗或驗證不足。先呼叫 inspect_ui 一次，再依最新畫面改用不同方法；不要直接重做 mutation。");
-        }
+        // A previous failure is evidence, not a global workflow lock.
+        // Gemini may choose a different low-risk mutation immediately. Runtime
+        // still blocks the exact same failed action on the unchanged screen.
         if (!safe(lastFailedMutationSignature).isEmpty()
                 && safe(signature).equals(safe(lastFailedMutationSignature))
                 && !safe(failedMutationScreenFingerprint).isEmpty()
