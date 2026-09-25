@@ -2395,6 +2395,7 @@ final class NativeGeminiLiveClient {
                                     .trim()
                                     .isEmpty());
             if (typeShouldBeSearch) {
+                userActionScope.ensureSearchForGoal(goalIntent);
                 String query =
                         resolved.runtimeArgs.optString("text", "").trim();
                 if (!query.isEmpty()) {
