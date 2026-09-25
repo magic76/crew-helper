@@ -56,6 +56,12 @@ final class MediaGoalUiPolicy {
     }
 
     static String uniquePlayTarget(JSONObject semanticScreen) {
+        return uniquePlayTarget(semanticScreen, "");
+    }
+
+    static String uniquePlayTarget(
+            JSONObject semanticScreen,
+            String goalText) {
         if (semanticScreen == null
                 || !semanticScreen.optBoolean("success", false)) {
             return "";
@@ -63,6 +69,27 @@ final class MediaGoalUiPolicy {
 
         JSONArray elements = semanticScreen.optJSONArray("elements");
         if (elements == null) return "";
+
+        String normalizedGoal = normalize(goalText);
+        for (int i = 0; i < elements.length(); i++) {
+            JSONObject item = elements.optJSONObject(i);
+            if (item == null
+                    || item.optBoolean("sensitive", false)
+                    || !item.optBoolean("enabled", true)
+                    || !item.optBoolean("clickable", false)) {
+                continue;
+            }
+            String label = item.optString("label", "").trim();
+            String normalizedLabel = normalize(label);
+            if (normalizedLabel.length() >= 2
+                    && !MediaPlaybackCompletionPolicy.isPlayControl(label)
+                    && !normalizedGoal.isEmpty()
+                    && normalizedGoal.contains(normalizedLabel)) {
+                // A goal-mentioned actionable entity is still visible, e.g.
+                // artist/search result. Do not skip it and press a generic Play.
+                return "";
+            }
+        }
 
         String target = "";
         int matches = 0;
