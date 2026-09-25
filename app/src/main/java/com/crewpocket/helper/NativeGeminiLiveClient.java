@@ -2460,6 +2460,27 @@ final class NativeGeminiLiveClient {
 
             observationVerificationController
                     .recordSemanticObservation(current);
+
+            String visualPackage =
+                    current.optString("package", "").trim();
+            boolean visualAppTrusted =
+                    appAutonomyStore.isTrusted(visualPackage)
+                            || MediaPlaybackCompletionPolicy
+                                    .isDefaultTrustedPackage(
+                                            visualPackage);
+            if (!visualAppTrusted) {
+                try {
+                    JSONObject blocked = runtimeBlocked(
+                            "VISUAL_TAP_APP_NOT_TRUSTED",
+                            "Visual TAP 只在使用者 trusted App 或預設低風險媒體 App 啟用。"
+                                    + "目前 App 仍可使用 element_id / semantic target。");
+                    blocked.put("taskState", "IN_PROGRESS")
+                            .put("nextRequirement", "TRY_ALTERNATIVE");
+                    sendToolResponse(id, requestedName, blocked);
+                } catch (Exception ignored) {}
+                return;
+            }
+
             VisualTapLease.Validation visualValidation =
                     visualTapLease.validateAndConsume(
                             args.optString("visual_lease_id", ""),
