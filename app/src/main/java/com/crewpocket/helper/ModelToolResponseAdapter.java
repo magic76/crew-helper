@@ -86,7 +86,12 @@ final class ModelToolResponseAdapter {
                 out.put("message", clip(message, MAX_MESSAGE));
             }
 
-            JSONObject screen = screen(source);
+            String goalText = progressContext == null
+                    ? ""
+                    : progressContext.optString(
+                            "goal",
+                            progressContext.optString("rootGoal", ""));
+            JSONObject screen = screen(source, goalIntent, goalText);
             if (screen.length() > 0) out.put("screen", screen);
 
             JSONObject context = context(progressContext, action);
@@ -535,7 +540,10 @@ final class ModelToolResponseAdapter {
         return existing.isEmpty() ? "這一步已驗證。" : existing;
     }
 
-    private static JSONObject screen(JSONObject result) {
+    private static JSONObject screen(
+            JSONObject result,
+            String goalIntent,
+            String goalText) {
         JSONObject out = new JSONObject();
         try {
             JSONObject source = result.optJSONObject("after");
@@ -550,7 +558,8 @@ final class ModelToolResponseAdapter {
                 copyString(source, out, "package");
                 JSONArray important = source.optJSONArray("important");
                 if (important != null && important.length() > 0) {
-                    JSONArray items = balancedImportantItems(important);
+                    JSONArray items = balancedImportantItems(
+                            important, goalIntent, goalText);
                     if (items.length() > 0) out.put("items", items);
                 }
 
@@ -589,7 +598,10 @@ final class ModelToolResponseAdapter {
         return out;
     }
 
-    private static JSONArray balancedImportantItems(JSONArray important) {
+    private static JSONArray balancedImportantItems(
+            JSONArray important,
+            final String goalIntent,
+            final String goalText) {
         java.util.ArrayList<JSONObject> original =
                 new java.util.ArrayList<JSONObject>();
         java.util.ArrayList<JSONObject> actions =
@@ -622,7 +634,9 @@ final class ModelToolResponseAdapter {
         java.util.Comparator<JSONObject> byPriority =
                 new java.util.Comparator<JSONObject>() {
                     @Override public int compare(JSONObject left, JSONObject right) {
-                        return Integer.compare(screenScore(right), screenScore(left));
+                        return Integer.compare(
+                                screenScore(right, goalIntent, goalText),
+                                screenScore(left, goalIntent, goalText));
                     }
                 };
         java.util.Collections.sort(actions, byPriority);
@@ -660,13 +674,15 @@ final class ModelToolResponseAdapter {
         return out;
     }
 
-    private static int screenScore(JSONObject item) {
+    private static int screenScore(
+            JSONObject item,
+            String goalIntent,
+            String goalText) {
         if (item == null) return 0;
-        return ScreenItemPriorityPolicy.score(
-                item.optString("role", ""),
-                item.optString("label", ""),
-                item.optString("semanticHint", ""),
-                item.optString("can", ""));
+        return MediaGoalUiPolicy.scoreItem(
+                item,
+                goalIntent,
+                goalText);
     }
 
     private static JSONArray choices(JSONObject result) {
