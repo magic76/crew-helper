@@ -17,6 +17,13 @@ public final class UserActionScopeTest {
                 "ordinary task never grants element overlay");
         check(!scope.canStartFutureWait(),
                 "ordinary media task never grants background wait");
+        check(!scope.shouldAutoCommitSearch(),
+                "media play does not require user to explicitly say search");
+        scope.ensureSearchForGoal("MEDIA:PLAY");
+        check(scope.shouldAutoCommitSearch(),
+                "media play may create a goal-derived search transaction");
+        check("MEDIA:PLAY".equals(scope.searchContinuation()),
+                "goal-derived search preserves media continuation");
 
         scope.updateFromUserText("等到播放按鈕出現後點它");
         check(scope.canStartFutureWait(),
