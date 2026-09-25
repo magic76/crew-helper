@@ -18,10 +18,16 @@ public final class UserActionScopeTest {
 
 
         scope.updateFromUserText("搜尋蔡依林");
+        check("STARTED".equals(scope.modelSearchPhase()),
+                "search progress starts explicitly");
         check(scope.shouldAutoCommitSearch(),
                 "pure search enables search transaction");
         scope.markSearchQueryEntered();
+        check("QUERY_ENTERED".equals(scope.modelSearchPhase()),
+                "query-entered search phase survives tool turns");
         scope.markSearchCommitted();
+        check("COMMIT_DISPATCHED".equals(scope.modelSearchPhase()),
+                "commit-dispatched phase is explicit before result evidence");
         check(scope.shouldBlockTapForSearch("蔡依林", false),
                 "pure search still blocks opening a result");
 
@@ -31,7 +37,9 @@ public final class UserActionScopeTest {
         check("MEDIA:PLAY".equals(scope.searchContinuation()),
                 "media play is preserved as post-search continuation");
         scope.markSearchQueryEntered();
-        scope.markSearchCommitted();
+        scope.markSearchResultsObserved();
+        check("RESULTS_OBSERVED".equals(scope.modelSearchPhase()),
+                "result evidence has its own persistent search phase");
         check(!scope.shouldBlockTapForSearch("蔡依林", false),
                 "search then play may open the artist result");
 
