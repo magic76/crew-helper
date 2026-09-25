@@ -680,7 +680,10 @@ final class ModelToolResponseAdapter {
             String goalText) {
         if (item == null) return 0;
         return MediaGoalUiPolicy.scoreItem(
-                item,
+                item.optString("role", ""),
+                item.optString("label", ""),
+                item.optString("semanticHint", ""),
+                item.optString("can", ""),
                 goalIntent,
                 goalText);
     }
