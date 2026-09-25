@@ -1,5 +1,7 @@
 package com.crewpocket.helper;
 
+import org.json.JSONObject;
+
 /**
  * Deterministic latest-turn action boundary.
  *
@@ -24,6 +26,7 @@ final class UserActionScope {
     private String searchTransactionPackage = "";
     private long searchTransactionGeneration = -1L;
     private boolean searchResultSelected;
+    private boolean searchResultsObserved;
     private boolean searchResultSelectionDispatched;
     private String selectedSearchResult = "";
     private String dispatchedSearchResult = "";
@@ -117,6 +120,7 @@ final class UserActionScope {
         searchTransactionPackage = "";
         searchTransactionGeneration = -1L;
         searchResultSelected = false;
+        searchResultsObserved = false;
         searchResultSelectionDispatched = false;
         selectedSearchResult = "";
         dispatchedSearchResult = "";
@@ -216,6 +220,7 @@ final class UserActionScope {
         searchTransactionGeneration = -1L;
         searchResultSelectionDispatched = false;
         searchResultSelected = false;
+        searchResultsObserved = false;
         dispatchedSearchResult = "";
         selectedSearchResult = "";
         return true;
@@ -261,6 +266,42 @@ final class UserActionScope {
         return isSearchOnlyLocked();
     }
 
+    synchronized boolean markSearchResultsObserved() {
+        expireIfNeeded();
+        if (!searchIntent) return false;
+        searchQueryEntered = true;
+        searchSubmissionDispatched = true;
+        searchCommitted = true;
+        searchResultsObserved = true;
+        return isSearchOnlyLocked();
+    }
+
+    synchronized JSONObject toModelProgressJson() {
+        expireIfNeeded();
+        JSONObject out = new JSONObject();
+        if (!searchIntent) return out;
+        try {
+            String phase;
+            if (searchResultSelected) {
+                phase = "RESULT_SELECTED";
+            } else if (searchResultsObserved) {
+                phase = "RESULTS_OBSERVED";
+            } else if (searchCommitted || searchSubmissionDispatched) {
+                phase = "COMMIT_DISPATCHED";
+            } else if (searchQueryEntered) {
+                phase = "QUERY_ENTERED";
+            } else {
+                phase = "STARTED";
+            }
+            out.put("phase", phase);
+            if (searchContinuation != null
+                    && searchContinuation.matches("[A-Z0-9:_-]{1,64}")) {
+                out.put("continuation", searchContinuation);
+            }
+        } catch (Exception ignored) {}
+        return out;
+    }
+
     synchronized void markSearchResultSelectionDispatched(String label) {
         expireIfNeeded();
         if (!searchIntent) return;
@@ -278,6 +319,7 @@ final class UserActionScope {
         searchCommitted = true;
         searchResultSelectionDispatched = true;
         searchResultSelected = true;
+        searchResultsObserved = true;
         selectedSearchResult = label == null ? "" : label.trim();
         dispatchedSearchResult = "";
     }
@@ -337,6 +379,7 @@ final class UserActionScope {
         searchTransactionPackage = "";
         searchTransactionGeneration = -1L;
         searchResultSelected = false;
+        searchResultsObserved = false;
         searchResultSelectionDispatched = false;
         selectedSearchResult = "";
         dispatchedSearchResult = "";
