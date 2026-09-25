@@ -90,10 +90,9 @@ public final class AgentTaskLifecyclePolicyTest {
                 AgentTaskLifecyclePolicy.evaluateStability(
                         false, false, "tap_screen",
                         true, false,
-                        "tap:1", "", "", "screen-a");
-        check(observe.blocked
-                        && "OBSERVE_REQUIRED_AFTER_FAILURE".equals(observe.code),
-                "failed mutation requires observation barrier");
+                        "tap:2", "tap:1", "screen-a", "screen-a");
+        check(!observe.blocked,
+                "different low-risk mutation may proceed after a failure without forced inspect");
 
         AgentTaskLifecyclePolicy.StabilityDecision repeat =
                 AgentTaskLifecyclePolicy.evaluateStability(
@@ -149,15 +148,13 @@ public final class AgentTaskLifecyclePolicyTest {
                 "take_screenshot should be observation");
         check(!AgentTaskLifecyclePolicy.shouldSuppressRepeatedVisualObservation(
                         "inspect_ui", 1),
-                "second consecutive visual observation remains available");
-        check(AgentTaskLifecyclePolicy.shouldSuppressRepeatedVisualObservation(
-                        "inspect_ui",
-                        AgentTaskLifecyclePolicy.MAX_CONSECUTIVE_VISUAL_OBSERVATIONS),
-                "third consecutive visual observation is suppressed");
-        check(AgentTaskLifecyclePolicy.shouldSuppressRepeatedVisualObservation(
-                        "take_screenshot",
-                        AgentTaskLifecyclePolicy.MAX_CONSECUTIVE_VISUAL_OBSERVATIONS),
-                "screenshot fallback shares the same visual loop budget");
+                "visual observation remains available");
+        check(!AgentTaskLifecyclePolicy.shouldSuppressRepeatedVisualObservation(
+                        "inspect_ui", 20),
+                "consecutive visual observations are no longer a workflow hard block");
+        check(!AgentTaskLifecyclePolicy.shouldSuppressRepeatedVisualObservation(
+                        "take_screenshot", 20),
+                "visual fallback uses total observation budget instead of consecutive hard block");
         check(!AgentTaskLifecyclePolicy.shouldSuppressRepeatedVisualObservation(
                         "wait",
                         AgentTaskLifecyclePolicy.MAX_CONSECUTIVE_VISUAL_OBSERVATIONS),
