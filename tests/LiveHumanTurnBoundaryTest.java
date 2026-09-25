@@ -95,15 +95,47 @@ public final class LiveHumanTurnBoundaryTest {
                         == LiveHumanTurnBoundary.Decision.NEW_INTENT,
                 "explicit correction retains human takeover authority");
 
-        boundary.forceNewTurn("搜尋大皇宮", 40_000L);
-        LiveHumanTurnBoundary.Resolution interrupted =
+        boundary.forceNewTurn("搜尋大皇宮", 35_000L);
+        LiveHumanTurnBoundary.Resolution naturalCorrection =
                 boundary.resolve(
-                        "停止",
-                        40_500L,
+                        "你做錯了，我要的是臥佛寺",
+                        36_000L,
+                        true,
+                        8L,
+                        8L,
+                        8L,
+                        "IN_PROGRESS",
+                        false,
+                        false);
+        check(naturalCorrection.decision
+                        == LiveHumanTurnBoundary.Decision.NEW_INTENT,
+                "natural-language correction immediately supersedes active task");
+
+        boundary.forceNewTurn("搜尋大皇宮", 40_000L);
+        LiveHumanTurnBoundary.Resolution lateActiveSpeech =
+                boundary.resolve(
+                        "打開相機",
+                        45_000L,
                         true,
                         9L,
                         9L,
                         9L,
+                        "IN_PROGRESS",
+                        false,
+                        false);
+        check(lateActiveSpeech.decision
+                        == LiveHumanTurnBoundary.Decision.NEW_INTENT,
+                "server IN_PROGRESS cannot merge unrelated speech forever");
+
+        boundary.forceNewTurn("搜尋大皇宮", 50_000L);
+        LiveHumanTurnBoundary.Resolution interrupted =
+                boundary.resolve(
+                        "停止",
+                        50_500L,
+                        true,
+                        10L,
+                        10L,
+                        10L,
                         "IN_PROGRESS",
                         false,
                         true);
