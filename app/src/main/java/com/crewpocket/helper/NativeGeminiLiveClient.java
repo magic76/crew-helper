@@ -3858,18 +3858,20 @@ final class NativeGeminiLiveClient {
                                     "semantic_target", "")
                             .trim();
         }
-        if (!MediaPlaybackCompletionPolicy
-                .isPlayControl(targetMetadata)) {
-            return;
-        }
-
         boolean observableEffect =
                 verification.screenChanged
                         || verification.stableScreenChanged
                         || verification.focusChanged
                         || verification.code.startsWith(
                                 "TAP_EFFECT_OBSERVED");
-        if (!observableEffect) return;
+        if (!MediaPlaybackCompletionPolicy
+                .shouldCompleteFromVerifiedEffect(
+                        goalIntent,
+                        targetMetadata,
+                        verification.committed(),
+                        observableEffect)) {
+            return;
+        }
 
         try {
             String existingEvidence =
