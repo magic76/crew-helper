@@ -32,9 +32,15 @@ final class LiveToolCatalog {
                                 .put("SCROLL").put("BACK").put("HOME"))
                         .put("description", "Choose exactly one semantic next action; Runtime decides Android implementation."))
                 .put("target", new JSONObject().put("type", "STRING")
-                        .put("description", "Human semantic target or App name. Examples: Google, Search, Wi-Fi, first result. Never pass coordinates or Android resource IDs."))
+                        .put("description", "Human semantic target or App name. Examples: Google, Search, Wi-Fi, first result. Never pass Android resource IDs. For visual TAP fallback this target is still required as the human-readable action being attempted."))
                 .put("element_id", new JSONObject().put("type", "STRING")
                         .put("description", "For TAP only: exact opaque screen.items[].id from the latest inspect/tool screen when available. Never invent or reuse it after the screen changes. Prefer this over label-only TAP for a specific visible item."))
+                .put("visual_lease_id", new JSONObject().put("type", "STRING")
+                        .put("description", "Visual TAP fallback only: exact screen.visualTapLease.id returned by the latest inspect_ui. Never invent or reuse it."))
+                .put("visual_x", new JSONObject().put("type", "NUMBER")
+                        .put("description", "Visual TAP fallback only: x in normalized 0..1000 coordinates on the latest inspect_ui screenshot. Requires target + visual_lease_id + visual_y."))
+                .put("visual_y", new JSONObject().put("type", "NUMBER")
+                        .put("description", "Visual TAP fallback only: y in normalized 0..1000 coordinates on the latest inspect_ui screenshot. Requires target + visual_lease_id + visual_x."))
                 .put("text", new JSONObject().put("type", "STRING")
                         .put("description", "For TYPE: exact text to put into the current visible editable field (settings, system prompt, form, note field, search box, or chat composer). TYPE never submits. For SEARCH: the query."))
                 .put("direction", new JSONObject().put("type", "STRING")
@@ -45,7 +51,7 @@ final class LiveToolCatalog {
                         .put("description", "Optional SCROLL distance."));
         tools.put(new JSONObject().put("name", "phone_action")
                 .put("description",
-                        "Perform exactly ONE semantic phone step. Choose WHAT: OPEN_APP, SEARCH, COMMIT_SEARCH, TAP, TYPE, SCROLL, BACK or HOME; Runtime owns HOW and verification. For a specific visible TAP item, pass its latest screen.items[].id as element_id when available; otherwise use target. TYPE never submits. SEARCH owns query entry; do not manually TAP+TYPE a search. Use send_text only for message submission.")
+                        "Perform exactly ONE semantic phone step. Choose WHAT: OPEN_APP, SEARCH, COMMIT_SEARCH, TAP, TYPE, SCROLL, BACK or HOME; Runtime owns HOW and verification. For TAP, prefer latest screen.items[].id, then target. Only when inspect_ui visually shows a low-risk target that has no usable semantic item, use the one-shot screen.visualTapLease with target + visual_lease_id + normalized visual_x/visual_y. Never use visual TAP for SEND, payment, deletion, account, credential or other sensitive commits. TYPE never submits. SEARCH owns query entry; do not manually TAP+TYPE a search. Use send_text only for message submission.")
                 .put("parameters", new JSONObject().put("type", "OBJECT")
                         .put("properties", phoneActionProperties)
                         .put("required", new JSONArray().put("action"))));
