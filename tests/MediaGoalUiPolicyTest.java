@@ -43,6 +43,31 @@ public final class MediaGoalUiPolicyTest {
         check("播放".equals(MediaGoalUiPolicy.uniquePlayTarget(screen)),
                 "unique confident play control may recover empty TAP");
 
+        JSONObject unresolvedEntityScreen = new JSONObject()
+                .put("success", true)
+                .put("elements", new JSONArray()
+                        .put(new JSONObject()
+                                .put("role", "button")
+                                .put("label", "鄧紫棋")
+                                .put("clickable", true)
+                                .put("enabled", true)
+                                .put("confidence", 0.92))
+                        .put(new JSONObject()
+                                .put("role", "button")
+                                .put("label", "播放")
+                                .put("clickable", true)
+                                .put("enabled", true)
+                                .put("confidence", 0.92)));
+        check("鄧紫棋".equals(
+                        MediaGoalUiPolicy.uniqueGoalEntityTarget(
+                                unresolvedEntityScreen,
+                                "播放鄧紫棋")),
+                "unique goal-mentioned media entity may recover empty TAP first");
+        check(MediaGoalUiPolicy.uniquePlayTarget(
+                        unresolvedEntityScreen,
+                        "播放鄧紫棋").isEmpty(),
+                "play recovery waits while a goal entity is still actionable");
+
         screen.getJSONArray("elements").put(new JSONObject()
                 .put("role", "button")
                 .put("label", "播放")
