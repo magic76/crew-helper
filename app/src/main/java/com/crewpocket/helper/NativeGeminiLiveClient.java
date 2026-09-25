@@ -3756,7 +3756,8 @@ final class NativeGeminiLiveClient {
 
     private String uniqueGoalEntityTargetFromSemanticScreen(
             JSONObject semanticScreen,
-            String goalText) {
+            String goalText,
+            String completedTarget) {
         if (semanticScreen == null
                 || !semanticScreen.optBoolean("success", false)) {
             return "";
@@ -3779,7 +3780,9 @@ final class NativeGeminiLiveClient {
             String label =
                     item.optString("label", "").trim();
             if (!MediaGoalUiPolicy.isGoalEntityLabel(
-                    label, goalText)) {
+                    label, goalText)
+                    || MediaGoalUiPolicy.sameSemanticLabel(
+                            label, completedTarget)) {
                 continue;
             }
 
@@ -3807,8 +3810,12 @@ final class NativeGeminiLiveClient {
 
         // If a goal-mentioned actionable entity is still visible, complete
         // that selection first instead of jumping to a generic Play control.
+        String completedTarget =
+                latestActivatedTargetForMediaRecovery();
         if (!uniqueGoalEntityTargetFromSemanticScreen(
-                semanticScreen, goalText).isEmpty()) {
+                semanticScreen,
+                goalText,
+                completedTarget).isEmpty()) {
             return "";
         }
 
@@ -3839,6 +3846,26 @@ final class NativeGeminiLiveClient {
             target = !label.isEmpty() ? label : hint;
         }
         return matches == 1 ? target : "";
+    }
+
+    private String latestActivatedTargetForMediaRecovery() {
+        JSONObject progress =
+                workingContext.toProgressJson();
+        JSONArray steps =
+                progress.optJSONArray("recentSteps");
+        if (steps == null) return "";
+        for (int i = steps.length() - 1; i >= 0; i--) {
+            JSONObject step = steps.optJSONObject(i);
+            if (step == null
+                    || !"UI_ACTIVATED".equals(
+                            step.optString("effect", ""))) {
+                continue;
+            }
+            String target =
+                    step.optString("target", "").trim();
+            if (!target.isEmpty()) return target;
+        }
+        return "";
     }
 
     private JSONObject recoverMediaPlayTapArgs(
@@ -3880,9 +3907,13 @@ final class NativeGeminiLiveClient {
         JSONObject current =
                 observationVerificationController
                         .readSemanticScreenQuietly();
+        String completedTarget =
+                latestActivatedTargetForMediaRecovery();
         String recovered =
                 uniqueGoalEntityTargetFromSemanticScreen(
-                        current, goalText);
+                        current,
+                        goalText,
+                        completedTarget);
         if (recovered.isEmpty()) {
             recovered =
                     uniquePlayTargetFromSemanticScreen(
