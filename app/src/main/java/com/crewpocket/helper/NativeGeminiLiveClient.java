@@ -3754,6 +3754,139 @@ final class NativeGeminiLiveClient {
                 args.optString("target", ""));
     }
 
+    private JSONObject recoverMediaPlayTapArgs(
+            String requestedName,
+            JSONObject requestedArgs,
+            String goalIntent,
+            String goalText) {
+        JSONObject original =
+                requestedArgs == null
+                        ? new JSONObject()
+                        : requestedArgs;
+        if (!SemanticPhoneAction.TOOL_NAME.equals(requestedName)
+                || !MediaGoalUiPolicy.isMediaPlayGoal(goalIntent)
+                || !"TAP".equalsIgnoreCase(
+                        original.optString("action", ""))) {
+            return original;
+        }
+
+        String elementId =
+                original.optString("element_id", "").trim();
+        String visualLeaseId =
+                original.optString("visual_lease_id", "").trim();
+        if (!elementId.isEmpty() || !visualLeaseId.isEmpty()) {
+            return original;
+        }
+
+        String target =
+                original.optString("target", "").trim();
+        boolean numericTarget =
+                MediaGoalUiPolicy
+                        .looksLikeNumericOrdinalTarget(target);
+        if (!target.isEmpty() && !numericTarget) {
+            return original;
+        }
+        if (numericTarget && ElementReferenceRuntime.isActive()) {
+            return original;
+        }
+
+        JSONObject current =
+                observationVerificationController
+                        .readSemanticScreenQuietly();
+        String recovered =
+                MediaGoalUiPolicy.uniqueGoalEntityTarget(
+                        current, goalText);
+        if (recovered.isEmpty()) {
+            recovered =
+                    MediaGoalUiPolicy.uniquePlayTarget(
+                            current, goalText);
+        }
+
+        try {
+            JSONObject out =
+                    new JSONObject(original.toString());
+            if (!recovered.isEmpty()) {
+                out.put("target", recovered)
+                        .put("runtime_media_target_recovered", true);
+                return out;
+            }
+
+            // A bare ordinal is not a semantic media target. Without an
+            // explicit element-reference session, fail as TARGET_REQUIRED
+            // instead of guessing a numbered label on screen.
+            if (numericTarget) {
+                out.remove("target");
+                out.put(
+                        "runtime_media_numeric_target_rejected",
+                        true);
+            }
+            return out;
+        } catch (Exception ignored) {
+            return original;
+        }
+    }
+
+    private void reconcileMediaPlayCompletionAfterV2(
+            JSONObject result,
+            SemanticPhoneAction.Resolution semantic,
+            String runtimeName,
+            ActionVerificationResult verification) {
+        if (result == null
+                || semantic == null
+                || verification == null
+                || !verification.committed()
+                || (!"tap_screen".equals(runtimeName)
+                    && !"tap_element".equals(runtimeName))) {
+            return;
+        }
+
+        String goalIntent =
+                workingContext.toProgressJson()
+                        .optString("goalIntent", "");
+        if (!MediaGoalUiPolicy.isMediaPlayGoal(goalIntent)) {
+            return;
+        }
+
+        String targetMetadata =
+                semantic.runtimeArgs
+                        .optString("label", "")
+                        .trim();
+        if (targetMetadata.isEmpty()) {
+            targetMetadata =
+                    semantic.runtimeArgs
+                            .optString(
+                                    "semantic_target", "")
+                            .trim();
+        }
+        if (!MediaPlaybackCompletionPolicy
+                .isPlayControl(targetMetadata)) {
+            return;
+        }
+
+        boolean observableEffect =
+                verification.screenChanged
+                        || verification.stableScreenChanged
+                        || verification.focusChanged
+                        || verification.code.startsWith(
+                                "TAP_EFFECT_OBSERVED");
+        if (!observableEffect) return;
+
+        try {
+            String existingEvidence =
+                    result.optString(
+                            "completionEvidence", "");
+            result.put("taskState", "DONE")
+                    .put(
+                            "completionEvidence",
+                            existingEvidence.startsWith("MEDIA_")
+                                    ? existingEvidence
+                                    : "MEDIA_PLAY_CONTROL_VERIFIED")
+                    .put("nextRequirement", "NONE")
+                    .put("mediaPlaybackAccepted", true)
+                    .put("verified", true);
+        } catch (Exception ignored) {}
+    }
+
     private JSONObject applyMediaPlaybackCompletion(
             JSONObject observed,
             String targetMetadata,
