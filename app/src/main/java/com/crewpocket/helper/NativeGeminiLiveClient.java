@@ -2435,8 +2435,8 @@ final class NativeGeminiLiveClient {
                             "VISUAL_TAP_HIGH_RISK_BLOCKED",
                             "Visual TAP 只允許 fresh inspect_ui 上的低風險可逆操作；"
                                     + "SEND、付款、刪除、帳號、credential 或其他提交型操作禁止使用座標 fallback。");
-                    blocked.put("taskState", "BLOCKED")
-                            .put("nextRequirement", "STOP");
+                    blocked.put("taskState", "IN_PROGRESS")
+                            .put("nextRequirement", "TRY_ALTERNATIVE");
                     sendToolResponse(id, requestedName, blocked);
                 } catch (Exception ignored) {}
                 return;
@@ -2480,6 +2480,7 @@ final class NativeGeminiLiveClient {
                 } catch (Exception ignored) {}
                 return;
             }
+            args.put("visual_lease_validated", true);
         }
 
         if (conversationLoopRecipe.isActive()
