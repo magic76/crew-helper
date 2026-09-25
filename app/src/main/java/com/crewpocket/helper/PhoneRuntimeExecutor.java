@@ -375,6 +375,11 @@ final class PhoneRuntimeExecutor {
         String targetMetadata =
                 label + " " + id + " " + semanticHint + " " + role;
         final boolean hasExplicitCoordinate = targetX >= 0 && targetY >= 0;
+        final boolean validatedVisualFallback =
+                safeArgs.optBoolean("visual_tap", false)
+                        && safeArgs.optBoolean(
+                                "visual_lease_validated", false)
+                        && "normalized_1000".equals(coordinateSpace);
         boolean hasSemanticTarget = !label.isEmpty()
                 || !id.isEmpty()
                 || !semanticHint.isEmpty()
@@ -434,7 +439,8 @@ final class PhoneRuntimeExecutor {
                 }
 
                 if (ambiguity) {
-                    if (trustedAutonomy) {
+                    if (trustedAutonomy
+                            && !validatedVisualFallback) {
                         JSONArray candidates =
                                 semantic.optJSONArray("candidates");
                         JSONObject top =
@@ -467,18 +473,23 @@ final class PhoneRuntimeExecutor {
                                             fallbackTrace);
                             }
                         }
-                    } else {
+                    } else if (!validatedVisualFallback) {
                         semantic.put("resolvedFrom", "semantic_v2")
                                 .put("fallbackTrace", fallbackTrace)
                                 .put("stepResult", "STEP_FAILED")
                                 .put("taskState", "NEED_USER")
                                 .put("instruction",
-                                        "定位候選太接近。列出 Runtime 提供的 candidates 請使用者選；不要降級猜 label 或座標。");
+                                        "定位候選太接近。列出 Runtime 提供的 candidates 請使用者選；不要降級猜座標。");
                         return semantic;
+                    } else {
+                        fallbackTrace.put(
+                                "semantic_v2:VISUAL_LEASE_FALLBACK");
                     }
                 }
 
-                if (mediumConfidence && !trustedAutonomy) {
+                if (mediumConfidence
+                        && !trustedAutonomy
+                        && !validatedVisualFallback) {
                     return semantic
                             .put("resolvedFrom", "semantic_v2")
                             .put("fallbackTrace", fallbackTrace)
@@ -487,6 +498,9 @@ final class PhoneRuntimeExecutor {
                             .put("nextRequirement", "inspect_ui once")
                             .put("instruction",
                                     "目前定位信心不足以執行。先取得一次 fresh inspect_ui，再重新定位；不要直接降級成座標。");
+                } else if (mediumConfidence && validatedVisualFallback) {
+                    fallbackTrace.put(
+                            "semantic_v2:VISUAL_LEASE_FALLBACK");
                 }
 
                 if (semanticNext == LocatorFallbackPolicy.Next.STOP) {
@@ -567,7 +581,8 @@ final class PhoneRuntimeExecutor {
                     }
 
                     if (structuralMatches > 1
-                            && !trustedAutonomy) {
+                            && !trustedAutonomy
+                            && !validatedVisualFallback) {
                         fallbackTrace.put("node_bounds:AMBIGUOUS");
                         return new JSONObject()
                                 .put("success", false)
@@ -578,11 +593,17 @@ final class PhoneRuntimeExecutor {
                                 .put("instruction",
                                         "legacy label/id 也命中多個元件。不要取第一個或改猜座標；請重新 inspect_ui 或請使用者選候選。");
                     }
+                    if (structuralMatches > 1
+                            && validatedVisualFallback) {
+                        fallbackTrace.put(
+                                "node_bounds:VISUAL_LEASE_FALLBACK");
+                    }
 
                     boolean mayUseBounds =
                             uniqueBounds != null
                                     && (structuralMatches == 1
-                                            || trustedAutonomy);
+                                            || (trustedAutonomy
+                                                && !validatedVisualFallback));
                     if (mayUseBounds) {
                         targetX = (
                                 uniqueBounds.optDouble("left", 0)
@@ -616,6 +637,17 @@ final class PhoneRuntimeExecutor {
         }
 
         // 4) Explicit coordinates are the final fallback only.
+        if (safeArgs.optBoolean("visual_tap", false)
+                && !validatedVisualFallback) {
+            return new JSONObject()
+                    .put("success", false)
+                    .put("stepResult", "STEP_FAILED")
+                    .put("error", "VISUAL_TAP_LEASE_NOT_VALIDATED")
+                    .put("fallbackTrace", fallbackTrace)
+                    .put("instruction",
+                            "visual coordinates require a Runtime-validated fresh inspect_ui lease.");
+        }
+
         if (!resolvedFromNode && "image".equals(coordinateSpace)) {
             if (visionController.lastScreenWidth() <= 1
                     || visionController.lastScreenHeight() <= 1) {

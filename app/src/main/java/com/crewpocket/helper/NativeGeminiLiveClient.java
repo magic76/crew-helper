@@ -76,6 +76,7 @@ final class NativeGeminiLiveClient {
     private volatile long runtimeAppTeachHandledGeneration = -1L;
     private volatile String runtimeAppTeachHandledMessage = "";
     private final LiveVisionController visionController;
+    private final VisualTapLease visualTapLease = new VisualTapLease();
     private volatile boolean running;
     private volatile String stage = "尚未開始";
     private final GeminiLiveConnection liveConnection;
@@ -2419,6 +2420,101 @@ final class NativeGeminiLiveClient {
         }
         final String name = semantic.runtimeName;
         final JSONObject args = semantic.runtimeArgs;
+
+        if ("tap_screen".equals(name)
+                && args.optBoolean("visual_tap", false)) {
+            String targetMetadata =
+                    args.optString("label", "").trim();
+            if (targetMetadata.isEmpty()
+                    || ActionSafetyPolicy.blocks(targetMetadata)
+                    || UserActionScope.looksLikeSendTarget(targetMetadata)
+                    || PendingActionPolicy.looksLikeHighRiskCommit(
+                            targetMetadata)) {
+                try {
+                    JSONObject blocked = runtimeBlocked(
+                            "VISUAL_TAP_HIGH_RISK_BLOCKED",
+                            "Visual TAP 只允許 fresh inspect_ui 上的低風險可逆操作；"
+                                    + "SEND、付款、刪除、帳號、credential 或其他提交型操作禁止使用座標 fallback。");
+                    blocked.put("taskState", "IN_PROGRESS")
+                            .put("nextRequirement", "TRY_ALTERNATIVE");
+                    sendToolResponse(id, requestedName, blocked);
+                } catch (Exception ignored) {}
+                return;
+            }
+
+            JSONObject current =
+                    observationVerificationController
+                            .readSemanticScreenQuietly();
+            if (current == null
+                    || !current.optBoolean("success", false)) {
+                try {
+                    JSONObject blocked = runtimeBlocked(
+                            "VISUAL_TAP_SCREEN_UNAVAILABLE",
+                            "無法重新確認目前畫面；visual tap 不會執行。請重新 inspect_ui。");
+                    blocked.put("taskState", "IN_PROGRESS")
+                            .put("nextRequirement", "INSPECT_UI");
+                    sendToolResponse(id, requestedName, blocked);
+                } catch (Exception ignored) {}
+                return;
+            }
+
+            observationVerificationController
+                    .recordSemanticObservation(current);
+
+            String visualPackage =
+                    current.optString("package", "").trim();
+            boolean visualAppTrusted =
+                    appAutonomyStore.isTrusted(visualPackage)
+                            || MediaPlaybackCompletionPolicy
+                                    .isDefaultTrustedPackage(
+                                            visualPackage);
+            if (!visualAppTrusted) {
+                try {
+                    JSONObject blocked = runtimeBlocked(
+                            "VISUAL_TAP_APP_NOT_TRUSTED",
+                            "Visual TAP 只在使用者 trusted App 或預設低風險媒體 App 啟用。"
+                                    + "目前 App 仍可使用 element_id / semantic target。");
+                    blocked.put("taskState", "IN_PROGRESS")
+                            .put("nextRequirement", "TRY_ALTERNATIVE");
+                    sendToolResponse(id, requestedName, blocked);
+                } catch (Exception ignored) {}
+                return;
+            }
+
+            VisualTapLease.Validation visualValidation =
+                    visualTapLease.validateAndConsume(
+                            args.optString("visual_lease_id", ""),
+                            current.optString("package", ""),
+                            current.optString("fingerprint", ""),
+                            args.optDouble("x", Double.NaN),
+                            args.optDouble("y", Double.NaN),
+                            System.currentTimeMillis());
+            if (!visualValidation.allowed) {
+                try {
+                    JSONObject blocked = runtimeBlocked(
+                            visualValidation.code,
+                            visualValidation.message
+                                    + " 請重新 inspect_ui，再依最新截圖決定 visual TAP。");
+                    blocked.put("taskState", "IN_PROGRESS")
+                            .put("nextRequirement", "INSPECT_UI");
+                    sendToolResponse(id, requestedName, blocked);
+                } catch (Exception ignored) {}
+                return;
+            }
+            try {
+                args.put("visual_lease_validated", true);
+            } catch (Exception ignored) {
+                try {
+                    JSONObject blocked = runtimeBlocked(
+                            "VISUAL_TAP_VALIDATION_STATE_FAILED",
+                            "Runtime 無法建立 visual tap 驗證狀態；不執行座標操作。請重新 inspect_ui。");
+                    blocked.put("taskState", "IN_PROGRESS")
+                            .put("nextRequirement", "INSPECT_UI");
+                    sendToolResponse(id, requestedName, blocked);
+                } catch (Exception ignoredAgain) {}
+                return;
+            }
+        }
 
         if (conversationLoopRecipe.isActive()
                 && !conversationLoopRecipe.allowsTool(name)) {
@@ -5409,6 +5505,7 @@ final class NativeGeminiLiveClient {
         }
 
         if (semanticScreenContainsSensitiveElement(semantic)) {
+            visualTapLease.clear();
             out.put("success", true)
                     .put("visualBlocked", "SENSITIVE_SCREEN")
                     .put("message",
@@ -5432,10 +5529,54 @@ final class NativeGeminiLiveClient {
         if (visual.optBoolean("success", false)) {
             out.put("success", true)
                     .put("visualSent", true)
-                    .put("visualSource", "FRESH_SCREENSHOT")
-                    .put("message",
-                            "最新手機畫面已傳送給模型；直接以畫面作為主要視覺證據。");
+                    .put("visualSource", "FRESH_SCREENSHOT");
+
+            JSONObject afterVisual =
+                    observationVerificationController
+                            .readSemanticScreenQuietly();
+            String beforePackage =
+                    semantic.optString("package", "");
+            String beforeFingerprint =
+                    semantic.optString("fingerprint", "");
+            String afterPackage =
+                    afterVisual == null
+                            ? ""
+                            : afterVisual.optString("package", "");
+            String afterFingerprint =
+                    afterVisual == null
+                            ? ""
+                            : afterVisual.optString("fingerprint", "");
+
+            boolean sameVisualScreen =
+                    afterVisual != null
+                            && afterVisual.optBoolean("success", false)
+                            && !beforePackage.isEmpty()
+                            && beforePackage.equals(afterPackage)
+                            && !beforeFingerprint.isEmpty()
+                            && beforeFingerprint.equals(afterFingerprint);
+
+            if (sameVisualScreen) {
+                VisualTapLease.Snapshot lease =
+                        visualTapLease.arm(
+                                afterPackage,
+                                afterFingerprint,
+                                System.currentTimeMillis());
+                JSONObject leaseJson = new JSONObject()
+                        .put("id", lease.id)
+                        .put("coordinateSpace", "normalized_1000")
+                        .put("expiresInMs", VisualTapLease.TTL_MS);
+                out.put("visualTapLease", leaseJson)
+                        .put("message",
+                                "最新畫面已傳送。優先使用 screen.items 的 element_id/target；"
+                                        + "只有看得到但節點不足的低風險目標，才可使用這次 visualTapLease。");
+            } else {
+                visualTapLease.clear();
+                out.put("visualTapUnavailable", "SCREEN_CHANGED_DURING_CAPTURE")
+                        .put("message",
+                                "截圖期間畫面已改變；可用於理解，但不可拿舊畫面做 visual TAP。請再 inspect_ui 一次。");
+            }
         } else {
+            visualTapLease.clear();
             out.put("visualSent", false)
                     .put("visualError",
                             visual.optString("error", "VISUAL_CAPTURE_FAILED"))

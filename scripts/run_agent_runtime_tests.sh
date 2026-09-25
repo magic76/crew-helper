@@ -47,6 +47,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/SearchResultAutonomyPolicy.java" \
   "$SRC/ScrollDirectionPolicy.java" \
   "$SRC/VisionCoordinateMapper.java" \
+  "$SRC/VisualTapLease.java" \
   "$SRC/ElementReferenceCommand.java" \
   "$SRC/ElementReferenceChoice.java" \
   "$SRC/ElementReferenceLayout.java" \
@@ -112,6 +113,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/AgentRuntimeV2Test.java" \
   "$ROOT/tests/AgentRuntimeRolloutTest.java" \
   "$ROOT/tests/VisionCoordinateMapperTest.java" \
+  "$ROOT/tests/VisualTapLeaseTest.java" \
   "$ROOT/tests/ElementReferenceCommandTest.java" \
   "$ROOT/tests/ElementReferenceChoiceTest.java" \
   "$ROOT/tests/ElementReferenceLayoutTest.java" \
@@ -177,6 +179,7 @@ java -cp "$OUT" com.crewpocket.helper.AgentTaskLifecycleClockTest
 java -cp "$OUT" com.crewpocket.helper.AgentRuntimeV2Test
 java -cp "$OUT" com.crewpocket.helper.AgentRuntimeRolloutTest
 java -cp "$OUT" com.crewpocket.helper.VisionCoordinateMapperTest
+java -cp "$OUT" com.crewpocket.helper.VisualTapLeaseTest
 java -cp "$OUT" com.crewpocket.helper.ElementReferenceCommandTest
 java -cp "$OUT" com.crewpocket.helper.ElementReferenceChoiceTest
 java -cp "$OUT" com.crewpocket.helper.ElementReferenceLayoutTest

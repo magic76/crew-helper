@@ -40,6 +40,12 @@ final class SemanticPhoneAction {
         String text = args.optString("text", "");
         String direction = args.optString("direction", "").trim().toLowerCase(Locale.ROOT);
         String distance = args.optString("distance", "").trim().toLowerCase(Locale.ROOT);
+        String visualLeaseId =
+                args.optString("visual_lease_id", "").trim();
+        boolean hasVisualX = args.has("visual_x");
+        boolean hasVisualY = args.has("visual_y");
+        double visualX = args.optDouble("visual_x", Double.NaN);
+        double visualY = args.optDouble("visual_y", Double.NaN);
 
         // Any non-TAP action leaves the manual element-reference mode so a stale
         // overlay never leaks into a new task.
@@ -137,6 +143,28 @@ final class SemanticPhoneAction {
             JSONObject out = new JSONObject()
                     .put("label", target)
                     .put("semantic_action", action);
+
+            boolean visualTapRequested =
+                    !visualLeaseId.isEmpty() || hasVisualX || hasVisualY;
+            if (visualTapRequested) {
+                if (target.isEmpty()
+                        || visualLeaseId.isEmpty()
+                        || !hasVisualX
+                        || !hasVisualY
+                        || !Double.isFinite(visualX)
+                        || !Double.isFinite(visualY)) {
+                    return error(
+                            action,
+                            "VISUAL_TAP_FIELDS_REQUIRED",
+                            "Visual TAP 必須同時提供 target、visual_lease_id、visual_x、visual_y；"
+                                    + "座標只能來自最新 inspect_ui 截圖。");
+                }
+                out.put("visual_tap", true)
+                        .put("visual_lease_id", visualLeaseId)
+                        .put("x", visualX)
+                        .put("y", visualY)
+                        .put("coordinate_space", "normalized_1000");
+            }
             if (!mapsConcept.isEmpty()) {
                 // The canonical concept is the stable WHAT shared with Live.
                 // The physical selector remains Runtime-owned. Until a learned
@@ -242,6 +270,7 @@ final class SemanticPhoneAction {
             return "target";
         }
         if ("BAD_ELEMENT_ID".equals(code)) return "element_id";
+        if ("VISUAL_TAP_FIELDS_REQUIRED".equals(code)) return "visual_lease_id";
         if ("TYPE_NEEDS_TEXT".equals(code) || "SEARCH_NEEDS_QUERY".equals(code)) {
             return "text";
         }

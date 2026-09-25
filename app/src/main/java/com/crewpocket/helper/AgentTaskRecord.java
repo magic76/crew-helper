@@ -155,6 +155,14 @@ final class AgentTaskRecord {
                 copyString(source, safeArgs, "app");
                 copyString(source, safeArgs, "package_name");
             } else if ("tap_screen".equals(name)) {
+                if (source.optBoolean("visual_tap", false)
+                        || source.has("visual_lease_id")
+                        || source.has("coordinate_space")) {
+                    recipeEligible = false;
+                    recipeIneligibleReason = "VISUAL_TAP_EPHEMERAL";
+                    recipeSteps.clear();
+                    return;
+                }
                 String label = source.optString(
                         "label",
                         source.optString("text", source.optString("name", ""))).trim();
