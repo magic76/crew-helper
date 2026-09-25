@@ -242,6 +242,12 @@ final class UserActionScope {
         searchSubmissionDispatched = true;
     }
 
+    synchronized boolean shouldSuppressSearchCommit() {
+        expireIfNeeded();
+        return searchIntent
+                && (searchSubmissionDispatched || searchCommitted);
+    }
+
     synchronized boolean shouldSuppressDuplicateSearch(
             String query, String packageName, long generation) {
         expireIfNeeded();
