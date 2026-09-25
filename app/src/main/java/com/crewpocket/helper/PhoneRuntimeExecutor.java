@@ -580,7 +580,8 @@ final class PhoneRuntimeExecutor {
                     }
 
                     if (structuralMatches > 1
-                            && !trustedAutonomy) {
+                            && !trustedAutonomy
+                            && !validatedVisualFallback) {
                         fallbackTrace.put("node_bounds:AMBIGUOUS");
                         return new JSONObject()
                                 .put("success", false)
@@ -590,6 +591,11 @@ final class PhoneRuntimeExecutor {
                                 .put("fallbackTrace", fallbackTrace)
                                 .put("instruction",
                                         "legacy label/id 也命中多個元件。不要取第一個或改猜座標；請重新 inspect_ui 或請使用者選候選。");
+                    }
+                    if (structuralMatches > 1
+                            && validatedVisualFallback) {
+                        fallbackTrace.put(
+                                "node_bounds:VISUAL_LEASE_FALLBACK");
                     }
 
                     boolean mayUseBounds =
