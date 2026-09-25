@@ -18,6 +18,8 @@ public final class MediaGoalUiPolicyTest {
                 "play control receives media-goal priority");
         check(artistScore > otherScore,
                 "goal-mentioned media entity is prioritized");
+        check(artistScore > playScore,
+                "unresolved actionable goal entity stays ahead of generic Play");
 
         check(MediaGoalUiPolicy.isGoalEntityLabel(
                         "鄧紫棋", "播放鄧紫棋"),
