@@ -2,6 +2,8 @@ package com.crewpocket.helper;
 
 import org.json.JSONObject;
 import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /** Model chooses WHAT; Runtime maps it to existing trusted tools. */
 final class SemanticPhoneAction {
@@ -60,17 +62,30 @@ final class SemanticPhoneAction {
             }
 
             if (!elementId.isEmpty()) {
-                if (!elementId.matches("e_[0-9a-fA-F]{8,32}")) {
+                String normalizedElementId =
+                        normalizeElementId(elementId);
+                if (!normalizedElementId.isEmpty()) {
+                    JSONObject selected = new JSONObject()
+                            .put("element_id", normalizedElementId)
+                            .put("semantic_action", action);
+                    if (!target.isEmpty()) {
+                        selected.put("label", target);
+                    }
+                    return mapped(
+                            action,
+                            "tap_element",
+                            selected);
+                }
+
+                // element_id is a precision hint, not a hard dependency.
+                // If the model also supplied a semantic target, degrade to the
+                // normal target locator instead of failing the whole step.
+                if (target.isEmpty()) {
                     return error(
                             action,
                             "BAD_ELEMENT_ID",
-                            "element_id 必須直接來自最新 screen.items[].id；不要自行產生或猜測。請改用目前畫面提供的 id 或只用 target。");
+                            "element_id 無法辨識，而且沒有 target 可退回。請使用最新 screen.items[].id，或提供目前畫面上的語意 target。");
                 }
-                JSONObject selected = new JSONObject()
-                        .put("element_id", elementId)
-                        .put("semantic_action", action);
-                if (!target.isEmpty()) selected.put("label", target);
-                return mapped(action, "tap_element", selected);
             }
 
             // Manual visual assist: label real Accessibility clickables.
@@ -186,6 +201,15 @@ final class SemanticPhoneAction {
 
         return error(action, "UNKNOWN_SEMANTIC_ACTION",
                 "只支援 OPEN_APP/SEARCH/COMMIT_SEARCH/TAP/TYPE/SCROLL/BACK/HOME。請改用支援的 action 後重試。");
+    }
+
+    private static String normalizeElementId(String value) {
+        String raw = value == null ? "" : value.trim();
+        if (raw.isEmpty()) return "";
+        Matcher matcher = Pattern
+                .compile("e_[0-9a-fA-F]{8,32}")
+                .matcher(raw);
+        return matcher.find() ? matcher.group() : "";
     }
 
     private static Resolution mapped(String action, String runtimeName, JSONObject args) {
