@@ -25,6 +25,13 @@ public final class UserActionScopeTest {
         scope.markSearchQueryEntered();
         check("QUERY_ENTERED".equals(scope.modelSearchPhase()),
                 "query-entered search phase survives tool turns");
+        check(scope.shouldBlockTapForSearch("蔡依林", false),
+                "generic pure-search result remains blocked before commit");
+        check(!scope.shouldBlockTapForSearch(
+                        "蔡依林",
+                        false,
+                        true),
+                "bounded low-risk media browse may open a result row");
         scope.markSearchCommitted();
         check("COMMIT_DISPATCHED".equals(scope.modelSearchPhase()),
                 "commit-dispatched phase is explicit before result evidence");
