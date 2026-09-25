@@ -1,6 +1,5 @@
 package com.crewpocket.helper;
 
-import org.json.JSONObject;
 
 /**
  * Deterministic latest-turn action boundary.
@@ -276,30 +275,16 @@ final class UserActionScope {
         return isSearchOnlyLocked();
     }
 
-    synchronized JSONObject toModelProgressJson() {
+    synchronized String modelSearchPhase() {
         expireIfNeeded();
-        JSONObject out = new JSONObject();
-        if (!searchIntent) return out;
-        try {
-            String phase;
-            if (searchResultSelected) {
-                phase = "RESULT_SELECTED";
-            } else if (searchResultsObserved) {
-                phase = "RESULTS_OBSERVED";
-            } else if (searchCommitted || searchSubmissionDispatched) {
-                phase = "COMMIT_DISPATCHED";
-            } else if (searchQueryEntered) {
-                phase = "QUERY_ENTERED";
-            } else {
-                phase = "STARTED";
-            }
-            out.put("phase", phase);
-            if (searchContinuation != null
-                    && searchContinuation.matches("[A-Z0-9:_-]{1,64}")) {
-                out.put("continuation", searchContinuation);
-            }
-        } catch (Exception ignored) {}
-        return out;
+        if (!searchIntent) return "";
+        if (searchResultSelected) return "RESULT_SELECTED";
+        if (searchResultsObserved) return "RESULTS_OBSERVED";
+        if (searchCommitted || searchSubmissionDispatched) {
+            return "COMMIT_DISPATCHED";
+        }
+        if (searchQueryEntered) return "QUERY_ENTERED";
+        return "STARTED";
     }
 
     synchronized void markSearchResultSelectionDispatched(String label) {
