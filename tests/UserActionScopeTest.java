@@ -15,6 +15,19 @@ public final class UserActionScopeTest {
         scope.updateFromUserText("播放 Apple Music 音樂");
         check(!scope.consumeElementReferenceAuthorization(),
                 "ordinary task never grants element overlay");
+        check(!scope.canStartFutureWait(),
+                "ordinary media task never grants background wait");
+
+        scope.updateFromUserText("等到播放按鈕出現後點它");
+        check(scope.canStartFutureWait(),
+                "explicit future condition grants one background wait");
+        scope.consumeFutureWaitAuthorization();
+        check(!scope.canStartFutureWait(),
+                "future wait authorization is one-shot");
+
+        scope.updateFromTrustedAction("等到畫面變化後通知");
+        check(!scope.canStartFutureWait(),
+                "trusted/internal action cannot grant future wait authority");
 
 
         scope.updateFromUserText("搜尋蔡依林");
