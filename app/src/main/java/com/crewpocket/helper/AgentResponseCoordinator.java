@@ -18,6 +18,7 @@ final class AgentResponseCoordinator {
     }
 
     private static final long FINAL_RESPONSE_WAIT_MS = 12_000L;
+    private static final long FORCED_CONCLUSION_WAIT_MS = 6_000L;
 
     private final AgentTaskCoordinator tasks;
     private final Host host;
@@ -66,9 +67,23 @@ final class AgentResponseCoordinator {
                         + "這個 active task 不可靜默結束；必須輸出一個簡短 AUDIO 回覆。"
                         + "不要說『抱歉』或『對不起』；直接說明已完成的部分與目前唯一卡點。",
                 "結論指令");
+        scheduleWatchdog(
+                task,
+                FORCED_CONCLUSION_WAIT_MS,
+                "任務已停止：Gemini 未在結論要求後回覆");
     }
 
     void scheduleWatchdog(final AgentTaskRecord task) {
+        scheduleWatchdog(
+                task,
+                FINAL_RESPONSE_WAIT_MS,
+                "任務未完成：Gemini 未在工具結果後繼續");
+    }
+
+    private void scheduleWatchdog(
+            final AgentTaskRecord task,
+            long timeoutMs,
+            final String timeoutReason) {
         if (task == null) return;
         synchronized (tasks.monitor()) {
             clearLocked();
@@ -87,7 +102,9 @@ final class AgentResponseCoordinator {
                     }
                     if (!shouldPrompt) return;
 
-                    String reason = "任務未完成：Gemini 未在工具結果後繼續";
+                    String reason = timeoutReason == null
+                            ? "任務未完成：Gemini 未在工具結果後繼續"
+                            : timeoutReason;
                     synchronized (tasks.monitor()) {
                         if (!tasks.isActive(task)
                                 || task.finished
@@ -106,7 +123,7 @@ final class AgentResponseCoordinator {
             };
             watchdogHandler.postDelayed(
                     responseWatchdog,
-                    FINAL_RESPONSE_WAIT_MS);
+                    Math.max(1_000L, timeoutMs));
         }
     }
 
@@ -161,6 +178,7 @@ final class AgentResponseCoordinator {
                         + "現在必須呼叫 inspect_ui；Runtime 會送一張 fresh screenshot。"
                         + "直接看最新畫面決定下一步；在取得該證據前，不要對使用者作答或作結論。",
                 "操作後驗證");
+        scheduleWatchdog(task);
     }
 
     private void requestNextToolAfterIntermediateReply(

@@ -749,13 +749,18 @@ final class NativeGeminiLiveClient {
                     active.retryIntentFamily = retry.intentFamily;
                 }
             }
-            cancelAgentTask(
+            boolean cancelled = cancelAgentTask(
                     "使用者重試尚未確認完成的操作",
                     UserRetryAfterUnconfirmedOutcomePolicy.CATEGORY);
+            if (cancelled) {
+                reportStage("已收到新指令，停止上一個任務並重新處理");
+            }
             return;
         }
 
-        cancelAgentTask("新使用者指令取代舊任務");
+        if (cancelAgentTask("新使用者指令取代舊任務")) {
+            reportStage("已收到新指令，停止上一個任務");
+        }
     }
 
     /**
