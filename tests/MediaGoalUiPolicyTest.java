@@ -21,6 +21,18 @@ public final class MediaGoalUiPolicyTest {
         check(artistScore > playScore,
                 "unresolved actionable goal entity stays ahead of generic Play");
 
+        int completedArtistScore = MediaGoalUiPolicy.scoreItem(
+                "button", "鄧紫棋", "", "tap",
+                "MEDIA:PLAY", "播放鄧紫棋", "鄧紫棋");
+        int playAfterArtistScore = MediaGoalUiPolicy.scoreItem(
+                "button", "播放", "", "tap",
+                "MEDIA:PLAY", "播放鄧紫棋", "鄧紫棋");
+        check(playAfterArtistScore > completedArtistScore,
+                "after artist activation Play becomes the higher-priority next action");
+        check(MediaGoalUiPolicy.sameSemanticLabel(
+                        " 鄧紫棋 ", "鄧紫棋"),
+                "completed media target comparison is normalized");
+
         check(MediaGoalUiPolicy.isGoalEntityLabel(
                         "鄧紫棋", "播放鄧紫棋"),
                 "artist label is recognized from goal text");
