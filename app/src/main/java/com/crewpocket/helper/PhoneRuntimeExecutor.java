@@ -439,7 +439,8 @@ final class PhoneRuntimeExecutor {
                 }
 
                 if (ambiguity) {
-                    if (trustedAutonomy) {
+                    if (trustedAutonomy
+                            && !validatedVisualFallback) {
                         JSONArray candidates =
                                 semantic.optJSONArray("candidates");
                         JSONObject top =
@@ -601,7 +602,8 @@ final class PhoneRuntimeExecutor {
                     boolean mayUseBounds =
                             uniqueBounds != null
                                     && (structuralMatches == 1
-                                            || trustedAutonomy);
+                                            || (trustedAutonomy
+                                                && !validatedVisualFallback));
                     if (mayUseBounds) {
                         targetX = (
                                 uniqueBounds.optDouble("left", 0)
