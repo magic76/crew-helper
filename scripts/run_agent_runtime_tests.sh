@@ -34,6 +34,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/MediaPlaybackCompletionPolicy.java" \
   "$SRC/ToolCallDispatchLedger.java" \
   "$SRC/RuntimeToolRouting.java" \
+  "$SRC/ToolIntentRoutingPolicy.java" \
   "$SRC/DeckTurnAdvancePolicy.java" \
   "$SRC/UiChangeSignal.java" \
   "$SRC/RuntimeUiState.java" \
@@ -90,6 +91,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/MediaPlaybackCompletionPolicyTest.java" \
   "$ROOT/tests/ToolCallDispatchLedgerTest.java" \
   "$ROOT/tests/RuntimeToolRoutingTest.java" \
+  "$ROOT/tests/ToolIntentRoutingPolicyTest.java" \
   "$ROOT/tests/DeckTurnAdvancePolicyTest.java" \
   "$ROOT/tests/UiChangeSignalTest.java" \
   "$ROOT/tests/RuntimeUiStateTest.java" \
@@ -154,6 +156,7 @@ java -cp "$OUT" com.crewpocket.helper.LiveModelProgressPolicyTest
 java -cp "$OUT" com.crewpocket.helper.MediaPlaybackCompletionPolicyTest
 java -cp "$OUT" com.crewpocket.helper.ToolCallDispatchLedgerTest
 java -cp "$OUT" com.crewpocket.helper.RuntimeToolRoutingTest
+java -cp "$OUT" com.crewpocket.helper.ToolIntentRoutingPolicyTest
 java -cp "$OUT" com.crewpocket.helper.DeckTurnAdvancePolicyTest
 java -cp "$OUT" com.crewpocket.helper.UiChangeSignalTest
 java -cp "$OUT" com.crewpocket.helper.RuntimeUiStateTest

@@ -2372,7 +2372,42 @@ final class NativeGeminiLiveClient {
         // 0034: model-facing semantic action -> existing trusted Runtime tool.
         final SemanticPhoneAction.Resolution semantic;
         try {
-            semantic = SemanticPhoneAction.resolve(requestedName, requestedArgs);
+            SemanticPhoneAction.Resolution resolved =
+                    SemanticPhoneAction.resolve(
+                            requestedName,
+                            requestedArgs);
+
+            // Tool-intent correction must happen BEFORE preflight / Inspector /
+            // verification so every layer agrees on what actually executed.
+            // Weak Live turns sometimes choose TYPE while pursuing a search or
+            // MEDIA:PLAY goal. Treat that as SEARCH instead of executing a
+            // hidden late remap that still reports TYPE back to the model.
+            String goalIntent = workingContext
+                    .toProgressJson()
+                    .optString("goalIntent", "");
+            boolean typeShouldBeSearch =
+                    ToolIntentRoutingPolicy.shouldRemapTypeToSearch(
+                            resolved.runtimeName,
+                            userActionScope.shouldAutoCommitSearch(),
+                            goalIntent,
+                            !resolved.runtimeArgs
+                                    .optString("text", "")
+                                    .trim()
+                                    .isEmpty());
+            if (typeShouldBeSearch) {
+                userActionScope.ensureSearchForGoal(goalIntent);
+                String query =
+                        resolved.runtimeArgs.optString("text", "").trim();
+                if (!query.isEmpty()) {
+                    JSONObject searchArgs = new JSONObject()
+                            .put("action", "SEARCH")
+                            .put("text", query);
+                    resolved = SemanticPhoneAction.resolve(
+                            SemanticPhoneAction.TOOL_NAME,
+                            searchArgs);
+                }
+            }
+            semantic = resolved;
         } catch (Exception error) {
             JSONObject failure = new JSONObject();
             try {
@@ -4134,6 +4169,13 @@ final class NativeGeminiLiveClient {
     }
 
     private JSONObject waitThenAction(JSONObject args) throws Exception {
+        if (!userActionScope.canStartFutureWait()) {
+            return runtimeBlocked(
+                    "FUTURE_WAIT_NOT_REQUESTED",
+                    "wait_then_action 只能在使用者明確要求等待未來條件、通知或後續動作時建立。"
+                            + "目前是一般即時任務；不要用背景等待作為卡住時的 fallback，請直接繼續目前 goal 或回報卡點。");
+        }
+
         String condition = args.optString("condition", "");
         String conditionText = args.optString("condition_text", "");
         String action = args.optString("action", "");
@@ -4157,6 +4199,9 @@ final class NativeGeminiLiveClient {
                     .put("error", validation.code)
                     .put("instruction", validation.message);
         }
+
+        // One explicit user request creates at most one background watcher.
+        userActionScope.consumeFutureWaitAuthorization();
 
         ScheduledTaskManager manager =
                 ScheduledTaskManager.getInstance(appContext);

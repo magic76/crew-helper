@@ -77,9 +77,16 @@ final class SemanticPhoneAction {
                             selected);
                 }
 
+                // Some Live turns put the visible label in element_id instead
+                // of target. Recover that harmless schema mistake locally.
+                if (target.isEmpty()
+                        && !elementId.startsWith("e_")
+                        && elementId.length() <= 96) {
+                    target = elementId;
+                }
+
                 // element_id is a precision hint, not a hard dependency.
-                // If the model also supplied a semantic target, degrade to the
-                // normal target locator instead of failing the whole step.
+                // If a semantic target exists, degrade to the normal locator.
                 if (target.isEmpty()) {
                     return error(
                             action,

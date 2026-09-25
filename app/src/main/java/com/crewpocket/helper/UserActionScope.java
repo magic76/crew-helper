@@ -33,6 +33,7 @@ final class UserActionScope {
     private boolean endCallAuthorized;
     private boolean appLearningAuthorized;
     private boolean elementReferenceAuthorized;
+    private boolean futureWaitAuthorized;
 
     synchronized boolean consumeEndCallAuthorization() {
         expireIfNeeded();
@@ -58,6 +59,7 @@ final class UserActionScope {
     synchronized void updateFromTrustedAction(String action) {
         update(action);
         elementReferenceAuthorized = false;
+        futureWaitAuthorized = false;
     }
 
     synchronized boolean consumeElementReferenceAuthorization() {
@@ -65,6 +67,16 @@ final class UserActionScope {
         boolean authorized = elementReferenceAuthorized;
         elementReferenceAuthorized = false;
         return authorized;
+    }
+
+    synchronized boolean canStartFutureWait() {
+        expireIfNeeded();
+        return futureWaitAuthorized;
+    }
+
+    synchronized void consumeFutureWaitAuthorization() {
+        expireIfNeeded();
+        futureWaitAuthorized = false;
     }
 
     private void update(String text) {
@@ -87,6 +99,7 @@ final class UserActionScope {
                 || value.matches("(?:please)?(?:endthecall|hangup|exitthevoiceassistant)(?:please)?");
 
         appLearningAuthorized = explicitAppLearning;
+        futureWaitAuthorized = hasExplicitFutureWaitIntent(text);
 
         boolean navigation = hasNavigationIntent(value);
         boolean search = hasSearchIntent(value) || navigation;
@@ -163,6 +176,29 @@ final class UserActionScope {
     synchronized boolean shouldAutoCommitSearch() {
         expireIfNeeded();
         return searchIntent;
+    }
+
+    synchronized void ensureSearchForGoal(String goalIntent) {
+        expireIfNeeded();
+        if (searchIntent) return;
+        if (!"MEDIA:PLAY".equals(goalIntent)) return;
+
+        searchIntent = true;
+        openSearchResultAuthorized = true;
+        searchResultSelectionRequested = false;
+        searchContinuation = "MEDIA:PLAY";
+        searchQueryEntered = false;
+        searchCommitted = false;
+        searchSubmissionDispatched = false;
+        searchTransactionQuery = "";
+        searchTransactionPackage = "";
+        searchTransactionGeneration = -1L;
+        searchResultSelected = false;
+        searchResultsObserved = false;
+        searchResultSelectionDispatched = false;
+        selectedSearchResult = "";
+        dispatchedSearchResult = "";
+        updatedAtMs = System.currentTimeMillis();
     }
 
     /** Search suggestions are not results and must never trigger a result picker. */
@@ -380,6 +416,7 @@ final class UserActionScope {
         endCallAuthorized = false;
         appLearningAuthorized = false;
         elementReferenceAuthorized = false;
+        futureWaitAuthorized = false;
         searchIntent = false;
         openSearchResultAuthorized = false;
         searchResultSelectionRequested = false;
@@ -419,6 +456,23 @@ final class UserActionScope {
                 || folded.matches(
                 "^\\s*(?:how|why|if)\\b.*"
                         + "\\b(?:open|search|navigate|send|click|tap|type|input)\\b.*");
+    }
+
+    private static boolean hasExplicitFutureWaitIntent(String rawText) {
+        if (rawText == null || rawText.trim().isEmpty()) return false;
+        String value = TextMatch.caseFold(rawText).trim();
+        String compact = normalize(rawText);
+
+        if (compact.contains("等到")
+                || compact.matches(".*等.+(?:再|後|后|就).*")
+                || compact.matches(".*(?:當|当).+(?:時|时|就).*")
+                || compact.matches(".*(?:出現|出现|完成|開啟|开启|可用).*(?:後|后|時|时).*(?:通知|提醒|點|点|輸入|输入|返回|繼續|继续).*")) {
+            return true;
+        }
+
+        return value.matches("(?s).*\b(wait until|when|once)\b.*")
+                || value.matches("(?s).*\bnotify me when\b.*")
+                || value.matches("(?s).*\bafter\b.*\b(then|notify|tap|type|continue)\b.*");
     }
 
     private static boolean hasAppLearningIntent(String rawText) {
