@@ -4317,20 +4317,18 @@ final class NativeGeminiLiveClient {
         String currentPackage =
                 observationVerificationController
                         .latestObservation().packageName;
-        boolean trustedMediaBrowse =
-                MediaPlaybackCompletionPolicy
-                        .isDefaultTrustedPackage(currentPackage)
-                        && !MediaPlaybackCompletionPolicy
-                                .isPlayControl(tapMeta);
+        boolean lowRiskTap =
+                !ActionSafetyPolicy.blocks(tapMeta)
+                        && !UserActionScope.looksLikeSendTarget(tapMeta);
 
         if (!pendingChoiceExecuting
                 && userActionScope.shouldBlockTapForSearch(
                         tapMeta,
                         label.isEmpty() && id.isEmpty(),
-                        trustedMediaBrowse)) {
+                        lowRiskTap)) {
             return runtimeBlocked(
                     "SEARCH_SCOPE_RESULT_OPEN_NOT_AUTHORIZED",
-                    "最新任務只要求搜尋。可在低風險媒體 App 開啟搜尋結果，但不可因此取得播放、傳訊、付款或帳號操作權限。");
+                    "這個搜尋後操作碰到高風險或提交邊界；一般低風險 TAP 不受 search-only scope 限制。");
         }
 
         boolean mediaPlayCandidate =
@@ -4849,20 +4847,18 @@ final class NativeGeminiLiveClient {
         String currentPackage =
                 observationVerificationController
                         .latestObservation().packageName;
-        boolean trustedMediaBrowse =
-                MediaPlaybackCompletionPolicy
-                        .isDefaultTrustedPackage(currentPackage)
-                        && !MediaPlaybackCompletionPolicy
-                                .isPlayControl(elementMeta);
+        boolean lowRiskTap =
+                !ActionSafetyPolicy.blocks(elementMeta)
+                        && !UserActionScope.looksLikeSendTarget(elementMeta);
 
         if (!pendingChoiceExecuting
                 && userActionScope.shouldBlockTapForSearch(
                         elementMeta,
-                        elementMeta.isEmpty(),
-                        trustedMediaBrowse)) {
+                        false,
+                        lowRiskTap)) {
             return runtimeBlocked(
                     "SEARCH_SCOPE_RESULT_OPEN_NOT_AUTHORIZED",
-                    "最新任務只要求搜尋。可在低風險媒體 App 開啟搜尋結果，但不可因此取得播放、傳訊、付款或帳號操作權限。");
+                    "這個搜尋後操作碰到高風險或提交邊界；一般低風險 semantic TAP 不受 search-only scope 限制。");
         }
 
         boolean mediaPlayCandidate =
