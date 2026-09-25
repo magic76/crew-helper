@@ -57,7 +57,16 @@ public final class AgentRuntimeV2Test {
         check(pendingRetry.decision == AgentRuntimeV2.PreflightDecision.REQUIRE_OBSERVE,
                 "pending repeat requires observation");
 
-        runtime.reverifyPending(s3);
+        AgentRuntimeV2.ReverificationSummary failedSummary =
+                runtime.reverifyPendingDetailed(s3);
+        check(failedSummary.failed == 1,
+                "explicit unchanged observation reports failed pending tap");
+        check("tap_screen".equals(failedSummary.failedRuntimeName),
+                "failed reverification identifies tap runtime");
+        check("NO_EFFECT_AFTER_EXPLICIT_OBSERVE".equals(
+                        failedSummary.failedCode),
+                "failed reverification exposes no-effect code");
+
         AgentRuntimeV2.PreflightResult recoveryRetry = runtime.preflight(
                 7L, 7L, "p3", "tap_screen", "tap:next", s3);
         check(recoveryRetry.allowed(),
@@ -104,8 +113,12 @@ public final class AgentRuntimeV2Test {
 
         ActionObservation s4 = obs("fp4", "s4");
         runtime.onScreenObserved(s4);
-        int reverified = runtime.reverifyPending(s4);
-        check(reverified >= 1, "pending transaction commits after later observation");
+        AgentRuntimeV2.ReverificationSummary committedSummary =
+                runtime.reverifyPendingDetailed(s4);
+        check(committedSummary.committed >= 1,
+                "pending transaction commits after later observation");
+        check(committedSummary.failed == 0,
+                "successful later observation is not reported as failed");
 
         // Repeat-safe scrolls are intentionally not deduped.
         AgentRuntimeV2.PreflightResult scroll1 = runtime.preflight(
