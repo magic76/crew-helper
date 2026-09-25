@@ -55,6 +55,48 @@ final class MediaGoalUiPolicy {
         return score;
     }
 
+    static String uniqueGoalEntityTarget(
+            JSONObject semanticScreen,
+            String goalText) {
+        if (semanticScreen == null
+                || !semanticScreen.optBoolean("success", false)) {
+            return "";
+        }
+        String normalizedGoal = normalize(goalText);
+        if (normalizedGoal.isEmpty()) return "";
+
+        JSONArray elements = semanticScreen.optJSONArray("elements");
+        if (elements == null) return "";
+
+        String target = "";
+        int matches = 0;
+        for (int i = 0; i < elements.length(); i++) {
+            JSONObject item = elements.optJSONObject(i);
+            if (item == null
+                    || item.optBoolean("sensitive", false)
+                    || !item.optBoolean("enabled", true)
+                    || !item.optBoolean("clickable", false)) {
+                continue;
+            }
+
+            String label = item.optString("label", "").trim();
+            String normalizedLabel = normalize(label);
+            if (normalizedLabel.length() < 2
+                    || MediaPlaybackCompletionPolicy.isPlayControl(label)
+                    || !normalizedGoal.contains(normalizedLabel)) {
+                continue;
+            }
+
+            double confidence = item.optDouble("confidence", 0.0);
+            if (confidence < 0.85) continue;
+
+            matches++;
+            if (matches > 1) return "";
+            target = label;
+        }
+        return matches == 1 ? target : "";
+    }
+
     static String uniquePlayTarget(JSONObject semanticScreen) {
         return uniquePlayTarget(semanticScreen, "");
     }
