@@ -562,6 +562,27 @@ final class ModelToolResponseAdapter {
                 }
             }
 
+            JSONObject visualLease =
+                    result.optJSONObject("visualTapLease");
+            if (visualLease != null) {
+                String leaseId =
+                        visualLease.optString("id", "").trim();
+                if (leaseId.matches("vt_[0-9a-f]+_[0-9a-f]+")) {
+                    JSONObject compactLease = new JSONObject()
+                            .put("id", leaseId)
+                            .put(
+                                    "coordinateSpace",
+                                    "normalized_1000");
+                    int expiresInMs =
+                            visualLease.optInt("expiresInMs", 0);
+                    if (expiresInMs > 0) {
+                        compactLease.put(
+                                "expiresInMs", expiresInMs);
+                    }
+                    out.put("visualTapLease", compactLease);
+                }
+            }
+
             JSONArray choices = choices(result);
             if (choices.length() > 0) out.put("choices", choices);
         } catch (Exception ignored) {}
