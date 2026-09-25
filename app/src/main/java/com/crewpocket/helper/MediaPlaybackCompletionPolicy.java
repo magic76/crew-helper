@@ -26,6 +26,17 @@ final class MediaPlaybackCompletionPolicy {
                 || value.contains("play_control");
     }
 
+    static boolean shouldCompleteFromVerifiedEffect(
+            String goalIntent,
+            String targetMetadata,
+            boolean committed,
+            boolean observableEffect) {
+        return "MEDIA:PLAY".equals(clean(goalIntent))
+                && isPlayControl(targetMetadata)
+                && committed
+                && observableEffect;
+    }
+
     static boolean uiIndicatesPlaying(String compactAfter) {
         String value = fold(compactAfter);
         if (value.isEmpty()) return false;
