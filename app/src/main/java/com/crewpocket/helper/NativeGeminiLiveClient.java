@@ -6069,6 +6069,30 @@ final class NativeGeminiLiveClient {
 
     /** Explicitly commits the currently focused search field via the IME key. */
     private JSONObject commitSearch() throws Exception {
+        if (userActionScope.shouldSuppressSearchCommit()) {
+            String phase = userActionScope.modelSearchPhase();
+            JSONObject suppressed = new JSONObject()
+                    .put("success", true)
+                    .put("stepResult", "STEP_OK")
+                    .put("action", "SEARCH_COMMIT")
+                    .put("duplicateSuppressed", true)
+                    .put("searchTransaction", phase)
+                    .put("taskState", "IN_PROGRESS")
+                    .put("completionEvidence",
+                            "SEARCH_COMMIT_ALREADY_DISPATCHED");
+            if ("RESULTS_OBSERVED".equals(phase)
+                    || "RESULT_SELECTED".equals(phase)) {
+                suppressed.put("nextRequirement", "CONTINUE_GOAL")
+                        .put("instruction",
+                                "這一輪搜尋結果已經可用；不要再次提交搜尋，直接繼續目前目標。");
+            } else {
+                suppressed.put("nextRequirement", "INSPECT_UI")
+                        .put("instruction",
+                                "這一輪搜尋提交已經送出；不要再次 COMMIT_SEARCH，先依目前畫面確認結果。");
+            }
+            return suppressed;
+        }
+
         JSONObject reply = phoneRuntimeExecutor.post("/commit_search", new JSONObject());
         workingContext.recordAction("search_commit",
                 reply.optBoolean("success", false) ? "submitted" : "failed");
