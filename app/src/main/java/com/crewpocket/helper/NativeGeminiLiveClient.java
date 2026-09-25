@@ -5513,9 +5513,15 @@ final class NativeGeminiLiveClient {
             if (commit.optBoolean("success", false)) {
                 workingContext.recordAction("search_commit", "submitted");
                 JSONObject observed = observationVerificationController.autoObserveAfterMutation(commit, "search_commit");
-                boolean searchOnlyBoundary = userActionScope.markSearchCommitted();
+                boolean searchOnlyBoundary =
+                        commit.optBoolean("resultsObserved", false)
+                                ? userActionScope.markSearchResultsObserved()
+                                : userActionScope.markSearchCommitted();
 
-                observed.put("searchTransaction", "COMMITTED")
+                observed.put("searchTransaction",
+                                commit.optBoolean("resultsObserved", false)
+                                        ? "RESULTS_OBSERVED"
+                                        : "COMMIT_DISPATCHED")
                         .put("typed", true)
                         .put("committed", true)
                         .put("searchCommitMethod", commit.optString("method", "RUNTIME"));
@@ -5705,7 +5711,7 @@ final class NativeGeminiLiveClient {
                         reply.optString("commitMethod", "NONE"));
 
         if (resultsObserved) {
-            userActionScope.markSearchCommitted();
+            userActionScope.markSearchResultsObserved();
             observed.put("taskState", "EVIDENCE_AVAILABLE")
                     .put("completionEvidence",
                             reply.optString("resultEvidence",
@@ -6063,11 +6069,39 @@ final class NativeGeminiLiveClient {
 
     /** Explicitly commits the currently focused search field via the IME key. */
     private JSONObject commitSearch() throws Exception {
+        if (userActionScope.shouldSuppressSearchCommit()) {
+            String phase = userActionScope.modelSearchPhase();
+            JSONObject suppressed = new JSONObject()
+                    .put("success", true)
+                    .put("stepResult", "STEP_OK")
+                    .put("action", "SEARCH_COMMIT")
+                    .put("duplicateSuppressed", true)
+                    .put("searchTransaction", phase)
+                    .put("taskState", "IN_PROGRESS")
+                    .put("completionEvidence",
+                            "SEARCH_COMMIT_ALREADY_DISPATCHED");
+            if ("RESULTS_OBSERVED".equals(phase)
+                    || "RESULT_SELECTED".equals(phase)) {
+                suppressed.put("nextRequirement", "CONTINUE_GOAL")
+                        .put("instruction",
+                                "這一輪搜尋結果已經可用；不要再次提交搜尋，直接繼續目前目標。");
+            } else {
+                suppressed.put("nextRequirement", "INSPECT_UI")
+                        .put("instruction",
+                                "這一輪搜尋提交已經送出；不要再次 COMMIT_SEARCH，先依目前畫面確認結果。");
+            }
+            return suppressed;
+        }
+
         JSONObject reply = phoneRuntimeExecutor.post("/commit_search", new JSONObject());
         workingContext.recordAction("search_commit",
                 reply.optBoolean("success", false) ? "submitted" : "failed");
         if (reply.optBoolean("success", false)) {
-            userActionScope.markSearchCommitted();
+            if (reply.optBoolean("resultsObserved", false)) {
+                userActionScope.markSearchResultsObserved();
+            } else {
+                userActionScope.markSearchCommitted();
+            }
         }
         if (!reply.optBoolean("success", false)) {
             reply.put("instruction",
@@ -6108,6 +6142,20 @@ final class NativeGeminiLiveClient {
         // projection. Fingerprints, authorization state and other debug fields
         // remain Runtime-internal.
         JSONObject progressContext = workingContext.toProgressJson();
+        String searchPhase = userActionScope.modelSearchPhase();
+        if (!searchPhase.isEmpty()) {
+            JSONObject searchProgress =
+                    new JSONObject().put("phase", searchPhase);
+            String continuation =
+                    userActionScope.searchContinuation();
+            if (continuation != null
+                    && continuation.matches("[A-Z0-9:_-]{1,64}")) {
+                searchProgress.put(
+                        "continuation",
+                        continuation);
+            }
+            progressContext.put("search", searchProgress);
+        }
         final JSONObject modelResult =
                 ModelToolResponseAdapter.forModel(
                         name, result, progressContext);

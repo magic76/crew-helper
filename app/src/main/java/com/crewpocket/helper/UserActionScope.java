@@ -1,5 +1,6 @@
 package com.crewpocket.helper;
 
+
 /**
  * Deterministic latest-turn action boundary.
  *
@@ -24,6 +25,7 @@ final class UserActionScope {
     private String searchTransactionPackage = "";
     private long searchTransactionGeneration = -1L;
     private boolean searchResultSelected;
+    private boolean searchResultsObserved;
     private boolean searchResultSelectionDispatched;
     private String selectedSearchResult = "";
     private String dispatchedSearchResult = "";
@@ -117,6 +119,7 @@ final class UserActionScope {
         searchTransactionPackage = "";
         searchTransactionGeneration = -1L;
         searchResultSelected = false;
+        searchResultsObserved = false;
         searchResultSelectionDispatched = false;
         selectedSearchResult = "";
         dispatchedSearchResult = "";
@@ -216,6 +219,7 @@ final class UserActionScope {
         searchTransactionGeneration = -1L;
         searchResultSelectionDispatched = false;
         searchResultSelected = false;
+        searchResultsObserved = false;
         dispatchedSearchResult = "";
         selectedSearchResult = "";
         return true;
@@ -236,6 +240,12 @@ final class UserActionScope {
         expireIfNeeded();
         if (!searchIntent || !searchQueryEntered) return;
         searchSubmissionDispatched = true;
+    }
+
+    synchronized boolean shouldSuppressSearchCommit() {
+        expireIfNeeded();
+        return searchIntent
+                && (searchSubmissionDispatched || searchCommitted);
     }
 
     synchronized boolean shouldSuppressDuplicateSearch(
@@ -261,6 +271,28 @@ final class UserActionScope {
         return isSearchOnlyLocked();
     }
 
+    synchronized boolean markSearchResultsObserved() {
+        expireIfNeeded();
+        if (!searchIntent) return false;
+        searchQueryEntered = true;
+        searchSubmissionDispatched = true;
+        searchCommitted = true;
+        searchResultsObserved = true;
+        return isSearchOnlyLocked();
+    }
+
+    synchronized String modelSearchPhase() {
+        expireIfNeeded();
+        if (!searchIntent) return "";
+        if (searchResultSelected) return "RESULT_SELECTED";
+        if (searchResultsObserved) return "RESULTS_OBSERVED";
+        if (searchCommitted || searchSubmissionDispatched) {
+            return "COMMIT_DISPATCHED";
+        }
+        if (searchQueryEntered) return "QUERY_ENTERED";
+        return "STARTED";
+    }
+
     synchronized void markSearchResultSelectionDispatched(String label) {
         expireIfNeeded();
         if (!searchIntent) return;
@@ -278,6 +310,7 @@ final class UserActionScope {
         searchCommitted = true;
         searchResultSelectionDispatched = true;
         searchResultSelected = true;
+        searchResultsObserved = true;
         selectedSearchResult = label == null ? "" : label.trim();
         dispatchedSearchResult = "";
     }
@@ -337,6 +370,7 @@ final class UserActionScope {
         searchTransactionPackage = "";
         searchTransactionGeneration = -1L;
         searchResultSelected = false;
+        searchResultsObserved = false;
         searchResultSelectionDispatched = false;
         selectedSearchResult = "";
         dispatchedSearchResult = "";

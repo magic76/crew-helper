@@ -252,6 +252,23 @@ final class ModelToolResponseAdapter {
                 copyClipped(source, out, "rootGoal", MAX_GOAL);
                 copyClipped(source, out, "currentApp", MAX_LABEL);
                 copyClipped(source, out, "pendingTask", MAX_LABEL);
+
+                JSONObject search = source.optJSONObject("search");
+                if (search != null) {
+                    JSONObject compactSearch = new JSONObject();
+                    String phase = search.optString("phase", "").trim();
+                    String continuation =
+                            search.optString("continuation", "").trim();
+                    if (phase.matches("[A-Z0-9:_-]{1,64}")) {
+                        compactSearch.put("phase", phase);
+                    }
+                    if (continuation.matches("[A-Z0-9:_-]{1,64}")) {
+                        compactSearch.put("continuation", continuation);
+                    }
+                    if (compactSearch.length() > 0) {
+                        out.put("search", compactSearch);
+                    }
+                }
             }
 
             JSONArray steps = new JSONArray();
@@ -664,6 +681,10 @@ final class ModelToolResponseAdapter {
         JSONObject out = new JSONObject();
         if (source == null) return out;
         try {
+            String id = source.optString("id", "").trim();
+            if (id.matches("e_[0-9a-fA-F]{8,32}")) {
+                out.put("id", id);
+            }
             copyClippedString(source, out, "role");
             copyClippedString(source, out, "label");
             copyClippedString(source, out, "semanticHint");
