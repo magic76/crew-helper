@@ -2386,9 +2386,14 @@ final class NativeGeminiLiveClient {
                     .toProgressJson()
                     .optString("goalIntent", "");
             boolean typeShouldBeSearch =
-                    "type_text".equals(resolved.runtimeName)
-                            && (userActionScope.shouldAutoCommitSearch()
-                                || "MEDIA:PLAY".equals(goalIntent));
+                    ToolIntentRoutingPolicy.shouldRemapTypeToSearch(
+                            resolved.runtimeName,
+                            userActionScope.shouldAutoCommitSearch(),
+                            goalIntent,
+                            !resolved.runtimeArgs
+                                    .optString("text", "")
+                                    .trim()
+                                    .isEmpty());
             if (typeShouldBeSearch) {
                 String query =
                         resolved.runtimeArgs.optString("text", "").trim();
