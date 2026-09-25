@@ -17,6 +17,19 @@ final class MediaGoalUiPolicy {
             String can,
             String goalIntent,
             String goalText) {
+        return scoreItem(
+                role, label, semanticHint, can,
+                goalIntent, goalText, "");
+    }
+
+    static int scoreItem(
+            String role,
+            String label,
+            String semanticHint,
+            String can,
+            String goalIntent,
+            String goalText,
+            String completedTarget) {
         int score = ScreenItemPriorityPolicy.score(
                 role, label, semanticHint, can);
         if (!isMediaPlayGoal(goalIntent)) return score;
@@ -34,6 +47,9 @@ final class MediaGoalUiPolicy {
                         role, label, semanticHint, can);
         if (isGoalEntityLabel(label, goalText)) {
             score += actionable ? 700 : 60;
+            if (sameSemanticLabel(label, completedTarget)) {
+                score -= 760;
+            }
         }
 
         if (actionable) {
@@ -72,6 +88,14 @@ final class MediaGoalUiPolicy {
                 || MediaPlaybackCompletionPolicy.isPlayControl(semanticHint)
                 || MediaPlaybackCompletionPolicy.isPlayControl(
                         clean(label) + " " + clean(semanticHint));
+    }
+
+    static boolean sameSemanticLabel(
+            String left,
+            String right) {
+        String a = normalize(left);
+        String b = normalize(right);
+        return !a.isEmpty() && a.equals(b);
     }
 
     static boolean looksLikeNumericOrdinalTarget(String target) {
