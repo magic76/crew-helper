@@ -1,8 +1,5 @@
 package com.crewpocket.helper;
 
-import org.json.JSONArray;
-import org.json.JSONObject;
-
 import java.util.Locale;
 
 /** Pure goal-aware UI hints for MEDIA:PLAY without app-specific selectors. */
@@ -14,158 +11,65 @@ final class MediaGoalUiPolicy {
     }
 
     static int scoreItem(
-            JSONObject item,
+            String role,
+            String label,
+            String semanticHint,
+            String can,
             String goalIntent,
             String goalText) {
-        if (item == null) return 0;
         int score = ScreenItemPriorityPolicy.score(
-                item.optString("role", ""),
-                item.optString("label", ""),
-                item.optString("semanticHint", ""),
-                item.optString("can", ""));
+                role, label, semanticHint, can);
         if (!isMediaPlayGoal(goalIntent)) return score;
 
-        String label = item.optString("label", "").trim();
-        String hint = item.optString("semanticHint", "").trim();
-        String metadata = label + " " + hint + " "
-                + item.optString("can", "");
-
+        String metadata = clean(label) + " "
+                + clean(semanticHint) + " " + clean(can);
         if (MediaPlaybackCompletionPolicy.isPlayControl(metadata)
                 || MediaPlaybackCompletionPolicy.isPlayControl(label)
-                || MediaPlaybackCompletionPolicy.isPlayControl(hint)) {
+                || MediaPlaybackCompletionPolicy.isPlayControl(semanticHint)) {
             score += 500;
         }
 
-        String normalizedLabel = normalize(label);
-        String normalizedGoal = normalize(goalText);
-        if (normalizedLabel.length() >= 2
-                && !normalizedGoal.isEmpty()
-                && (normalizedGoal.contains(normalizedLabel)
-                    || normalizedLabel.contains(normalizedGoal))) {
+        if (isGoalEntityLabel(label, goalText)) {
             score += 260;
         }
 
         if (ScreenItemPriorityPolicy.isActionable(
-                item.optString("role", ""),
-                label,
-                hint,
-                item.optString("can", ""))) {
+                role, label, semanticHint, can)) {
             score += 40;
         }
         return score;
     }
 
-    static String uniqueGoalEntityTarget(
-            JSONObject semanticScreen,
+    static boolean isGoalEntityLabel(
+            String label,
             String goalText) {
-        if (semanticScreen == null
-                || !semanticScreen.optBoolean("success", false)) {
-            return "";
-        }
+        String normalizedLabel = normalize(label);
         String normalizedGoal = normalize(goalText);
-        if (normalizedGoal.isEmpty()) return "";
-
-        JSONArray elements = semanticScreen.optJSONArray("elements");
-        if (elements == null) return "";
-
-        String target = "";
-        int matches = 0;
-        for (int i = 0; i < elements.length(); i++) {
-            JSONObject item = elements.optJSONObject(i);
-            if (item == null
-                    || item.optBoolean("sensitive", false)
-                    || !item.optBoolean("enabled", true)
-                    || !item.optBoolean("clickable", false)) {
-                continue;
-            }
-
-            String label = item.optString("label", "").trim();
-            String normalizedLabel = normalize(label);
-            if (normalizedLabel.length() < 2
-                    || MediaPlaybackCompletionPolicy.isPlayControl(label)
-                    || !normalizedGoal.contains(normalizedLabel)) {
-                continue;
-            }
-
-            double confidence = item.optDouble("confidence", 0.0);
-            if (confidence < 0.85) continue;
-
-            matches++;
-            if (matches > 1) return "";
-            target = label;
-        }
-        return matches == 1 ? target : "";
+        return normalizedLabel.length() >= 2
+                && !MediaPlaybackCompletionPolicy.isPlayControl(label)
+                && !normalizedGoal.isEmpty()
+                && normalizedGoal.contains(normalizedLabel);
     }
 
-    static String uniquePlayTarget(JSONObject semanticScreen) {
-        return uniquePlayTarget(semanticScreen, "");
-    }
-
-    static String uniquePlayTarget(
-            JSONObject semanticScreen,
-            String goalText) {
-        if (semanticScreen == null
-                || !semanticScreen.optBoolean("success", false)) {
-            return "";
+    static boolean isEligiblePlayCandidate(
+            String role,
+            String label,
+            String semanticHint,
+            boolean clickable,
+            boolean enabled,
+            boolean sensitive,
+            double confidence) {
+        if (sensitive || !enabled || confidence < 0.85) {
+            return false;
         }
-
-        JSONArray elements = semanticScreen.optJSONArray("elements");
-        if (elements == null) return "";
-
-        String normalizedGoal = normalize(goalText);
-        for (int i = 0; i < elements.length(); i++) {
-            JSONObject item = elements.optJSONObject(i);
-            if (item == null
-                    || item.optBoolean("sensitive", false)
-                    || !item.optBoolean("enabled", true)
-                    || !item.optBoolean("clickable", false)) {
-                continue;
-            }
-            String label = item.optString("label", "").trim();
-            String normalizedLabel = normalize(label);
-            if (normalizedLabel.length() >= 2
-                    && !MediaPlaybackCompletionPolicy.isPlayControl(label)
-                    && !normalizedGoal.isEmpty()
-                    && normalizedGoal.contains(normalizedLabel)) {
-                // A goal-mentioned actionable entity is still visible, e.g.
-                // artist/search result. Do not skip it and press a generic Play.
-                return "";
-            }
-        }
-
-        String target = "";
-        int matches = 0;
-        for (int i = 0; i < elements.length(); i++) {
-            JSONObject item = elements.optJSONObject(i);
-            if (item == null
-                    || item.optBoolean("sensitive", false)
-                    || !item.optBoolean("enabled", true)) {
-                continue;
-            }
-
-            String role = item.optString("role", "");
-            boolean actionable = item.optBoolean("clickable", false)
-                    || "button".equals(role)
-                    || "icon_button".equals(role);
-            if (!actionable) continue;
-
-            String label = item.optString("label", "").trim();
-            String hint = item.optString("semanticHint", "").trim();
-            String metadata = label + " " + hint;
-            if (!MediaPlaybackCompletionPolicy.isPlayControl(metadata)
-                    && !MediaPlaybackCompletionPolicy.isPlayControl(label)
-                    && !MediaPlaybackCompletionPolicy.isPlayControl(hint)) {
-                continue;
-            }
-
-            double confidence = item.optDouble("confidence", 0.0);
-            if (confidence < 0.85) continue;
-
-            matches++;
-            if (matches > 1) return "";
-            target = !label.isEmpty() ? label : hint;
-        }
-        return matches == 1 ? target : "";
+        boolean actionable = clickable
+                || "button".equals(clean(role))
+                || "icon_button".equals(clean(role));
+        if (!actionable) return false;
+        return MediaPlaybackCompletionPolicy.isPlayControl(label)
+                || MediaPlaybackCompletionPolicy.isPlayControl(semanticHint)
+                || MediaPlaybackCompletionPolicy.isPlayControl(
+                        clean(label) + " " + clean(semanticHint));
     }
 
     static boolean looksLikeNumericOrdinalTarget(String target) {
