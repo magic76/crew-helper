@@ -6118,8 +6118,18 @@ final class NativeGeminiLiveClient {
         // projection. Fingerprints, authorization state and other debug fields
         // remain Runtime-internal.
         JSONObject progressContext = workingContext.toProgressJson();
-        JSONObject searchProgress = userActionScope.toModelProgressJson();
-        if (searchProgress.length() > 0) {
+        String searchPhase = userActionScope.modelSearchPhase();
+        if (!searchPhase.isEmpty()) {
+            JSONObject searchProgress =
+                    new JSONObject().put("phase", searchPhase);
+            String continuation =
+                    userActionScope.searchContinuation();
+            if (continuation != null
+                    && continuation.matches("[A-Z0-9:_-]{1,64}")) {
+                searchProgress.put(
+                        "continuation",
+                        continuation);
+            }
             progressContext.put("search", searchProgress);
         }
         final JSONObject modelResult =
