@@ -47,19 +47,13 @@ final class SessionContextSnapshot {
             externalPackage = "";
         }
 
-        String base = SessionContextPrompt.build(
+        return SessionContextPrompt.build(
                 local.format(now),
                 zone.getID(),
                 offset,
                 localeTag,
                 location,
                 externalPackage);
-        String learned =
-                new RefinedMemoryStore(context)
-                        .setupInstruction(externalPackage, 1);
-        return learned.isEmpty()
-                ? base
-                : base + "\n" + learned;
     }
 
     private static String approximateLocation(Context context) {
