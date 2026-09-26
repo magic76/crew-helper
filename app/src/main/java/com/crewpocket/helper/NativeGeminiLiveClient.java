@@ -4200,7 +4200,7 @@ final class NativeGeminiLiveClient {
                                         task.refinedMemoryTerminalVerified,
                                         task.refinedMemoryMediaPlaybackActive);
         boolean shouldLearnRecipe =
-                "任務完成".equals(reason)
+                AgentTaskEndReason.COMPLETED.equals(reason)
                         && task != null
                         && task.blockedReason == null
                         && strongTerminalLearningEvidence
@@ -4249,10 +4249,11 @@ final class NativeGeminiLiveClient {
                         memoryTaskFinishedAt
                                 - task.effectiveStartedAt(
                                         memoryTaskFinishedAt)),
-                "任務完成".equals(reason),
-                strongTerminalLearningEvidence);
+                AgentTaskEndReason.COMPLETED.equals(reason),
+                strongTerminalLearningEvidence,
+                !memoryTraceMismatch);
 
-        if ("任務完成".equals(reason)
+        if (AgentTaskEndReason.COMPLETED.equals(reason)
                 && task != null
                 && task.blockedReason == null) {
             JSONObject progress = workingContext.toProgressJson();
