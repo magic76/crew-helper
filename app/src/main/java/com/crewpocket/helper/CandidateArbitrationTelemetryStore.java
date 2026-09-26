@@ -236,32 +236,32 @@ final class CandidateArbitrationTelemetryStore {
                 .append(total)
                 .append("/")
                 .append(MAX_EVENTS)
-                .append(" qualifying events\\n")
+                .append(" qualifying events\n")
                 .append("Arbitration coverage: ")
                 .append(percent(completed, total))
-                .append("%\\n")
+                .append("%\n")
                 .append("Decisive rate: ")
                 .append(percent(decisive, total))
                 .append("% · abstain: ")
                 .append(percent(abstain, total))
                 .append("% · timeout: ")
                 .append(percent(timeout, total))
-                .append("%\\n");
+                .append("%\n");
         if (!latencies.isEmpty()) {
             out.append("Latency P50/P95: ")
                     .append(p50)
                     .append("/")
                     .append(p95)
-                    .append(" ms\\n");
+                    .append(" ms\n");
         }
         out.append("Baseline interaction verified: ")
                 .append(percent(interaction, total))
                 .append("% · semantic effect verified: ")
                 .append(percent(semantic, total))
-                .append("%\\n")
+                .append("%\n")
                 .append("Correction rate: ")
                 .append(percent(correction, total))
-                .append("%\\n")
+                .append("%\n")
                 .append("Decisive accuracy proxy: ");
         if (proxySamples == 0) {
             out.append("n/a");
@@ -271,7 +271,7 @@ final class CandidateArbitrationTelemetryStore {
                     .append(proxySamples)
                     .append(")");
         }
-        out.append("\\nProgress proxy is semanticEffectVerified && !correctionObserved; "
+        out.append("\nProgress proxy is semanticEffectVerified && !correctionObserved; "
                 + "it is not terminal truth. Shadow advice never executes.");
         return out.toString();
     }

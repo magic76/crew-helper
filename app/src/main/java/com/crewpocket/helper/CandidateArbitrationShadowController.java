@@ -38,7 +38,7 @@ final class CandidateArbitrationShadowController {
                         : context.getApplicationContext();
         this.arbitrator = arbitrator;
         this.coordinatorExecutor =
-                Executors.newSingleThreadExecutor(
+                Executors.newCachedThreadPool(
                         daemonThreadFactory(
                                 "candidate-arbitration-shadow"));
         this.modelExecutor =
@@ -57,7 +57,9 @@ final class CandidateArbitrationShadowController {
         if (locatorDecision == null || arbitrator == null) return "";
 
         List<CandidateArbitrator.Candidate> candidates =
-                parseCandidates(locatorDecision.optJSONArray("candidates"));
+                parseCandidates(
+                        locatorDecision.optJSONArray(
+                                "_shadowCandidates"));
         double best = candidates.isEmpty()
                 ? locatorDecision.optDouble("confidence", 0.0d)
                 : candidates.get(0).confidence;
@@ -84,12 +86,16 @@ final class CandidateArbitrationShadowController {
             return "";
         }
 
+        String observedPackage =
+                locatorDecision.optString(
+                        "_shadowPackage",
+                        packageName == null ? "" : packageName);
         final String eventId =
                 CandidateArbitrationTelemetryStore.recordStart(
                         appContext,
                         taskId,
                         generation,
-                        packageName,
+                        observedPackage,
                         goalIntent,
                         trigger,
                         candidates);
@@ -98,7 +104,7 @@ final class CandidateArbitrationShadowController {
                         taskGoal,
                         goalIntent,
                         generation,
-                        packageName,
+                        observedPackage,
                         candidates);
 
         coordinatorExecutor.execute(new Runnable() {

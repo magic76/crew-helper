@@ -825,25 +825,46 @@ public class CrewAccessibilityService extends AccessibilityService {
                             if ((match.decision == UiLocatorScorer.Decision.AMBIGUOUS
                                     || match.decision == UiLocatorScorer.Decision.FALLBACK)
                                     && !match.candidates.isEmpty()) {
-                                JSONArray candidates = new JSONArray();
+                                JSONArray shadowCandidates = new JSONArray();
+                                JSONArray baselineCandidates = new JSONArray();
                                 for (UiLocatorV2.CandidateSummary candidate
                                         : match.candidates) {
-                                    candidates.put(new JSONObject()
-                                            .put("index", candidate.index)
-                                            .put("label", candidate.displayLabel())
-                                            .put("elementId", candidate.elementId)
-                                            .put("viewId", candidate.viewId)
-                                            .put("role", candidate.role)
-                                            .put("semanticHint", candidate.semanticHint)
-                                            .put("confidence", candidate.confidence)
-                                            .put("exactViewId", candidate.exactViewId)
-                                            .put("bounds", new JSONObject()
-                                                    .put("left", candidate.left)
-                                                    .put("top", candidate.top)
-                                                    .put("right", candidate.right)
-                                                    .put("bottom", candidate.bottom)));
+                                    JSONObject baselineCandidate =
+                                            new JSONObject()
+                                                    .put("index", candidate.index)
+                                                    .put("label", candidate.displayLabel())
+                                                    .put("elementId", candidate.elementId)
+                                                    .put("viewId", candidate.viewId)
+                                                    .put("role", candidate.role)
+                                                    .put("semanticHint", candidate.semanticHint)
+                                                    .put("confidence", candidate.confidence);
+                                    baselineCandidates.put(baselineCandidate);
+                                    shadowCandidates.put(
+                                            new JSONObject(baselineCandidate.toString())
+                                                    .put("exactViewId", candidate.exactViewId)
+                                                    .put("bounds", new JSONObject()
+                                                            .put("left", candidate.left)
+                                                            .put("top", candidate.top)
+                                                            .put("right", candidate.right)
+                                                            .put("bottom", candidate.bottom)));
                                 }
-                                out.put("candidates", candidates);
+                                // Private bridge-only evidence for Phase-0 shadow.
+                                // PhoneRuntimeExecutor removes it immediately
+                                // after forking; it never reaches the baseline
+                                // tool result or model conversation.
+                                out.put("_shadowCandidates", shadowCandidates)
+                                        .put(
+                                                "_shadowPackage",
+                                                root.getPackageName() == null
+                                                        ? ""
+                                                        : String.valueOf(
+                                                                root.getPackageName()));
+                                if (match.decision
+                                        == UiLocatorScorer.Decision.AMBIGUOUS) {
+                                    // Preserve the exact pre-experiment
+                                    // baseline candidate payload.
+                                    out.put("candidates", baselineCandidates);
+                                }
                             }
 
                             if (match.decision == UiLocatorScorer.Decision.AMBIGUOUS) {

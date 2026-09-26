@@ -12,6 +12,7 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * Bounded semantic advisor for Candidate Arbitration.
@@ -273,7 +274,7 @@ final class CandidateArbitrator {
                 + "Abstain is a normal high-quality result. "
                 + "Never output coordinates, actions, tool calls, plans, user "
                 + "messages, or any field beyond the required JSON contract. "
-                + "Do not invent UI facts.\\nBounded input:\\n"
+                + "Do not invent UI facts.\nBounded input:\n"
                 + boundedInput.toString();
 
         return new JSONObject()
@@ -312,7 +313,10 @@ final class CandidateArbitrator {
     }
 
     private static String safeReason(String value) {
-        String reason = value == null ? "" : value.trim().toUpperCase();
+        String reason =
+                value == null
+                        ? ""
+                        : value.trim().toUpperCase(Locale.ROOT);
         reason = reason.replaceAll("[^A-Z0-9_]", "_");
         if (reason.length() > 64) reason = reason.substring(0, 64);
         return reason.isEmpty() ? "UNKNOWN" : reason;

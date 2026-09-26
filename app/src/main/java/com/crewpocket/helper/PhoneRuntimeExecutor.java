@@ -439,6 +439,10 @@ final class PhoneRuntimeExecutor {
                         arbitrationEventId = "";
                     }
                 }
+                // Restore the exact baseline /click_v2 payload before any
+                // existing fallback, Runtime, Gemini, or memory path sees it.
+                semantic.remove("_shadowCandidates");
+                semantic.remove("_shadowPackage");
 
                 String semanticDecision =
                         semantic.optString("decision", "");

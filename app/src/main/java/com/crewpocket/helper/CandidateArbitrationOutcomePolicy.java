@@ -1,5 +1,7 @@
 package com.crewpocket.helper;
 
+import java.util.Locale;
+
 /**
  * Pure telemetry semantics for Candidate Arbitration Phase 0.
  *
@@ -42,6 +44,8 @@ final class CandidateArbitrationOutcomePolicy {
     }
 
     private static String clean(String value) {
-        return value == null ? "" : value.trim().toUpperCase();
+        return value == null
+                ? ""
+                : value.trim().toUpperCase(Locale.ROOT);
     }
 }
