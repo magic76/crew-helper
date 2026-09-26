@@ -16,6 +16,8 @@ final class AgentTaskRecord {
     final ArrayList<String> stepsSummary = new ArrayList<String>();
     final ArrayList<JSONObject> stepDiagnostics = new ArrayList<JSONObject>();
     final ArrayList<JSONObject> recipeSteps = new ArrayList<JSONObject>();
+    final ArrayList<RefinedMemoryPolicy.Step> refinedMemorySteps =
+            new ArrayList<RefinedMemoryPolicy.Step>();
     String recipeGoal = "";
     String recipeStartPackage = "";
     boolean recipeEligible = true;
@@ -242,6 +244,46 @@ final class AgentTaskRecord {
             recipeIneligibleReason = "SANITIZE_FAILED";
             recipeSteps.clear();
         }
+    }
+
+    void captureRefinedMemoryStep(
+            String name,
+            JSONObject args,
+            JSONObject result) {
+        if (result == null || !result.optBoolean("success", false)) return;
+        String tool = safe(name);
+        if (!"launch_app".equals(tool)
+                && !"search_current_app".equals(tool)
+                && !"commit_search".equals(tool)
+                && !"tap_screen".equals(tool)
+                && !"tap_element".equals(tool)
+                && !"swipe_screen".equals(tool)
+                && !"press_key".equals(tool)) {
+            return;
+        }
+        if (refinedMemorySteps.size()
+                >= RefinedMemoryPolicy.MAX_PATTERN_STEPS + 3) {
+            return;
+        }
+
+        JSONObject source = args == null ? new JSONObject() : args;
+        String target =
+                RefinedMemoryRefinery.targetFromArgs(tool, source);
+        if (target.isEmpty()
+                && ("tap_screen".equals(tool)
+                    || "tap_element".equals(tool))) {
+            target = result.optString(
+                    "modelTarget",
+                    result.optString("semanticTarget", ""));
+        }
+        refinedMemorySteps.add(
+                new RefinedMemoryPolicy.Step(tool, target));
+    }
+
+    java.util.List<RefinedMemoryPolicy.Step>
+            refinedMemoryStepsSnapshot() {
+        return new ArrayList<RefinedMemoryPolicy.Step>(
+                refinedMemorySteps);
     }
 
     boolean canSaveRecipe() {
