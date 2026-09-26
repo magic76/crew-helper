@@ -4,7 +4,7 @@ plugins {
 
 android {
     namespace 'com.crewpocket.helper'
-    compileSdk 34
+    compileSdk 37
 
     defaultConfig {
         applicationId "com.crewpocket.helper"
@@ -32,8 +32,14 @@ android {
         }
     }
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
     }
 }
 
@@ -43,7 +49,7 @@ dependencies {
     // Gemini Live transport. Keep the networking stack Gradle-managed so
     // OkHttp, Okio, and Kotlin runtime stay version-aligned instead of shipping
     // stale vendored JARs from app/libs.
-    implementation platform('com.squareup.okhttp3:okhttp-bom:4.12.0')
+    implementation platform('com.squareup.okhttp3:okhttp-bom:5.5.0')
     implementation 'com.squareup.okhttp3:okhttp'
 
     // Local binary dependency kept intentionally; network/Kotlin runtime jars
