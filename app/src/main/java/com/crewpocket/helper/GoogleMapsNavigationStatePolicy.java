@@ -10,13 +10,14 @@ import java.util.Locale;
  * one more observation; false positives would make Crew lie about navigation.
  */
 final class GoogleMapsNavigationStatePolicy {
+    static final String MAPS_PACKAGE = "com.google.android.apps.maps";
+
     private GoogleMapsNavigationStatePolicy() {}
 
     static boolean isActiveNavigationScreen(
             String packageName,
             String visibleEvidence) {
-        if (!GoogleMapsRuntimeAdapter.PACKAGE_NAME.equals(
-                clean(packageName))) {
+        if (!MAPS_PACKAGE.equals(clean(packageName))) {
             return false;
         }
 
