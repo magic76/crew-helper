@@ -52,23 +52,163 @@ public class AppConfig {
     }
 
     // ── 1. Gemini API Key (BYOK) ──
-    public static String getGeminiApiKey(Context context) {
+    private static final String SECURE_GEMINI_SECRET = "gemini_api_key";
+    private static final String LEGACY_LIVE_PREFS = "crew_native_live";
+    private static final String LEGACY_ACTIVITY_PREFS =
+            "com.crewpocket.helper.NativeLiveActivity";
+    private static final String LEGACY_LIVE_KEY = "gemini_live_key";
+
+    /**
+     * Reads the Keystore-backed copy first. Existing plaintext installs migrate
+     * lazily and crash-safely: plaintext is deleted only after an encrypted
+     * write is read back and verified.
+     */
+    public static synchronized String getGeminiApiKey(Context context) {
         if (context == null) return "";
-        String key = getPrefs(context).getString(KEY_GEMINI_API_KEY, "");
-        if (key.isEmpty()) {
-            key = context.getSharedPreferences("crew_native_live", Context.MODE_PRIVATE).getString("gemini_live_key", "");
+        Context app = context.getApplicationContext();
+
+        String secure = SecureSecretStore.read(
+                app,
+                SECURE_GEMINI_SECRET);
+        if (!secure.isEmpty()) {
+            // Cleanup is idempotent. If an earlier remove failed, every normal
+            // key read retries it without risking the secure copy.
+            deleteLegacyGeminiApiKeys(app);
+            return secure;
         }
-        if (key.isEmpty()) {
-            key = context.getSharedPreferences("com.crewpocket.helper.NativeLiveActivity", Context.MODE_PRIVATE).getString("gemini_live_key", "");
+
+        String legacy = findLegacyGeminiApiKey(app);
+        if (legacy.isEmpty()) return "";
+
+        boolean writeSucceeded =
+                SecureSecretStore.write(
+                        app,
+                        SECURE_GEMINI_SECRET,
+                        legacy);
+        String verifiedSecure =
+                SecureSecretStore.read(
+                        app,
+                        SECURE_GEMINI_SECRET);
+        if (SecretMigrationPolicy.mayDeleteLegacy(
+                legacy,
+                verifiedSecure,
+                writeSucceeded)) {
+            deleteLegacyGeminiApiKeys(app);
         }
-        return key;
+
+        // Availability is preserved if Android Keystore is temporarily
+        // unavailable. Plaintext stays in place and migration retries later.
+        return SecretMigrationPolicy.readableValue(
+                verifiedSecure,
+                legacy);
     }
 
-    public static void setGeminiApiKey(Context context, String key) {
-        if (context == null) return;
+    /**
+     * Returns true only when the requested value is encrypted, readable, and
+     * all known plaintext legacy copies have been removed.
+     */
+    public static synchronized boolean setGeminiApiKey(
+            Context context,
+            String key) {
+        if (context == null) return false;
+        Context app = context.getApplicationContext();
         String cleanKey = key == null ? "" : key.trim();
-        getPrefs(context).edit().putString(KEY_GEMINI_API_KEY, cleanKey).apply();
-        context.getSharedPreferences("crew_native_live", Context.MODE_PRIVATE).edit().putString("gemini_live_key", cleanKey).apply();
+
+        if (cleanKey.isEmpty()) {
+            boolean secureDeleted =
+                    SecureSecretStore.delete(
+                            app,
+                            SECURE_GEMINI_SECRET);
+            boolean legacyDeleted =
+                    deleteLegacyGeminiApiKeys(app);
+            return secureDeleted && legacyDeleted;
+        }
+
+        boolean writeSucceeded =
+                SecureSecretStore.write(
+                        app,
+                        SECURE_GEMINI_SECRET,
+                        cleanKey);
+        String verifiedSecure =
+                SecureSecretStore.read(
+                        app,
+                        SECURE_GEMINI_SECRET);
+
+        if (!SecretMigrationPolicy.mayDeleteLegacy(
+                cleanKey,
+                verifiedSecure,
+                writeSucceeded)) {
+            return false;
+        }
+
+        return deleteLegacyGeminiApiKeys(app);
+    }
+
+    public static synchronized boolean isGeminiApiKeySecure(
+            Context context) {
+        if (context == null) return false;
+        Context app = context.getApplicationContext();
+        String secure = SecureSecretStore.read(
+                app,
+                SECURE_GEMINI_SECRET);
+        if (secure.isEmpty()) return false;
+        return !hasLegacyGeminiApiKey(app);
+    }
+
+    private static String findLegacyGeminiApiKey(Context context) {
+        String key = getPrefs(context)
+                .getString(KEY_GEMINI_API_KEY, "");
+        if (key == null || key.trim().isEmpty()) {
+            key = context.getSharedPreferences(
+                            LEGACY_LIVE_PREFS,
+                            Context.MODE_PRIVATE)
+                    .getString(LEGACY_LIVE_KEY, "");
+        }
+        if (key == null || key.trim().isEmpty()) {
+            key = context.getSharedPreferences(
+                            LEGACY_ACTIVITY_PREFS,
+                            Context.MODE_PRIVATE)
+                    .getString(LEGACY_LIVE_KEY, "");
+        }
+        return key == null ? "" : key.trim();
+    }
+
+    private static boolean hasLegacyGeminiApiKey(Context context) {
+        if (context == null) return false;
+        String primary = getPrefs(context)
+                .getString(KEY_GEMINI_API_KEY, "");
+        String live = context.getSharedPreferences(
+                        LEGACY_LIVE_PREFS,
+                        Context.MODE_PRIVATE)
+                .getString(LEGACY_LIVE_KEY, "");
+        String activity = context.getSharedPreferences(
+                        LEGACY_ACTIVITY_PREFS,
+                        Context.MODE_PRIVATE)
+                .getString(LEGACY_LIVE_KEY, "");
+        return (primary != null && !primary.trim().isEmpty())
+                || (live != null && !live.trim().isEmpty())
+                || (activity != null && !activity.trim().isEmpty());
+    }
+
+    private static boolean deleteLegacyGeminiApiKeys(Context context) {
+        if (context == null) return false;
+        boolean primary = getPrefs(context)
+                .edit()
+                .remove(KEY_GEMINI_API_KEY)
+                .commit();
+        boolean live = context.getSharedPreferences(
+                        LEGACY_LIVE_PREFS,
+                        Context.MODE_PRIVATE)
+                .edit()
+                .remove(LEGACY_LIVE_KEY)
+                .commit();
+        boolean activity = context.getSharedPreferences(
+                        LEGACY_ACTIVITY_PREFS,
+                        Context.MODE_PRIVATE)
+                .edit()
+                .remove(LEGACY_LIVE_KEY)
+                .commit();
+        return primary && live && activity;
     }
 
     // ── 2. Gemini Live Voice Persona ──

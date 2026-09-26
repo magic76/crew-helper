@@ -1679,8 +1679,8 @@ public class MainActivity extends Activity
 
         TextView directHint = new TextView(this);
         directHint.setText(I18n.get(this,
-            "Crew Helper 直接連線 Gemini Live；手機操作仍使用本機 127.0.0.1:8766 Bridge。",
-            "Crew Helper connects directly to Gemini Live; phone actions continue to use the local 127.0.0.1:8766 bridge."));
+            "API Key 會使用 Android Keystore 加密保存；Crew Helper 直接連線 Gemini Live，手機操作仍使用本機 127.0.0.1:8766 Bridge。",
+            "The API key is encrypted with Android Keystore. Crew Helper connects directly to Gemini Live; phone actions continue to use the local 127.0.0.1:8766 bridge."));
         directHint.setTextSize(10);
         directHint.setTextColor(CrewTheme.TEXT_MUTED);
         directHint.setPadding(0, dp(4), 0, 0);
@@ -1690,13 +1690,23 @@ public class MainActivity extends Activity
         builder.setPositiveButton(I18n.get(this, "儲存設定", "Save Settings"),
             new android.content.DialogInterface.OnClickListener() {
                 @Override public void onClick(android.content.DialogInterface dialog, int which) {
-                    AppConfig.setGeminiApiKey(
-                            MainActivity.this, keyInput.getText().toString().trim());
-                    Toast.makeText(MainActivity.this,
-                            I18n.get(MainActivity.this,
-                                "Gemini API Key 已儲存！",
-                                "Gemini API Key saved!"),
-                            Toast.LENGTH_SHORT).show();
+                    boolean secured = AppConfig.setGeminiApiKey(
+                            MainActivity.this,
+                            keyInput.getText().toString().trim());
+                    Toast.makeText(
+                            MainActivity.this,
+                            secured
+                                    ? I18n.get(
+                                            MainActivity.this,
+                                            "Gemini API Key 已使用 Android Keystore 安全儲存",
+                                            "Gemini API Key saved securely with Android Keystore")
+                                    : I18n.get(
+                                            MainActivity.this,
+                                            "無法安全儲存 API Key，舊資料未刪除，請重試",
+                                            "Could not secure the API key. Legacy data was kept; please retry."),
+                            secured
+                                    ? Toast.LENGTH_SHORT
+                                    : Toast.LENGTH_LONG).show();
                     if (activeTab == 2) {
                         renderSettingsPage();
                         refreshNavigation();
