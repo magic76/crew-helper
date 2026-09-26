@@ -37,7 +37,9 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/RefinedMemoryPolicy.java" \
   "$SRC/RefinedMemoryEvidencePolicy.java" \
   "$SRC/RefinedMemoryCorrectionPolicy.java" \
+  "$SRC/RefinedMemoryDashboardPolicy.java" \
   "$SRC/RefinedMemoryUseTrace.java" \
+  "$SRC/AgentTaskEndReason.java" \
   "$SRC/GoogleMapsNavigationStatePolicy.java" \
   "$SRC/TaskRecipeCompletionPolicy.java" \
   "$SRC/ToolCallDispatchLedger.java" \
@@ -103,6 +105,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/RefinedMemoryPolicyTest.java" \
   "$ROOT/tests/RefinedMemoryEvidencePolicyTest.java" \
   "$ROOT/tests/RefinedMemoryCorrectionPolicyTest.java" \
+  "$ROOT/tests/RefinedMemoryDashboardPolicyTest.java" \
   "$ROOT/tests/RefinedMemoryUseTraceTest.java" \
   "$ROOT/tests/GoogleMapsNavigationStatePolicyTest.java" \
   "$ROOT/tests/TaskRecipeCompletionPolicyTest.java" \
@@ -177,6 +180,7 @@ java -cp "$OUT" com.crewpocket.helper.MediaTapRecoveryPolicyTest
 java -cp "$OUT" com.crewpocket.helper.RefinedMemoryPolicyTest
 java -cp "$OUT" com.crewpocket.helper.RefinedMemoryEvidencePolicyTest
 java -cp "$OUT" com.crewpocket.helper.RefinedMemoryCorrectionPolicyTest
+java -cp "$OUT" com.crewpocket.helper.RefinedMemoryDashboardPolicyTest
 java -cp "$OUT" com.crewpocket.helper.RefinedMemoryUseTraceTest
 java -cp "$OUT" com.crewpocket.helper.GoogleMapsNavigationStatePolicyTest
 java -cp "$OUT" com.crewpocket.helper.TaskRecipeCompletionPolicyTest
