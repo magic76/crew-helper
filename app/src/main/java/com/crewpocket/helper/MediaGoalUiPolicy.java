@@ -34,26 +34,36 @@ final class MediaGoalUiPolicy {
                 role, label, semanticHint, can);
         if (!isMediaPlayGoal(goalIntent)) return score;
 
-        String metadata = clean(label) + " "
-                + clean(semanticHint) + " " + clean(can);
-        if (MediaPlaybackCompletionPolicy.isPlayControl(metadata)
-                || MediaPlaybackCompletionPolicy.isPlayControl(label)
-                || MediaPlaybackCompletionPolicy.isPlayControl(semanticHint)) {
-            score += 500;
-        }
-
         boolean actionable =
                 ScreenItemPriorityPolicy.isActionable(
                         role, label, semanticHint, can);
+        String metadata = clean(label) + " "
+                + clean(semanticHint) + " " + clean(can);
+
+        // MEDIA:PLAY model projection is intentionally tiered:
+        // Play/Resume > goal-mentioned artist/song > other media result
+        // > ordinary actionable > scene context.
+        if (MediaPlaybackCompletionPolicy.isPlayControl(metadata)
+                || MediaPlaybackCompletionPolicy.isPlayControl(label)
+                || MediaPlaybackCompletionPolicy.isPlayControl(semanticHint)) {
+            return score + 1200;
+        }
+
         if (isGoalEntityLabel(label, goalText)) {
-            score += actionable ? 700 : 60;
+            score += actionable ? 900 : 90;
             if (sameSemanticLabel(label, completedTarget)) {
-                score -= 760;
+                score -= 1000;
             }
+            return score;
+        }
+
+        if (actionable && isActionableMediaResult(
+                role, label, semanticHint, can)) {
+            return score + 600;
         }
 
         if (actionable) {
-            score += 40;
+            return score + 300;
         }
         return score;
     }
@@ -67,6 +77,28 @@ final class MediaGoalUiPolicy {
                 && !MediaPlaybackCompletionPolicy.isPlayControl(label)
                 && !normalizedGoal.isEmpty()
                 && normalizedGoal.contains(normalizedLabel);
+    }
+
+    static boolean isActionableMediaResult(
+            String role,
+            String label,
+            String semanticHint,
+            String can) {
+        if (!ScreenItemPriorityPolicy.isActionable(
+                role, label, semanticHint, can)) {
+            return false;
+        }
+        String metadata =
+                normalize(role) + " "
+                        + normalize(label) + " "
+                        + normalize(semanticHint) + " "
+                        + normalize(can);
+        return containsAny(
+                metadata,
+                "media", "music", "song", "track", "artist",
+                "album", "playlist", "episode",
+                "音樂", "音乐", "歌曲", "歌手", "藝人", "艺人",
+                "專輯", "专辑", "播放清單", "播放列表");
     }
 
     static boolean isEligiblePlayCandidate(
@@ -101,6 +133,27 @@ final class MediaGoalUiPolicy {
     static boolean looksLikeNumericOrdinalTarget(String target) {
         String value = clean(target);
         return !value.isEmpty() && value.matches("[0-9]{1,3}");
+    }
+
+    static boolean shouldRejectNumericTarget(
+            String target,
+            boolean elementReferenceActive) {
+        return looksLikeNumericOrdinalTarget(target)
+                && !elementReferenceActive;
+    }
+
+    private static boolean containsAny(
+            String value,
+            String... needles) {
+        if (value == null || value.isEmpty()) return false;
+        for (String needle : needles) {
+            if (needle != null
+                    && !needle.isEmpty()
+                    && value.contains(needle)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static String normalize(String value) {

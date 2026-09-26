@@ -15,6 +15,10 @@ public final class MediaPlaybackCompletionPolicyTest {
                 "Chinese play control recognized");
         check(MediaPlaybackCompletionPolicy.isPlayControl("Play"),
                 "English play control recognized");
+        check(MediaPlaybackCompletionPolicy.isPlayControl("Resume"),
+                "generic resume control recognized");
+        check(MediaPlaybackCompletionPolicy.isPlayControl("繼續播放"),
+                "Chinese resume control recognized");
         check(!MediaPlaybackCompletionPolicy.isPlayControl("播放列表"),
                 "playlist label is not playback control");
 

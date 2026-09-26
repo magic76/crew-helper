@@ -10,25 +10,30 @@ public final class MediaGoalUiPolicyTest {
         int artistScore = MediaGoalUiPolicy.scoreItem(
                 "button", "鄧紫棋", "", "tap",
                 "MEDIA:PLAY", "播放鄧紫棋");
+        int mediaResultScore = MediaGoalUiPolicy.scoreItem(
+                "button", "泡沫", "track", "tap",
+                "MEDIA:PLAY", "播放鄧紫棋");
         int otherScore = MediaGoalUiPolicy.scoreItem(
                 "button", "更多", "", "tap",
                 "MEDIA:PLAY", "播放鄧紫棋");
+        int sceneScore = MediaGoalUiPolicy.scoreItem(
+                "text", "目前結果", "", "",
+                "MEDIA:PLAY", "播放鄧紫棋");
 
-        check(playScore > otherScore,
-                "play control receives media-goal priority");
-        check(artistScore > otherScore,
-                "goal-mentioned media entity is prioritized");
-        check(artistScore > playScore,
-                "unresolved actionable goal entity stays ahead of generic Play");
+        check(playScore > artistScore,
+                "Play/Resume controls are first for media projection");
+        check(artistScore > mediaResultScore,
+                "goal-mentioned media entity is second");
+        check(mediaResultScore > otherScore,
+                "other actionable media result is third");
+        check(otherScore > sceneScore,
+                "ordinary actionable stays above scene context");
 
         int completedArtistScore = MediaGoalUiPolicy.scoreItem(
                 "button", "鄧紫棋", "", "tap",
                 "MEDIA:PLAY", "播放鄧紫棋", "鄧紫棋");
-        int playAfterArtistScore = MediaGoalUiPolicy.scoreItem(
-                "button", "播放", "", "tap",
-                "MEDIA:PLAY", "播放鄧紫棋", "鄧紫棋");
-        check(playAfterArtistScore > completedArtistScore,
-                "after artist activation Play becomes the higher-priority next action");
+        check(playScore > completedArtistScore,
+                "completed media entity is demoted after activation");
         check(MediaGoalUiPolicy.sameSemanticLabel(
                         " 鄧紫棋 ", "鄧紫棋"),
                 "completed media target comparison is normalized");
@@ -39,6 +44,13 @@ public final class MediaGoalUiPolicyTest {
         check(!MediaGoalUiPolicy.isGoalEntityLabel(
                         "播放", "播放鄧紫棋"),
                 "play control is not treated as unresolved media entity");
+
+        check(MediaGoalUiPolicy.isActionableMediaResult(
+                        "button", "泡沫", "track", "tap"),
+                "semantic media result is recognized without app selector");
+        check(!MediaGoalUiPolicy.isActionableMediaResult(
+                        "button", "更多", "", "tap"),
+                "generic action is not promoted as media result");
 
         check(MediaGoalUiPolicy.isEligiblePlayCandidate(
                         "button",
@@ -61,8 +73,22 @@ public final class MediaGoalUiPolicyTest {
 
         check(MediaGoalUiPolicy.looksLikeNumericOrdinalTarget("10"),
                 "numeric ordinal-like target detected");
+        check(MediaGoalUiPolicy.shouldRejectNumericTarget(
+                        "10", false),
+                "numeric target is rejected outside element-reference mode");
+        check(!MediaGoalUiPolicy.shouldRejectNumericTarget(
+                        "10", true),
+                "numeric target remains valid during explicit element-reference mode");
         check(!MediaGoalUiPolicy.looksLikeNumericOrdinalTarget("鄧紫棋"),
                 "semantic label is not numeric target");
+
+        int genericMediaGoalScore = MediaGoalUiPolicy.scoreItem(
+                "button", "播放", "", "tap",
+                "SEARCH:RESULT", "播放鄧紫棋");
+        int genericBaseScore = ScreenItemPriorityPolicy.score(
+                "button", "播放", "", "tap");
+        check(genericMediaGoalScore == genericBaseScore,
+                "non-media goals preserve generic screen ranking");
 
         System.out.println(
                 "MediaGoalUiPolicyTest passed " + checks + " checks");

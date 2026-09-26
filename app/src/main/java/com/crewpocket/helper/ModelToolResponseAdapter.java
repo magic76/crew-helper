@@ -667,6 +667,16 @@ final class ModelToolResponseAdapter {
         java.util.Collections.sort(actions, byPriority);
         java.util.Collections.sort(ranked, byPriority);
 
+        if (MediaGoalUiPolicy.isMediaPlayGoal(goalIntent)) {
+            JSONArray mediaOrdered = new JSONArray();
+            for (JSONObject item : ranked) {
+                if (mediaOrdered.length() >= MAX_SCREEN_ITEMS) break;
+                JSONObject compact = compactItem(item);
+                if (compact.length() > 0) mediaOrdered.put(compact);
+            }
+            return mediaOrdered;
+        }
+
         int actionLimit = Math.min(6, actions.size());
         int sceneLimit = Math.min(6, scenes.size());
         java.util.ArrayList<JSONObject> selected =

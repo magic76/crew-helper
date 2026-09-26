@@ -3754,98 +3754,30 @@ final class NativeGeminiLiveClient {
                 args.optString("target", ""));
     }
 
-    private String uniqueGoalEntityTargetFromSemanticScreen(
-            JSONObject semanticScreen,
-            String goalText,
-            String completedTarget) {
+    private java.util.ArrayList<MediaTapRecoveryPolicy.Candidate>
+            mediaRecoveryCandidates(JSONObject semanticScreen) {
+        java.util.ArrayList<MediaTapRecoveryPolicy.Candidate> out =
+                new java.util.ArrayList<MediaTapRecoveryPolicy.Candidate>();
         if (semanticScreen == null
                 || !semanticScreen.optBoolean("success", false)) {
-            return "";
+            return out;
         }
-        JSONArray elements =
-                semanticScreen.optJSONArray("elements");
-        if (elements == null) return "";
+        JSONArray elements = semanticScreen.optJSONArray("elements");
+        if (elements == null) return out;
 
-        String target = "";
-        int matches = 0;
-        for (int i = 0; i < elements.length(); i++) {
-            JSONObject item = elements.optJSONObject(i);
-            if (item == null
-                    || item.optBoolean("sensitive", false)
-                    || !item.optBoolean("enabled", true)
-                    || !item.optBoolean("clickable", false)) {
-                continue;
-            }
-
-            String label =
-                    item.optString("label", "").trim();
-            if (!MediaGoalUiPolicy.isGoalEntityLabel(
-                    label, goalText)
-                    || MediaGoalUiPolicy.sameSemanticLabel(
-                            label, completedTarget)) {
-                continue;
-            }
-
-            double confidence =
-                    item.optDouble("confidence", 0.0);
-            if (confidence < 0.85) continue;
-
-            matches++;
-            if (matches > 1) return "";
-            target = label;
-        }
-        return matches == 1 ? target : "";
-    }
-
-    private String uniquePlayTargetFromSemanticScreen(
-            JSONObject semanticScreen,
-            String goalText) {
-        if (semanticScreen == null
-                || !semanticScreen.optBoolean("success", false)) {
-            return "";
-        }
-        JSONArray elements =
-                semanticScreen.optJSONArray("elements");
-        if (elements == null) return "";
-
-        // If a goal-mentioned actionable entity is still visible, complete
-        // that selection first instead of jumping to a generic Play control.
-        String completedTarget =
-                latestActivatedTargetForMediaRecovery();
-        if (!uniqueGoalEntityTargetFromSemanticScreen(
-                semanticScreen,
-                goalText,
-                completedTarget).isEmpty()) {
-            return "";
-        }
-
-        String target = "";
-        int matches = 0;
         for (int i = 0; i < elements.length(); i++) {
             JSONObject item = elements.optJSONObject(i);
             if (item == null) continue;
-
-            String label =
-                    item.optString("label", "").trim();
-            String hint =
-                    item.optString(
-                            "semanticHint", "").trim();
-            if (!MediaGoalUiPolicy.isEligiblePlayCandidate(
+            out.add(new MediaTapRecoveryPolicy.Candidate(
                     item.optString("role", ""),
-                    label,
-                    hint,
+                    item.optString("label", ""),
+                    item.optString("semanticHint", ""),
                     item.optBoolean("clickable", false),
                     item.optBoolean("enabled", true),
                     item.optBoolean("sensitive", false),
-                    item.optDouble("confidence", 0.0))) {
-                continue;
-            }
-
-            matches++;
-            if (matches > 1) return "";
-            target = !label.isEmpty() ? label : hint;
+                    item.optDouble("confidence", 0.0)));
         }
-        return matches == 1 ? target : "";
+        return out;
     }
 
     private String latestActivatedTargetForMediaRecovery() {
@@ -3900,25 +3832,21 @@ final class NativeGeminiLiveClient {
         if (!target.isEmpty() && !numericTarget) {
             return original;
         }
-        if (numericTarget && ElementReferenceRuntime.isActive()) {
+
+        boolean elementReferenceActive =
+                ElementReferenceRuntime.isActive();
+        if (numericTarget && elementReferenceActive) {
             return original;
         }
 
         JSONObject current =
                 observationVerificationController
                         .readSemanticScreenQuietly();
-        String completedTarget =
-                latestActivatedTargetForMediaRecovery();
         String recovered =
-                uniqueGoalEntityTargetFromSemanticScreen(
-                        current,
+                MediaTapRecoveryPolicy.recoverTarget(
                         goalText,
-                        completedTarget);
-        if (recovered.isEmpty()) {
-            recovered =
-                    uniquePlayTargetFromSemanticScreen(
-                            current, goalText);
-        }
+                        latestActivatedTargetForMediaRecovery(),
+                        mediaRecoveryCandidates(current));
 
         try {
             JSONObject out =
@@ -3932,7 +3860,8 @@ final class NativeGeminiLiveClient {
             // A bare ordinal is not a semantic media target. Without an
             // explicit element-reference session, fail as TARGET_REQUIRED
             // instead of guessing a numbered label on screen.
-            if (numericTarget) {
+            if (MediaGoalUiPolicy.shouldRejectNumericTarget(
+                    target, elementReferenceActive)) {
                 out.remove("target");
                 out.put(
                         "runtime_media_numeric_target_rejected",
@@ -3993,14 +3922,16 @@ final class NativeGeminiLiveClient {
 
         try {
             String existingEvidence =
-                    result.optString(
-                            "completionEvidence", "");
+                    result.optString("completionEvidence", "");
+            if ("DONE".equals(
+                    result.optString("taskState", ""))
+                    && existingEvidence.startsWith("MEDIA_")) {
+                return;
+            }
             result.put("taskState", "DONE")
                     .put(
                             "completionEvidence",
-                            existingEvidence.startsWith("MEDIA_")
-                                    ? existingEvidence
-                                    : "MEDIA_PLAY_CONTROL_VERIFIED")
+                            "MEDIA_PLAY_CONTROL_VERIFIED")
                     .put("nextRequirement", "NONE")
                     .put("mediaPlaybackAccepted", true)
                     .put("verified", true);
@@ -4024,9 +3955,16 @@ final class NativeGeminiLiveClient {
                         : after.optString(
                                 "package",
                                 currentPackage);
+        String goalIntent =
+                workingContext.toProgressJson()
+                        .optString("goalIntent", "");
+        boolean explicitMediaPlayGoal =
+                MediaGoalUiPolicy.isMediaPlayGoal(goalIntent);
         boolean musicActiveAfter =
-                waitForMusicActiveAfterTap(
-                        musicActiveBefore);
+                explicitMediaPlayGoal
+                        ? isMusicActive()
+                        : waitForMusicActiveAfterTap(
+                                musicActiveBefore);
         boolean uiPlaying =
                 MediaPlaybackCompletionPolicy
                         .uiIndicatesPlaying(
@@ -4035,10 +3973,6 @@ final class NativeGeminiLiveClient {
                                         : after.toString());
         boolean actionSucceeded =
                 observed.optBoolean("success", false);
-
-        String goalIntent =
-                workingContext.toProgressJson()
-                        .optString("goalIntent", "");
         boolean screenChanged =
                 observed.optBoolean("screenChanged", false);
 
