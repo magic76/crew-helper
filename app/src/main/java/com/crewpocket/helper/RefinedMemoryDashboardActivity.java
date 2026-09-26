@@ -199,10 +199,17 @@ public class RefinedMemoryDashboardActivity extends Activity {
                         1f));
 
         String state = item.optString("state", "");
+        boolean enabled = item.optBoolean("enabled", true);
+        String displayState =
+                enabled
+                        ? state
+                        : "DISABLED · " + state;
         TextView badge = text(
-                state,
+                displayState,
                 9.5f,
-                stateColor(state),
+                enabled
+                        ? stateColor(state)
+                        : CrewTheme.TEXT_MUTED,
                 true);
         badge.setPadding(dp(8), dp(3), dp(8), dp(3));
         badge.setBackground(CrewTheme.createCard(
@@ -351,7 +358,6 @@ public class RefinedMemoryDashboardActivity extends Activity {
         actions.setOrientation(LinearLayout.HORIZONTAL);
         actions.setPadding(0, dp(9), 0, 0);
 
-        boolean enabled = item.optBoolean("enabled", true);
         String memoryId = item.optString("id", "");
 
         Button toggle = actionButton(
