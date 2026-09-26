@@ -33,6 +33,7 @@ public class CrewLearnedActivity extends Activity {
     private LearnedUiMappingStore actionMemory;
     private AppPlaybookStore playbooks;
     private ReflectionLessonStore experiences;
+    private RefinedMemoryStore refinedMemory;
 
     private int dp(float value) {
         return CrewTheme.dp(this, value);
@@ -43,6 +44,7 @@ public class CrewLearnedActivity extends Activity {
         actionMemory = new LearnedUiMappingStore(this);
         playbooks = new AppPlaybookStore(this);
         experiences = new ReflectionLessonStore(this);
+        refinedMemory = new RefinedMemoryStore(this);
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             getWindow().setStatusBarColor(CrewTheme.BG_PRIMARY);
@@ -109,6 +111,7 @@ public class CrewLearnedActivity extends Activity {
         content.addView(intro);
 
         renderActionMemory();
+        renderRefinedMemory();
         renderPlaybooks();
         renderExperience();
     }
@@ -250,6 +253,119 @@ public class CrewLearnedActivity extends Activity {
                     10, CrewTheme.TEXT_MUTED, false);
             more.setPadding(dp(4), 0, 0, dp(8));
             content.addView(more);
+        }
+    }
+
+    private void renderRefinedMemory() {
+        JSONArray items = refinedMemory == null
+                ? new JSONArray()
+                : refinedMemory.dumpForDebug();
+        int usable = refinedMemory == null
+                ? 0
+                : refinedMemory.injectableCount();
+
+        addSectionHeader(
+                I18n.get(this, "Refined Memory", "Refined Memory"),
+                I18n.get(this,
+                        "PATTERNS · 把多次成功流程精煉成短而可重用的操作模式",
+                        "PATTERNS · distilled reusable procedures from repeated successful use"),
+                usable + " "
+                        + I18n.get(this, "可使用", "usable")
+                        + " · " + items.length() + " "
+                        + I18n.get(this, "總計", "total"));
+
+        LinearLayout intro = card();
+        intro.addView(text(
+                I18n.get(this,
+                        "這層只保存抽象流程，例如 SEARCH_QUERY → TAP_GOAL_ENTITY → TAP_PLAY_CONTROL；不保存搜尋文字、訊息內容、座標或密碼。只有 VERIFIED / TRUSTED 才會進 Gemini context，而且永遠不會提升操作權限。",
+                        "This layer stores abstract procedures such as SEARCH_QUERY → TAP_GOAL_ENTITY → TAP_PLAY_CONTROL. It does not store query text, message content, coordinates, or credentials. Only VERIFIED / TRUSTED patterns enter Gemini context, and they never grant authority."),
+                11, CrewTheme.TEXT_SECONDARY, false));
+        content.addView(intro, cardParams());
+
+        if (items.length() == 0) {
+            content.addView(emptyCard(I18n.get(
+                    this,
+                    "還沒有可精煉的成功流程。正常使用即可，Crew 會從完成的低風險任務累積 evidence。",
+                    "No refined procedures yet. Use Crew normally; completed low-risk tasks will accumulate evidence.")));
+            return;
+        }
+
+        int shown = Math.min(10, items.length());
+        for (int i = 0; i < shown; i++) {
+            JSONObject item = items.optJSONObject(i);
+            if (item == null) continue;
+
+            LinearLayout card = card();
+            LinearLayout top = new LinearLayout(this);
+            top.setOrientation(LinearLayout.HORIZONTAL);
+            top.setGravity(Gravity.CENTER_VERTICAL);
+
+            String scope = item.optString("scope", "");
+            top.addView(text(scope, 12.5f, CrewTheme.TEXT_PRIMARY, true),
+                    new LinearLayout.LayoutParams(
+                            0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+            String state = item.optString("state", "");
+            int stateColor =
+                    RefinedMemoryPolicy.STATE_TRUSTED.equals(state)
+                            ? CrewTheme.EMERALD_400
+                            : (RefinedMemoryPolicy.STATE_VERIFIED.equals(state)
+                                    ? CrewTheme.TEAL_300
+                                    : (RefinedMemoryPolicy.STATE_STALE.equals(state)
+                                            ? CrewTheme.ROSE_400
+                                            : CrewTheme.TEXT_MUTED));
+            TextView badge = text(state, 9.5f, stateColor, true);
+            badge.setPadding(dp(8), dp(3), dp(8), dp(3));
+            badge.setBackground(CrewTheme.createCard(
+                    this,
+                    Color.argb(30, 82, 82, 91),
+                    CrewTheme.BORDER_SUBTLE,
+                    10));
+            top.addView(badge);
+            card.addView(top);
+
+            String pkg = item.optString("packageName", "");
+            if (!pkg.isEmpty()) {
+                String app = AppRuntimeRegistry.displayName(this, pkg);
+                card.addView(text(
+                        app == null || app.trim().isEmpty()
+                                || app.equals(pkg)
+                                ? pkg
+                                : app + " · " + pkg,
+                        9.5f,
+                        CrewTheme.TEXT_SECONDARY,
+                        false));
+            }
+
+            TextView pattern = text(
+                    item.optString("pattern", ""),
+                    10.5f,
+                    CrewTheme.INDIGO_400,
+                    true);
+            pattern.setTypeface(Typeface.MONOSPACE);
+            pattern.setPadding(0, dp(6), 0, 0);
+            card.addView(pattern);
+
+            int success = item.optInt("successCount", 0);
+            int failure = item.optInt("failureCount", 0);
+            int confidence = (int) Math.round(
+                    item.optDouble("confidence", 0.0d) * 100.0d);
+            TextView meta = text(
+                    I18n.get(this, "成功 ", "Success ")
+                            + success
+                            + " · "
+                            + I18n.get(this, "失敗 ", "Failed ")
+                            + failure
+                            + " · confidence "
+                            + confidence
+                            + "%",
+                    9.5f,
+                    CrewTheme.TEXT_MUTED,
+                    false);
+            meta.setPadding(0, dp(5), 0, 0);
+            card.addView(meta);
+
+            content.addView(card, cardParams());
         }
     }
 
