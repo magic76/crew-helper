@@ -16,6 +16,7 @@ final class RefinedMemoryPolicy {
     static final String STATE_VERIFIED = "VERIFIED";
     static final String STATE_TRUSTED = "TRUSTED";
     static final String STATE_STALE = "STALE";
+    static final String STATE_SUSPECT = "SUSPECT";
     static final int MAX_PATTERN_STEPS = 7;
 
     static final class Step {

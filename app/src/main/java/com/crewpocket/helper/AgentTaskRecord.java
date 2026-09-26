@@ -23,6 +23,11 @@ final class AgentTaskRecord {
     boolean recipeEligible = true;
     String recipeIneligibleReason = "";
     final HashMap<String, Integer> toolCounts = new HashMap<String, Integer>();
+    final HashMap<String, Integer> refinedMemoryPackageCounts =
+            new HashMap<String, Integer>();
+    boolean refinedMemoryTerminalVerified;
+    boolean refinedMemoryMediaPlaybackActive;
+    String refinedMemoryTerminalPackage = "";
     int steps;
     int mutationActions;
     int observationActions;
@@ -249,8 +254,36 @@ final class AgentTaskRecord {
     void captureRefinedMemoryStep(
             String name,
             JSONObject args,
-            JSONObject result) {
-        if (result == null || !result.optBoolean("success", false)) return;
+            JSONObject result,
+            JSONObject beforeContext) {
+        if (result == null) return;
+
+        String afterPackage = "";
+        JSONObject after = result.optJSONObject("after");
+        if (after != null) {
+            afterPackage = safe(after.optString("package", ""));
+            if (!afterPackage.isEmpty()) {
+                refinedMemoryTerminalPackage = afterPackage;
+            }
+        }
+
+        String completion =
+                safe(result.optString("completionEvidence", ""));
+        if (!completion.isEmpty()) {
+            refinedMemoryTerminalVerified =
+                    result.optBoolean("verified", false)
+                            || "VERIFIED".equalsIgnoreCase(
+                                    result.optString(
+                                            "verificationStatus", ""))
+                            || "VERIFIED".equalsIgnoreCase(
+                                    result.optString(
+                                            "verification", ""));
+            refinedMemoryMediaPlaybackActive =
+                    result.optBoolean(
+                            "mediaPlaybackActive", false);
+        }
+
+        if (!result.optBoolean("success", false)) return;
         String tool = safe(name);
         if (!"launch_app".equals(tool)
                 && !"search_current_app".equals(tool)
@@ -261,6 +294,25 @@ final class AgentTaskRecord {
                 && !"press_key".equals(tool)) {
             return;
         }
+
+        String executionPackage = "";
+        if ("launch_app".equals(tool)) {
+            executionPackage = afterPackage;
+        } else if (beforeContext != null) {
+            executionPackage =
+                    safe(beforeContext.optString("currentApp", ""));
+        }
+        if (executionPackage.isEmpty()) {
+            executionPackage = afterPackage;
+        }
+        if (!executionPackage.isEmpty()) {
+            Integer count =
+                    refinedMemoryPackageCounts.get(executionPackage);
+            refinedMemoryPackageCounts.put(
+                    executionPackage,
+                    count == null ? 1 : count + 1);
+        }
+
         if (refinedMemorySteps.size()
                 >= RefinedMemoryPolicy.MAX_PATTERN_STEPS + 3) {
             return;
@@ -278,6 +330,26 @@ final class AgentTaskRecord {
         }
         refinedMemorySteps.add(
                 new RefinedMemoryPolicy.Step(tool, target));
+    }
+
+    String primaryExecutionPackage() {
+        String best = safe(refinedMemoryTerminalPackage);
+        int bestCount = -1;
+        for (java.util.Map.Entry<String, Integer> entry
+                : refinedMemoryPackageCounts.entrySet()) {
+            String pkg = safe(entry.getKey());
+            int count = entry.getValue() == null
+                    ? 0
+                    : entry.getValue();
+            if (pkg.isEmpty()) continue;
+            if (count > bestCount
+                    || (count == bestCount
+                        && pkg.equals(refinedMemoryTerminalPackage))) {
+                best = pkg;
+                bestCount = count;
+            }
+        }
+        return best.isEmpty() ? safe(recipeStartPackage) : best;
     }
 
     java.util.List<RefinedMemoryPolicy.Step>
@@ -412,7 +484,13 @@ final class AgentTaskRecord {
                     .put("suspendedAtMs", suspendedAtMs)
                     .put("accumulatedSuspendedMs", accumulatedSuspendedMs)
                     .put("recipeEligible", recipeEligible)
-                    .put("recipeStepCount", recipeSteps.size());
+                    .put("recipeStepCount", recipeSteps.size())
+                    .put("refinedMemoryPrimaryPackage",
+                            primaryExecutionPackage())
+                    .put("refinedMemoryTerminalVerified",
+                            refinedMemoryTerminalVerified)
+                    .put("refinedMemoryMediaPlaybackActive",
+                            refinedMemoryMediaPlaybackActive);
         } catch (Exception ignored) {}
         return json;
     }

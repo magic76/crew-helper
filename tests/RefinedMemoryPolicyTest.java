@@ -59,6 +59,10 @@ public final class RefinedMemoryPolicyTest {
                         RefinedMemoryPolicy.STATE_VERIFIED),
                 "verified memory can enter model context");
 
+        check(!RefinedMemoryPolicy.isInjectable(
+                        RefinedMemoryPolicy.STATE_SUSPECT),
+                "suspect memory is quarantined from model context");
+
         double early = RefinedMemoryPolicy.confidenceFor(1, 0);
         double mature = RefinedMemoryPolicy.confidenceFor(6, 0);
         check(mature > early,

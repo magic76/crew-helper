@@ -75,6 +75,33 @@ final class ContextPayloadAudit {
                 + " turn=" + turnInjectedBytes);
     }
 
+    synchronized void logRefinedMemory(
+            long toolGeneration,
+            int memoryBytes,
+            int memoryCount,
+            int taskInjectionCount,
+            int screenItemsBefore,
+            int screenItemsAfter) {
+        ensureGeneration(toolGeneration);
+        int retentionPct = screenItemsBefore <= 0
+                ? 100
+                : (int) Math.round(
+                        screenItemsAfter * 100.0d
+                                / screenItemsBefore);
+        log("kind=refined_memory source=memory"
+                + " gen=" + generation
+                + " bytes=" + Math.max(0, memoryBytes)
+                + " count=" + Math.max(0, memoryCount)
+                + " taskInjections="
+                + Math.max(0, taskInjectionCount)
+                + " screenBefore="
+                + Math.max(0, screenItemsBefore)
+                + " screenAfter="
+                + Math.max(0, screenItemsAfter)
+                + " screenRetentionPct="
+                + Math.max(0, retentionPct));
+    }
+
     synchronized void logInternalDirective(
             long directiveGeneration,
             int textBytes,

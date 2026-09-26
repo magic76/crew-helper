@@ -311,7 +311,8 @@ public class CrewLearnedActivity extends Activity {
                             ? CrewTheme.EMERALD_400
                             : (RefinedMemoryPolicy.STATE_VERIFIED.equals(state)
                                     ? CrewTheme.TEAL_300
-                                    : (RefinedMemoryPolicy.STATE_STALE.equals(state)
+                                    : ((RefinedMemoryPolicy.STATE_STALE.equals(state)
+                                            || RefinedMemoryPolicy.STATE_SUSPECT.equals(state))
                                             ? CrewTheme.ROSE_400
                                             : CrewTheme.TEXT_MUTED));
             TextView badge = text(state, 9.5f, stateColor, true);
@@ -347,12 +348,16 @@ public class CrewLearnedActivity extends Activity {
             card.addView(pattern);
 
             int success = item.optInt("successCount", 0);
+            int support = item.optInt("supportCount", 0);
             int failure = item.optInt("failureCount", 0);
             int confidence = (int) Math.round(
                     item.optDouble("confidence", 0.0d) * 100.0d);
             TextView meta = text(
-                    I18n.get(this, "成功 ", "Success ")
+                    I18n.get(this, "獨立成功 ", "Independent ")
                             + success
+                            + " · "
+                            + I18n.get(this, "回放支持 ", "Replay support ")
+                            + support
                             + " · "
                             + I18n.get(this, "失敗 ", "Failed ")
                             + failure
