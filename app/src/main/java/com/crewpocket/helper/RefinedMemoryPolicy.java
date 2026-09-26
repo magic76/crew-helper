@@ -76,6 +76,7 @@ final class RefinedMemoryPolicy {
         if (raw.isEmpty()) return "";
         String[] parts = raw.split(">");
         StringBuilder out = new StringBuilder();
+        int tokenCount = 0;
         for (String part : parts) {
             String token = clean(part)
                     .toUpperCase(Locale.ROOT)
@@ -83,7 +84,8 @@ final class RefinedMemoryPolicy {
             if (token.isEmpty()) continue;
             if (out.length() > 0) out.append(" > ");
             out.append(token);
-            if (out.toString().split(" > ").length >= MAX_PATTERN_STEPS) break;
+            tokenCount++;
+            if (tokenCount >= MAX_PATTERN_STEPS) break;
         }
         return out.toString();
     }
