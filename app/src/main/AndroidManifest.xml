@@ -89,6 +89,11 @@
             android:exported="false" />
 
         <activity
+            android:name=".RefinedMemoryDashboardActivity"
+            android:screenOrientation="portrait"
+            android:exported="false" />
+
+        <activity
             android:name=".CrewExperienceActivity"
             android:screenOrientation="portrait"
             android:exported="false" />
