@@ -71,6 +71,7 @@ final class TaskRecipeStore {
                 put(existing, "createdAt", now);
                 put(existing, "runSuccessCount", 0);
                 put(existing, "runFailureCount", 0);
+                put(existing, "runUnverifiedCount", 0);
                 put(existing, "enabled", true);
                 recipes.put(existing);
             }
@@ -150,6 +151,13 @@ final class TaskRecipeStore {
     }
 
     void recordRun(String recipeId, boolean success) {
+        recordRunOutcome(recipeId, success, success);
+    }
+
+    void recordRunOutcome(
+            String recipeId,
+            boolean executionSuccess,
+            boolean goalTerminalVerified) {
         synchronized (LOCK) {
             if (prefs == null) return;
             String id = safe(recipeId);
@@ -157,7 +165,15 @@ final class TaskRecipeStore {
             for (int i = 0; i < recipes.length(); i++) {
                 JSONObject item = recipes.optJSONObject(i);
                 if (item == null || !id.equals(item.optString("id", ""))) continue;
-                String key = success ? "runSuccessCount" : "runFailureCount";
+
+                String key;
+                if (!executionSuccess) {
+                    key = "runFailureCount";
+                } else if (goalTerminalVerified) {
+                    key = "runSuccessCount";
+                } else {
+                    key = "runUnverifiedCount";
+                }
                 put(item, key, item.optInt(key, 0) + 1);
                 put(item, "lastRunAt", System.currentTimeMillis());
                 saveLocked(recipes);
