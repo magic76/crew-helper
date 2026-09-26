@@ -261,6 +261,14 @@ final class RefinedMemoryStore {
             }
 
             long now = System.currentTimeMillis();
+            if (target == null
+                    && verdict
+                            != RefinedMemoryEvidencePolicy.Verdict
+                                    .INDEPENDENT_SUCCESS) {
+                // Replay/support/failure can update an existing memory but can
+                // never create a new belief on their own.
+                return null;
+            }
             if (target == null) {
                 target = new Entry();
                 target.id = UUID.randomUUID().toString();
