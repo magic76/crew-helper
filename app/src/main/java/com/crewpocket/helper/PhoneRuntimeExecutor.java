@@ -447,11 +447,10 @@ final class PhoneRuntimeExecutor {
                         sensitiveBlocked,
                         authorityAllowed);
 
-        fallbackTrace.put(
-                "candidate_arbitration:"
-                        + gate.verdict.name());
-
         if (!gate.allowed()) {
+            fallbackTrace.put(
+                    "candidate_arbitration:"
+                            + gate.verdict.name());
             locatorArbitrationObserver
                     .onTreatmentRevalidation(
                             decision.eventId,
@@ -558,16 +557,11 @@ final class PhoneRuntimeExecutor {
                                 .Verdict.ALLOW,
                         candidate.candidateId,
                         true);
+        // Keep successful Fast-cognition feedback experiment-blind. The A/B
+        // bucket and advisor provenance live only in bounded telemetry.
         return tapped
-                .put(
-                        "resolvedFrom",
-                        "candidate_arbitration_treatment")
-                .put(
-                        "arbitrationBucket",
-                        "TREATMENT")
-                .put(
-                        "fallbackTrace",
-                        fallbackTrace);
+                .put("resolvedFrom", "semantic_v2")
+                .put("fallbackTrace", fallbackTrace);
     }
 
     private CandidateArbitrationExecutionPolicy.Verdict
