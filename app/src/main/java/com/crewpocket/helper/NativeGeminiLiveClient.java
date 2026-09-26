@@ -54,6 +54,8 @@ final class NativeGeminiLiveClient {
     private final AppPlaybookStore appPlaybookStore;
     private final AppAutonomyStore appAutonomyStore;
     private final TaskRecipeStore taskRecipeStore;
+    private final RefinedMemoryStore refinedMemoryStore;
+    private final RefinedMemoryRefinery refinedMemoryRefinery;
     private final ConversationLoopRecipe conversationLoopRecipe =
             new ConversationLoopRecipe();
     private final DelegatedSendLease delegatedSendLease =
@@ -232,6 +234,10 @@ final class NativeGeminiLiveClient {
         this.appPlaybookStore = new AppPlaybookStore(this.appContext);
         this.appAutonomyStore = new AppAutonomyStore(this.appContext);
         this.taskRecipeStore = new TaskRecipeStore(this.appContext);
+        this.refinedMemoryStore =
+                new RefinedMemoryStore(this.appContext);
+        this.refinedMemoryRefinery =
+                new RefinedMemoryRefinery(this.refinedMemoryStore);
         this.toolCallDispatcher = new ToolCallDispatcher(
                 new ToolCallDispatcher.Host() {
                     @Override public void executeTool(JSONObject call) {
@@ -2863,6 +2869,7 @@ final class NativeGeminiLiveClient {
             }
             task.prematureModelReplies = 0;
             task.captureRecipeStep(name, args, result, recipeBeforeContext);
+            task.captureRefinedMemoryStep(name, args, result);
             task.addStep(name, result);
             sendToolResponse(id, requestedName, result);
             PerformanceMetrics.markAgentToolResultSent(
@@ -3014,6 +3021,7 @@ final class NativeGeminiLiveClient {
 
         boolean success = result.optBoolean("success", false);
         taskRecipeStore.recordRun(recipeId, success);
+        refinedMemoryRefinery.observeRecipeOutcome(recipe, success);
         try {
             if (success) {
                 result.put("taskState", "DONE")
@@ -4061,6 +4069,26 @@ final class NativeGeminiLiveClient {
         liveTurnCoordinator.closeOperationalGeneration(
                 task.intentGeneration);
         conversationGoalTouchedAt = System.currentTimeMillis();
+
+        if ("任務完成".equals(reason)
+                && task != null
+                && task.blockedReason == null) {
+            JSONObject progress = workingContext.toProgressJson();
+            RefinedMemoryStore.Entry learned =
+                    refinedMemoryRefinery.observeCompletedTask(
+                            task.recipeGoal,
+                            progress.optString(
+                                    "goalIntent",
+                                    GoalIntentKey.derive(task.recipeGoal)),
+                            task.recipeStartPackage,
+                            task.refinedMemoryStepsSnapshot());
+            if (learned != null) {
+                Log.i(TAG, "RefinedMemory learned scope="
+                        + learned.scope
+                        + " state=" + learned.state
+                        + " success=" + learned.successCount);
+            }
+        }
 
         if (shouldLearnRecipe) {
             JSONObject saved = taskRecipeStore.rememberSuccessful(
@@ -6560,6 +6588,24 @@ final class NativeGeminiLiveClient {
         // projection. Fingerprints, authorization state and other debug fields
         // remain Runtime-internal.
         JSONObject progressContext = workingContext.toProgressJson();
+        String memoryPackage =
+                progressContext.optString("currentApp", "");
+        JSONObject afterForMemory =
+                result == null ? null : result.optJSONObject("after");
+        if (afterForMemory != null
+                && !afterForMemory.optString("package", "").trim().isEmpty()) {
+            memoryPackage =
+                    afterForMemory.optString("package", "").trim();
+        }
+        JSONArray refinedMemory =
+                refinedMemoryStore.forModel(
+                        progressContext.optString("goalIntent", ""),
+                        memoryPackage,
+                        2);
+        if (refinedMemory.length() > 0) {
+            progressContext.put("refinedMemory", refinedMemory);
+        }
+
         String searchPhase = userActionScope.modelSearchPhase();
         if (!searchPhase.isEmpty()) {
             JSONObject searchProgress =
@@ -6606,6 +6652,9 @@ final class NativeGeminiLiveClient {
                 ContextPayloadBudget.utf8Bytes(modelResult.toString());
         int progressBytes =
                 ContextPayloadBudget.utf8Bytes(progressContext.toString());
+        int refinedMemoryBytes =
+                ContextPayloadBudget.utf8Bytes(
+                        refinedMemory.toString());
         int playbookBytes = ContextPayloadBudget.utf8Bytes(
                 appPlaybook == null ? "" : appPlaybook.toString());
         int outboundBytes =
@@ -6628,6 +6677,12 @@ final class NativeGeminiLiveClient {
                     "app_playbook",
                     playbookBytes,
                     ContextPayloadBudget.APP_PLAYBOOK_BYTES);
+        }
+        if (refinedMemoryBytes > 0) {
+            contextPayloadAudit.logBudget(
+                    "refined_memory",
+                    refinedMemoryBytes,
+                    ContextPayloadBudget.REFINED_MEMORY_BYTES);
         }
 
         if (!liveConnection.isAvailable()
