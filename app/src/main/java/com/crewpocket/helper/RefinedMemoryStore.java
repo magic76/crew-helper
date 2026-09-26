@@ -442,22 +442,6 @@ final class RefinedMemoryStore {
         }
     }
 
-    void recordCorrection(
-            String taskId,
-            String scope,
-            List<String> usedIds,
-            List<String> learnedIds,
-            int changed) {
-        if (prefs == null || changed <= 0) return;
-        synchronized (LOCK) {
-            JSONObject event = baseEvent("CORRECTED", taskId, scope);
-            put(event, "usedIds", toArray(usedIds));
-            put(event, "learnedIds", toArray(learnedIds));
-            put(event, "changed", changed);
-            appendEventLocked(event);
-        }
-    }
-
     JSONArray recentEvents(int limit) {
         JSONArray out = new JSONArray();
         if (prefs == null) return out;
@@ -506,7 +490,12 @@ final class RefinedMemoryStore {
                         usedTasks++;
                         usedSteps += Math.max(0, event.optInt("stepCount", 0));
                         usedDuration += Math.max(0L, event.optLong("durationMs", 0L));
-                        if (event.optBoolean("terminalVerified", false)) {
+                        boolean correctedTask =
+                                wasTaskCorrected(
+                                        events,
+                                        event.optString("taskId", ""));
+                        if (event.optBoolean("terminalVerified", false)
+                                && !correctedTask) {
                             verifiedTasks++;
                         }
                         if (containsId(event.optJSONArray("appliedIds"), id)) {
@@ -519,7 +508,12 @@ final class RefinedMemoryStore {
                         baselineTasks++;
                         baselineSteps += Math.max(0, event.optInt("stepCount", 0));
                         baselineDuration += Math.max(0L, event.optLong("durationMs", 0L));
-                        if (event.optBoolean("terminalVerified", false)) {
+                        boolean correctedTask =
+                                wasTaskCorrected(
+                                        events,
+                                        event.optString("taskId", ""));
+                        if (event.optBoolean("terminalVerified", false)
+                                && !correctedTask) {
                             baselineVerified++;
                         }
                     }
@@ -571,14 +565,20 @@ final class RefinedMemoryStore {
                 if (!"TASK_RESULT".equals(type)) continue;
                 JSONArray ids = event.optJSONArray("memoryIds");
                 boolean usedMemory = ids != null && ids.length() > 0;
+                boolean correctedTask =
+                        wasTaskCorrected(
+                                events,
+                                event.optString("taskId", ""));
                 if (usedMemory) {
                     memoryTasks++;
-                    if (event.optBoolean("terminalVerified", false)) {
+                    if (event.optBoolean("terminalVerified", false)
+                            && !correctedTask) {
                         memoryVerified++;
                     }
                 } else {
                     noMemoryTasks++;
-                    if (event.optBoolean("terminalVerified", false)) {
+                    if (event.optBoolean("terminalVerified", false)
+                            && !correctedTask) {
                         noMemoryVerified++;
                     }
                 }
@@ -675,6 +675,10 @@ final class RefinedMemoryStore {
                             ids == null ? 0 : ids.length());
                 } else if ("TASK_RESULT".equals(type)) {
                     taskResult = event;
+                    JSONArray ids = event.optJSONArray("memoryIds");
+                    usedCount = Math.max(
+                            usedCount,
+                            ids == null ? 0 : ids.length());
                 } else if ("LEARNED".equals(type)
                         || "EVIDENCE".equals(type)
                         || "REPLAY_SUPPORT".equals(type)) {
@@ -694,9 +698,15 @@ final class RefinedMemoryStore {
                         .append("/")
                         .append(usedCount)
                         .append("\n");
+                boolean correctedTask =
+                        correctedCount > 0
+                                || wasTaskCorrected(events, id);
                 out.append("Terminal verified: ")
                         .append(taskResult.optBoolean("terminalVerified", false)
-                                ? "yes" : "no")
+                                        && !correctedTask
+                                ? "yes" : (correctedTask
+                                        ? "retracted by correction"
+                                        : "no"))
                         .append("\n");
                 out.append("Steps / duration: ")
                         .append(taskResult.optInt("stepCount", 0))
@@ -1001,6 +1011,24 @@ final class RefinedMemoryStore {
         if (values == null || cleanId.isEmpty()) return false;
         for (int i = 0; i < values.length(); i++) {
             if (cleanId.equals(safe(values.optString(i, "")))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean wasTaskCorrected(
+            JSONArray events,
+            String taskId) {
+        String id = safe(taskId);
+        if (events == null || id.isEmpty()) return false;
+        for (int i = 0; i < events.length(); i++) {
+            JSONObject event = events.optJSONObject(i);
+            if (event != null
+                    && "CORRECTED".equals(
+                            event.optString("type", ""))
+                    && id.equals(
+                            event.optString("taskId", ""))) {
                 return true;
             }
         }
