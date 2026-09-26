@@ -4111,10 +4111,26 @@ final class NativeGeminiLiveClient {
             AgentTaskRecord task,
             String reason,
             String finalReply) {
+        String learningGoalIntent =
+                task == null
+                        ? ""
+                        : workingContext.toProgressJson().optString(
+                                "goalIntent",
+                                GoalIntentKey.derive(task.recipeGoal));
+        boolean strongTerminalLearningEvidence =
+                task != null
+                        && RefinedMemoryEvidencePolicy
+                                .hasStrongTerminalEvidence(
+                                        learningGoalIntent,
+                                        task.lastTaskState,
+                                        task.lastCompletionEvidence,
+                                        task.refinedMemoryTerminalVerified,
+                                        task.refinedMemoryMediaPlaybackActive);
         boolean shouldLearnRecipe =
                 "任務完成".equals(reason)
                         && task != null
                         && task.blockedReason == null
+                        && strongTerminalLearningEvidence
                         && task.canSaveRecipe();
 
         agentResponseCoordinator.clear();
@@ -4132,9 +4148,7 @@ final class NativeGeminiLiveClient {
             RefinedMemoryStore.Entry learned =
                     refinedMemoryRefinery.observeCompletedTask(
                             task.recipeGoal,
-                            progress.optString(
-                                    "goalIntent",
-                                    GoalIntentKey.derive(task.recipeGoal)),
+                            learningGoalIntent,
                             task.primaryExecutionPackage(),
                             task.recipeStartPackage,
                             task.refinedMemoryStepsSnapshot(),
@@ -6804,11 +6818,17 @@ final class NativeGeminiLiveClient {
         }
         RefinedMemoryUseTrace.Snapshot memoryTrace =
                 refinedMemoryUseTrace.snapshot();
+        int currentTaskInjectionCount =
+                refinedMemoryTask != null
+                        && refinedMemoryTask.taskId.equals(
+                                memoryTrace.taskId)
+                                ? memoryTrace.injectionCount
+                                : 0;
         contextPayloadAudit.logRefinedMemory(
                 userIntentGeneration,
                 refinedMemoryBytes,
                 refinedMemoryCount,
-                memoryTrace.injectionCount,
+                currentTaskInjectionCount,
                 screenItemsBefore,
                 screenItemsAfter);
     }
