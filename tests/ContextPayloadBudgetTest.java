@@ -28,6 +28,9 @@ public final class ContextPayloadBudgetTest {
                 ContextPayloadBudget.APP_PLAYBOOK_BYTES >= 1600,
                 "app playbook context is not over-compressed");
         check(
+                ContextPayloadBudget.REFINED_MEMORY_BYTES <= 512,
+                "refined memory remains compact");
+        check(
                 ContextPayloadBudget.withinToolBudget(
                         "phone_action",
                         ContextPayloadBudget.PHONE_ACTION_BYTES),
