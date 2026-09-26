@@ -4217,10 +4217,22 @@ final class NativeGeminiLiveClient {
         long memoryTaskFinishedAt = System.currentTimeMillis();
         RefinedMemoryUseTrace.Snapshot memoryTaskTrace =
                 refinedMemoryUseTrace.snapshot();
+        boolean memoryTraceMatched =
+                task.taskId.equals(memoryTaskTrace.taskId);
+        boolean memoryTraceMismatch =
+                !memoryTraceMatched
+                        && !memoryTaskTrace.taskId.isEmpty()
+                        && !memoryTaskTrace.usedMemoryIds.isEmpty();
         java.util.List<String> memoryIdsUsedByTask =
-                task.taskId.equals(memoryTaskTrace.taskId)
+                memoryTraceMatched
                         ? memoryTaskTrace.usedMemoryIds
                         : java.util.Collections.<String>emptyList();
+        if (memoryTraceMismatch) {
+            refinedMemoryStore.recordTraceMismatch(
+                    task.taskId,
+                    memoryTaskTrace.taskId,
+                    learningGoalIntent);
+        }
         String actualMemoryPattern =
                 RefinedMemoryPolicy.patternFor(
                         learningGoalIntent,
