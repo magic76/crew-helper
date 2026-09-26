@@ -312,15 +312,40 @@ public class RefinedMemoryDashboardActivity extends Activity {
         }
 
         if (baselineTasks > 0) {
+            boolean enoughBaseline =
+                    RefinedMemoryDashboardPolicy
+                            .hasSufficientComparisonSample(
+                                    baselineTasks);
+            String baselineText;
+            if (enoughBaseline) {
+                baselineText =
+                        I18n.get(this,
+                                "同 scope、無 Refined Memory · ",
+                                "Same scope, without Refined Memory · ")
+                                + oneDecimal(usage.optDouble("avgStepsWithout", 0.0d))
+                                + " steps · "
+                                + duration(usage.optDouble("avgDurationMsWithout", 0.0d))
+                                + " · verified "
+                                + rate(baselineVerified, baselineTasks)
+                                + " · "
+                                + I18n.get(this,
+                                        "觀測相關，非因果",
+                                        "observational, not causal");
+            } else {
+                baselineText =
+                        I18n.get(this,
+                                "同 scope baseline 樣本不足 · ",
+                                "Same-scope baseline insufficient · ")
+                                + baselineTasks
+                                + "/"
+                                + RefinedMemoryDashboardPolicy.MIN_COMPARISON_SAMPLE
+                                + " · "
+                                + I18n.get(this,
+                                        "暫不比較效果",
+                                        "impact comparison withheld");
+            }
             card.addView(text(
-                    I18n.get(this,
-                            "同 scope、無 Refined Memory · ",
-                            "Same scope, without Refined Memory · ")
-                            + oneDecimal(usage.optDouble("avgStepsWithout", 0.0d))
-                            + " steps · "
-                            + duration(usage.optDouble("avgDurationMsWithout", 0.0d))
-                            + " · verified "
-                            + rate(baselineVerified, baselineTasks),
+                    baselineText,
                     9.5f,
                     CrewTheme.TEXT_MUTED,
                     false));
@@ -450,6 +475,10 @@ public class RefinedMemoryDashboardActivity extends Activity {
         if ("CORRECTED".equals(type)) {
             return prefix + " · affected="
                     + event.optInt("changed", 0);
+        }
+        if ("TRACE_MISMATCH".equals(type)) {
+            return prefix
+                    + " · excluded from baseline";
         }
 
         if ("LEARNED".equals(type)
