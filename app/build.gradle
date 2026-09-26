@@ -59,5 +59,4 @@ dependencies {
                     'okio-*.jar'
             ])
     implementation files('libs/sherpa-onnx-1.13.7.aar')
-    implementation files('libs/annotations-13.0.jar')
 }
