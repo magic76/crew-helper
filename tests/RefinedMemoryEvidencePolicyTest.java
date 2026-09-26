@@ -63,6 +63,35 @@ public final class RefinedMemoryEvidencePolicyTest {
                 "failed replay is negative evidence");
 
         check(
+                RefinedMemoryEvidencePolicy.normalTaskVerdict(
+                        "NAVIGATION:START",
+                        "DONE",
+                        "MAPS_START_NAVIGATION_SCREEN_CHANGED",
+                        true,
+                        false)
+                        == RefinedMemoryEvidencePolicy.Verdict.NONE,
+                "screen change after Start is not navigation learning evidence");
+        check(
+                RefinedMemoryEvidencePolicy.normalTaskVerdict(
+                        "NAVIGATION:START",
+                        "DONE",
+                        "MAPS_NAVIGATION_ACTIVE_VERIFIED",
+                        true,
+                        false)
+                        == RefinedMemoryEvidencePolicy.Verdict.INDEPENDENT_SUCCESS,
+                "active navigation is strong learning evidence");
+        check(
+                RefinedMemoryEvidencePolicy.normalTaskVerdict(
+                        "SEARCH:RESULT",
+                        "ANSWER_READY",
+                        "SEARCH_RESULT_SCREEN_INSPECTED",
+                        true,
+                        false)
+                        == RefinedMemoryEvidencePolicy.Verdict.NONE,
+                "search learning waits for query-result affinity");
+
+
+        check(
                 RefinedMemoryEvidencePolicy.looksLikeReliableCorrection(
                         "不是這首，我是說鄧紫棋",
                         0.95d),

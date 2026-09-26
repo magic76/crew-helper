@@ -6,8 +6,11 @@ import java.util.LinkedHashSet;
 import java.util.List;
 
 /**
- * In-memory causal trace connecting model-injected Refined Memory to the task
- * that consumed it. No user text or screen content is retained here.
+ * In-memory causal receipt for Refined Memory.
+ *
+ * USED ids were injected into the model for this task.
+ * LEARNED ids received a new independent-success vote from this task.
+ * No user text, query, screen content, or selector data is retained.
  */
 final class RefinedMemoryUseTrace {
     static final long CORRECTION_WINDOW_MS = 45_000L;
@@ -15,32 +18,36 @@ final class RefinedMemoryUseTrace {
     static final class Snapshot {
         final String taskId;
         final long generation;
-        final List<String> memoryIds;
+        final List<String> usedMemoryIds;
+        final List<String> learnedMemoryIds;
         final int injectionCount;
 
         Snapshot(
                 String taskId,
                 long generation,
-                List<String> memoryIds,
+                List<String> usedMemoryIds,
+                List<String> learnedMemoryIds,
                 int injectionCount) {
             this.taskId = clean(taskId);
             this.generation = generation;
-            this.memoryIds = memoryIds == null
-                    ? new ArrayList<String>()
-                    : new ArrayList<String>(memoryIds);
+            this.usedMemoryIds = copy(usedMemoryIds);
+            this.learnedMemoryIds = copy(learnedMemoryIds);
             this.injectionCount = Math.max(0, injectionCount);
         }
 
         boolean isEmpty() {
-            return memoryIds.isEmpty();
+            return usedMemoryIds.isEmpty()
+                    && learnedMemoryIds.isEmpty();
         }
     }
 
     private String taskId = "";
     private long generation = -1L;
-    private long lastInjectedAt;
+    private long lastEvidenceAt;
     private int injectionCount;
-    private final LinkedHashSet<String> memoryIds =
+    private final LinkedHashSet<String> usedMemoryIds =
+            new LinkedHashSet<String>();
+    private final LinkedHashSet<String> learnedMemoryIds =
             new LinkedHashSet<String>();
 
     synchronized boolean alreadyInjected(
@@ -54,73 +61,142 @@ final class RefinedMemoryUseTrace {
         for (String id : ids) {
             String cleanId = clean(id);
             if (!cleanId.isEmpty()
-                    && !memoryIds.contains(cleanId)) {
+                    && !usedMemoryIds.contains(cleanId)) {
                 return false;
             }
         }
         return true;
     }
 
+    // Compatibility name retained for the model-injection call site.
     synchronized void record(
             String nextTaskId,
             long nextGeneration,
             Collection<String> ids,
             long now) {
-        String cleanTaskId = clean(nextTaskId);
-        if (cleanTaskId.isEmpty() || ids == null || ids.isEmpty()) {
+        recordUsed(
+                nextTaskId,
+                nextGeneration,
+                ids,
+                now);
+    }
+
+    synchronized void recordUsed(
+            String nextTaskId,
+            long nextGeneration,
+            Collection<String> ids,
+            long now) {
+        if (!prepareTask(
+                nextTaskId,
+                nextGeneration,
+                ids)) {
             return;
+        }
+
+        for (String id : ids) {
+            String cleanId = clean(id);
+            if (!cleanId.isEmpty()) {
+                usedMemoryIds.add(cleanId);
+            }
+        }
+        if (!usedMemoryIds.isEmpty()) {
+            injectionCount++;
+            lastEvidenceAt = Math.max(0L, now);
+        }
+    }
+
+    synchronized void recordLearned(
+            String nextTaskId,
+            long nextGeneration,
+            String memoryId,
+            long now) {
+        String cleanId = clean(memoryId);
+        if (cleanId.isEmpty()) return;
+        ArrayList<String> single = new ArrayList<String>();
+        single.add(cleanId);
+        if (!prepareTask(
+                nextTaskId,
+                nextGeneration,
+                single)) {
+            return;
+        }
+        learnedMemoryIds.add(cleanId);
+        lastEvidenceAt = Math.max(0L, now);
+    }
+
+    synchronized Snapshot consumeRecentCorrection(long now) {
+        if (taskId.isEmpty()
+                || (usedMemoryIds.isEmpty()
+                    && learnedMemoryIds.isEmpty())
+                || lastEvidenceAt <= 0L
+                || now - lastEvidenceAt < 0L
+                || now - lastEvidenceAt
+                        > CORRECTION_WINDOW_MS) {
+            clear();
+            return emptySnapshot();
+        }
+
+        Snapshot out = snapshotLocked();
+        clear();
+        return out;
+    }
+
+    synchronized Snapshot snapshot() {
+        return snapshotLocked();
+    }
+
+    synchronized void clear() {
+        taskId = "";
+        generation = -1L;
+        lastEvidenceAt = 0L;
+        injectionCount = 0;
+        usedMemoryIds.clear();
+        learnedMemoryIds.clear();
+    }
+
+    private boolean prepareTask(
+            String nextTaskId,
+            long nextGeneration,
+            Collection<String> ids) {
+        String cleanTaskId = clean(nextTaskId);
+        if (cleanTaskId.isEmpty()
+                || ids == null
+                || ids.isEmpty()) {
+            return false;
         }
 
         if (!cleanTaskId.equals(taskId)) {
             taskId = cleanTaskId;
             generation = nextGeneration;
             injectionCount = 0;
-            memoryIds.clear();
+            usedMemoryIds.clear();
+            learnedMemoryIds.clear();
         }
-
-        for (String id : ids) {
-            String cleanId = clean(id);
-            if (!cleanId.isEmpty()) memoryIds.add(cleanId);
-        }
-        if (!memoryIds.isEmpty()) {
-            injectionCount++;
-            lastInjectedAt = Math.max(0L, now);
-        }
+        return true;
     }
 
-    synchronized Snapshot consumeRecentCorrection(long now) {
-        if (taskId.isEmpty()
-                || memoryIds.isEmpty()
-                || lastInjectedAt <= 0L
-                || now - lastInjectedAt < 0L
-                || now - lastInjectedAt > CORRECTION_WINDOW_MS) {
-            clear();
-            return new Snapshot("", -1L, null, 0);
-        }
-
-        Snapshot out = new Snapshot(
-                taskId,
-                generation,
-                new ArrayList<String>(memoryIds),
-                injectionCount);
-        clear();
-        return out;
-    }
-
-    synchronized Snapshot snapshot() {
+    private Snapshot snapshotLocked() {
         return new Snapshot(
                 taskId,
                 generation,
-                new ArrayList<String>(memoryIds),
+                new ArrayList<String>(usedMemoryIds),
+                new ArrayList<String>(learnedMemoryIds),
                 injectionCount);
     }
 
-    synchronized void clear() {
-        taskId = "";
-        generation = -1L;
-        lastInjectedAt = 0L;
-        injectionCount = 0;
-        memoryIds.clear();
+    private static Snapshot emptySnapshot() {
+        return new Snapshot(
+                "",
+                -1L,
+                null,
+                null,
+                0);
+    }
+
+    private static List<String> copy(List<String> source) {
+        return source == null
+                ? new ArrayList<String>()
+                : new ArrayList<String>(source);
     }
 
     private static String clean(String value) {

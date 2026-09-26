@@ -801,8 +801,9 @@ final class NativeGeminiLiveClient {
                         System.currentTimeMillis());
         if (trace.isEmpty()) return;
 
-        int changed = refinedMemoryStore.markSuspectByIds(
-                trace.memoryIds,
+        int changed = refinedMemoryStore.applyCorrection(
+                trace.usedMemoryIds,
+                trace.learnedMemoryIds,
                 trace.taskId,
                 "USER_CORRECTION");
         if (changed > 0) {
@@ -812,6 +813,10 @@ final class NativeGeminiLiveClient {
                             + changed
                             + " sourceTask="
                             + trace.taskId
+                            + " used="
+                            + trace.usedMemoryIds.size()
+                            + " learned="
+                            + trace.learnedMemoryIds.size()
                             + " injections="
                             + trace.injectionCount);
         }
@@ -3070,19 +3075,33 @@ final class NativeGeminiLiveClient {
             } catch (Exception ignored) {}
         }
 
-        boolean success = result.optBoolean("success", false);
-        taskRecipeStore.recordRun(recipeId, success);
+        boolean recipeExecutionSuccess =
+                result.optBoolean("success", false);
+        boolean goalTerminalVerified =
+                recipeExecutionSuccess
+                        && result.optBoolean(
+                                "goalTerminalVerified", false);
+        taskRecipeStore.recordRunOutcome(
+                recipeId,
+                recipeExecutionSuccess,
+                goalTerminalVerified);
         refinedMemoryRefinery.observeRecipeOutcome(
                 recipe,
                 result,
-                success,
+                recipeExecutionSuccess,
                 task.taskId);
         try {
-            if (success) {
-                result.put("taskState", "DONE")
-                        .put("completionEvidence", "TASK_RECIPE_COMPLETED")
-                        .put("nextRequirement", "NONE");
-            } else if (!result.has("taskState")) {
+            if (recipeExecutionSuccess
+                    && !goalTerminalVerified) {
+                task.requiresPostActionInspection = true;
+                task.postActionInspectionPrompted = false;
+                result.put("taskState", "EVIDENCE_AVAILABLE")
+                        .put(
+                                "completionEvidence",
+                                "TASK_RECIPE_EXECUTED")
+                        .put("nextRequirement", "INSPECT_UI");
+            } else if (!recipeExecutionSuccess
+                    && !result.has("taskState")) {
                 result.put("taskState", "IN_PROGRESS");
             }
             task.lastToolName = "task_recipe";
@@ -3096,9 +3115,12 @@ final class NativeGeminiLiveClient {
             agentResponseCoordinator.scheduleWatchdog(task);
             PerformanceMetrics.markAgentToolResultSent(
                     task.taskId, task.intentGeneration, "task_recipe");
-            reportStage(success
-                    ? "⚡ 熟悉流程完成，等待 Gemini 簡短回覆"
-                    : "熟悉流程不符合目前畫面，已交回 Gemini");
+            reportStage(
+                    goalTerminalVerified
+                            ? "⚡ 熟悉流程完成，最終狀態已驗證"
+                            : (recipeExecutionSuccess
+                                    ? "熟悉流程已執行，正在確認最終狀態"
+                                    : "熟悉流程不符合目前畫面，已交回 Gemini"));
         } catch (Exception error) {
             reportStage("Task Recipe 結果回灌失敗：" + error.getMessage());
         }
@@ -3261,19 +3283,42 @@ final class NativeGeminiLiveClient {
 
                     String semanticTarget =
                             result.optString("semanticTarget", "").trim();
+                    boolean navigationStartAttempt =
+                            GoogleMapsSemanticContract.START_NAVIGATION
+                                    .equals(semanticTarget);
+                    String afterPackage =
+                            after == null
+                                    ? ""
+                                    : after.optString("package", "");
                     boolean verifiedNavigationStart =
-                            freshAfter
-                                    && result.optBoolean("screenChanged", false)
-                                    && GoogleMapsSemanticContract.START_NAVIGATION
-                                            .equals(semanticTarget);
+                            navigationStartAttempt
+                                    && freshAfter
+                                    && GoogleMapsNavigationStatePolicy
+                                            .isActiveNavigationScreen(
+                                                    afterPackage,
+                                                    after.toString());
 
                     if (verifiedNavigationStart) {
                         result.put("taskState", "DONE")
                                 .put("completionEvidence",
-                                        "MAPS_START_NAVIGATION_SCREEN_CHANGED")
-                                .put("nextRequirement", "NONE");
+                                        "MAPS_NAVIGATION_ACTIVE_VERIFIED")
+                                .put("nextRequirement", "NONE")
+                                .put("verified", true);
                         task.requiresPostActionInspection = false;
                     } else {
+                        if (navigationStartAttempt) {
+                            // The Start tap may have executed, but screen change
+                            // alone is not proof that turn-by-turn guidance is
+                            // active. Force one fresh observation before any
+                            // user-visible completion claim.
+                            task.requiresPostActionInspection = true;
+                            task.postActionInspectionPrompted = false;
+                            result.put("taskState", "EVIDENCE_AVAILABLE")
+                                    .put(
+                                            "completionEvidence",
+                                            "MAPS_NAVIGATION_START_NEEDS_ACTIVE_STATE")
+                                    .put("nextRequirement", "INSPECT_UI");
+                        }
                         if (!result.has("taskState")) {
                             result.put(
                                     "taskState",
@@ -3317,8 +3362,33 @@ final class NativeGeminiLiveClient {
                             || "BLOCKED".equals(domainState);
                     JSONObject progressForCompletion =
                             workingContext.toProgressJson();
+                    JSONObject semanticFallback =
+                            result.optJSONObject("semanticFallback");
+                    String inspectedPackage =
+                            result.optString("package", "");
+                    boolean activeNavigation =
+                            "NAVIGATION:START".equals(
+                                    progressForCompletion.optString(
+                                            "goalIntent", ""))
+                                    && GoogleMapsNavigationStatePolicy
+                                            .isActiveNavigationScreen(
+                                                    inspectedPackage,
+                                                    semanticFallback == null
+                                                            ? result.toString()
+                                                            : semanticFallback.toString());
+                    if (activeNavigation) {
+                        result.put("taskState", "DONE")
+                                .put(
+                                        "completionEvidence",
+                                        "MAPS_NAVIGATION_ACTIVE_VERIFIED")
+                                .put("nextRequirement", "NONE")
+                                .put("verified", true);
+                        task.requiresPostActionInspection = false;
+                    }
+
                     boolean answerFastPath =
-                            !conversationLoopRecipe.isActive()
+                            !activeNavigation
+                                    && !conversationLoopRecipe.isActive()
                                     && InformationAnswerFastPathPolicy.shouldOffer(
                                     name,
                                     true,
@@ -3329,7 +3399,10 @@ final class NativeGeminiLiveClient {
                                     progressForCompletion.optString("goal", ""),
                                     progressForCompletion.optString("rootGoal", ""));
 
-                    if (answerFastPath) {
+                    if (activeNavigation) {
+                        // Terminal state already written from the fresh
+                        // semantic screen above.
+                    } else if (answerFastPath) {
                         result.put("answerFastPath", true)
                                 .put("taskState", "ANSWER_READY")
                                 .put("completionEvidence", "SEARCH_RESULT_SCREEN_INSPECTED")
@@ -4158,6 +4231,11 @@ final class NativeGeminiLiveClient {
                             task.refinedMemoryMediaPlaybackActive,
                             task.taskId);
             if (learned != null) {
+                refinedMemoryUseTrace.recordLearned(
+                        task.taskId,
+                        task.intentGeneration,
+                        learned.id,
+                        System.currentTimeMillis());
                 Log.i(TAG, "RefinedMemory learned scope="
                         + learned.scope
                         + " state=" + learned.state
@@ -6685,6 +6763,7 @@ final class NativeGeminiLiveClient {
                     refinedMemoryStore.selectForModel(
                             goalIntent,
                             memoryPackage,
+                            refinedMemoryTask.recipeStartPackage,
                             2);
             if (!candidate.isEmpty()
                     && !refinedMemoryUseTrace.alreadyInjected(

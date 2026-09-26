@@ -193,19 +193,45 @@ final class RefinedMemoryStore {
                 safe(source).isEmpty() ? "NEGATIVE" : safe(source));
     }
 
-    int markSuspectByIds(
-            List<String> ids,
+    int applyCorrection(
+            List<String> usedIds,
+            List<String> learnedIds,
             String taskId,
             String reason) {
-        if (prefs == null || ids == null || ids.isEmpty()) return 0;
+        if (prefs == null) return 0;
+
+        java.util.LinkedHashSet<String> allIds =
+                new java.util.LinkedHashSet<String>();
+        if (usedIds != null) allIds.addAll(usedIds);
+        if (learnedIds != null) allIds.addAll(learnedIds);
+        if (allIds.isEmpty()) return 0;
+
         synchronized (LOCK) {
             List<Entry> items = loadLocked();
             long now = System.currentTimeMillis();
             int changed = 0;
             for (Entry item : items) {
-                if (item == null || !ids.contains(item.id)) continue;
-                item.failureCount++;
-                item.state = RefinedMemoryPolicy.STATE_SUSPECT;
+                if (item == null
+                        || !allIds.contains(item.id)) {
+                    continue;
+                }
+
+                boolean learnedByCorrectedTask =
+                        learnedIds != null
+                                && learnedIds.contains(item.id)
+                                && safe(taskId).equals(
+                                        item.lastTaskId)
+                                && "NORMAL_TASK".equals(
+                                        item.lastEvidenceSource);
+
+                RefinedMemoryCorrectionPolicy.Result correction =
+                        RefinedMemoryCorrectionPolicy.apply(
+                                item.successCount,
+                                item.failureCount,
+                                learnedByCorrectedTask);
+                item.successCount = correction.successCount;
+                item.failureCount = correction.failureCount;
+                item.state = correction.state;
                 item.updatedAt = now;
                 item.lastFailureAt = now;
                 item.lastEvidenceSource =
@@ -213,14 +239,23 @@ final class RefinedMemoryStore {
                                 ? "USER_CORRECTION"
                                 : safe(reason);
                 item.lastTaskId = safe(taskId);
-                item.confidence = RefinedMemoryPolicy.confidenceFor(
-                        item.successCount,
-                        item.failureCount);
+                item.confidence = correction.confidence;
                 changed++;
             }
             if (changed > 0) trimAndSaveLocked(items);
             return changed;
         }
+    }
+
+    int markSuspectByIds(
+            List<String> ids,
+            String taskId,
+            String reason) {
+        return applyCorrection(
+                ids,
+                null,
+                taskId,
+                reason);
     }
 
     private Entry applyEvidence(
@@ -343,6 +378,7 @@ final class RefinedMemoryStore {
     Selection selectForModel(
             String scope,
             String packageName,
+            String startPackage,
             int limit) {
         int max = Math.max(0, Math.min(3, limit));
         Selection out = new Selection();
@@ -354,18 +390,34 @@ final class RefinedMemoryStore {
             for (Entry item : loadLocked()) {
                 if (!item.enabled) continue;
                 String state = effectiveState(item, now);
-                boolean exactScope = safe(scope).equals(item.scope);
-                boolean exactPackage =
-                        safe(packageName).equals(item.packageName)
-                                || item.packageName.isEmpty();
-                if (!exactPackage) continue;
+                boolean exactScope =
+                        safe(scope).equals(item.scope);
+                int packageAffinity =
+                        RefinedMemoryPolicy.packageAffinityScore(
+                                item.packageName,
+                                item.startPackage,
+                                packageName,
+                                startPackage);
+                if (packageAffinity == Integer.MIN_VALUE) {
+                    continue;
+                }
+                boolean exactPrimaryPackage =
+                        safe(packageName).equals(
+                                item.packageName);
                 int score = RefinedMemoryPolicy.relevanceScore(
                         state,
                         item.confidence,
                         exactScope,
-                        safe(packageName).equals(item.packageName),
+                        exactPrimaryPackage,
                         item.lastVerifiedAt,
                         now);
+                if (score != Integer.MIN_VALUE
+                        && !exactPrimaryPackage) {
+                    // relevanceScore gives the conservative generic-package
+                    // baseline. Replace it with the explicit start-package
+                    // affinity when this is a cross-App learned procedure.
+                    score += Math.max(0, packageAffinity - 40);
+                }
                 if (score == Integer.MIN_VALUE) continue;
                 scored.add(new ScoredEntry(item, score));
             }
@@ -387,11 +439,26 @@ final class RefinedMemoryStore {
         return out;
     }
 
+    Selection selectForModel(
+            String scope,
+            String packageName,
+            int limit) {
+        return selectForModel(
+                scope,
+                packageName,
+                "",
+                limit);
+    }
+
     JSONArray forModel(
             String scope,
             String packageName,
             int limit) {
-        return selectForModel(scope, packageName, limit).modelLines;
+        return selectForModel(
+                scope,
+                packageName,
+                "",
+                limit).modelLines;
     }
 
     JSONArray dumpForDebug() {

@@ -63,6 +63,27 @@ public final class RefinedMemoryPolicyTest {
                         RefinedMemoryPolicy.STATE_SUSPECT),
                 "suspect memory is quarantined from model context");
 
+        check(RefinedMemoryPolicy.packageAffinityScore(
+                        "com.apple.android.music",
+                        "com.sec.android.app.launcher",
+                        "com.apple.android.music",
+                        "com.sec.android.app.launcher") == 220,
+                "primary execution app is strongest retrieval match");
+        check(RefinedMemoryPolicy.packageAffinityScore(
+                        "com.apple.android.music",
+                        "com.sec.android.app.launcher",
+                        "com.sec.android.app.launcher",
+                        "com.sec.android.app.launcher") == 140,
+                "task start app can retrieve a cross-app procedure");
+        check(RefinedMemoryPolicy.packageAffinityScore(
+                        "com.apple.android.music",
+                        "com.sec.android.app.launcher",
+                        "com.google.android.apps.maps",
+                        "com.google.android.apps.maps")
+                        == Integer.MIN_VALUE,
+                "unrelated app cannot retrieve the memory");
+
+
         double early = RefinedMemoryPolicy.confidenceFor(1, 0);
         double mature = RefinedMemoryPolicy.confidenceFor(6, 0);
         check(mature > early,

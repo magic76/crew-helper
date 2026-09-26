@@ -77,12 +77,13 @@ final class RefinedMemoryEvidencePolicy {
         }
 
         if ("NAVIGATION:START".equals(intent)) {
-            return "MAPS_START_NAVIGATION_SCREEN_CHANGED".equals(evidence);
+            return "MAPS_NAVIGATION_ACTIVE_VERIFIED".equals(evidence);
         }
 
+        // Search-result memory is paused until Runtime can bind the observed
+        // result screen to the exact query that produced it.
         if ("SEARCH:RESULT".equals(intent)) {
-            return "ANSWER_READY".equals(state)
-                    && "SEARCH_RESULT_SCREEN_INSPECTED".equals(evidence);
+            return false;
         }
 
         if ("APP:OPEN".equals(intent)) {

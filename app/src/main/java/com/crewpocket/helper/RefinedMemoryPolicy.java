@@ -115,6 +115,30 @@ final class RefinedMemoryPolicy {
                 || STATE_TRUSTED.equals(clean(state));
     }
 
+    static int packageAffinityScore(
+            String memoryPrimaryPackage,
+            String memoryStartPackage,
+            String currentPackage,
+            String taskStartPackage) {
+        String primary = clean(memoryPrimaryPackage);
+        String learnedStart = clean(memoryStartPackage);
+        String current = clean(currentPackage);
+        String currentStart = clean(taskStartPackage);
+
+        if (!primary.isEmpty() && primary.equals(current)) {
+            return 220;
+        }
+        if (!learnedStart.isEmpty()
+                && !currentStart.isEmpty()
+                && learnedStart.equals(currentStart)) {
+            return 140;
+        }
+        if (primary.isEmpty()) {
+            return 40;
+        }
+        return Integer.MIN_VALUE;
+    }
+
     static int relevanceScore(
             String state,
             double confidence,
