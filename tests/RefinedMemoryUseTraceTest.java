@@ -36,16 +36,40 @@ public final class RefinedMemoryUseTraceTest {
                 trace.consumeRecentCorrection(now + 2_000L);
         check("task-1".equals(correction.taskId),
                 "correction binds to source task");
-        check(correction.memoryIds.size() == 2,
-                "correction contains only used memories");
+        check(correction.usedMemoryIds.size() == 2,
+                "conservative correction keeps both injected memories causal");
+        check(correction.learnedMemoryIds.isEmpty(),
+                "no learned receipt exists yet");
         check(correction.injectionCount == 1,
                 "injection count is retained");
+
+        // Deliberate conservative tradeoff: when two memories were injected
+        // into one task and the user says the result was wrong, both stay in
+        // the causal set. We do not add fragile culprit attribution.
+        check(correction.usedMemoryIds.contains("m1")
+                        && correction.usedMemoryIds.contains("m2"),
+                "both injected memories remain attributable");
+
         check(trace.consumeRecentCorrection(now + 3_000L).isEmpty(),
                 "same correction cannot penalize twice");
 
+        trace.recordLearned(
+                "task-learn",
+                8L,
+                "learned-1",
+                now);
+        RefinedMemoryUseTrace.Snapshot learnedCorrection =
+                trace.consumeRecentCorrection(now + 1_000L);
+        check(learnedCorrection.usedMemoryIds.isEmpty(),
+                "first-learning correction does not require prior injection");
+        check(learnedCorrection.learnedMemoryIds.size() == 1
+                        && learnedCorrection.learnedMemoryIds.contains(
+                                "learned-1"),
+                "freshly learned memory id is recoverable");
+
         trace.record(
                 "task-2",
-                8L,
+                9L,
                 Arrays.asList("m3"),
                 now);
         check(
