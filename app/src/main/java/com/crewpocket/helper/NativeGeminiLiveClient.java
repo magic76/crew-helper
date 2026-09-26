@@ -776,12 +776,23 @@ final class NativeGeminiLiveClient {
      * task continuity. The newest turn is authoritative; rootGoal survives only
      * inside the existing 45-second conversation-goal window.
      */
-    private void applyRefinedMemoryCorrection(
+    private void handleRefinedMemoryUserTurn(
             String userText,
             double transcriptConfidence) {
+        boolean correctionLike =
+                RefinedMemoryEvidencePolicy
+                        .looksLikeCorrectionText(userText);
+        if (!correctionLike) {
+            // The user moved on. Do not let a later unrelated correction
+            // penalize a memory used by an older task.
+            refinedMemoryUseTrace.clear();
+            return;
+        }
         if (!RefinedMemoryEvidencePolicy.looksLikeReliableCorrection(
                 userText,
                 transcriptConfidence)) {
+            // Preserve the short-lived trace for a possible clearer repeat,
+            // but never punish memory from a low-confidence ASR transcript.
             return;
         }
 
@@ -948,7 +959,7 @@ final class NativeGeminiLiveClient {
             if (consumePendingUiChoiceInput(input)) return true;
             if (hasPendingUiChoice()) clearPendingUiChoiceSilently();
 
-            applyRefinedMemoryCorrection(input, -1.0d);
+            handleRefinedMemoryUserTurn(input, -1.0d);
             beginNewUserIntent(input);
             liveHumanTurnBoundary.forceNewTurn(
                     input, System.currentTimeMillis());
@@ -1412,7 +1423,7 @@ final class NativeGeminiLiveClient {
                 effectiveUserInput = boundary.effectiveText;
                 if (boundary.decision
                         == LiveHumanTurnBoundary.Decision.NEW_INTENT) {
-                    applyRefinedMemoryCorrection(
+                    handleRefinedMemoryUserTurn(
                             effectiveUserInput,
                             frame.inputConfidence);
                     beginNewUserIntent(effectiveUserInput);
