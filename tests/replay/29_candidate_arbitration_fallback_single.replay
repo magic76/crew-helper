@@ -1,0 +1,8 @@
+kind=candidate_arbitration_gate
+locator.decision=FALLBACK
+candidate.count=1
+locator.best=0.58
+locator.runnerUp=0.0
+locator.exactViewId=false
+locator.runnerUpExactViewId=false
+expect.trigger=NONE

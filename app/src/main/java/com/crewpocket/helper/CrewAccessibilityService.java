@@ -822,7 +822,9 @@ public class CrewAccessibilityService extends AccessibilityService {
                                     .put("code", match.code)
                                     .put("source", match.source);
 
-                            if (match.decision == UiLocatorScorer.Decision.AMBIGUOUS) {
+                            if ((match.decision == UiLocatorScorer.Decision.AMBIGUOUS
+                                    || match.decision == UiLocatorScorer.Decision.FALLBACK)
+                                    && !match.candidates.isEmpty()) {
                                 JSONArray candidates = new JSONArray();
                                 for (UiLocatorV2.CandidateSummary candidate
                                         : match.candidates) {
@@ -833,11 +835,20 @@ public class CrewAccessibilityService extends AccessibilityService {
                                             .put("viewId", candidate.viewId)
                                             .put("role", candidate.role)
                                             .put("semanticHint", candidate.semanticHint)
-                                            .put("confidence", candidate.confidence));
+                                            .put("confidence", candidate.confidence)
+                                            .put("exactViewId", candidate.exactViewId)
+                                            .put("bounds", new JSONObject()
+                                                    .put("left", candidate.left)
+                                                    .put("top", candidate.top)
+                                                    .put("right", candidate.right)
+                                                    .put("bottom", candidate.bottom)));
                                 }
+                                out.put("candidates", candidates);
+                            }
+
+                            if (match.decision == UiLocatorScorer.Decision.AMBIGUOUS) {
                                 out.put("status", "MULTIPLE_MATCHES")
                                         .put("taskState", "NEED_USER")
-                                        .put("candidates", candidates)
                                         .put("error", match.code)
                                         .put("instruction",
                                                 "定位結果太接近，Runtime 不會猜。只列出候選並請使用者選第幾個。");

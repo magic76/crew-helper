@@ -52,6 +52,10 @@ public final class AgentReplayRunner {
             runLocatorFallback(file, p);
             return;
         }
+        if ("candidate_arbitration_gate".equals(kind)) {
+            runCandidateArbitrationGate(file, p);
+            return;
+        }
         if ("context_budget".equals(kind)) {
             runContextBudget(file, p);
             return;
@@ -121,6 +125,34 @@ public final class AgentReplayRunner {
                         + result.code
                         + " margin="
                         + result.margin);
+    }
+
+    private static void runCandidateArbitrationGate(
+            File file,
+            Properties p) {
+        CandidateArbitrationPolicy.TriggerType trigger =
+                CandidateArbitrationPolicy.qualify(
+                        p.getProperty("locator.decision", ""),
+                        integer(p, "candidate.count", 0),
+                        decimal(p, "locator.best", 0.0),
+                        decimal(p, "locator.runnerUp", 0.0),
+                        bool(p, "locator.exactViewId"),
+                        bool(p, "locator.runnerUpExactViewId"));
+        String expected = required(p, "expect.trigger");
+        if (!expected.equals(trigger.name())) {
+            throw new AssertionError(
+                    file.getName()
+                            + " expected "
+                            + expected
+                            + " but got "
+                            + trigger);
+        }
+        passed++;
+        System.out.println(
+                "  PASS "
+                        + file.getName()
+                        + " -> "
+                        + trigger);
     }
 
     private static void runLocatorFallback(File file, Properties p) {

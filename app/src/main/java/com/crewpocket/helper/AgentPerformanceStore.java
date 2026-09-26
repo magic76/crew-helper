@@ -207,6 +207,11 @@ final class AgentPerformanceStore {
                     .append(answerReadyTotal / answerReadySamples).append(" ms\n");
         }
         out.append("Persistent across Runtime/process restarts.");
+        String arbitration =
+                CandidateArbitrationTelemetryStore.buildReport(context);
+        if (!arbitration.isEmpty()) {
+            out.append("\n\n").append(arbitration);
+        }
         return out.toString();
     }
 
