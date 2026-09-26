@@ -273,6 +273,16 @@ final class AgentInspectorStore {
             out.append("Task: none captured yet\n");
         }
 
+        String inspectorTaskId =
+                task.optString("taskId", "");
+        if (!inspectorTaskId.isEmpty()) {
+            out.append("\n\n")
+                    .append(
+                            new RefinedMemoryStore(context)
+                                    .buildInspectorReport(
+                                            inspectorTaskId));
+        }
+
         out.append("\n\n")
                 .append(AgentPerformanceStore.buildReport(context))
                 .append("\n\n")
