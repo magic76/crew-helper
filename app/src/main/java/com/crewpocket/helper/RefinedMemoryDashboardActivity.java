@@ -124,16 +124,36 @@ public class RefinedMemoryDashboardActivity extends Activity {
         int baselineTasks = summary.optInt("noMemoryTasks", 0);
         int baselineVerified = summary.optInt("noMemoryVerified", 0);
         int corrections = summary.optInt("corrections", 0);
+        int traceMismatches = summary.optInt("traceMismatches", 0);
+        String baselineOverview =
+                baselineTasks
+                                >= RefinedMemoryDashboardPolicy
+                                        .MIN_COMPARISON_SAMPLE
+                        ? baselineVerified + "/" + baselineTasks
+                                + " terminal verified ("
+                                + rate(baselineVerified, baselineTasks)
+                                + ") · "
+                                + I18n.get(this,
+                                        "觀測相關，非因果",
+                                        "observational, not causal")
+                        : I18n.get(this,
+                                "樣本不足 ",
+                                "insufficient sample ")
+                                + baselineTasks
+                                + "/"
+                                + RefinedMemoryDashboardPolicy
+                                        .MIN_COMPARISON_SAMPLE;
 
         TextView stats = text(
                 I18n.get(this, "Memory 任務 ", "Memory tasks ")
                         + memoryVerified + "/" + memoryTasks
                         + " terminal verified (" + rate(memoryVerified, memoryTasks) + ")\n"
-                        + I18n.get(this, "無 Memory 任務 ", "No-memory tasks ")
-                        + baselineVerified + "/" + baselineTasks
-                        + " terminal verified (" + rate(baselineVerified, baselineTasks) + ")\n"
+                        + I18n.get(this, "無 Memory baseline · ", "No-memory baseline · ")
+                        + baselineOverview + "\n"
                         + I18n.get(this, "糾正事件 ", "Correction events ")
-                        + corrections,
+                        + corrections
+                        + " · TRACE_MISMATCH "
+                        + traceMismatches,
                 10,
                 CrewTheme.TEXT_MUTED,
                 false);
@@ -312,15 +332,40 @@ public class RefinedMemoryDashboardActivity extends Activity {
         }
 
         if (baselineTasks > 0) {
+            boolean enoughBaseline =
+                    RefinedMemoryDashboardPolicy
+                            .hasSufficientComparisonSample(
+                                    baselineTasks);
+            String baselineText;
+            if (enoughBaseline) {
+                baselineText =
+                        I18n.get(this,
+                                "同 scope、無 Refined Memory · ",
+                                "Same scope, without Refined Memory · ")
+                                + oneDecimal(usage.optDouble("avgStepsWithout", 0.0d))
+                                + " steps · "
+                                + duration(usage.optDouble("avgDurationMsWithout", 0.0d))
+                                + " · verified "
+                                + rate(baselineVerified, baselineTasks)
+                                + " · "
+                                + I18n.get(this,
+                                        "觀測相關，非因果",
+                                        "observational, not causal");
+            } else {
+                baselineText =
+                        I18n.get(this,
+                                "同 scope baseline 樣本不足 · ",
+                                "Same-scope baseline insufficient · ")
+                                + baselineTasks
+                                + "/"
+                                + RefinedMemoryDashboardPolicy.MIN_COMPARISON_SAMPLE
+                                + " · "
+                                + I18n.get(this,
+                                        "暫不比較效果",
+                                        "impact comparison withheld");
+            }
             card.addView(text(
-                    I18n.get(this,
-                            "同 scope、無 Refined Memory · ",
-                            "Same scope, without Refined Memory · ")
-                            + oneDecimal(usage.optDouble("avgStepsWithout", 0.0d))
-                            + " steps · "
-                            + duration(usage.optDouble("avgDurationMsWithout", 0.0d))
-                            + " · verified "
-                            + rate(baselineVerified, baselineTasks),
+                    baselineText,
                     9.5f,
                     CrewTheme.TEXT_MUTED,
                     false));
@@ -450,6 +495,10 @@ public class RefinedMemoryDashboardActivity extends Activity {
         if ("CORRECTED".equals(type)) {
             return prefix + " · affected="
                     + event.optInt("changed", 0);
+        }
+        if ("TRACE_MISMATCH".equals(type)) {
+            return prefix
+                    + " · excluded from baseline";
         }
 
         if ("LEARNED".equals(type)

@@ -109,6 +109,24 @@ public final class RefinedMemoryPolicyTest {
         check(!RefinedMemoryPolicy.isEligibleScope("MESSAGE:SEND"),
                 "message send is excluded from automatic procedure memory");
 
+        check(RefinedMemoryPolicy.patternsEquivalent(
+                        " search_query>tap_goal_entity > tap_play_control ",
+                        "SEARCH_QUERY > TAP_GOAL_ENTITY > TAP_PLAY_CONTROL"),
+                "pattern comparison is canonical rather than formatting-sensitive");
+        check("SEARCH_QUERY > TAP_GOAL_ENTITY > TAP_PLAY_CONTROL".equals(
+                        RefinedMemoryPolicy.canonicalPattern(
+                                " search_query > tap_goal_entity>tap_play_control ")),
+                "canonical pattern has stable persisted formatting");
+        check(!RefinedMemoryPolicy.isSelectable(
+                        false,
+                        RefinedMemoryPolicy.STATE_TRUSTED),
+                "disabled trusted memory is excluded from injection");
+        check(RefinedMemoryPolicy.isSelectable(
+                        true,
+                        RefinedMemoryPolicy.STATE_VERIFIED),
+                "enabled verified memory remains injectable");
+
+
         System.out.println(
                 "RefinedMemoryPolicyTest passed "
                         + checks + " checks");

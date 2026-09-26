@@ -4200,7 +4200,7 @@ final class NativeGeminiLiveClient {
                                         task.refinedMemoryTerminalVerified,
                                         task.refinedMemoryMediaPlaybackActive);
         boolean shouldLearnRecipe =
-                "任務完成".equals(reason)
+                AgentTaskEndReason.COMPLETED.equals(reason)
                         && task != null
                         && task.blockedReason == null
                         && strongTerminalLearningEvidence
@@ -4217,10 +4217,22 @@ final class NativeGeminiLiveClient {
         long memoryTaskFinishedAt = System.currentTimeMillis();
         RefinedMemoryUseTrace.Snapshot memoryTaskTrace =
                 refinedMemoryUseTrace.snapshot();
+        boolean memoryTraceMatched =
+                task.taskId.equals(memoryTaskTrace.taskId);
+        boolean memoryTraceMismatch =
+                !memoryTraceMatched
+                        && !memoryTaskTrace.taskId.isEmpty()
+                        && !memoryTaskTrace.usedMemoryIds.isEmpty();
         java.util.List<String> memoryIdsUsedByTask =
-                task.taskId.equals(memoryTaskTrace.taskId)
+                memoryTraceMatched
                         ? memoryTaskTrace.usedMemoryIds
                         : java.util.Collections.<String>emptyList();
+        if (memoryTraceMismatch) {
+            refinedMemoryStore.recordTraceMismatch(
+                    task.taskId,
+                    memoryTaskTrace.taskId,
+                    learningGoalIntent);
+        }
         String actualMemoryPattern =
                 RefinedMemoryPolicy.patternFor(
                         learningGoalIntent,
@@ -4237,10 +4249,11 @@ final class NativeGeminiLiveClient {
                         memoryTaskFinishedAt
                                 - task.effectiveStartedAt(
                                         memoryTaskFinishedAt)),
-                "任務完成".equals(reason),
-                strongTerminalLearningEvidence);
+                AgentTaskEndReason.COMPLETED.equals(reason),
+                strongTerminalLearningEvidence,
+                !memoryTraceMismatch);
 
-        if ("任務完成".equals(reason)
+        if (AgentTaskEndReason.COMPLETED.equals(reason)
                 && task != null
                 && task.blockedReason == null) {
             JSONObject progress = workingContext.toProgressJson();

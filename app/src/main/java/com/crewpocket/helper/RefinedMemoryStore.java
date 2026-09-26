@@ -22,9 +22,11 @@ final class RefinedMemoryStore {
     private static final String PREFS = "crew_refined_memory";
     private static final String KEY_DATA = "memories_v1";
     private static final String KEY_EVENTS = "events_v1";
+    private static final String KEY_CORRECTED_TASKS = "corrected_tasks_v1";
     private static final int EVIDENCE_SCHEMA_VERSION = 2;
     private static final int MAX_ITEMS = 48;
     private static final int MAX_EVENTS = 96;
+    private static final int MAX_CORRECTED_TASKS = 256;
     private static final long STALE_AFTER_MS =
             120L * 24L * 60L * 60L * 1000L;
     private static final Object LOCK = new Object();
@@ -84,7 +86,8 @@ final class RefinedMemoryStore {
             out.scope = safe(source.optString("scope", ""));
             out.packageName = safe(source.optString("packageName", ""));
             out.startPackage = safe(source.optString("startPackage", ""));
-            out.pattern = safe(source.optString("pattern", ""));
+            out.pattern = RefinedMemoryPolicy.canonicalPattern(
+                    source.optString("pattern", ""));
             out.guidance = clip(source.optString("guidance", ""), 220);
             out.state = safe(source.optString(
                     "state", RefinedMemoryPolicy.STATE_CANDIDATE));
@@ -246,6 +249,7 @@ final class RefinedMemoryStore {
             }
             if (changed > 0) {
                 trimAndSaveLocked(items);
+                markCorrectedTaskLocked(taskId);
                 JSONObject event = baseEvent(
                         "CORRECTED",
                         taskId,
@@ -282,7 +286,8 @@ final class RefinedMemoryStore {
         String cleanScope = safe(scope);
         String cleanPackage = safe(packageName);
         String cleanStartPackage = safe(startPackage);
-        String cleanPattern = clip(pattern, 180);
+        String cleanPattern = clip(
+                RefinedMemoryPolicy.canonicalPattern(pattern), 180);
         String cleanGuidance = clip(guidance, 220);
         if (prefs == null
                 || !RefinedMemoryPolicy.isEligibleScope(cleanScope)
@@ -416,18 +421,24 @@ final class RefinedMemoryStore {
             int stepCount,
             long durationMs,
             boolean completed,
-            boolean terminalVerified) {
+            boolean terminalVerified,
+            boolean memoryUsageKnown) {
         if (prefs == null || safe(taskId).isEmpty()) return;
         synchronized (LOCK) {
             JSONObject event = baseEvent("TASK_RESULT", taskId, scope);
             JSONArray used = toArray(usedMemoryIds);
             JSONArray applied = new JSONArray();
-            String cleanPattern = clip(actualPattern, 180);
+            String cleanPattern = clip(
+                    RefinedMemoryPolicy.canonicalPattern(actualPattern), 180);
             if (!cleanPattern.isEmpty() && usedMemoryIds != null) {
                 List<Entry> items = loadLocked();
                 for (String id : usedMemoryIds) {
                     Entry item = findById(items, id);
-                    if (item != null && cleanPattern.equals(item.pattern)) {
+                    if (item != null
+                            && RefinedMemoryDashboardPolicy
+                                    .isAppliedPattern(
+                                            item.pattern,
+                                            cleanPattern)) {
                         applied.put(item.id);
                     }
                 }
@@ -438,6 +449,24 @@ final class RefinedMemoryStore {
             put(event, "durationMs", Math.max(0L, durationMs));
             put(event, "completed", completed);
             put(event, "terminalVerified", terminalVerified);
+            put(event, "memoryUsageKnown", memoryUsageKnown);
+            appendEventLocked(event);
+        }
+    }
+
+    void recordTraceMismatch(
+            String taskId,
+            String traceTaskId,
+            String scope) {
+        if (prefs == null) return;
+        synchronized (LOCK) {
+            JSONObject event = baseEvent(
+                    "TRACE_MISMATCH",
+                    taskId,
+                    scope);
+            if (!safe(traceTaskId).isEmpty()) {
+                put(event, "traceTaskId", safe(traceTaskId));
+            }
             appendEventLocked(event);
         }
     }
@@ -464,58 +493,42 @@ final class RefinedMemoryStore {
             JSONArray events = loadEventsLocked();
             String id = safe(memoryId);
             String cleanScope = safe(scope);
-
-            int usedTasks = 0;
-            int verifiedTasks = 0;
-            int appliedTasks = 0;
+            RefinedMemoryDashboardPolicy.UsageAccumulator stats =
+                    new RefinedMemoryDashboardPolicy.UsageAccumulator();
             int corrected = 0;
-            long usedSteps = 0L;
-            long usedDuration = 0L;
-            int baselineTasks = 0;
-            int baselineVerified = 0;
-            long baselineSteps = 0L;
-            long baselineDuration = 0L;
             long lastUsedAt = 0L;
 
             for (int i = 0; i < events.length(); i++) {
                 JSONObject event = events.optJSONObject(i);
                 if (event == null) continue;
                 String type = event.optString("type", "");
-                if ("TASK_RESULT".equals(type)
-                        && cleanScope.equals(event.optString("scope", ""))) {
+                if ("TASK_RESULT".equals(type)) {
                     JSONArray ids = event.optJSONArray("memoryIds");
-                    boolean hasAnyMemory = ids != null && ids.length() > 0;
                     boolean contains = containsId(ids, id);
+                    boolean hasAnyMemory =
+                            ids != null && ids.length() > 0;
+                    boolean correctedTask =
+                            isTaskCorrectedLocked(
+                                    event.optString("taskId", ""));
+                    stats.observe(
+                            cleanScope.equals(
+                                    event.optString("scope", "")),
+                            event.optBoolean(
+                                    "memoryUsageKnown", true),
+                            contains,
+                            hasAnyMemory,
+                            event.optBoolean(
+                                    "terminalVerified", false),
+                            correctedTask,
+                            containsId(
+                                    event.optJSONArray("appliedIds"),
+                                    id),
+                            event.optInt("stepCount", 0),
+                            event.optLong("durationMs", 0L));
                     if (contains) {
-                        usedTasks++;
-                        usedSteps += Math.max(0, event.optInt("stepCount", 0));
-                        usedDuration += Math.max(0L, event.optLong("durationMs", 0L));
-                        boolean correctedTask =
-                                wasTaskCorrected(
-                                        events,
-                                        event.optString("taskId", ""));
-                        if (event.optBoolean("terminalVerified", false)
-                                && !correctedTask) {
-                            verifiedTasks++;
-                        }
-                        if (containsId(event.optJSONArray("appliedIds"), id)) {
-                            appliedTasks++;
-                        }
                         lastUsedAt = Math.max(
                                 lastUsedAt,
                                 event.optLong("at", 0L));
-                    } else if (!hasAnyMemory) {
-                        baselineTasks++;
-                        baselineSteps += Math.max(0, event.optInt("stepCount", 0));
-                        baselineDuration += Math.max(0L, event.optLong("durationMs", 0L));
-                        boolean correctedTask =
-                                wasTaskCorrected(
-                                        events,
-                                        event.optString("taskId", ""));
-                        if (event.optBoolean("terminalVerified", false)
-                                && !correctedTask) {
-                            baselineVerified++;
-                        }
                     }
                 } else if ("CORRECTED".equals(type)
                         && (containsId(event.optJSONArray("usedIds"), id)
@@ -524,21 +537,31 @@ final class RefinedMemoryStore {
                 }
             }
 
-            put(out, "usedTasks", usedTasks);
-            put(out, "verifiedTasks", verifiedTasks);
-            put(out, "appliedTasks", appliedTasks);
+            put(out, "usedTasks", stats.usedTasks);
+            put(out, "verifiedTasks", stats.verifiedTasks);
+            put(out, "appliedTasks", stats.appliedTasks);
             put(out, "corrections", corrected);
             put(out, "lastUsedAt", lastUsedAt);
             put(out, "avgStepsWith",
-                    usedTasks == 0 ? 0.0d : usedSteps / (double) usedTasks);
+                    stats.usedTasks == 0
+                            ? 0.0d
+                            : stats.usedSteps / (double) stats.usedTasks);
             put(out, "avgDurationMsWith",
-                    usedTasks == 0 ? 0.0d : usedDuration / (double) usedTasks);
-            put(out, "baselineTasks", baselineTasks);
-            put(out, "baselineVerified", baselineVerified);
+                    stats.usedTasks == 0
+                            ? 0.0d
+                            : stats.usedDuration / (double) stats.usedTasks);
+            put(out, "baselineTasks", stats.baselineTasks);
+            put(out, "baselineVerified", stats.baselineVerified);
             put(out, "avgStepsWithout",
-                    baselineTasks == 0 ? 0.0d : baselineSteps / (double) baselineTasks);
+                    stats.baselineTasks == 0
+                            ? 0.0d
+                            : stats.baselineSteps
+                                    / (double) stats.baselineTasks);
             put(out, "avgDurationMsWithout",
-                    baselineTasks == 0 ? 0.0d : baselineDuration / (double) baselineTasks);
+                    stats.baselineTasks == 0
+                            ? 0.0d
+                            : stats.baselineDuration
+                                    / (double) stats.baselineTasks);
         }
         return out;
     }
@@ -548,11 +571,10 @@ final class RefinedMemoryStore {
         if (prefs == null) return out;
         synchronized (LOCK) {
             JSONArray events = loadEventsLocked();
-            int memoryTasks = 0;
-            int memoryVerified = 0;
-            int noMemoryTasks = 0;
-            int noMemoryVerified = 0;
+            RefinedMemoryDashboardPolicy.OverallAccumulator stats =
+                    new RefinedMemoryDashboardPolicy.OverallAccumulator();
             int corrections = 0;
+            int traceMismatches = 0;
 
             for (int i = 0; i < events.length(); i++) {
                 JSONObject event = events.optJSONObject(i);
@@ -562,33 +584,27 @@ final class RefinedMemoryStore {
                     corrections++;
                     continue;
                 }
-                if (!"TASK_RESULT".equals(type)) continue;
-                JSONArray ids = event.optJSONArray("memoryIds");
-                boolean usedMemory = ids != null && ids.length() > 0;
-                boolean correctedTask =
-                        wasTaskCorrected(
-                                events,
-                                event.optString("taskId", ""));
-                if (usedMemory) {
-                    memoryTasks++;
-                    if (event.optBoolean("terminalVerified", false)
-                            && !correctedTask) {
-                        memoryVerified++;
-                    }
-                } else {
-                    noMemoryTasks++;
-                    if (event.optBoolean("terminalVerified", false)
-                            && !correctedTask) {
-                        noMemoryVerified++;
-                    }
+                if ("TRACE_MISMATCH".equals(type)) {
+                    traceMismatches++;
+                    continue;
                 }
+                if (!"TASK_RESULT".equals(type)) continue;
+
+                JSONArray ids = event.optJSONArray("memoryIds");
+                stats.observe(
+                        event.optBoolean("memoryUsageKnown", true),
+                        ids != null && ids.length() > 0,
+                        event.optBoolean("terminalVerified", false),
+                        isTaskCorrectedLocked(
+                                event.optString("taskId", "")));
             }
 
-            put(out, "memoryTasks", memoryTasks);
-            put(out, "memoryVerified", memoryVerified);
-            put(out, "noMemoryTasks", noMemoryTasks);
-            put(out, "noMemoryVerified", noMemoryVerified);
+            put(out, "memoryTasks", stats.memoryTasks);
+            put(out, "memoryVerified", stats.memoryVerified);
+            put(out, "noMemoryTasks", stats.noMemoryTasks);
+            put(out, "noMemoryVerified", stats.noMemoryVerified);
             put(out, "corrections", corrections);
+            put(out, "traceMismatches", traceMismatches);
         }
         return out;
     }
@@ -639,6 +655,7 @@ final class RefinedMemoryStore {
             prefs.edit()
                     .remove(KEY_DATA)
                     .remove(KEY_EVENTS)
+                    .remove(KEY_CORRECTED_TASKS)
                     .apply();
             return count;
         }
@@ -722,7 +739,7 @@ final class RefinedMemoryStore {
                         .append("\n");
                 boolean correctedTask =
                         correctedCount > 0
-                                || wasTaskCorrected(events, id);
+                                || isTaskCorrectedLocked(id);
                 out.append("Terminal verified: ")
                         .append(taskResult.optBoolean("terminalVerified", false)
                                         && !correctedTask
@@ -777,8 +794,9 @@ final class RefinedMemoryStore {
             long now = System.currentTimeMillis();
             List<ScoredEntry> scored = new ArrayList<ScoredEntry>();
             for (Entry item : loadLocked()) {
-                if (!item.enabled) continue;
                 String state = effectiveState(item, now);
+                if (!RefinedMemoryPolicy.isSelectable(
+                        item.enabled, state)) continue;
                 boolean exactScope =
                         safe(scope).equals(item.scope);
                 int packageAffinity =
@@ -886,9 +904,9 @@ final class RefinedMemoryStore {
             int count = 0;
             long now = System.currentTimeMillis();
             for (Entry item : loadLocked()) {
-                if (item.enabled
-                        && RefinedMemoryPolicy.isInjectable(
-                                effectiveState(item, now))) {
+                if (RefinedMemoryPolicy.isSelectable(
+                        item.enabled,
+                        effectiveState(item, now))) {
                     count++;
                 }
             }
@@ -1049,22 +1067,55 @@ final class RefinedMemoryStore {
         }
     }
 
-    private static boolean wasTaskCorrected(
-            JSONArray events,
-            String taskId) {
+    private void markCorrectedTaskLocked(String taskId) {
         String id = safe(taskId);
-        if (events == null || id.isEmpty()) return false;
-        for (int i = 0; i < events.length(); i++) {
-            JSONObject event = events.optJSONObject(i);
-            if (event != null
-                    && "CORRECTED".equals(
-                            event.optString("type", ""))
-                    && id.equals(
-                            event.optString("taskId", ""))) {
+        if (prefs == null || id.isEmpty()) return;
+
+        JSONArray current = loadCorrectedTasksLocked();
+        JSONArray next = new JSONArray();
+        JSONObject latest = new JSONObject();
+        put(latest, "taskId", id);
+        put(latest, "at", System.currentTimeMillis());
+        next.put(latest);
+
+        for (int i = 0;
+                i < current.length()
+                        && next.length() < MAX_CORRECTED_TASKS;
+                i++) {
+            JSONObject item = current.optJSONObject(i);
+            if (item == null) continue;
+            String existing = safe(item.optString("taskId", ""));
+            if (existing.isEmpty() || id.equals(existing)) continue;
+            next.put(item);
+        }
+
+        prefs.edit()
+                .putString(KEY_CORRECTED_TASKS, next.toString())
+                .apply();
+    }
+
+    private boolean isTaskCorrectedLocked(String taskId) {
+        String id = safe(taskId);
+        if (prefs == null || id.isEmpty()) return false;
+        JSONArray items = loadCorrectedTasksLocked();
+        for (int i = 0; i < items.length(); i++) {
+            JSONObject item = items.optJSONObject(i);
+            if (item != null
+                    && id.equals(safe(item.optString("taskId", "")))) {
                 return true;
             }
         }
         return false;
+    }
+
+    private JSONArray loadCorrectedTasksLocked() {
+        if (prefs == null) return new JSONArray();
+        try {
+            return new JSONArray(
+                    prefs.getString(KEY_CORRECTED_TASKS, "[]"));
+        } catch (Exception ignored) {
+            return new JSONArray();
+        }
     }
 
     private static Entry findById(
