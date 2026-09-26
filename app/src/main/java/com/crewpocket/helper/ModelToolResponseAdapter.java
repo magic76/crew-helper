@@ -121,42 +121,63 @@ final class ModelToolResponseAdapter {
         JSONObject screen = out.optJSONObject("screen");
         JSONObject context = out.optJSONObject("context");
 
-        trimArray(context, "refinedMemory", 2);
-        trimArray(screen, "items", 10);
-        trimArray(screen, "choices", 12);
+        // Current screen evidence is authoritative; learned memory is only a
+        // prior. If the payload is crowded, evict memory before removing any
+        // actionable current-screen item.
+        if (context != null) {
+            context.remove("refinedMemory");
+        }
+        if (ContextPayloadBudget.utf8Bytes(out.toString()) <= budget) {
+            return out;
+        }
+
         trimTailArray(context, "recentSteps", 2);
         clipInPlace(out, "message", 170);
         clipInPlace(context, "goal", 260);
         clipInPlace(context, "rootGoal", 260);
-
         if (ContextPayloadBudget.utf8Bytes(out.toString()) <= budget) {
             return out;
         }
 
         if (context != null) {
-            trimArray(context, "refinedMemory", 1);
             trimTailArray(context, "recentSteps", 1);
         }
-        trimArray(screen, "items", 8);
-        trimArray(screen, "choices", 8);
-
+        clipInPlace(out, "message", 145);
         if (ContextPayloadBudget.utf8Bytes(out.toString()) <= budget) {
             return out;
         }
 
-        // Last-resort compaction still preserves a mixed current-screen view.
-        // Losing every screen item made the model more rule-bound but less aware
-        // of what the user was actually looking at.
-        trimArray(screen, "items", 6);
-        trimArray(screen, "choices", 4);
         if (context != null) {
-            context.remove("refinedMemory");
             context.remove("recentSteps");
             String goal = context.optString("goal", "");
             String rootGoal = context.optString("rootGoal", "");
             if (!goal.isEmpty() && goal.equals(rootGoal)) {
                 context.remove("rootGoal");
             }
+            clipInPlace(context, "goal", 220);
+            clipInPlace(context, "rootGoal", 220);
+        }
+        if (ContextPayloadBudget.utf8Bytes(out.toString()) <= budget) {
+            return out;
+        }
+
+        // Only after memory/history/message compaction do we reduce visible
+        // screen items. Keep the mixed current-screen view as long as possible.
+        trimArray(screen, "items", 10);
+        trimArray(screen, "choices", 12);
+        if (ContextPayloadBudget.utf8Bytes(out.toString()) <= budget) {
+            return out;
+        }
+
+        trimArray(screen, "items", 8);
+        trimArray(screen, "choices", 8);
+        if (ContextPayloadBudget.utf8Bytes(out.toString()) <= budget) {
+            return out;
+        }
+
+        trimArray(screen, "items", 6);
+        trimArray(screen, "choices", 4);
+        if (context != null) {
             clipInPlace(context, "goal", 180);
             clipInPlace(context, "rootGoal", 180);
             clipInPlace(context, "currentApp", 64);
