@@ -68,12 +68,39 @@ final class RefinedMemoryPolicy {
             if (out.length() > 0) out.append(" > ");
             out.append(token);
         }
+        return canonicalPattern(out.toString());
+    }
+
+    static String canonicalPattern(String pattern) {
+        String raw = clean(pattern);
+        if (raw.isEmpty()) return "";
+        String[] parts = raw.split(">");
+        StringBuilder out = new StringBuilder();
+        for (String part : parts) {
+            String token = clean(part)
+                    .toUpperCase(Locale.ROOT)
+                    .replaceAll("[^A-Z0-9_:-]", "");
+            if (token.isEmpty()) continue;
+            if (out.length() > 0) out.append(" > ");
+            out.append(token);
+            if (out.toString().split(" > ").length >= MAX_PATTERN_STEPS) break;
+        }
         return out.toString();
+    }
+
+    static boolean patternsEquivalent(String left, String right) {
+        String a = canonicalPattern(left);
+        String b = canonicalPattern(right);
+        return !a.isEmpty() && a.equals(b);
+    }
+
+    static boolean isSelectable(boolean enabled, String state) {
+        return enabled && isInjectable(state);
     }
 
     static String guidanceFor(String scope, String pattern) {
         String s = clean(scope);
-        String p = clean(pattern);
+        String p = canonicalPattern(pattern);
         if (!isEligibleScope(s) || p.isEmpty()) return "";
         return s + " usual verified procedure: " + p
                 + ". Use only when current screen evidence agrees.";
