@@ -12,6 +12,7 @@ final class ContextPayloadBudget {
     static final int DEFAULT_TOOL_BYTES = 2000;
     static final int INTERNAL_DIRECTIVE_BYTES = 1100;
     static final int APP_PLAYBOOK_BYTES = 1800;
+    static final int REFINED_MEMORY_BYTES = 480;
 
     private ContextPayloadBudget() {}
 
