@@ -21,6 +21,7 @@ import java.util.UUID;
 final class RefinedMemoryStore {
     private static final String PREFS = "crew_refined_memory";
     private static final String KEY_DATA = "memories_v1";
+    private static final int EVIDENCE_SCHEMA_VERSION = 2;
     private static final int MAX_ITEMS = 48;
     private static final long STALE_AFTER_MS =
             120L * 24L * 60L * 60L * 1000L;
@@ -50,6 +51,7 @@ final class RefinedMemoryStore {
         JSONObject toJson() {
             JSONObject out = new JSONObject();
             put(out, "id", id);
+            put(out, "evidenceSchemaVersion", EVIDENCE_SCHEMA_VERSION);
             put(out, "type", type);
             put(out, "scope", scope);
             put(out, "packageName", packageName);
@@ -85,21 +87,42 @@ final class RefinedMemoryStore {
             out.state = safe(source.optString(
                     "state", RefinedMemoryPolicy.STATE_CANDIDATE));
             out.enabled = source.optBoolean("enabled", true);
-            out.successCount = Math.max(
+            int evidenceSchemaVersion =
+                    source.optInt("evidenceSchemaVersion", 1);
+            int storedSuccessCount = Math.max(
                     0, source.optInt("successCount", 0));
+            out.successCount = evidenceSchemaVersion
+                    >= EVIDENCE_SCHEMA_VERSION
+                            ? storedSuccessCount
+                            : 0;
             out.supportCount = Math.max(
-                    0, source.optInt("supportCount", 0));
+                    0, source.optInt("supportCount", 0))
+                    + (evidenceSchemaVersion
+                            >= EVIDENCE_SCHEMA_VERSION
+                                    ? 0
+                                    : storedSuccessCount);
             out.failureCount = Math.max(
                     0, source.optInt("failureCount", 0));
             out.confidence = source.optDouble("confidence", 0.0d);
             out.lastEvidenceSource =
                     safe(source.optString("lastEvidenceSource", ""));
+            if (source.optInt("evidenceSchemaVersion", 1)
+                    < EVIDENCE_SCHEMA_VERSION) {
+                out.lastEvidenceSource =
+                        "LEGACY_PRE_TERMINAL_GATE";
+                out.state =
+                        RefinedMemoryPolicy.STATE_CANDIDATE;
+            }
             out.lastTaskId =
                     safe(source.optString("lastTaskId", ""));
             out.createdAt = source.optLong("createdAt", 0L);
             out.updatedAt = source.optLong("updatedAt", 0L);
             out.lastVerifiedAt =
-                    source.optLong("lastVerifiedAt", 0L);
+                    source.optInt("evidenceSchemaVersion", 1)
+                            >= EVIDENCE_SCHEMA_VERSION
+                                    ? source.optLong(
+                                            "lastVerifiedAt", 0L)
+                                    : 0L;
             out.lastFailureAt =
                     source.optLong("lastFailureAt", 0L);
             return out;
