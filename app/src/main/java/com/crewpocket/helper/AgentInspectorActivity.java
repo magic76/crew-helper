@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -109,6 +110,21 @@ public class AgentInspectorActivity extends Activity {
                 ViewGroup.LayoutParams.WRAP_CONTENT));
         root.addView(scroll, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        Button memoryDashboard = smallButton(I18n.get(
+                this,
+                "開啟 Memory Dashboard",
+                "Open Memory Dashboard"));
+        LinearLayout.LayoutParams memoryDashboardLp =
+                new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        dp(44));
+        memoryDashboardLp.setMargins(dp(3), dp(12), dp(3), 0);
+        memoryDashboard.setOnClickListener(v -> startActivity(
+                new Intent(
+                        AgentInspectorActivity.this,
+                        CrewLearnedActivity.class)));
+        root.addView(memoryDashboard, memoryDashboardLp);
 
         Button testModel = smallButton(I18n.get(
                 this,
