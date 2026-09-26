@@ -94,6 +94,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/ConversationLoopWakePolicy.java" \
   "$SRC/ContextPayloadBudget.java" \
   "$SRC/ScreenItemPriorityPolicy.java" \
+  "$SRC/SecretMigrationPolicy.java" \
   "$ROOT/tests/SendAuthorizationTest.java" \
   "$ROOT/tests/LiveTurnCoordinatorTest.java" \
   "$ROOT/tests/LiveTurnOrderingPolicyTest.java" \
@@ -167,6 +168,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/DelegatedSendLeaseTest.java" \
   "$ROOT/tests/ContextPayloadBudgetTest.java" \
   "$ROOT/tests/ScreenItemPriorityPolicyTest.java" \
+  "$ROOT/tests/SecretMigrationPolicyTest.java" \
   "$ROOT/tests/AgentReplayRunner.java"
 
 java -cp "$OUT" com.crewpocket.helper.SendAuthorizationTest
@@ -247,3 +249,5 @@ java -cp "$OUT" com.crewpocket.helper.AgentReplayRunner "$ROOT/tests/replay"
 if command -v python3 >/dev/null 2>&1; then
   python3 -m py_compile "$ROOT/scripts/analyze_context_audit.py"
 fi
+
+java -cp "$OUT" com.crewpocket.helper.SecretMigrationPolicyTest
