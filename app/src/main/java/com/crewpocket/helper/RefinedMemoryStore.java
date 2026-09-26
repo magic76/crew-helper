@@ -435,9 +435,10 @@ final class RefinedMemoryStore {
                 for (String id : usedMemoryIds) {
                     Entry item = findById(items, id);
                     if (item != null
-                            && RefinedMemoryPolicy.patternsEquivalent(
-                                    cleanPattern,
-                                    item.pattern)) {
+                            && RefinedMemoryDashboardPolicy
+                                    .isAppliedPattern(
+                                            item.pattern,
+                                            cleanPattern)) {
                         applied.put(item.id);
                     }
                 }
@@ -492,63 +493,42 @@ final class RefinedMemoryStore {
             JSONArray events = loadEventsLocked();
             String id = safe(memoryId);
             String cleanScope = safe(scope);
-
-            int usedTasks = 0;
-            int verifiedTasks = 0;
-            int appliedTasks = 0;
+            RefinedMemoryDashboardPolicy.UsageAccumulator stats =
+                    new RefinedMemoryDashboardPolicy.UsageAccumulator();
             int corrected = 0;
-            long usedSteps = 0L;
-            long usedDuration = 0L;
-            int baselineTasks = 0;
-            int baselineVerified = 0;
-            long baselineSteps = 0L;
-            long baselineDuration = 0L;
             long lastUsedAt = 0L;
 
             for (int i = 0; i < events.length(); i++) {
                 JSONObject event = events.optJSONObject(i);
                 if (event == null) continue;
                 String type = event.optString("type", "");
-                if ("TASK_RESULT".equals(type)
-                        && cleanScope.equals(event.optString("scope", ""))) {
+                if ("TASK_RESULT".equals(type)) {
                     JSONArray ids = event.optJSONArray("memoryIds");
-                    boolean memoryUsageKnown =
-                            event.optBoolean("memoryUsageKnown", true);
-                    boolean hasAnyMemory = ids != null && ids.length() > 0;
                     boolean contains = containsId(ids, id);
+                    boolean hasAnyMemory =
+                            ids != null && ids.length() > 0;
+                    boolean correctedTask =
+                            isTaskCorrectedLocked(
+                                    event.optString("taskId", ""));
+                    stats.observe(
+                            cleanScope.equals(
+                                    event.optString("scope", "")),
+                            event.optBoolean(
+                                    "memoryUsageKnown", true),
+                            contains,
+                            hasAnyMemory,
+                            event.optBoolean(
+                                    "terminalVerified", false),
+                            correctedTask,
+                            containsId(
+                                    event.optJSONArray("appliedIds"),
+                                    id),
+                            event.optInt("stepCount", 0),
+                            event.optLong("durationMs", 0L));
                     if (contains) {
-                        usedTasks++;
-                        usedSteps += Math.max(0, event.optInt("stepCount", 0));
-                        usedDuration += Math.max(0L, event.optLong("durationMs", 0L));
-                        boolean correctedTask =
-                                isTaskCorrectedLocked(
-                                        event.optString("taskId", ""));
-                        if (RefinedMemoryDashboardPolicy.isVerifiedWin(
-                                event.optBoolean("terminalVerified", false),
-                                correctedTask)) {
-                            verifiedTasks++;
-                        }
-                        if (containsId(event.optJSONArray("appliedIds"), id)) {
-                            appliedTasks++;
-                        }
                         lastUsedAt = Math.max(
                                 lastUsedAt,
                                 event.optLong("at", 0L));
-                    } else if (RefinedMemoryDashboardPolicy
-                            .shouldCountAsBaseline(
-                                    memoryUsageKnown,
-                                    hasAnyMemory ? 1 : 0)) {
-                        baselineTasks++;
-                        baselineSteps += Math.max(0, event.optInt("stepCount", 0));
-                        baselineDuration += Math.max(0L, event.optLong("durationMs", 0L));
-                        boolean correctedTask =
-                                isTaskCorrectedLocked(
-                                        event.optString("taskId", ""));
-                        if (RefinedMemoryDashboardPolicy.isVerifiedWin(
-                                event.optBoolean("terminalVerified", false),
-                                correctedTask)) {
-                            baselineVerified++;
-                        }
                     }
                 } else if ("CORRECTED".equals(type)
                         && (containsId(event.optJSONArray("usedIds"), id)
@@ -557,21 +537,31 @@ final class RefinedMemoryStore {
                 }
             }
 
-            put(out, "usedTasks", usedTasks);
-            put(out, "verifiedTasks", verifiedTasks);
-            put(out, "appliedTasks", appliedTasks);
+            put(out, "usedTasks", stats.usedTasks);
+            put(out, "verifiedTasks", stats.verifiedTasks);
+            put(out, "appliedTasks", stats.appliedTasks);
             put(out, "corrections", corrected);
             put(out, "lastUsedAt", lastUsedAt);
             put(out, "avgStepsWith",
-                    usedTasks == 0 ? 0.0d : usedSteps / (double) usedTasks);
+                    stats.usedTasks == 0
+                            ? 0.0d
+                            : stats.usedSteps / (double) stats.usedTasks);
             put(out, "avgDurationMsWith",
-                    usedTasks == 0 ? 0.0d : usedDuration / (double) usedTasks);
-            put(out, "baselineTasks", baselineTasks);
-            put(out, "baselineVerified", baselineVerified);
+                    stats.usedTasks == 0
+                            ? 0.0d
+                            : stats.usedDuration / (double) stats.usedTasks);
+            put(out, "baselineTasks", stats.baselineTasks);
+            put(out, "baselineVerified", stats.baselineVerified);
             put(out, "avgStepsWithout",
-                    baselineTasks == 0 ? 0.0d : baselineSteps / (double) baselineTasks);
+                    stats.baselineTasks == 0
+                            ? 0.0d
+                            : stats.baselineSteps
+                                    / (double) stats.baselineTasks);
             put(out, "avgDurationMsWithout",
-                    baselineTasks == 0 ? 0.0d : baselineDuration / (double) baselineTasks);
+                    stats.baselineTasks == 0
+                            ? 0.0d
+                            : stats.baselineDuration
+                                    / (double) stats.baselineTasks);
         }
         return out;
     }
@@ -581,11 +571,10 @@ final class RefinedMemoryStore {
         if (prefs == null) return out;
         synchronized (LOCK) {
             JSONArray events = loadEventsLocked();
-            int memoryTasks = 0;
-            int memoryVerified = 0;
-            int noMemoryTasks = 0;
-            int noMemoryVerified = 0;
+            RefinedMemoryDashboardPolicy.OverallAccumulator stats =
+                    new RefinedMemoryDashboardPolicy.OverallAccumulator();
             int corrections = 0;
+            int traceMismatches = 0;
 
             for (int i = 0; i < events.length(); i++) {
                 JSONObject event = events.optJSONObject(i);
@@ -595,37 +584,27 @@ final class RefinedMemoryStore {
                     corrections++;
                     continue;
                 }
-                if (!"TASK_RESULT".equals(type)) continue;
-                JSONArray ids = event.optJSONArray("memoryIds");
-                boolean memoryUsageKnown =
-                        event.optBoolean("memoryUsageKnown", true);
-                if (!memoryUsageKnown) continue;
-                boolean usedMemory = ids != null && ids.length() > 0;
-                boolean correctedTask =
-                        isTaskCorrectedLocked(
-                                event.optString("taskId", ""));
-                if (usedMemory) {
-                    memoryTasks++;
-                    if (RefinedMemoryDashboardPolicy.isVerifiedWin(
-                            event.optBoolean("terminalVerified", false),
-                            correctedTask)) {
-                        memoryVerified++;
-                    }
-                } else {
-                    noMemoryTasks++;
-                    if (RefinedMemoryDashboardPolicy.isVerifiedWin(
-                            event.optBoolean("terminalVerified", false),
-                            correctedTask)) {
-                        noMemoryVerified++;
-                    }
+                if ("TRACE_MISMATCH".equals(type)) {
+                    traceMismatches++;
+                    continue;
                 }
+                if (!"TASK_RESULT".equals(type)) continue;
+
+                JSONArray ids = event.optJSONArray("memoryIds");
+                stats.observe(
+                        event.optBoolean("memoryUsageKnown", true),
+                        ids != null && ids.length() > 0,
+                        event.optBoolean("terminalVerified", false),
+                        isTaskCorrectedLocked(
+                                event.optString("taskId", "")));
             }
 
-            put(out, "memoryTasks", memoryTasks);
-            put(out, "memoryVerified", memoryVerified);
-            put(out, "noMemoryTasks", noMemoryTasks);
-            put(out, "noMemoryVerified", noMemoryVerified);
+            put(out, "memoryTasks", stats.memoryTasks);
+            put(out, "memoryVerified", stats.memoryVerified);
+            put(out, "noMemoryTasks", stats.noMemoryTasks);
+            put(out, "noMemoryVerified", stats.noMemoryVerified);
             put(out, "corrections", corrections);
+            put(out, "traceMismatches", traceMismatches);
         }
         return out;
     }
@@ -925,9 +904,9 @@ final class RefinedMemoryStore {
             int count = 0;
             long now = System.currentTimeMillis();
             for (Entry item : loadLocked()) {
-                if (item.enabled
-                        && RefinedMemoryPolicy.isInjectable(
-                                effectiveState(item, now))) {
+                if (RefinedMemoryPolicy.isSelectable(
+                        item.enabled,
+                        effectiveState(item, now))) {
                     count++;
                 }
             }
