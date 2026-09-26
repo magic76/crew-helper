@@ -56,6 +56,8 @@ final class NativeGeminiLiveClient {
     private final TaskRecipeStore taskRecipeStore;
     private final RefinedMemoryStore refinedMemoryStore;
     private final RefinedMemoryRefinery refinedMemoryRefinery;
+    private final RefinedMemoryUseTrace refinedMemoryUseTrace =
+            new RefinedMemoryUseTrace();
     private final ConversationLoopRecipe conversationLoopRecipe =
             new ConversationLoopRecipe();
     private final DelegatedSendLease delegatedSendLease =
@@ -774,6 +776,36 @@ final class NativeGeminiLiveClient {
      * task continuity. The newest turn is authoritative; rootGoal survives only
      * inside the existing 45-second conversation-goal window.
      */
+    private void applyRefinedMemoryCorrection(
+            String userText,
+            double transcriptConfidence) {
+        if (!RefinedMemoryEvidencePolicy.looksLikeReliableCorrection(
+                userText,
+                transcriptConfidence)) {
+            return;
+        }
+
+        RefinedMemoryUseTrace.Snapshot trace =
+                refinedMemoryUseTrace.consumeRecentCorrection(
+                        System.currentTimeMillis());
+        if (trace.isEmpty()) return;
+
+        int changed = refinedMemoryStore.markSuspectByIds(
+                trace.memoryIds,
+                trace.taskId,
+                "USER_CORRECTION");
+        if (changed > 0) {
+            Log.i(
+                    TAG,
+                    "RefinedMemory correction quarantined="
+                            + changed
+                            + " sourceTask="
+                            + trace.taskId
+                            + " injections="
+                            + trace.injectionCount);
+        }
+    }
+
     private void beginNewUserIntent(String userText) {
         beginUserIntent(userText, true);
     }
@@ -916,6 +948,7 @@ final class NativeGeminiLiveClient {
             if (consumePendingUiChoiceInput(input)) return true;
             if (hasPendingUiChoice()) clearPendingUiChoiceSilently();
 
+            applyRefinedMemoryCorrection(input, -1.0d);
             beginNewUserIntent(input);
             liveHumanTurnBoundary.forceNewTurn(
                     input, System.currentTimeMillis());
@@ -1379,6 +1412,9 @@ final class NativeGeminiLiveClient {
                 effectiveUserInput = boundary.effectiveText;
                 if (boundary.decision
                         == LiveHumanTurnBoundary.Decision.NEW_INTENT) {
+                    applyRefinedMemoryCorrection(
+                            effectiveUserInput,
+                            frame.inputConfidence);
                     beginNewUserIntent(effectiveUserInput);
                     PerformanceMetrics.recordLiveHumanTurnNewIntent(
                             boundary.reason);
@@ -2869,7 +2905,11 @@ final class NativeGeminiLiveClient {
             }
             task.prematureModelReplies = 0;
             task.captureRecipeStep(name, args, result, recipeBeforeContext);
-            task.captureRefinedMemoryStep(name, args, result);
+            task.captureRefinedMemoryStep(
+                    name,
+                    args,
+                    result,
+                    recipeBeforeContext);
             task.addStep(name, result);
             sendToolResponse(id, requestedName, result);
             PerformanceMetrics.markAgentToolResultSent(
@@ -3021,7 +3061,11 @@ final class NativeGeminiLiveClient {
 
         boolean success = result.optBoolean("success", false);
         taskRecipeStore.recordRun(recipeId, success);
-        refinedMemoryRefinery.observeRecipeOutcome(recipe, success);
+        refinedMemoryRefinery.observeRecipeOutcome(
+                recipe,
+                result,
+                success,
+                task.taskId);
         try {
             if (success) {
                 result.put("taskState", "DONE")
@@ -4080,8 +4124,14 @@ final class NativeGeminiLiveClient {
                             progress.optString(
                                     "goalIntent",
                                     GoalIntentKey.derive(task.recipeGoal)),
+                            task.primaryExecutionPackage(),
                             task.recipeStartPackage,
-                            task.refinedMemoryStepsSnapshot());
+                            task.refinedMemoryStepsSnapshot(),
+                            task.lastTaskState,
+                            task.lastCompletionEvidence,
+                            task.refinedMemoryTerminalVerified,
+                            task.refinedMemoryMediaPlaybackActive,
+                            task.taskId);
             if (learned != null) {
                 Log.i(TAG, "RefinedMemory learned scope="
                         + learned.scope
@@ -6597,13 +6647,30 @@ final class NativeGeminiLiveClient {
             memoryPackage =
                     afterForMemory.optString("package", "").trim();
         }
-        JSONArray refinedMemory =
-                refinedMemoryStore.forModel(
-                        progressContext.optString("goalIntent", ""),
-                        memoryPackage,
-                        2);
-        if (refinedMemory.length() > 0) {
-            progressContext.put("refinedMemory", refinedMemory);
+
+        AgentTaskRecord refinedMemoryTask =
+                agentTaskCoordinator.activeRunning();
+        RefinedMemoryStore.Selection refinedSelection = null;
+        JSONArray refinedMemory = new JSONArray();
+        String goalIntent =
+                progressContext.optString("goalIntent", "");
+        if (refinedMemoryTask != null
+                && !goalIntent.isEmpty()) {
+            RefinedMemoryStore.Selection candidate =
+                    refinedMemoryStore.selectForModel(
+                            goalIntent,
+                            memoryPackage,
+                            2);
+            if (!candidate.isEmpty()
+                    && !refinedMemoryUseTrace.alreadyInjected(
+                            refinedMemoryTask.taskId,
+                            candidate.ids)) {
+                refinedSelection = candidate;
+                refinedMemory = candidate.modelLines;
+                progressContext.put(
+                        "refinedMemory",
+                        refinedMemory);
+            }
         }
 
         String searchPhase = userActionScope.modelSearchPhase();
@@ -6652,9 +6719,26 @@ final class NativeGeminiLiveClient {
                 ContextPayloadBudget.utf8Bytes(modelResult.toString());
         int progressBytes =
                 ContextPayloadBudget.utf8Bytes(progressContext.toString());
+        JSONObject projectedContext =
+                modelResult.optJSONObject("context");
+        JSONArray injectedRefinedMemory =
+                projectedContext == null
+                        ? null
+                        : projectedContext.optJSONArray(
+                                "refinedMemory");
         int refinedMemoryBytes =
                 ContextPayloadBudget.utf8Bytes(
-                        refinedMemory.toString());
+                        injectedRefinedMemory == null
+                                ? ""
+                                : injectedRefinedMemory.toString());
+        int refinedMemoryCount =
+                injectedRefinedMemory == null
+                        ? 0
+                        : injectedRefinedMemory.length();
+        int screenItemsBefore =
+                sourceScreenItemCount(result);
+        int screenItemsAfter =
+                projectedScreenItemCount(modelResult);
         int playbookBytes = ContextPayloadBudget.utf8Bytes(
                 appPlaybook == null ? "" : appPlaybook.toString());
         int outboundBytes =
@@ -6689,6 +6773,50 @@ final class NativeGeminiLiveClient {
                 || !liveConnection.send(payload)) {
             throw new Exception("工具結果無法傳回 Gemini");
         }
+
+        if (refinedSelection != null
+                && refinedMemoryTask != null
+                && refinedMemoryCount > 0) {
+            java.util.ArrayList<String> actualIds =
+                    new java.util.ArrayList<String>();
+            int count = Math.min(
+                    refinedMemoryCount,
+                    refinedSelection.ids.size());
+            for (int i = 0; i < count; i++) {
+                actualIds.add(refinedSelection.ids.get(i));
+            }
+            refinedMemoryUseTrace.record(
+                    refinedMemoryTask.taskId,
+                    refinedMemoryTask.intentGeneration,
+                    actualIds,
+                    System.currentTimeMillis());
+        }
+        RefinedMemoryUseTrace.Snapshot memoryTrace =
+                refinedMemoryUseTrace.snapshot();
+        contextPayloadAudit.logRefinedMemory(
+                userIntentGeneration,
+                refinedMemoryBytes,
+                refinedMemoryCount,
+                memoryTrace.injectionCount,
+                screenItemsBefore,
+                screenItemsAfter);
+    }
+
+    private static int sourceScreenItemCount(JSONObject result) {
+        if (result == null) return 0;
+        JSONObject source = result.optJSONObject("after");
+        if (source == null) source = result.optJSONObject("screen");
+        if (source == null) source = result;
+        JSONArray items = source.optJSONArray("items");
+        return items == null ? 0 : items.length();
+    }
+
+    private static int projectedScreenItemCount(JSONObject modelResult) {
+        if (modelResult == null) return 0;
+        JSONObject screen = modelResult.optJSONObject("screen");
+        if (screen == null) return 0;
+        JSONArray items = screen.optJSONArray("items");
+        return items == null ? 0 : items.length();
     }
 
 
