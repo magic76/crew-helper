@@ -69,11 +69,14 @@ final class CandidateArbitrationExecutionPolicy {
         if (!candidateExists) {
             return new Result(Verdict.CANDIDATE_NOT_FOUND);
         }
-        if (!candidateClickable) {
-            return new Result(Verdict.CANDIDATE_NOT_CLICKABLE);
-        }
+        // Safety classification wins over ordinary clickability. A blocked
+        // credential/payment/destructive target must never be reported as a
+        // generic stale UI problem that invites retry.
         if (sensitiveBlocked) {
             return new Result(Verdict.SENSITIVE_TARGET);
+        }
+        if (!candidateClickable) {
+            return new Result(Verdict.CANDIDATE_NOT_CLICKABLE);
         }
         if (!authorityAllowed) {
             return new Result(Verdict.AUTHORITY_BLOCKED);

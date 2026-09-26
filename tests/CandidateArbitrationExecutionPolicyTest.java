@@ -49,10 +49,10 @@ public final class CandidateArbitrationExecutionPolicyTest {
                         true,
                         true,
                         true,
-                        true,
+                        false,
                         true,
                         true).verdict,
-                "sensitive candidate must be blocked");
+                "sensitive candidate must be blocked even when not clickable");
 
         expect(
                 CandidateArbitrationExecutionPolicy.Verdict.AUTHORITY_BLOCKED,

@@ -515,25 +515,37 @@ final class PhoneRuntimeExecutor {
                         "elementId",
                         candidate.candidateId));
         if (!tapped.optBoolean("success", false)) {
+            String tapError = tapped.optString(
+                    "error",
+                    "CANDIDATE_ARBITRATION_EXECUTION_FAILED");
+            CandidateArbitrationExecutionPolicy.Verdict
+                    failureVerdict =
+                            arbitrationTapFailureVerdict(
+                                    tapError);
             locatorArbitrationObserver
                     .onTreatmentRevalidation(
                             decision.eventId,
-                            CandidateArbitrationExecutionPolicy
-                                    .Verdict
-                                    .CANDIDATE_NOT_FOUND,
+                            failureVerdict,
                             "",
                             false);
-            return baselineSemantic
+            JSONObject failed = baselineSemantic
                     .put("success", false)
                     .put("stepResult", "STEP_FAILED")
+                    .put("error", tapError)
+                    .put("fallbackTrace", fallbackTrace);
+            if (failureVerdict
+                    == CandidateArbitrationExecutionPolicy
+                            .Verdict.SENSITIVE_TARGET) {
+                return failed
+                        .put("blockedByRuntime", true)
+                        .put("taskState", "BLOCKED")
+                        .put(
+                                "instruction",
+                                "候選在執行瞬間被 Runtime safety 擋下；不重試、不改用座標。");
+            }
+            return failed
                     .put("taskState", "IN_PROGRESS")
                     .put("nextRequirement", "INSPECT_UI")
-                    .put(
-                            "error",
-                            tapped.optString(
-                                    "error",
-                                    "CANDIDATE_ARBITRATION_EXECUTION_FAILED"))
-                    .put("fallbackTrace", fallbackTrace)
                     .put(
                             "instruction",
                             "Arbitrator 候選在執行瞬間已失效；不要用座標補點，重新取得 fresh screen。");
@@ -556,6 +568,21 @@ final class PhoneRuntimeExecutor {
                 .put(
                         "fallbackTrace",
                         fallbackTrace);
+    }
+
+    private CandidateArbitrationExecutionPolicy.Verdict
+            arbitrationTapFailureVerdict(String error) {
+        String code = error == null ? "" : error.trim();
+        if ("SENSITIVE_TARGET_BLOCKED".equals(code)) {
+            return CandidateArbitrationExecutionPolicy
+                    .Verdict.SENSITIVE_TARGET;
+        }
+        if ("ELEMENT_NOT_CLICKABLE".equals(code)) {
+            return CandidateArbitrationExecutionPolicy
+                    .Verdict.CANDIDATE_NOT_CLICKABLE;
+        }
+        return CandidateArbitrationExecutionPolicy
+                .Verdict.CANDIDATE_NOT_FOUND;
     }
 
     JSONObject tap(JSONObject args) throws Exception {
