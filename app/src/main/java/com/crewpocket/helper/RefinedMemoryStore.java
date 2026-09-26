@@ -224,17 +224,14 @@ final class RefinedMemoryStore {
                                 && "NORMAL_TASK".equals(
                                         item.lastEvidenceSource);
 
-                // If this task just created an independent-success vote and the
-                // user immediately says it was wrong, retract that exact vote.
-                // Older independent successes are left intact.
-                if (learnedByCorrectedTask
-                        && item.successCount > 0) {
-                    item.successCount--;
-                }
-
-                item.failureCount++;
-                item.state =
-                        RefinedMemoryPolicy.STATE_SUSPECT;
+                RefinedMemoryCorrectionPolicy.Result correction =
+                        RefinedMemoryCorrectionPolicy.apply(
+                                item.successCount,
+                                item.failureCount,
+                                learnedByCorrectedTask);
+                item.successCount = correction.successCount;
+                item.failureCount = correction.failureCount;
+                item.state = correction.state;
                 item.updatedAt = now;
                 item.lastFailureAt = now;
                 item.lastEvidenceSource =
@@ -242,10 +239,7 @@ final class RefinedMemoryStore {
                                 ? "USER_CORRECTION"
                                 : safe(reason);
                 item.lastTaskId = safe(taskId);
-                item.confidence =
-                        RefinedMemoryPolicy.confidenceFor(
-                                item.successCount,
-                                item.failureCount);
+                item.confidence = correction.confidence;
                 changed++;
             }
             if (changed > 0) trimAndSaveLocked(items);
