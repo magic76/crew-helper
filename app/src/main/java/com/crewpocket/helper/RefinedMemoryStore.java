@@ -656,6 +656,8 @@ final class RefinedMemoryStore {
         synchronized (LOCK) {
             JSONArray events = loadEventsLocked();
             JSONObject taskResult = null;
+            java.util.LinkedHashSet<String> usedIds =
+                    new java.util.LinkedHashSet<String>();
             int usedCount = 0;
             int learnedCount = 0;
             int correctedCount = 0;
@@ -670,12 +672,14 @@ final class RefinedMemoryStore {
                 String type = event.optString("type", "");
                 if ("USED".equals(type)) {
                     JSONArray ids = event.optJSONArray("memoryIds");
+                    addIds(usedIds, ids);
                     usedCount = Math.max(
                             usedCount,
                             ids == null ? 0 : ids.length());
                 } else if ("TASK_RESULT".equals(type)) {
                     taskResult = event;
                     JSONArray ids = event.optJSONArray("memoryIds");
+                    addIds(usedIds, ids);
                     usedCount = Math.max(
                             usedCount,
                             ids == null ? 0 : ids.length());
@@ -691,6 +695,24 @@ final class RefinedMemoryStore {
             }
 
             out.append("Used memories: ").append(usedCount).append("\n");
+            if (!usedIds.isEmpty()) {
+                List<Entry> items = loadLocked();
+                int shown = 0;
+                for (String memoryId : usedIds) {
+                    Entry item = findById(items, memoryId);
+                    if (item == null) continue;
+                    out.append("  - ")
+                            .append(item.scope)
+                            .append(" · ")
+                            .append(effectiveState(
+                                    item,
+                                    System.currentTimeMillis()))
+                            .append(" · ")
+                            .append(item.pattern)
+                            .append("\n");
+                    if (++shown >= 3) break;
+                }
+            }
             if (taskResult != null) {
                 JSONArray applied = taskResult.optJSONArray("appliedIds");
                 out.append("Pattern applied: ")
@@ -1015,6 +1037,16 @@ final class RefinedMemoryStore {
             }
         }
         return false;
+    }
+
+    private static void addIds(
+            java.util.Set<String> target,
+            JSONArray values) {
+        if (target == null || values == null) return;
+        for (int i = 0; i < values.length(); i++) {
+            String id = safe(values.optString(i, ""));
+            if (!id.isEmpty()) target.add(id);
+        }
     }
 
     private static boolean wasTaskCorrected(
