@@ -1073,9 +1073,10 @@ final class RefinedMemoryStore {
 
         JSONArray current = loadCorrectedTasksLocked();
         JSONArray next = new JSONArray();
-        next.put(new JSONObject()
-                .put("taskId", id)
-                .put("at", System.currentTimeMillis()));
+        JSONObject latest = new JSONObject();
+        put(latest, "taskId", id);
+        put(latest, "at", System.currentTimeMillis());
+        next.put(latest);
 
         for (int i = 0;
                 i < current.length()
