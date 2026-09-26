@@ -113,7 +113,10 @@ final class RefinedMemoryEvidencePolicy {
                 && transcriptConfidence < MIN_CORRECTION_CONFIDENCE) {
             return false;
         }
+        return looksLikeCorrectionText(text);
+    }
 
+    static boolean looksLikeCorrectionText(String text) {
         String value = normalize(text);
         if (value.isEmpty()) return false;
         return containsAny(
