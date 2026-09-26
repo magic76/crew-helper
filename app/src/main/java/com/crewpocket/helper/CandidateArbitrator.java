@@ -64,6 +64,16 @@ final class CandidateArbitrator {
             this.right = right;
             this.bottom = bottom;
         }
+
+        String safetyMetadata() {
+            return label
+                    + " "
+                    + role
+                    + " "
+                    + viewId
+                    + " "
+                    + semanticHint;
+        }
     }
 
     static final class Request {

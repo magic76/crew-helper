@@ -56,6 +56,10 @@ public final class AgentReplayRunner {
             runCandidateArbitrationGate(file, p);
             return;
         }
+        if ("candidate_arbitration_revalidation".equals(kind)) {
+            runCandidateArbitrationRevalidation(file, p);
+            return;
+        }
         if ("context_budget".equals(kind)) {
             runContextBudget(file, p);
             return;
@@ -153,6 +157,36 @@ public final class AgentReplayRunner {
                         + file.getName()
                         + " -> "
                         + trigger);
+    }
+
+    private static void runCandidateArbitrationRevalidation(
+            File file,
+            Properties p) {
+        CandidateArbitrationExecutionPolicy.Result result =
+                CandidateArbitrationExecutionPolicy.evaluate(
+                        boolDefault(p, "treatment", true),
+                        boolDefault(p, "advisor.decisive", true),
+                        boolDefault(p, "generation.current", true),
+                        boolDefault(p, "package.current", true),
+                        boolDefault(p, "candidate.exists", true),
+                        boolDefault(p, "candidate.clickable", true),
+                        boolDefault(p, "candidate.sensitive", false),
+                        boolDefault(p, "authority.allowed", true));
+        String expected = required(p, "expect.verdict");
+        if (!expected.equals(result.verdict.name())) {
+            throw new AssertionError(
+                    file.getName()
+                            + " expected "
+                            + expected
+                            + " but got "
+                            + result.verdict);
+        }
+        passed++;
+        System.out.println(
+                "  PASS "
+                        + file.getName()
+                        + " -> "
+                        + result.verdict);
     }
 
     private static void runLocatorFallback(File file, Properties p) {

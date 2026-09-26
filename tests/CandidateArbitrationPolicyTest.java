@@ -57,9 +57,26 @@ public final class CandidateArbitrationPolicyTest {
                         false),
                 "AUTO never enters the experiment");
 
+        CandidateArbitrationPolicy.Bucket first =
+                CandidateArbitrationPolicy.deterministicBucket(
+                        "task-123",
+                        8L,
+                        "pkg",
+                        "MEDIA:PLAY");
+        CandidateArbitrationPolicy.Bucket repeated =
+                CandidateArbitrationPolicy.deterministicBucket(
+                        "task-123",
+                        999L,
+                        "different.pkg",
+                        "NAVIGATION:START");
+        if (first != repeated) {
+            throw new AssertionError(
+                    "task-level bucket must remain stable");
+        }
+
         if (CandidateArbitrationPolicy.phase0MayOverrideBaseline()) {
             throw new AssertionError(
-                    "Phase 0 must never override baseline execution");
+                    "merged Phase 0 regression guard must remain false");
         }
 
         System.out.println("CandidateArbitrationPolicyTest passed");
