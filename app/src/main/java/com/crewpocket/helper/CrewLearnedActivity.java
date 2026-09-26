@@ -494,6 +494,10 @@ public class CrewLearnedActivity extends Activity {
                             + I18n.get(this, "最後使用 ", "last used ")
                             + formatTime(lastUsedAt);
                 }
+                String lastTaskId = item.optString("lastTaskId", "");
+                if (!lastTaskId.isEmpty()) {
+                    provenance += " · task " + shortTask(lastTaskId);
+                }
                 TextView provenanceView = text(
                         provenance,
                         9,
@@ -587,7 +591,17 @@ public class CrewLearnedActivity extends Activity {
         String prefix = formatTime(event.optLong("at", 0L))
                 + "  " + type;
         if (!scope.isEmpty()) prefix += " · " + scope;
+        String eventTaskId = event.optString("taskId", "");
+        if (!eventTaskId.isEmpty()) {
+            prefix += " · task " + shortTask(eventTaskId);
+        }
 
+        if ("USED".equals(type)) {
+            JSONArray ids = event.optJSONArray("memoryIds");
+            return prefix
+                    + " · memories="
+                    + (ids == null ? 0 : ids.length());
+        }
         if ("TASK_RESULT".equals(type)) {
             JSONArray ids = event.optJSONArray("memoryIds");
             JSONArray applied = event.optJSONArray("appliedIds");
@@ -736,6 +750,12 @@ public class CrewLearnedActivity extends Activity {
         return app == null || app.trim().isEmpty() || app.equals(pkg)
                 ? pkg
                 : app + " · " + pkg;
+    }
+
+    private String shortTask(String taskId) {
+        String value = taskId == null ? "" : taskId.trim();
+        if (value.length() <= 8) return value;
+        return "…" + value.substring(value.length() - 8);
     }
 
     private String rate(int success, int total) {
