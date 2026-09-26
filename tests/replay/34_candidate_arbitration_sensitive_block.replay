@@ -1,0 +1,10 @@
+kind=candidate_arbitration_revalidation
+treatment=true
+advisor.decisive=true
+generation.current=true
+package.current=true
+candidate.exists=true
+candidate.clickable=true
+candidate.sensitive=true
+authority.allowed=true
+expect.verdict=SENSITIVE_TARGET

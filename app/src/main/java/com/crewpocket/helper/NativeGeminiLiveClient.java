@@ -65,8 +65,8 @@ final class NativeGeminiLiveClient {
     private volatile long taskRecipeCandidateGeneration = -1L;
     private volatile String taskRecipeCandidateId = "";
     private final PhoneRuntimeExecutor phoneRuntimeExecutor;
-    private final CandidateArbitrationShadowController
-            candidateArbitrationShadowController;
+    private final CandidateArbitrationExperimentController
+            candidateArbitrationController;
     private final RuntimeToolExecutor runtimeToolExecutor;
     private final LiveAudioController liveAudioController;
     private final GeminiLiveTurnHandler geminiLiveTurnHandler;
@@ -279,17 +279,20 @@ final class NativeGeminiLiveClient {
                     }
                 },
                 this.contextPayloadAudit);
-        this.candidateArbitrationShadowController =
-                new CandidateArbitrationShadowController(
+        this.candidateArbitrationController =
+                new CandidateArbitrationExperimentController(
                         this.appContext,
+                        new CandidateArbitrator(apiKey),
                         new CandidateArbitrator(apiKey));
         this.phoneRuntimeExecutor = new PhoneRuntimeExecutor(
                 this.appContext,
                 this.visionController,
-                new PhoneRuntimeExecutor.LocatorShadowObserver() {
+                new PhoneRuntimeExecutor
+                        .LocatorArbitrationObserver() {
                     @Override
-                    public String onLocatorDecision(
-                            JSONObject semanticDecision) {
+                    public CandidateArbitrationExperimentController.Decision
+                            onLocatorDecision(
+                                    JSONObject semanticDecision) {
                         JSONObject progress =
                                 NativeGeminiLiveClient.this
                                         .workingContext
@@ -298,8 +301,8 @@ final class NativeGeminiLiveClient {
                                 "rootGoal",
                                 progress.optString("goal", ""));
                         return NativeGeminiLiveClient.this
-                                .candidateArbitrationShadowController
-                                .observe(
+                                .candidateArbitrationController
+                                .evaluate(
                                         NativeGeminiLiveClient.this
                                                 .agentTaskCoordinator
                                                 .activeTaskId(),
@@ -314,14 +317,62 @@ final class NativeGeminiLiveClient {
                     }
 
                     @Override
+                    public boolean isGenerationCurrent(
+                            long generation) {
+                        return NativeGeminiLiveClient.this
+                                .isCurrentUserIntent(generation);
+                    }
+
+                    @Override
+                    public boolean isCandidateAuthorized(
+                            long generation,
+                            String candidateMetadata) {
+                        if (!NativeGeminiLiveClient.this
+                                .isCurrentUserIntent(generation)) {
+                            return false;
+                        }
+                        String metadata =
+                                candidateMetadata == null
+                                        ? ""
+                                        : candidateMetadata;
+                        boolean lowRisk =
+                                !ActionSafetyPolicy.blocks(metadata)
+                                        && !UserActionScope
+                                                .looksLikeSendTarget(
+                                                        metadata);
+                        if (!lowRisk) return false;
+                        return !NativeGeminiLiveClient.this
+                                .userActionScope
+                                .shouldBlockTapForSearch(
+                                        metadata,
+                                        false,
+                                        true);
+                    }
+
+                    @Override
                     public void onBaselineCandidate(
                             String eventId,
                             String candidateId) {
                         NativeGeminiLiveClient.this
-                                .candidateArbitrationShadowController
+                                .candidateArbitrationController
                                 .recordBaselineCandidate(
                                         eventId,
                                         candidateId);
+                    }
+
+                    @Override
+                    public void onTreatmentRevalidation(
+                            String eventId,
+                            CandidateArbitrationExecutionPolicy.Verdict verdict,
+                            String executedCandidateId,
+                            boolean executed) {
+                        NativeGeminiLiveClient.this
+                                .candidateArbitrationController
+                                .recordTreatmentRevalidation(
+                                        eventId,
+                                        verdict,
+                                        executedCandidateId,
+                                        executed);
                     }
                 });
         this.runtimeToolExecutor = new RuntimeToolExecutor(
@@ -833,7 +884,7 @@ final class NativeGeminiLiveClient {
                                 userText,
                                 transcriptConfidence);
         if (reliableCorrection) {
-            candidateArbitrationShadowController.recordCorrection(
+            candidateArbitrationController.recordCorrection(
                     userIntentGeneration,
                     System.currentTimeMillis(),
                     CORRECTION_WINDOW_MS);
@@ -2964,7 +3015,7 @@ final class NativeGeminiLiveClient {
                     result.optString(
                             "_candidateArbitrationEventId", "").trim();
             if (!arbitrationEventId.isEmpty()) {
-                candidateArbitrationShadowController.recordOutcome(
+                candidateArbitrationController.recordOutcome(
                         arbitrationEventId,
                         result);
                 // Correlation is process-local only. Never expose it to Gemini,

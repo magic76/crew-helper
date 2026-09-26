@@ -12,7 +12,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Privacy-bounded persistent Phase-0 experiment events.
+ * Privacy-bounded Candidate Arbitration experiment telemetry.
  *
  * Never stores task goal text, candidate labels/view ids, screenshots, tool
  * payloads, model prompts, or user utterances.
@@ -33,6 +33,7 @@ final class CandidateArbitrationTelemetryStore {
             String packageName,
             String goalIntent,
             CandidateArbitrationPolicy.TriggerType triggerType,
+            CandidateArbitrationPolicy.Bucket bucket,
             List<CandidateArbitrator.Candidate> candidates) {
         long now = System.currentTimeMillis();
         String eventId = "arb_" + now + "_" + SEQUENCE.incrementAndGet();
@@ -57,6 +58,12 @@ final class CandidateArbitrationTelemetryStore {
                     .put("generation", generation)
                     .put("package", safe(packageName, 120))
                     .put("goalIntent", safe(goalIntent, 96))
+                    .put("experimentPhase", "PHASE_1")
+                    .put(
+                            "bucket",
+                            bucket == null
+                                    ? "CONTROL"
+                                    : bucket.name())
                     .put("triggerType",
                             triggerType == null
                                     ? "NONE"
@@ -66,12 +73,16 @@ final class CandidateArbitrationTelemetryStore {
                     .put("candidateConfidences", confidences)
                     .put("model", CandidateArbitrator.MODEL)
                     .put("latencyMs", -1L)
+                    .put("additionalLatencyMs", 0L)
                     .put("timeout", false)
                     .put("selectedCandidateId", "")
                     .put("arbitratorConfidence", 0.0d)
                     .put("abstain", true)
                     .put("reasonCode", "PENDING")
                     .put("baselineSelectedCandidateId", "")
+                    .put("executedCandidateId", "")
+                    .put("treatmentExecuted", false)
+                    .put("revalidationCode", "NOT_APPLICABLE")
                     .put("interactionVerified", false)
                     .put("semanticEffectVerified", false)
                     .put("correctionObserved", false);
@@ -91,7 +102,8 @@ final class CandidateArbitrationTelemetryStore {
             CandidateArbitrator.Advice advice,
             long latencyMs,
             boolean timeout,
-            String reasonOverride) {
+            String reasonOverride,
+            boolean addedToUserPath) {
         update(context, eventId, new EventUpdate() {
             @Override public void apply(JSONObject event) throws Exception {
                 CandidateArbitrator.Advice safeAdvice =
@@ -99,7 +111,13 @@ final class CandidateArbitrationTelemetryStore {
                                 ? CandidateArbitrator.Advice.abstain(
                                         reasonOverride)
                                 : advice;
-                event.put("latencyMs", Math.max(0L, latencyMs))
+                long boundedLatency = Math.max(0L, latencyMs);
+                event.put("latencyMs", boundedLatency)
+                        .put(
+                                "additionalLatencyMs",
+                                addedToUserPath
+                                        ? boundedLatency
+                                        : 0L)
                         .put("timeout", timeout)
                         .put(
                                 "selectedCandidateId",
@@ -129,6 +147,25 @@ final class CandidateArbitrationTelemetryStore {
                 event.put(
                         "baselineSelectedCandidateId",
                         safe(candidateId, 96));
+            }
+        });
+    }
+
+    static void recordTreatmentExecution(
+            Context context,
+            String eventId,
+            String revalidationCode,
+            String executedCandidateId,
+            boolean executed) {
+        update(context, eventId, new EventUpdate() {
+            @Override public void apply(JSONObject event) throws Exception {
+                event.put(
+                                "revalidationCode",
+                                safe(revalidationCode, 64))
+                        .put(
+                                "executedCandidateId",
+                                safe(executedCandidateId, 96))
+                        .put("treatmentExecuted", executed);
             }
         });
     }
@@ -181,98 +218,196 @@ final class CandidateArbitrationTelemetryStore {
         }
         int total = events.length();
         if (total == 0) {
-            return "Candidate arbitration shadow · no qualifying samples yet.";
+            return "Candidate arbitration · no qualifying samples yet.";
         }
 
+        int legacy = 0;
+        int control = 0;
+        int treatment = 0;
         int completed = 0;
         int decisive = 0;
         int abstain = 0;
         int timeout = 0;
-        int interaction = 0;
-        int semantic = 0;
-        int correction = 0;
-        int proxySamples = 0;
-        int proxyMatches = 0;
-        List<Long> latencies = new ArrayList<Long>();
+        int treatmentExecuted = 0;
+        int treatmentRejected = 0;
+
+        int controlInteraction = 0;
+        int treatmentInteraction = 0;
+        int controlSemantic = 0;
+        int treatmentSemantic = 0;
+        int controlCorrection = 0;
+        int treatmentCorrection = 0;
+        int controlProgress = 0;
+        int treatmentProgress = 0;
+
+        int controlAccuracySamples = 0;
+        int controlAccuracyMatches = 0;
+
+        List<Long> allModelLatencies = new ArrayList<Long>();
+        List<Long> treatmentAddedLatencies = new ArrayList<Long>();
 
         for (int i = 0; i < total; i++) {
             JSONObject event = events.optJSONObject(i);
             if (event == null) continue;
+
+            String bucket = event.optString("bucket", "");
+            boolean isControl = "CONTROL".equals(bucket);
+            boolean isTreatment = "TREATMENT".equals(bucket);
+            if (!isControl && !isTreatment) {
+                legacy++;
+                continue;
+            }
+
+            if (isControl) control++;
+            if (isTreatment) treatment++;
+
             String reason = event.optString("reasonCode", "");
             if (!reason.isEmpty() && !"PENDING".equals(reason)) completed++;
+
             boolean didAbstain = event.optBoolean("abstain", true);
             if (didAbstain) abstain++;
             else decisive++;
             if (event.optBoolean("timeout", false)) timeout++;
-            if (event.optBoolean("interactionVerified", false)) interaction++;
-            if (event.optBoolean("semanticEffectVerified", false)) semantic++;
-            if (event.optBoolean("correctionObserved", false)) correction++;
 
             long latency = event.optLong("latencyMs", -1L);
-            if (latency >= 0L) latencies.add(latency);
+            if (latency >= 0L) allModelLatencies.add(latency);
+            long added = event.optLong("additionalLatencyMs", -1L);
+            if (isTreatment && added >= 0L) {
+                treatmentAddedLatencies.add(added);
+            }
 
-            String shadow = event.optString("selectedCandidateId", "");
-            String baseline =
-                    event.optString("baselineSelectedCandidateId", "");
-            if (!didAbstain
-                    && !shadow.isEmpty()
-                    && !baseline.isEmpty()
-                    && event.optBoolean("semanticEffectVerified", false)) {
-                proxySamples++;
-                if (shadow.equals(baseline)
-                        && !event.optBoolean(
-                                "correctionObserved", false)) {
-                    proxyMatches++;
+            boolean interaction =
+                    event.optBoolean("interactionVerified", false);
+            boolean semantic =
+                    event.optBoolean("semanticEffectVerified", false);
+            boolean correction =
+                    event.optBoolean("correctionObserved", false);
+            boolean progress = semantic && !correction;
+
+            if (isControl) {
+                if (interaction) controlInteraction++;
+                if (semantic) controlSemantic++;
+                if (correction) controlCorrection++;
+                if (progress) controlProgress++;
+            } else {
+                if (interaction) treatmentInteraction++;
+                if (semantic) treatmentSemantic++;
+                if (correction) treatmentCorrection++;
+                if (progress) treatmentProgress++;
+                if (event.optBoolean("treatmentExecuted", false)) {
+                    treatmentExecuted++;
+                } else {
+                    String revalidation =
+                            event.optString("revalidationCode", "");
+                    if (!revalidation.isEmpty()
+                            && !"NOT_APPLICABLE".equals(revalidation)) {
+                        treatmentRejected++;
+                    }
+                }
+            }
+
+            if (isControl
+                    && !didAbstain
+                    && semantic
+                    && !correction) {
+                String shadow =
+                        event.optString("selectedCandidateId", "");
+                String baseline =
+                        event.optString(
+                                "baselineSelectedCandidateId", "");
+                if (!shadow.isEmpty() && !baseline.isEmpty()) {
+                    controlAccuracySamples++;
+                    if (shadow.equals(baseline)) {
+                        controlAccuracyMatches++;
+                    }
                 }
             }
         }
 
-        Collections.sort(latencies);
-        long p50 = percentile(latencies, 0.50d);
-        long p95 = percentile(latencies, 0.95d);
+        Collections.sort(allModelLatencies);
+        Collections.sort(treatmentAddedLatencies);
 
         StringBuilder out = new StringBuilder();
-        out.append("Candidate arbitration shadow · last ")
+        out.append("Candidate arbitration Phase 1 A/B · last ")
                 .append(total)
                 .append("/")
                 .append(MAX_EVENTS)
-                .append(" qualifying events\n")
+                .append(" stored events\n")
+                .append("A/B samples: control=")
+                .append(control)
+                .append(" · treatment=")
+                .append(treatment);
+        if (legacy > 0) {
+            out.append(" · legacy shadow excluded=")
+                    .append(legacy);
+        }
+        out.append("\n")
                 .append("Arbitration coverage: ")
-                .append(percent(completed, total))
-                .append("%\n")
-                .append("Decisive rate: ")
-                .append(percent(decisive, total))
+                .append(percent(completed, control + treatment))
+                .append("% · decisive: ")
+                .append(percent(decisive, control + treatment))
                 .append("% · abstain: ")
-                .append(percent(abstain, total))
+                .append(percent(abstain, control + treatment))
                 .append("% · timeout: ")
-                .append(percent(timeout, total))
+                .append(percent(timeout, control + treatment))
                 .append("%\n");
-        if (!latencies.isEmpty()) {
-            out.append("Latency P50/P95: ")
-                    .append(p50)
+
+        if (!allModelLatencies.isEmpty()) {
+            out.append("Model latency P50/P95: ")
+                    .append(percentile(allModelLatencies, 0.50d))
                     .append("/")
-                    .append(p95)
+                    .append(percentile(allModelLatencies, 0.95d))
                     .append(" ms\n");
         }
-        out.append("Baseline interaction verified: ")
-                .append(percent(interaction, total))
-                .append("% · semantic effect verified: ")
-                .append(percent(semantic, total))
+        if (!treatmentAddedLatencies.isEmpty()) {
+            out.append("Treatment added latency P50/P95: ")
+                    .append(percentile(
+                            treatmentAddedLatencies, 0.50d))
+                    .append("/")
+                    .append(percentile(
+                            treatmentAddedLatencies, 0.95d))
+                    .append(" ms\n");
+        }
+
+        out.append("Control interaction verified: ")
+                .append(percent(controlInteraction, control))
+                .append("% · treatment: ")
+                .append(percent(treatmentInteraction, treatment))
                 .append("%\n")
-                .append("Correction rate: ")
-                .append(percent(correction, total))
+                .append("Control semantic effect verified: ")
+                .append(percent(controlSemantic, control))
+                .append("% · treatment: ")
+                .append(percent(treatmentSemantic, treatment))
                 .append("%\n")
-                .append("Decisive accuracy proxy: ");
-        if (proxySamples == 0) {
+                .append("Control correction: ")
+                .append(percent(controlCorrection, control))
+                .append("% · treatment: ")
+                .append(percent(treatmentCorrection, treatment))
+                .append("%\n")
+                .append("Progress proxy control/treatment: ")
+                .append(percent(controlProgress, control))
+                .append("% / ")
+                .append(percent(treatmentProgress, treatment))
+                .append("%\n")
+                .append("Treatment executed: ")
+                .append(treatmentExecuted)
+                .append(" · revalidation rejected: ")
+                .append(treatmentRejected)
+                .append("\n")
+                .append("Control decisive accuracy proxy: ");
+        if (controlAccuracySamples == 0) {
             out.append("n/a");
         } else {
-            out.append(percent(proxyMatches, proxySamples))
+            out.append(percent(
+                            controlAccuracyMatches,
+                            controlAccuracySamples))
                     .append("% (n=")
-                    .append(proxySamples)
+                    .append(controlAccuracySamples)
                     .append(")");
         }
+
         out.append("\nProgress proxy is semanticEffectVerified && !correctionObserved; "
-                + "it is not terminal truth. Shadow advice never executes.");
+                + "it is not terminal truth. Treatment execution still requires fresh Runtime revalidation.");
         return out.toString();
     }
 
@@ -342,22 +477,34 @@ final class CandidateArbitrationTelemetryStore {
         return out;
     }
 
-    private static long percentile(List<Long> values, double fraction) {
+    private static long percentile(
+            List<Long> values,
+            double fraction) {
         if (values == null || values.isEmpty()) return -1L;
-        int index = (int) Math.ceil(values.size() * fraction) - 1;
-        index = Math.max(0, Math.min(values.size() - 1, index));
+        int index = (int) Math.ceil(
+                values.size() * fraction) - 1;
+        index = Math.max(
+                0,
+                Math.min(values.size() - 1, index));
         return values.get(index);
     }
 
-    private static int percent(int numerator, int denominator) {
+    private static int percent(
+            int numerator,
+            int denominator) {
         if (denominator <= 0) return 0;
-        return (int) Math.round(numerator * 100.0d / denominator);
+        return (int) Math.round(
+                numerator * 100.0d / denominator);
     }
 
-    private static String safe(String value, int max) {
+    private static String safe(
+            String value,
+            int max) {
         String clean = value == null ? "" : value.trim();
         clean = clean.replaceAll("[\\r\\n\\t]", " ");
-        if (clean.length() > max) clean = clean.substring(0, max);
+        if (clean.length() > max) {
+            clean = clean.substring(0, max);
+        }
         return clean;
     }
 }

@@ -20,9 +20,21 @@ import java.util.Locale;
  * and post-action verification remain in NativeGeminiLiveClient.
  */
 final class PhoneRuntimeExecutor {
-    interface LocatorShadowObserver {
-        String onLocatorDecision(JSONObject semanticDecision);
-        void onBaselineCandidate(String eventId, String candidateId);
+    interface LocatorArbitrationObserver {
+        CandidateArbitrationExperimentController.Decision onLocatorDecision(
+                JSONObject semanticDecision);
+        boolean isGenerationCurrent(long generation);
+        boolean isCandidateAuthorized(
+                long generation,
+                String candidateMetadata);
+        void onBaselineCandidate(
+                String eventId,
+                String candidateId);
+        void onTreatmentRevalidation(
+                String eventId,
+                CandidateArbitrationExecutionPolicy.Verdict verdict,
+                String executedCandidateId,
+                boolean executed);
     }
 
     static final class MutationResult {
@@ -40,7 +52,7 @@ final class PhoneRuntimeExecutor {
     private final Context appContext;
     private final LiveVisionController visionController;
     private final AppAutonomyStore autonomyStore;
-    private final LocatorShadowObserver locatorShadowObserver;
+    private final LocatorArbitrationObserver locatorArbitrationObserver;
     private final ThreadLocal<String> lastCandidateArbitrationEventId =
             new ThreadLocal<String>();
     private final ArrayList<JSONObject> lastCandidateApps =
@@ -54,11 +66,12 @@ final class PhoneRuntimeExecutor {
     PhoneRuntimeExecutor(
             Context appContext,
             LiveVisionController visionController,
-            LocatorShadowObserver locatorShadowObserver) {
+            LocatorArbitrationObserver locatorArbitrationObserver) {
         this.appContext = appContext;
         this.visionController = visionController;
         this.autonomyStore = new AppAutonomyStore(appContext);
-        this.locatorShadowObserver = locatorShadowObserver;
+        this.locatorArbitrationObserver =
+                locatorArbitrationObserver;
     }
 
     String consumeCandidateArbitrationEventId() {
@@ -372,6 +385,179 @@ final class PhoneRuntimeExecutor {
                 .put("screenChanged", changed);
     }
 
+    private JSONObject executeArbitratedCandidate(
+            CandidateArbitrationExperimentController.Decision decision,
+            JSONObject baselineSemantic,
+            JSONArray fallbackTrace) throws Exception {
+        if (decision == null
+                || !decision.hasSelectedCandidate()
+                || locatorArbitrationObserver == null) {
+            return null;
+        }
+
+        CandidateArbitrator.Candidate candidate =
+                decision.selectedCandidate;
+        JSONObject validation;
+        try {
+            validation = post(
+                    "/semantic_validate",
+                    new JSONObject().put(
+                            "elementId",
+                            candidate.candidateId));
+        } catch (Exception error) {
+            validation = new JSONObject()
+                    .put("success", false)
+                    .put("exists", false)
+                    .put("clickable", false)
+                    .put("sensitiveBlocked", false)
+                    .put("package", "");
+        }
+
+        boolean generationCurrent =
+                locatorArbitrationObserver
+                        .isGenerationCurrent(
+                                decision.generation);
+        String currentPackage =
+                validation.optString("package", "");
+        boolean packageCurrent =
+                !decision.packageName.isEmpty()
+                        && decision.packageName.equals(
+                                currentPackage);
+        boolean candidateExists =
+                validation.optBoolean("exists", false);
+        boolean candidateClickable =
+                validation.optBoolean("clickable", false);
+        boolean sensitiveBlocked =
+                validation.optBoolean(
+                        "sensitiveBlocked", false);
+        boolean authorityAllowed =
+                locatorArbitrationObserver
+                        .isCandidateAuthorized(
+                                decision.generation,
+                                candidate.safetyMetadata());
+
+        CandidateArbitrationExecutionPolicy.Result gate =
+                CandidateArbitrationExecutionPolicy.evaluate(
+                        true,
+                        decision.advisorDecisive,
+                        generationCurrent,
+                        packageCurrent,
+                        candidateExists,
+                        candidateClickable,
+                        sensitiveBlocked,
+                        authorityAllowed);
+
+        fallbackTrace.put(
+                "candidate_arbitration:"
+                        + gate.verdict.name());
+
+        if (!gate.allowed()) {
+            locatorArbitrationObserver
+                    .onTreatmentRevalidation(
+                            decision.eventId,
+                            gate.verdict,
+                            "",
+                            false);
+            JSONObject rejected =
+                    baselineSemantic == null
+                            ? new JSONObject()
+                            : baselineSemantic;
+            rejected.put("success", false)
+                    .put("stepResult", "STEP_FAILED")
+                    .put(
+                            "error",
+                            "CANDIDATE_ARBITRATION_"
+                                    + gate.verdict.name())
+                    .put("fallbackTrace", fallbackTrace);
+
+            if (gate.authorityBlocked()) {
+                return rejected
+                        .put("blockedByRuntime", true)
+                        .put("taskState", "BLOCKED")
+                        .put(
+                                "instruction",
+                                "Arbitrator 選到的候選未通過目前 authority / safety；Runtime 不執行，也不降級成座標。");
+            }
+            return rejected
+                    .put("taskState", "IN_PROGRESS")
+                    .put("nextRequirement", "INSPECT_UI")
+                    .put(
+                            "instruction",
+                            "Arbitrator 結果在 fresh Runtime revalidation 已失效；丟棄結果並重新觀察，不使用舊座標。");
+        }
+
+        // Close the small validation->execution race. /semantic_tap itself
+        // resolves the stable elementId again and re-applies SensitiveDataGuard.
+        if (!locatorArbitrationObserver
+                .isGenerationCurrent(decision.generation)) {
+            locatorArbitrationObserver
+                    .onTreatmentRevalidation(
+                            decision.eventId,
+                            CandidateArbitrationExecutionPolicy
+                                    .Verdict
+                                    .STALE_GENERATION,
+                            "",
+                            false);
+            return baselineSemantic
+                    .put("success", false)
+                    .put("stale", true)
+                    .put("stepResult", "STEP_FAILED")
+                    .put("taskState", "IN_PROGRESS")
+                    .put(
+                            "error",
+                            "CANDIDATE_ARBITRATION_STALE_GENERATION")
+                    .put("fallbackTrace", fallbackTrace);
+        }
+
+        JSONObject tapped = post(
+                "/semantic_tap",
+                new JSONObject().put(
+                        "elementId",
+                        candidate.candidateId));
+        if (!tapped.optBoolean("success", false)) {
+            locatorArbitrationObserver
+                    .onTreatmentRevalidation(
+                            decision.eventId,
+                            CandidateArbitrationExecutionPolicy
+                                    .Verdict
+                                    .CANDIDATE_NOT_FOUND,
+                            "",
+                            false);
+            return baselineSemantic
+                    .put("success", false)
+                    .put("stepResult", "STEP_FAILED")
+                    .put("taskState", "IN_PROGRESS")
+                    .put("nextRequirement", "INSPECT_UI")
+                    .put(
+                            "error",
+                            tapped.optString(
+                                    "error",
+                                    "CANDIDATE_ARBITRATION_EXECUTION_FAILED"))
+                    .put("fallbackTrace", fallbackTrace)
+                    .put(
+                            "instruction",
+                            "Arbitrator 候選在執行瞬間已失效；不要用座標補點，重新取得 fresh screen。");
+        }
+
+        locatorArbitrationObserver
+                .onTreatmentRevalidation(
+                        decision.eventId,
+                        CandidateArbitrationExecutionPolicy
+                                .Verdict.ALLOW,
+                        candidate.candidateId,
+                        true);
+        return tapped
+                .put(
+                        "resolvedFrom",
+                        "candidate_arbitration_treatment")
+                .put(
+                        "arbitrationBucket",
+                        "TREATMENT")
+                .put(
+                        "fallbackTrace",
+                        fallbackTrace);
+    }
+
     JSONObject tap(JSONObject args) throws Exception {
         lastCandidateArbitrationEventId.remove();
         JSONObject safeArgs = args == null ? new JSONObject() : args;
@@ -425,24 +611,72 @@ final class PhoneRuntimeExecutor {
                         + semantic.optString("decision",
                                 semantic.optString("error", "UNKNOWN")));
 
-                String arbitrationEventId = "";
-                if (locatorShadowObserver != null) {
+                CandidateArbitrationExperimentController.Decision
+                        arbitrationDecision =
+                                CandidateArbitrationExperimentController
+                                        .Decision.none();
+                if (locatorArbitrationObserver != null) {
                     try {
-                        arbitrationEventId =
-                                locatorShadowObserver.onLocatorDecision(semantic);
-                        if (arbitrationEventId != null
-                                && !arbitrationEventId.isEmpty()) {
-                            lastCandidateArbitrationEventId.set(
-                                    arbitrationEventId);
-                        }
+                        arbitrationDecision =
+                                locatorArbitrationObserver
+                                        .onLocatorDecision(semantic);
                     } catch (Exception ignored) {
-                        arbitrationEventId = "";
+                        arbitrationDecision =
+                                CandidateArbitrationExperimentController
+                                        .Decision.none();
                     }
                 }
+                String arbitrationEventId =
+                        arbitrationDecision.eventId;
+                if (!arbitrationEventId.isEmpty()) {
+                    lastCandidateArbitrationEventId.set(
+                            arbitrationEventId);
+                }
+
                 // Restore the exact baseline /click_v2 payload before any
                 // existing fallback, Runtime, Gemini, or memory path sees it.
                 semantic.remove("_shadowCandidates");
                 semantic.remove("_shadowPackage");
+
+                if (arbitrationDecision.treatment()) {
+                    if (locatorArbitrationObserver == null
+                            || !locatorArbitrationObserver
+                                    .isGenerationCurrent(
+                                            arbitrationDecision.generation)) {
+                        if (!arbitrationEventId.isEmpty()) {
+                            locatorArbitrationObserver
+                                    .onTreatmentRevalidation(
+                                            arbitrationEventId,
+                                            CandidateArbitrationExecutionPolicy
+                                                    .Verdict
+                                                    .STALE_GENERATION,
+                                            "",
+                                            false);
+                        }
+                        return semantic
+                                .put("success", false)
+                                .put("stale", true)
+                                .put("stepResult", "STEP_FAILED")
+                                .put("taskState", "IN_PROGRESS")
+                                .put(
+                                        "error",
+                                        "CANDIDATE_ARBITRATION_STALE_GENERATION")
+                                .put(
+                                        "instruction",
+                                        "使用者目標已改變；丟棄舊 arbitration 與舊 locator 證據，不執行任何 tap。");
+                    }
+
+                    if (arbitrationDecision.hasSelectedCandidate()) {
+                        JSONObject treatment =
+                                executeArbitratedCandidate(
+                                        arbitrationDecision,
+                                        semantic,
+                                        fallbackTrace);
+                        if (treatment != null) {
+                            return treatment;
+                        }
+                    }
+                }
 
                 String semanticDecision =
                         semantic.optString("decision", "");
@@ -506,11 +740,11 @@ final class PhoneRuntimeExecutor {
                                                     ? "SUCCESS"
                                                     : "MISS"));
                             if (trustedTap.optBoolean("success", false)) {
-                                if (locatorShadowObserver != null
+                                if (locatorArbitrationObserver != null
                                         && arbitrationEventId != null
                                         && !arbitrationEventId.isEmpty()) {
                                     try {
-                                        locatorShadowObserver.onBaselineCandidate(
+                                        locatorArbitrationObserver.onBaselineCandidate(
                                                 arbitrationEventId,
                                                 trustedElementId);
                                     } catch (Exception ignored) {}

@@ -1299,6 +1299,96 @@ public class CrewAccessibilityService extends AccessibilityService {
                 } finally {
                     if (root != null) root.recycle();
                 }
+            } else if (path.startsWith("/semantic_validate")) {
+                final String elementId =
+                        getJsonString(body, "elementId");
+                if (elementId == null
+                        || elementId.trim().isEmpty()) {
+                    responseJson =
+                            "{\"success\":false,\"exists\":false,\"clickable\":false,\"sensitiveBlocked\":false,\"error\":\"MISSING_ELEMENT_ID\"}";
+                } else {
+                    final Object lock = new Object();
+                    final boolean[] exists =
+                            new boolean[]{false};
+                    final boolean[] clickableFound =
+                            new boolean[]{false};
+                    final boolean[] sensitiveBlocked =
+                            new boolean[]{false};
+                    final String[] packageName =
+                            new String[]{""};
+                    mainHandler.post(new Runnable() {
+                        @Override public void run() {
+                            AccessibilityNodeInfo root =
+                                    getRootInActiveWindow();
+                            AccessibilityNodeInfo resolved = null;
+                            AccessibilityNodeInfo clickable = null;
+                            try {
+                                if (root != null
+                                        && root.getPackageName() != null) {
+                                    packageName[0] =
+                                            String.valueOf(
+                                                    root.getPackageName());
+                                }
+                                resolved =
+                                        SemanticElementResolver.resolve(
+                                                root,
+                                                elementId);
+                                exists[0] = resolved != null;
+                                if (resolved == null) return;
+
+                                if (SensitiveDataGuard
+                                        .isHardBlockedInput(
+                                                resolved)) {
+                                    sensitiveBlocked[0] = true;
+                                    return;
+                                }
+                                clickable =
+                                        SemanticElementResolver
+                                                .nearestClickable(
+                                                        resolved);
+                                clickableFound[0] =
+                                        clickable != null;
+                                if (clickable != null
+                                        && SensitiveDataGuard
+                                                .isBlockedAction(
+                                                        clickable)) {
+                                    sensitiveBlocked[0] = true;
+                                }
+                            } catch (Exception ignored) {
+                            } finally {
+                                if (clickable != null) {
+                                    clickable.recycle();
+                                }
+                                if (resolved != null) {
+                                    resolved.recycle();
+                                }
+                                if (root != null) {
+                                    root.recycle();
+                                }
+                                synchronized (lock) {
+                                    lock.notify();
+                                }
+                            }
+                        }
+                    });
+                    synchronized (lock) {
+                        try {
+                            lock.wait(1800);
+                        } catch (Exception ignored) {}
+                    }
+                    responseJson =
+                            "{\"success\":true"
+                                    + ",\"package\":\""
+                                    + jsonEscape(packageName[0])
+                                    + "\""
+                                    + ",\"exists\":"
+                                    + exists[0]
+                                    + ",\"clickable\":"
+                                    + clickableFound[0]
+                                    + ",\"sensitiveBlocked\":"
+                                    + sensitiveBlocked[0]
+                                    + "}";
+                }
             } else if (path.startsWith("/semantic_tap")) {
                 final String elementId = getJsonString(body, "elementId");
                 if (elementId == null || elementId.trim().isEmpty()) {
