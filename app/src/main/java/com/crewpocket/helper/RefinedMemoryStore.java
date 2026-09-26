@@ -193,19 +193,48 @@ final class RefinedMemoryStore {
                 safe(source).isEmpty() ? "NEGATIVE" : safe(source));
     }
 
-    int markSuspectByIds(
-            List<String> ids,
+    int applyCorrection(
+            List<String> usedIds,
+            List<String> learnedIds,
             String taskId,
             String reason) {
-        if (prefs == null || ids == null || ids.isEmpty()) return 0;
+        if (prefs == null) return 0;
+
+        java.util.LinkedHashSet<String> allIds =
+                new java.util.LinkedHashSet<String>();
+        if (usedIds != null) allIds.addAll(usedIds);
+        if (learnedIds != null) allIds.addAll(learnedIds);
+        if (allIds.isEmpty()) return 0;
+
         synchronized (LOCK) {
             List<Entry> items = loadLocked();
             long now = System.currentTimeMillis();
             int changed = 0;
             for (Entry item : items) {
-                if (item == null || !ids.contains(item.id)) continue;
+                if (item == null
+                        || !allIds.contains(item.id)) {
+                    continue;
+                }
+
+                boolean learnedByCorrectedTask =
+                        learnedIds != null
+                                && learnedIds.contains(item.id)
+                                && safe(taskId).equals(
+                                        item.lastTaskId)
+                                && "NORMAL_TASK".equals(
+                                        item.lastEvidenceSource);
+
+                // If this task just created an independent-success vote and the
+                // user immediately says it was wrong, retract that exact vote.
+                // Older independent successes are left intact.
+                if (learnedByCorrectedTask
+                        && item.successCount > 0) {
+                    item.successCount--;
+                }
+
                 item.failureCount++;
-                item.state = RefinedMemoryPolicy.STATE_SUSPECT;
+                item.state =
+                        RefinedMemoryPolicy.STATE_SUSPECT;
                 item.updatedAt = now;
                 item.lastFailureAt = now;
                 item.lastEvidenceSource =
@@ -213,14 +242,26 @@ final class RefinedMemoryStore {
                                 ? "USER_CORRECTION"
                                 : safe(reason);
                 item.lastTaskId = safe(taskId);
-                item.confidence = RefinedMemoryPolicy.confidenceFor(
-                        item.successCount,
-                        item.failureCount);
+                item.confidence =
+                        RefinedMemoryPolicy.confidenceFor(
+                                item.successCount,
+                                item.failureCount);
                 changed++;
             }
             if (changed > 0) trimAndSaveLocked(items);
             return changed;
         }
+    }
+
+    int markSuspectByIds(
+            List<String> ids,
+            String taskId,
+            String reason) {
+        return applyCorrection(
+                ids,
+                null,
+                taskId,
+                reason);
     }
 
     private Entry applyEvidence(
