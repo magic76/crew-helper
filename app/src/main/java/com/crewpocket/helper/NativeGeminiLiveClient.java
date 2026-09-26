@@ -801,8 +801,9 @@ final class NativeGeminiLiveClient {
                         System.currentTimeMillis());
         if (trace.isEmpty()) return;
 
-        int changed = refinedMemoryStore.markSuspectByIds(
-                trace.memoryIds,
+        int changed = refinedMemoryStore.applyCorrection(
+                trace.usedMemoryIds,
+                trace.learnedMemoryIds,
                 trace.taskId,
                 "USER_CORRECTION");
         if (changed > 0) {
@@ -812,6 +813,10 @@ final class NativeGeminiLiveClient {
                             + changed
                             + " sourceTask="
                             + trace.taskId
+                            + " used="
+                            + trace.usedMemoryIds.size()
+                            + " learned="
+                            + trace.learnedMemoryIds.size()
                             + " injections="
                             + trace.injectionCount);
         }
@@ -4226,6 +4231,11 @@ final class NativeGeminiLiveClient {
                             task.refinedMemoryMediaPlaybackActive,
                             task.taskId);
             if (learned != null) {
+                refinedMemoryUseTrace.recordLearned(
+                        task.taskId,
+                        task.intentGeneration,
+                        learned.id,
+                        System.currentTimeMillis());
                 Log.i(TAG, "RefinedMemory learned scope="
                         + learned.scope
                         + " state=" + learned.state
