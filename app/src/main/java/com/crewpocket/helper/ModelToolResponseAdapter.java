@@ -121,6 +121,7 @@ final class ModelToolResponseAdapter {
         JSONObject screen = out.optJSONObject("screen");
         JSONObject context = out.optJSONObject("context");
 
+        trimArray(context, "refinedMemory", 2);
         trimArray(screen, "items", 10);
         trimArray(screen, "choices", 12);
         trimTailArray(context, "recentSteps", 2);
@@ -133,6 +134,7 @@ final class ModelToolResponseAdapter {
         }
 
         if (context != null) {
+            trimArray(context, "refinedMemory", 1);
             trimTailArray(context, "recentSteps", 1);
         }
         trimArray(screen, "items", 8);
@@ -148,6 +150,7 @@ final class ModelToolResponseAdapter {
         trimArray(screen, "items", 6);
         trimArray(screen, "choices", 4);
         if (context != null) {
+            context.remove("refinedMemory");
             context.remove("recentSteps");
             String goal = context.optString("goal", "");
             String rootGoal = context.optString("rootGoal", "");
@@ -266,6 +269,25 @@ final class ModelToolResponseAdapter {
                 copyClipped(source, out, "rootGoal", MAX_GOAL);
                 copyClipped(source, out, "currentApp", MAX_LABEL);
                 copyClipped(source, out, "pendingTask", MAX_LABEL);
+
+                JSONArray refinedMemory =
+                        source.optJSONArray("refinedMemory");
+                if (refinedMemory != null) {
+                    JSONArray compactMemory = new JSONArray();
+                    for (int i = 0;
+                            i < refinedMemory.length()
+                                    && compactMemory.length() < 2;
+                            i++) {
+                        String value =
+                                refinedMemory.optString(i, "").trim();
+                        if (!value.isEmpty()) {
+                            compactMemory.put(clip(value, 180));
+                        }
+                    }
+                    if (compactMemory.length() > 0) {
+                        out.put("refinedMemory", compactMemory);
+                    }
+                }
 
                 JSONObject search = source.optJSONObject("search");
                 if (search != null) {
