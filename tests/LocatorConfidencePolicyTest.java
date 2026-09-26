@@ -26,7 +26,28 @@ public final class LocatorConfidencePolicyTest {
                         0.75, 0.50, false, false, false).outcome,
                 "medium confidence should reobserve");
 
+        expectTrue(
+                LocatorConfidencePolicy.hasAmbiguousCompetition(
+                        0.90, 0.84, false, false),
+                "shared ambiguity predicate should detect close runner-up");
+        expectFalse(
+                LocatorConfidencePolicy.hasAmbiguousCompetition(
+                        0.90, 0.80, false, false),
+                "shared ambiguity predicate should reject clear margin");
+        expectFalse(
+                LocatorConfidencePolicy.hasAmbiguousCompetition(
+                        0.90, 0.89, true, false),
+                "unique exact view-id must preserve the locator special case");
+
         System.out.println("LocatorConfidencePolicyTest passed");
+    }
+
+    private static void expectTrue(boolean value, String message) {
+        if (!value) throw new AssertionError(message);
+    }
+
+    private static void expectFalse(boolean value, String message) {
+        if (value) throw new AssertionError(message);
     }
 
     private static void expect(

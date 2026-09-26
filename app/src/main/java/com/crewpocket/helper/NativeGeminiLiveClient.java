@@ -65,6 +65,8 @@ final class NativeGeminiLiveClient {
     private volatile long taskRecipeCandidateGeneration = -1L;
     private volatile String taskRecipeCandidateId = "";
     private final PhoneRuntimeExecutor phoneRuntimeExecutor;
+    private final CandidateArbitrationShadowController
+            candidateArbitrationShadowController;
     private final RuntimeToolExecutor runtimeToolExecutor;
     private final LiveAudioController liveAudioController;
     private final GeminiLiveTurnHandler geminiLiveTurnHandler;
@@ -277,8 +279,51 @@ final class NativeGeminiLiveClient {
                     }
                 },
                 this.contextPayloadAudit);
+        this.candidateArbitrationShadowController =
+                new CandidateArbitrationShadowController(
+                        this.appContext,
+                        new CandidateArbitrator(apiKey));
         this.phoneRuntimeExecutor = new PhoneRuntimeExecutor(
-                this.appContext, this.visionController);
+                this.appContext,
+                this.visionController,
+                new PhoneRuntimeExecutor.LocatorShadowObserver() {
+                    @Override
+                    public String onLocatorDecision(
+                            JSONObject semanticDecision) {
+                        JSONObject progress =
+                                NativeGeminiLiveClient.this
+                                        .workingContext
+                                        .toProgressJson();
+                        String goal = progress.optString(
+                                "rootGoal",
+                                progress.optString("goal", ""));
+                        return NativeGeminiLiveClient.this
+                                .candidateArbitrationShadowController
+                                .observe(
+                                        NativeGeminiLiveClient.this
+                                                .agentTaskCoordinator
+                                                .activeTaskId(),
+                                        NativeGeminiLiveClient.this
+                                                .userIntentGeneration,
+                                        goal,
+                                        progress.optString(
+                                                "goalIntent", ""),
+                                        progress.optString(
+                                                "currentApp", ""),
+                                        semanticDecision);
+                    }
+
+                    @Override
+                    public void onBaselineCandidate(
+                            String eventId,
+                            String candidateId) {
+                        NativeGeminiLiveClient.this
+                                .candidateArbitrationShadowController
+                                .recordBaselineCandidate(
+                                        eventId,
+                                        candidateId);
+                    }
+                });
         this.runtimeToolExecutor = new RuntimeToolExecutor(
                 this.appContext,
                 this.notebookToolHandler,
@@ -782,15 +827,24 @@ final class NativeGeminiLiveClient {
         boolean correctionLike =
                 RefinedMemoryEvidencePolicy
                         .looksLikeCorrectionText(userText);
+        boolean reliableCorrection =
+                RefinedMemoryEvidencePolicy
+                        .looksLikeReliableCorrection(
+                                userText,
+                                transcriptConfidence);
+        if (reliableCorrection) {
+            candidateArbitrationShadowController.recordCorrection(
+                    userIntentGeneration,
+                    System.currentTimeMillis(),
+                    CORRECTION_WINDOW_MS);
+        }
         if (!correctionLike) {
             // The user moved on. Do not let a later unrelated correction
             // penalize a memory used by an older task.
             refinedMemoryUseTrace.clear();
             return;
         }
-        if (!RefinedMemoryEvidencePolicy.looksLikeReliableCorrection(
-                userText,
-                transcriptConfidence)) {
+        if (!reliableCorrection) {
             // Preserve the short-lived trace for a possible clearer repeat,
             // but never punish memory from a low-confidence ASR transcript.
             return;
@@ -2906,6 +2960,17 @@ final class NativeGeminiLiveClient {
             if (isPhoneContextTool(name)) attachCurrentAppPlaybook(result);
             updateTaskCompletionContract(
                     task, name, result, runtimeV2Enforced);
+            String arbitrationEventId =
+                    result.optString(
+                            "_candidateArbitrationEventId", "").trim();
+            if (!arbitrationEventId.isEmpty()) {
+                candidateArbitrationShadowController.recordOutcome(
+                        arbitrationEventId,
+                        result);
+                // Correlation is process-local only. Never expose it to Gemini,
+                // recipe capture, Refined Memory, Inspector payloads, or storage.
+                result.remove("_candidateArbitrationEventId");
+            }
             if (!runtimeV2Enforced) {
                 updateAgentStabilityAfterResult(
                         task, name, args, result);
@@ -4921,6 +4986,8 @@ final class NativeGeminiLiveClient {
                 mediaPlayCandidate && isMusicActive();
 
         JSONObject reply = phoneRuntimeExecutor.tap(args);
+        String arbitrationEventId =
+                phoneRuntimeExecutor.consumeCandidateArbitrationEventId();
         workingContext.recordAction(
                 "tap_screen",
                 reply.optBoolean("success", false)
@@ -4930,6 +4997,13 @@ final class NativeGeminiLiveClient {
                 observationVerificationController
                         .autoObserveAfterMutation(
                                 reply, "tap_screen");
+        if (!arbitrationEventId.isEmpty()) {
+            try {
+                observed.put(
+                        "_candidateArbitrationEventId",
+                        arbitrationEventId);
+            } catch (Exception ignored) {}
+        }
         return applyMediaPlaybackCompletion(
                 observed,
                 tapMeta,

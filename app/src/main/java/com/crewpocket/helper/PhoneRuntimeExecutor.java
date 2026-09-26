@@ -20,6 +20,11 @@ import java.util.Locale;
  * and post-action verification remain in NativeGeminiLiveClient.
  */
 final class PhoneRuntimeExecutor {
+    interface LocatorShadowObserver {
+        String onLocatorDecision(JSONObject semanticDecision);
+        void onBaselineCandidate(String eventId, String candidateId);
+    }
+
     static final class MutationResult {
         final JSONObject result;
         final boolean observeAfter;
@@ -35,14 +40,31 @@ final class PhoneRuntimeExecutor {
     private final Context appContext;
     private final LiveVisionController visionController;
     private final AppAutonomyStore autonomyStore;
+    private final LocatorShadowObserver locatorShadowObserver;
+    private final ThreadLocal<String> lastCandidateArbitrationEventId =
+            new ThreadLocal<String>();
     private final ArrayList<JSONObject> lastCandidateApps =
             new ArrayList<JSONObject>();
     private volatile HttpURLConnection activeConnection;
 
     PhoneRuntimeExecutor(Context appContext, LiveVisionController visionController) {
+        this(appContext, visionController, null);
+    }
+
+    PhoneRuntimeExecutor(
+            Context appContext,
+            LiveVisionController visionController,
+            LocatorShadowObserver locatorShadowObserver) {
         this.appContext = appContext;
         this.visionController = visionController;
         this.autonomyStore = new AppAutonomyStore(appContext);
+        this.locatorShadowObserver = locatorShadowObserver;
+    }
+
+    String consumeCandidateArbitrationEventId() {
+        String eventId = lastCandidateArbitrationEventId.get();
+        lastCandidateArbitrationEventId.remove();
+        return eventId == null ? "" : eventId;
     }
 
     void resetTransientState() {
@@ -351,6 +373,7 @@ final class PhoneRuntimeExecutor {
     }
 
     JSONObject tap(JSONObject args) throws Exception {
+        lastCandidateArbitrationEventId.remove();
         JSONObject safeArgs = args == null ? new JSONObject() : args;
         double targetX = safeArgs.optDouble("x", -1);
         double targetY = safeArgs.optDouble("y", -1);
@@ -401,6 +424,25 @@ final class PhoneRuntimeExecutor {
                 fallbackTrace.put("semantic_v2:"
                         + semantic.optString("decision",
                                 semantic.optString("error", "UNKNOWN")));
+
+                String arbitrationEventId = "";
+                if (locatorShadowObserver != null) {
+                    try {
+                        arbitrationEventId =
+                                locatorShadowObserver.onLocatorDecision(semantic);
+                        if (arbitrationEventId != null
+                                && !arbitrationEventId.isEmpty()) {
+                            lastCandidateArbitrationEventId.set(
+                                    arbitrationEventId);
+                        }
+                    } catch (Exception ignored) {
+                        arbitrationEventId = "";
+                    }
+                }
+                // Restore the exact baseline /click_v2 payload before any
+                // existing fallback, Runtime, Gemini, or memory path sees it.
+                semantic.remove("_shadowCandidates");
+                semantic.remove("_shadowPackage");
 
                 String semanticDecision =
                         semantic.optString("decision", "");
@@ -464,6 +506,15 @@ final class PhoneRuntimeExecutor {
                                                     ? "SUCCESS"
                                                     : "MISS"));
                             if (trustedTap.optBoolean("success", false)) {
+                                if (locatorShadowObserver != null
+                                        && arbitrationEventId != null
+                                        && !arbitrationEventId.isEmpty()) {
+                                    try {
+                                        locatorShadowObserver.onBaselineCandidate(
+                                                arbitrationEventId,
+                                                trustedElementId);
+                                    } catch (Exception ignored) {}
+                                }
                                 return trustedTap
                                         .put(
                                             "resolvedFrom",

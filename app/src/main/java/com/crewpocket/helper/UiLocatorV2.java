@@ -25,6 +25,11 @@ final class UiLocatorV2 {
         final String role;
         final String semanticHint;
         final double confidence;
+        final boolean exactViewId;
+        final int left;
+        final int top;
+        final int right;
+        final int bottom;
 
         CandidateSummary(int index, UiLocatorScorer.Score score) {
             UiNodeSnapshot node = score == null ? null : score.node;
@@ -35,6 +40,11 @@ final class UiLocatorV2 {
             this.role = node == null ? "" : node.role;
             this.semanticHint = node == null ? "" : node.semanticHint;
             this.confidence = score == null ? 0.0 : score.confidence;
+            this.exactViewId = score != null && score.exactViewId;
+            this.left = node == null ? 0 : node.left;
+            this.top = node == null ? 0 : node.top;
+            this.right = node == null ? 0 : node.right;
+            this.bottom = node == null ? 0 : node.bottom;
         }
 
         String displayLabel() {

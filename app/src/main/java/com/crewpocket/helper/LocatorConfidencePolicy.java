@@ -59,11 +59,11 @@ final class LocatorConfidencePolicy {
                     margin);
         }
 
-        boolean exactViewIdWins =
-                exactViewId && !runnerUpExactViewId;
-        if (!exactViewIdWins
-                && runner >= RUNNER_UP_RELEVANT_CONFIDENCE
-                && margin < AUTO_MIN_MARGIN) {
+        if (hasAmbiguousCompetition(
+                best,
+                runner,
+                exactViewId,
+                runnerUpExactViewId)) {
             return new Result(
                     Outcome.AMBIGUOUS,
                     "LOCATOR_MARGIN_TOO_SMALL",
@@ -89,6 +89,27 @@ final class LocatorConfidencePolicy {
                 Outcome.NOT_FOUND,
                 "INSUFFICIENT_SIGNAL",
                 margin);
+    }
+
+    /**
+     * Single source of truth for "there is a genuinely competing runner-up".
+     *
+     * Candidate arbitration reuses this exact predicate; it must never grow a
+     * second margin/confidence threshold beside the locator.
+     */
+    static boolean hasAmbiguousCompetition(
+            double bestConfidence,
+            double runnerUpConfidence,
+            boolean exactViewId,
+            boolean runnerUpExactViewId) {
+        double best = clamp(bestConfidence);
+        double runner = clamp(runnerUpConfidence);
+        if (best <= 0.0) return false;
+        boolean exactViewIdWins = exactViewId && !runnerUpExactViewId;
+        double margin = Math.max(0.0, best - runner);
+        return !exactViewIdWins
+                && runner >= RUNNER_UP_RELEVANT_CONFIDENCE
+                && margin < AUTO_MIN_MARGIN;
     }
 
     private static double clamp(double value) {
