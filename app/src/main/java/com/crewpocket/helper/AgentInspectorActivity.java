@@ -123,7 +123,7 @@ public class AgentInspectorActivity extends Activity {
         memoryDashboard.setOnClickListener(v -> startActivity(
                 new Intent(
                         AgentInspectorActivity.this,
-                        CrewLearnedActivity.class)));
+                        RefinedMemoryDashboardActivity.class)));
         root.addView(memoryDashboard, memoryDashboardLp);
 
         Button testModel = smallButton(I18n.get(
