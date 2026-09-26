@@ -25,6 +25,9 @@ final class TaskRecipeRuntime {
             return fallback("TASK_RECIPE_INVALID", -1, recipeId);
         }
 
+        JSONObject terminalResult = null;
+        String terminalPackage = "";
+
         for (int i = 0; i < steps.length(); i++) {
             if (!host.isCurrentIntent()) {
                 return fallback("TASK_RECIPE_CANCELLED", i, recipeId);
@@ -88,6 +91,14 @@ final class TaskRecipeRuntime {
                 return fallback("TASK_RECIPE_NEEDS_MODEL", i, recipeId);
             }
 
+            terminalResult = result;
+            JSONObject terminalAfter = result.optJSONObject("after");
+            if (terminalAfter != null
+                    && !terminalAfter.optString("package", "").trim().isEmpty()) {
+                terminalPackage =
+                        terminalAfter.optString("package", "").trim();
+            }
+
             String expectedAfterPackage =
                     step.optString("expectedAfterPackage", "");
             String expectedAfterStable =
@@ -114,7 +125,7 @@ final class TaskRecipeRuntime {
             }
         }
 
-        return new JSONObject()
+        JSONObject out = new JSONObject()
                 .put("success", true)
                 .put("fastPath", true)
                 .put("fastPathState", "COMPLETED")
@@ -125,6 +136,33 @@ final class TaskRecipeRuntime {
                 .put("semanticAction", "TASK_RECIPE")
                 .put("resolvedByRuntime", "task_recipe")
                 .put("message", "已用熟悉流程完成；直接簡短回覆完成，不要再呼叫工具。");
+
+        if (terminalResult != null) {
+            out.put(
+                    "terminalTaskState",
+                    terminalResult.optString("taskState", ""))
+                    .put(
+                            "terminalCompletionEvidence",
+                            terminalResult.optString(
+                                    "completionEvidence", ""))
+                    .put(
+                            "terminalVerified",
+                            terminalResult.optBoolean("verified", false)
+                                    || "VERIFIED".equalsIgnoreCase(
+                                            terminalResult.optString(
+                                                    "verificationStatus", ""))
+                                    || "VERIFIED".equalsIgnoreCase(
+                                            terminalResult.optString(
+                                                    "verification", "")))
+                    .put(
+                            "terminalMediaPlaybackActive",
+                            terminalResult.optBoolean(
+                                    "mediaPlaybackActive", false));
+        }
+        if (!terminalPackage.isEmpty()) {
+            out.put("terminalPackage", terminalPackage);
+        }
+        return out;
     }
 
     private static JSONObject fallback(
