@@ -4214,6 +4214,32 @@ final class NativeGeminiLiveClient {
                 task.intentGeneration);
         conversationGoalTouchedAt = System.currentTimeMillis();
 
+        long memoryTaskFinishedAt = System.currentTimeMillis();
+        RefinedMemoryUseTrace.Snapshot memoryTaskTrace =
+                refinedMemoryUseTrace.snapshot();
+        java.util.List<String> memoryIdsUsedByTask =
+                task.taskId.equals(memoryTaskTrace.taskId)
+                        ? memoryTaskTrace.usedMemoryIds
+                        : java.util.Collections.<String>emptyList();
+        String actualMemoryPattern =
+                RefinedMemoryPolicy.patternFor(
+                        learningGoalIntent,
+                        task.recipeGoal,
+                        task.refinedMemoryStepsSnapshot());
+        refinedMemoryStore.recordTaskResult(
+                task.taskId,
+                learningGoalIntent,
+                memoryIdsUsedByTask,
+                actualMemoryPattern,
+                task.steps + task.observationActions,
+                Math.max(
+                        0L,
+                        memoryTaskFinishedAt
+                                - task.effectiveStartedAt(
+                                        memoryTaskFinishedAt)),
+                "任務完成".equals(reason),
+                strongTerminalLearningEvidence);
+
         if ("任務完成".equals(reason)
                 && task != null
                 && task.blockedReason == null) {
@@ -6894,6 +6920,10 @@ final class NativeGeminiLiveClient {
                     refinedMemoryTask.intentGeneration,
                     actualIds,
                     System.currentTimeMillis());
+            refinedMemoryStore.recordUsed(
+                    refinedMemoryTask.taskId,
+                    goalIntent,
+                    actualIds);
         }
         RefinedMemoryUseTrace.Snapshot memoryTrace =
                 refinedMemoryUseTrace.snapshot();

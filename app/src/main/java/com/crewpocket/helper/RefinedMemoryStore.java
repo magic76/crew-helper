@@ -21,8 +21,10 @@ import java.util.UUID;
 final class RefinedMemoryStore {
     private static final String PREFS = "crew_refined_memory";
     private static final String KEY_DATA = "memories_v1";
+    private static final String KEY_EVENTS = "events_v1";
     private static final int EVIDENCE_SCHEMA_VERSION = 2;
     private static final int MAX_ITEMS = 48;
+    private static final int MAX_EVENTS = 96;
     private static final long STALE_AFTER_MS =
             120L * 24L * 60L * 60L * 1000L;
     private static final Object LOCK = new Object();
@@ -242,7 +244,17 @@ final class RefinedMemoryStore {
                 item.confidence = correction.confidence;
                 changed++;
             }
-            if (changed > 0) trimAndSaveLocked(items);
+            if (changed > 0) {
+                trimAndSaveLocked(items);
+                JSONObject event = baseEvent(
+                        "CORRECTED",
+                        taskId,
+                        "");
+                put(event, "usedIds", toArray(usedIds));
+                put(event, "learnedIds", toArray(learnedIds));
+                put(event, "changed", changed);
+                appendEventLocked(event);
+            }
             return changed;
         }
     }
@@ -362,8 +374,385 @@ final class RefinedMemoryStore {
                     target.failureCount);
 
             trimAndSaveLocked(items);
+
+            String eventType =
+                    verdict == RefinedMemoryEvidencePolicy.Verdict.INDEPENDENT_SUCCESS
+                            ? (target.successCount <= 1 ? "LEARNED" : "EVIDENCE")
+                            : (verdict == RefinedMemoryEvidencePolicy.Verdict.SUPPORTING_SUCCESS
+                                    ? "REPLAY_SUPPORT"
+                                    : "NEGATIVE");
+            JSONObject event = baseEvent(
+                    eventType,
+                    taskId,
+                    target.scope);
+            put(event, "memoryId", target.id);
+            put(event, "state", target.state);
+            put(event, "source", safe(source));
+            put(event, "successCount", target.successCount);
+            put(event, "supportCount", target.supportCount);
+            put(event, "failureCount", target.failureCount);
+            appendEventLocked(event);
             return copy(target);
         }
+    }
+
+    void recordUsed(
+            String taskId,
+            String scope,
+            List<String> memoryIds) {
+        if (prefs == null || memoryIds == null || memoryIds.isEmpty()) return;
+        synchronized (LOCK) {
+            JSONObject event = baseEvent("USED", taskId, scope);
+            put(event, "memoryIds", toArray(memoryIds));
+            appendEventLocked(event);
+        }
+    }
+
+    void recordTaskResult(
+            String taskId,
+            String scope,
+            List<String> usedMemoryIds,
+            String actualPattern,
+            int stepCount,
+            long durationMs,
+            boolean completed,
+            boolean terminalVerified) {
+        if (prefs == null || safe(taskId).isEmpty()) return;
+        synchronized (LOCK) {
+            JSONObject event = baseEvent("TASK_RESULT", taskId, scope);
+            JSONArray used = toArray(usedMemoryIds);
+            JSONArray applied = new JSONArray();
+            String cleanPattern = clip(actualPattern, 180);
+            if (!cleanPattern.isEmpty() && usedMemoryIds != null) {
+                List<Entry> items = loadLocked();
+                for (String id : usedMemoryIds) {
+                    Entry item = findById(items, id);
+                    if (item != null && cleanPattern.equals(item.pattern)) {
+                        applied.put(item.id);
+                    }
+                }
+            }
+            put(event, "memoryIds", used);
+            put(event, "appliedIds", applied);
+            put(event, "stepCount", Math.max(0, stepCount));
+            put(event, "durationMs", Math.max(0L, durationMs));
+            put(event, "completed", completed);
+            put(event, "terminalVerified", terminalVerified);
+            appendEventLocked(event);
+        }
+    }
+
+    JSONArray recentEvents(int limit) {
+        JSONArray out = new JSONArray();
+        if (prefs == null) return out;
+        synchronized (LOCK) {
+            JSONArray events = loadEventsLocked();
+            int max = Math.max(0, Math.min(30, limit));
+            int start = Math.max(0, events.length() - max);
+            for (int i = events.length() - 1; i >= start; i--) {
+                JSONObject event = events.optJSONObject(i);
+                if (event != null) out.put(copyObject(event));
+            }
+        }
+        return out;
+    }
+
+    JSONObject usageStats(String memoryId, String scope) {
+        JSONObject out = new JSONObject();
+        if (prefs == null) return out;
+        synchronized (LOCK) {
+            JSONArray events = loadEventsLocked();
+            String id = safe(memoryId);
+            String cleanScope = safe(scope);
+
+            int usedTasks = 0;
+            int verifiedTasks = 0;
+            int appliedTasks = 0;
+            int corrected = 0;
+            long usedSteps = 0L;
+            long usedDuration = 0L;
+            int baselineTasks = 0;
+            int baselineVerified = 0;
+            long baselineSteps = 0L;
+            long baselineDuration = 0L;
+            long lastUsedAt = 0L;
+
+            for (int i = 0; i < events.length(); i++) {
+                JSONObject event = events.optJSONObject(i);
+                if (event == null) continue;
+                String type = event.optString("type", "");
+                if ("TASK_RESULT".equals(type)
+                        && cleanScope.equals(event.optString("scope", ""))) {
+                    JSONArray ids = event.optJSONArray("memoryIds");
+                    boolean hasAnyMemory = ids != null && ids.length() > 0;
+                    boolean contains = containsId(ids, id);
+                    if (contains) {
+                        usedTasks++;
+                        usedSteps += Math.max(0, event.optInt("stepCount", 0));
+                        usedDuration += Math.max(0L, event.optLong("durationMs", 0L));
+                        boolean correctedTask =
+                                wasTaskCorrected(
+                                        events,
+                                        event.optString("taskId", ""));
+                        if (event.optBoolean("terminalVerified", false)
+                                && !correctedTask) {
+                            verifiedTasks++;
+                        }
+                        if (containsId(event.optJSONArray("appliedIds"), id)) {
+                            appliedTasks++;
+                        }
+                        lastUsedAt = Math.max(
+                                lastUsedAt,
+                                event.optLong("at", 0L));
+                    } else if (!hasAnyMemory) {
+                        baselineTasks++;
+                        baselineSteps += Math.max(0, event.optInt("stepCount", 0));
+                        baselineDuration += Math.max(0L, event.optLong("durationMs", 0L));
+                        boolean correctedTask =
+                                wasTaskCorrected(
+                                        events,
+                                        event.optString("taskId", ""));
+                        if (event.optBoolean("terminalVerified", false)
+                                && !correctedTask) {
+                            baselineVerified++;
+                        }
+                    }
+                } else if ("CORRECTED".equals(type)
+                        && (containsId(event.optJSONArray("usedIds"), id)
+                            || containsId(event.optJSONArray("learnedIds"), id))) {
+                    corrected++;
+                }
+            }
+
+            put(out, "usedTasks", usedTasks);
+            put(out, "verifiedTasks", verifiedTasks);
+            put(out, "appliedTasks", appliedTasks);
+            put(out, "corrections", corrected);
+            put(out, "lastUsedAt", lastUsedAt);
+            put(out, "avgStepsWith",
+                    usedTasks == 0 ? 0.0d : usedSteps / (double) usedTasks);
+            put(out, "avgDurationMsWith",
+                    usedTasks == 0 ? 0.0d : usedDuration / (double) usedTasks);
+            put(out, "baselineTasks", baselineTasks);
+            put(out, "baselineVerified", baselineVerified);
+            put(out, "avgStepsWithout",
+                    baselineTasks == 0 ? 0.0d : baselineSteps / (double) baselineTasks);
+            put(out, "avgDurationMsWithout",
+                    baselineTasks == 0 ? 0.0d : baselineDuration / (double) baselineTasks);
+        }
+        return out;
+    }
+
+    JSONObject dashboardSummary() {
+        JSONObject out = new JSONObject();
+        if (prefs == null) return out;
+        synchronized (LOCK) {
+            JSONArray events = loadEventsLocked();
+            int memoryTasks = 0;
+            int memoryVerified = 0;
+            int noMemoryTasks = 0;
+            int noMemoryVerified = 0;
+            int corrections = 0;
+
+            for (int i = 0; i < events.length(); i++) {
+                JSONObject event = events.optJSONObject(i);
+                if (event == null) continue;
+                String type = event.optString("type", "");
+                if ("CORRECTED".equals(type)) {
+                    corrections++;
+                    continue;
+                }
+                if (!"TASK_RESULT".equals(type)) continue;
+                JSONArray ids = event.optJSONArray("memoryIds");
+                boolean usedMemory = ids != null && ids.length() > 0;
+                boolean correctedTask =
+                        wasTaskCorrected(
+                                events,
+                                event.optString("taskId", ""));
+                if (usedMemory) {
+                    memoryTasks++;
+                    if (event.optBoolean("terminalVerified", false)
+                            && !correctedTask) {
+                        memoryVerified++;
+                    }
+                } else {
+                    noMemoryTasks++;
+                    if (event.optBoolean("terminalVerified", false)
+                            && !correctedTask) {
+                        noMemoryVerified++;
+                    }
+                }
+            }
+
+            put(out, "memoryTasks", memoryTasks);
+            put(out, "memoryVerified", memoryVerified);
+            put(out, "noMemoryTasks", noMemoryTasks);
+            put(out, "noMemoryVerified", noMemoryVerified);
+            put(out, "corrections", corrections);
+        }
+        return out;
+    }
+
+    boolean setEnabled(String id, boolean enabled) {
+        if (prefs == null || safe(id).isEmpty()) return false;
+        synchronized (LOCK) {
+            List<Entry> items = loadLocked();
+            Entry item = findById(items, id);
+            if (item == null) return false;
+            item.enabled = enabled;
+            item.updatedAt = System.currentTimeMillis();
+            trimAndSaveLocked(items);
+            JSONObject event = baseEvent(
+                    enabled ? "ENABLED" : "DISABLED",
+                    "",
+                    item.scope);
+            put(event, "memoryId", item.id);
+            appendEventLocked(event);
+            return true;
+        }
+    }
+
+    boolean delete(String id) {
+        if (prefs == null || safe(id).isEmpty()) return false;
+        synchronized (LOCK) {
+            List<Entry> items = loadLocked();
+            for (int i = 0; i < items.size(); i++) {
+                Entry item = items.get(i);
+                if (item != null && safe(id).equals(item.id)) {
+                    String scope = item.scope;
+                    items.remove(i);
+                    trimAndSaveLocked(items);
+                    JSONObject event = baseEvent("DELETED", "", scope);
+                    put(event, "memoryId", safe(id));
+                    appendEventLocked(event);
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
+    int clearAll() {
+        if (prefs == null) return 0;
+        synchronized (LOCK) {
+            int count = loadLocked().size();
+            prefs.edit()
+                    .remove(KEY_DATA)
+                    .remove(KEY_EVENTS)
+                    .apply();
+            return count;
+        }
+    }
+
+    String buildInspectorReport(String taskId) {
+        String id = safe(taskId);
+        StringBuilder out = new StringBuilder();
+        out.append("Refined Memory trace\n");
+        if (prefs == null || id.isEmpty()) {
+            out.append("Task memory: unavailable");
+            return out.toString();
+        }
+
+        synchronized (LOCK) {
+            JSONArray events = loadEventsLocked();
+            JSONObject taskResult = null;
+            java.util.LinkedHashSet<String> usedIds =
+                    new java.util.LinkedHashSet<String>();
+            int usedCount = 0;
+            int learnedCount = 0;
+            int correctedCount = 0;
+            String learnedScope = "";
+            String learnedState = "";
+
+            for (int i = 0; i < events.length(); i++) {
+                JSONObject event = events.optJSONObject(i);
+                if (event == null || !id.equals(event.optString("taskId", ""))) {
+                    continue;
+                }
+                String type = event.optString("type", "");
+                if ("USED".equals(type)) {
+                    JSONArray ids = event.optJSONArray("memoryIds");
+                    addIds(usedIds, ids);
+                    usedCount = Math.max(
+                            usedCount,
+                            ids == null ? 0 : ids.length());
+                } else if ("TASK_RESULT".equals(type)) {
+                    taskResult = event;
+                    JSONArray ids = event.optJSONArray("memoryIds");
+                    addIds(usedIds, ids);
+                    usedCount = Math.max(
+                            usedCount,
+                            ids == null ? 0 : ids.length());
+                } else if ("LEARNED".equals(type)
+                        || "EVIDENCE".equals(type)
+                        || "REPLAY_SUPPORT".equals(type)) {
+                    learnedCount++;
+                    learnedScope = event.optString("scope", "");
+                    learnedState = event.optString("state", "");
+                } else if ("CORRECTED".equals(type)) {
+                    correctedCount += Math.max(1, event.optInt("changed", 1));
+                }
+            }
+
+            out.append("Used memories: ").append(usedCount).append("\n");
+            if (!usedIds.isEmpty()) {
+                List<Entry> items = loadLocked();
+                int shown = 0;
+                for (String memoryId : usedIds) {
+                    Entry item = findById(items, memoryId);
+                    if (item == null) continue;
+                    out.append("  - ")
+                            .append(item.scope)
+                            .append(" · ")
+                            .append(effectiveState(
+                                    item,
+                                    System.currentTimeMillis()))
+                            .append(" · ")
+                            .append(item.pattern)
+                            .append("\n");
+                    if (++shown >= 3) break;
+                }
+            }
+            if (taskResult != null) {
+                JSONArray applied = taskResult.optJSONArray("appliedIds");
+                out.append("Pattern applied: ")
+                        .append(applied == null ? 0 : applied.length())
+                        .append("/")
+                        .append(usedCount)
+                        .append("\n");
+                boolean correctedTask =
+                        correctedCount > 0
+                                || wasTaskCorrected(events, id);
+                out.append("Terminal verified: ")
+                        .append(taskResult.optBoolean("terminalVerified", false)
+                                        && !correctedTask
+                                ? "yes" : (correctedTask
+                                        ? "retracted by correction"
+                                        : "no"))
+                        .append("\n");
+                out.append("Steps / duration: ")
+                        .append(taskResult.optInt("stepCount", 0))
+                        .append(" / ")
+                        .append(taskResult.optLong("durationMs", 0L))
+                        .append("ms\n");
+            }
+            if (learnedCount > 0) {
+                out.append("Learning: ")
+                        .append(learnedCount)
+                        .append(" update");
+                if (!learnedScope.isEmpty()) {
+                    out.append(" · ").append(learnedScope);
+                }
+                if (!learnedState.isEmpty()) {
+                    out.append(" · ").append(learnedState);
+                }
+                out.append("\n");
+            } else {
+                out.append("Learning: none\n");
+            }
+            out.append("Corrections: ").append(correctedCount);
+        }
+        return out.toString();
     }
 
     static final class Selection {
@@ -581,6 +970,123 @@ final class RefinedMemoryStore {
         if (RefinedMemoryPolicy.STATE_CANDIDATE.equals(state)) return 2;
         if (RefinedMemoryPolicy.STATE_SUSPECT.equals(state)) return 1;
         return 0;
+    }
+
+    private JSONArray loadEventsLocked() {
+        if (prefs == null) return new JSONArray();
+        try {
+            return new JSONArray(
+                    prefs.getString(KEY_EVENTS, "[]"));
+        } catch (Exception ignored) {
+            return new JSONArray();
+        }
+    }
+
+    private void appendEventLocked(JSONObject event) {
+        if (prefs == null || event == null) return;
+        JSONArray events = loadEventsLocked();
+        events.put(event);
+        if (events.length() > MAX_EVENTS) {
+            JSONArray trimmed = new JSONArray();
+            for (int i = Math.max(0, events.length() - MAX_EVENTS);
+                    i < events.length();
+                    i++) {
+                trimmed.put(events.opt(i));
+            }
+            events = trimmed;
+        }
+        prefs.edit()
+                .putString(KEY_EVENTS, events.toString())
+                .apply();
+    }
+
+    private static JSONObject baseEvent(
+            String type,
+            String taskId,
+            String scope) {
+        JSONObject event = new JSONObject();
+        put(event, "at", System.currentTimeMillis());
+        put(event, "type", safe(type));
+        if (!safe(taskId).isEmpty()) {
+            put(event, "taskId", safe(taskId));
+        }
+        if (!safe(scope).isEmpty()) {
+            put(event, "scope", safe(scope));
+        }
+        return event;
+    }
+
+    private static JSONArray toArray(List<String> values) {
+        JSONArray out = new JSONArray();
+        if (values == null) return out;
+        for (String value : values) {
+            String clean = safe(value);
+            if (!clean.isEmpty()) out.put(clean);
+        }
+        return out;
+    }
+
+    private static boolean containsId(
+            JSONArray values,
+            String id) {
+        String cleanId = safe(id);
+        if (values == null || cleanId.isEmpty()) return false;
+        for (int i = 0; i < values.length(); i++) {
+            if (cleanId.equals(safe(values.optString(i, "")))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static void addIds(
+            java.util.Set<String> target,
+            JSONArray values) {
+        if (target == null || values == null) return;
+        for (int i = 0; i < values.length(); i++) {
+            String id = safe(values.optString(i, ""));
+            if (!id.isEmpty()) target.add(id);
+        }
+    }
+
+    private static boolean wasTaskCorrected(
+            JSONArray events,
+            String taskId) {
+        String id = safe(taskId);
+        if (events == null || id.isEmpty()) return false;
+        for (int i = 0; i < events.length(); i++) {
+            JSONObject event = events.optJSONObject(i);
+            if (event != null
+                    && "CORRECTED".equals(
+                            event.optString("type", ""))
+                    && id.equals(
+                            event.optString("taskId", ""))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static Entry findById(
+            List<Entry> items,
+            String id) {
+        String cleanId = safe(id);
+        if (items == null || cleanId.isEmpty()) return null;
+        for (Entry item : items) {
+            if (item != null && cleanId.equals(item.id)) {
+                return item;
+            }
+        }
+        return null;
+    }
+
+    private static JSONObject copyObject(JSONObject source) {
+        if (source == null) return new JSONObject();
+        try {
+            return new JSONObject(source.toString());
+        } catch (Exception ignored) {
+            return new JSONObject();
+        }
     }
 
     private static boolean sameIdentity(
