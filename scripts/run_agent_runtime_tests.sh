@@ -35,6 +35,8 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/MediaGoalUiPolicy.java" \
   "$SRC/MediaTapRecoveryPolicy.java" \
   "$SRC/RefinedMemoryPolicy.java" \
+  "$SRC/RefinedMemoryEvidencePolicy.java" \
+  "$SRC/RefinedMemoryUseTrace.java" \
   "$SRC/ToolCallDispatchLedger.java" \
   "$SRC/RuntimeToolRouting.java" \
   "$SRC/ToolIntentRoutingPolicy.java" \
@@ -96,6 +98,8 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/MediaGoalUiPolicyTest.java" \
   "$ROOT/tests/MediaTapRecoveryPolicyTest.java" \
   "$ROOT/tests/RefinedMemoryPolicyTest.java" \
+  "$ROOT/tests/RefinedMemoryEvidencePolicyTest.java" \
+  "$ROOT/tests/RefinedMemoryUseTraceTest.java" \
   "$ROOT/tests/ToolCallDispatchLedgerTest.java" \
   "$ROOT/tests/RuntimeToolRoutingTest.java" \
   "$ROOT/tests/ToolIntentRoutingPolicyTest.java" \
@@ -165,6 +169,8 @@ java -cp "$OUT" com.crewpocket.helper.MediaPlaybackCompletionPolicyTest
 java -cp "$OUT" com.crewpocket.helper.MediaGoalUiPolicyTest
 java -cp "$OUT" com.crewpocket.helper.MediaTapRecoveryPolicyTest
 java -cp "$OUT" com.crewpocket.helper.RefinedMemoryPolicyTest
+java -cp "$OUT" com.crewpocket.helper.RefinedMemoryEvidencePolicyTest
+java -cp "$OUT" com.crewpocket.helper.RefinedMemoryUseTraceTest
 java -cp "$OUT" com.crewpocket.helper.ToolCallDispatchLedgerTest
 java -cp "$OUT" com.crewpocket.helper.RuntimeToolRoutingTest
 java -cp "$OUT" com.crewpocket.helper.ToolIntentRoutingPolicyTest
