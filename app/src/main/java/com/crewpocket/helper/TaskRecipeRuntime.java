@@ -125,40 +125,96 @@ final class TaskRecipeRuntime {
             }
         }
 
+        String goalIntent =
+                GoalIntentKey.derive(
+                        recipe.optString("goal", ""));
+        String terminalTaskState =
+                terminalResult == null
+                        ? ""
+                        : terminalResult.optString(
+                                "taskState", "");
+        String terminalCompletionEvidence =
+                terminalResult == null
+                        ? ""
+                        : terminalResult.optString(
+                                "completionEvidence", "");
+        boolean terminalVerified =
+                terminalResult != null
+                        && (terminalResult.optBoolean(
+                                    "verified", false)
+                            || "VERIFIED".equalsIgnoreCase(
+                                    terminalResult.optString(
+                                            "verificationStatus", ""))
+                            || "VERIFIED".equalsIgnoreCase(
+                                    terminalResult.optString(
+                                            "verification", "")));
+        boolean terminalMediaPlaybackActive =
+                terminalResult != null
+                        && terminalResult.optBoolean(
+                                "mediaPlaybackActive", false);
+        String terminalVisibleEvidence =
+                terminalResult == null
+                        ? ""
+                        : terminalResult.toString();
+
+        boolean goalTerminalVerified =
+                TaskRecipeCompletionPolicy
+                        .isGoalTerminalVerified(
+                                goalIntent,
+                                terminalTaskState,
+                                terminalCompletionEvidence,
+                                terminalVerified,
+                                terminalMediaPlaybackActive,
+                                terminalPackage,
+                                terminalVisibleEvidence);
+
         JSONObject out = new JSONObject()
                 .put("success", true)
+                .put("recipeExecutionSuccess", true)
+                .put("goalTerminalVerified", goalTerminalVerified)
                 .put("fastPath", true)
-                .put("fastPathState", "COMPLETED")
+                .put(
+                        "fastPathState",
+                        goalTerminalVerified
+                                ? "VERIFIED_COMPLETED"
+                                : "EXECUTED_NEEDS_VERIFICATION")
                 .put("recipeId", recipeId)
                 .put("recipeStepCount", steps.length())
-                .put("taskState", "EVIDENCE_AVAILABLE")
-                .put("completionEvidence", "TASK_RECIPE_COMPLETED")
+                .put(
+                        "taskState",
+                        goalTerminalVerified
+                                ? "DONE"
+                                : "EVIDENCE_AVAILABLE")
+                .put(
+                        "completionEvidence",
+                        goalTerminalVerified
+                                ? (terminalCompletionEvidence.isEmpty()
+                                        ? "TASK_RECIPE_TERMINAL_VERIFIED"
+                                        : terminalCompletionEvidence)
+                                : "TASK_RECIPE_EXECUTED")
+                .put(
+                        "nextRequirement",
+                        goalTerminalVerified
+                                ? "NONE"
+                                : "INSPECT_UI")
                 .put("semanticAction", "TASK_RECIPE")
                 .put("resolvedByRuntime", "task_recipe")
-                .put("message", "已用熟悉流程完成；直接簡短回覆完成，不要再呼叫工具。");
+                .put(
+                        "message",
+                        goalTerminalVerified
+                                ? "熟悉流程已執行，且最終狀態已驗證。"
+                                : "熟悉流程已執行，但尚未證明整個任務完成；請先檢查目前畫面再作結論。");
 
-        if (terminalResult != null) {
-            out.put(
-                    "terminalTaskState",
-                    terminalResult.optString("taskState", ""))
-                    .put(
-                            "terminalCompletionEvidence",
-                            terminalResult.optString(
-                                    "completionEvidence", ""))
-                    .put(
-                            "terminalVerified",
-                            terminalResult.optBoolean("verified", false)
-                                    || "VERIFIED".equalsIgnoreCase(
-                                            terminalResult.optString(
-                                                    "verificationStatus", ""))
-                                    || "VERIFIED".equalsIgnoreCase(
-                                            terminalResult.optString(
-                                                    "verification", "")))
-                    .put(
-                            "terminalMediaPlaybackActive",
-                            terminalResult.optBoolean(
-                                    "mediaPlaybackActive", false));
-        }
+        out.put("terminalTaskState", terminalTaskState)
+                .put(
+                        "terminalCompletionEvidence",
+                        terminalCompletionEvidence)
+                .put(
+                        "terminalVerified",
+                        terminalVerified)
+                .put(
+                        "terminalMediaPlaybackActive",
+                        terminalMediaPlaybackActive);
         if (!terminalPackage.isEmpty()) {
             out.put("terminalPackage", terminalPackage);
         }
