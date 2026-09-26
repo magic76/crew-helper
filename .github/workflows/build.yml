@@ -40,7 +40,7 @@ jobs:
           packages: ''
 
       - name: Install Android 37 SDK
-        run: sdkmanager --channel=3 "platforms;android-37"
+        run: sdkmanager "platforms;android-37.0" "build-tools;37.0.0"
 
       - name: Resolve Shared Agent Harness
         run: gradle :app:dependencies --configuration releaseCompileClasspath
