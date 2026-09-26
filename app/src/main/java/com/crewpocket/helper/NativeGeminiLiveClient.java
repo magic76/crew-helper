@@ -6763,6 +6763,7 @@ final class NativeGeminiLiveClient {
                     refinedMemoryStore.selectForModel(
                             goalIntent,
                             memoryPackage,
+                            refinedMemoryTask.recipeStartPackage,
                             2);
             if (!candidate.isEmpty()
                     && !refinedMemoryUseTrace.alreadyInjected(
