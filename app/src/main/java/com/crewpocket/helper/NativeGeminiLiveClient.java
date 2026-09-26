@@ -2378,19 +2378,32 @@ final class NativeGeminiLiveClient {
         // 0034: model-facing semantic action -> existing trusted Runtime tool.
         final SemanticPhoneAction.Resolution semantic;
         try {
+            JSONObject progress =
+                    workingContext.toProgressJson();
+            String goalIntent =
+                    progress.optString("goalIntent", "");
+            String goalText =
+                    progress.optString(
+                            "goal",
+                            progress.optString("rootGoal", ""));
+
+            JSONObject semanticInputArgs =
+                    recoverMediaPlayTapArgs(
+                            requestedName,
+                            requestedArgs,
+                            goalIntent,
+                            goalText);
+
             SemanticPhoneAction.Resolution resolved =
                     SemanticPhoneAction.resolve(
                             requestedName,
-                            requestedArgs);
+                            semanticInputArgs);
 
             // Tool-intent correction must happen BEFORE preflight / Inspector /
             // verification so every layer agrees on what actually executed.
             // Weak Live turns sometimes choose TYPE while pursuing a search or
             // MEDIA:PLAY goal. Treat that as SEARCH instead of executing a
             // hidden late remap that still reports TYPE back to the model.
-            String goalIntent = workingContext
-                    .toProgressJson()
-                    .optString("goalIntent", "");
             boolean typeShouldBeSearch =
                     ToolIntentRoutingPolicy.shouldRemapTypeToSearch(
                             resolved.runtimeName,
@@ -2826,6 +2839,11 @@ final class NativeGeminiLiveClient {
                 ActionVerificationResult verification = agentRuntimeV2.verifyAndRecord(
                         id, evidence, observationVerificationController.latestObservation());
                 applyV2VerificationContract(result, verification);
+                reconcileMediaPlayCompletionAfterV2(
+                        result,
+                        semantic,
+                        name,
+                        verification);
             }
             if (isPhoneContextTool(name)) attachCurrentAppPlaybook(result);
             updateTaskCompletionContract(
@@ -3736,6 +3754,190 @@ final class NativeGeminiLiveClient {
                 args.optString("target", ""));
     }
 
+    private java.util.ArrayList<MediaTapRecoveryPolicy.Candidate>
+            mediaRecoveryCandidates(JSONObject semanticScreen) {
+        java.util.ArrayList<MediaTapRecoveryPolicy.Candidate> out =
+                new java.util.ArrayList<MediaTapRecoveryPolicy.Candidate>();
+        if (semanticScreen == null
+                || !semanticScreen.optBoolean("success", false)) {
+            return out;
+        }
+        JSONArray elements = semanticScreen.optJSONArray("elements");
+        if (elements == null) return out;
+
+        for (int i = 0; i < elements.length(); i++) {
+            JSONObject item = elements.optJSONObject(i);
+            if (item == null) continue;
+            out.add(new MediaTapRecoveryPolicy.Candidate(
+                    item.optString("role", ""),
+                    item.optString("label", ""),
+                    item.optString("semanticHint", ""),
+                    item.optBoolean("clickable", false),
+                    item.optBoolean("enabled", true),
+                    item.optBoolean("sensitive", false),
+                    item.optDouble("confidence", 0.0)));
+        }
+        return out;
+    }
+
+    private String latestActivatedTargetForMediaRecovery() {
+        JSONObject progress =
+                workingContext.toProgressJson();
+        JSONArray steps =
+                progress.optJSONArray("recentSteps");
+        if (steps == null) return "";
+        for (int i = steps.length() - 1; i >= 0; i--) {
+            JSONObject step = steps.optJSONObject(i);
+            if (step == null
+                    || !"UI_ACTIVATED".equals(
+                            step.optString("effect", ""))) {
+                continue;
+            }
+            String target =
+                    step.optString("target", "").trim();
+            if (!target.isEmpty()) return target;
+        }
+        return "";
+    }
+
+    private JSONObject recoverMediaPlayTapArgs(
+            String requestedName,
+            JSONObject requestedArgs,
+            String goalIntent,
+            String goalText) {
+        JSONObject original =
+                requestedArgs == null
+                        ? new JSONObject()
+                        : requestedArgs;
+        if (!SemanticPhoneAction.TOOL_NAME.equals(requestedName)
+                || !MediaGoalUiPolicy.isMediaPlayGoal(goalIntent)
+                || !"TAP".equalsIgnoreCase(
+                        original.optString("action", ""))) {
+            return original;
+        }
+
+        String elementId =
+                original.optString("element_id", "").trim();
+        String visualLeaseId =
+                original.optString("visual_lease_id", "").trim();
+        if (!elementId.isEmpty() || !visualLeaseId.isEmpty()) {
+            return original;
+        }
+
+        String target =
+                original.optString("target", "").trim();
+        boolean numericTarget =
+                MediaGoalUiPolicy
+                        .looksLikeNumericOrdinalTarget(target);
+        if (!target.isEmpty() && !numericTarget) {
+            return original;
+        }
+
+        boolean elementReferenceActive =
+                ElementReferenceRuntime.isActive();
+        if (numericTarget && elementReferenceActive) {
+            return original;
+        }
+
+        JSONObject current =
+                observationVerificationController
+                        .readSemanticScreenQuietly();
+        String recovered =
+                MediaTapRecoveryPolicy.recoverTarget(
+                        goalText,
+                        latestActivatedTargetForMediaRecovery(),
+                        mediaRecoveryCandidates(current));
+
+        try {
+            JSONObject out =
+                    new JSONObject(original.toString());
+            if (!recovered.isEmpty()) {
+                out.put("target", recovered)
+                        .put("runtime_media_target_recovered", true);
+                return out;
+            }
+
+            // A bare ordinal is not a semantic media target. Without an
+            // explicit element-reference session, fail as TARGET_REQUIRED
+            // instead of guessing a numbered label on screen.
+            if (MediaGoalUiPolicy.shouldRejectNumericTarget(
+                    target, elementReferenceActive)) {
+                out.remove("target");
+                out.put(
+                        "runtime_media_numeric_target_rejected",
+                        true);
+            }
+            return out;
+        } catch (Exception ignored) {
+            return original;
+        }
+    }
+
+    private void reconcileMediaPlayCompletionAfterV2(
+            JSONObject result,
+            SemanticPhoneAction.Resolution semantic,
+            String runtimeName,
+            ActionVerificationResult verification) {
+        if (result == null
+                || semantic == null
+                || verification == null
+                || !verification.committed()
+                || (!"tap_screen".equals(runtimeName)
+                    && !"tap_element".equals(runtimeName))) {
+            return;
+        }
+
+        String goalIntent =
+                workingContext.toProgressJson()
+                        .optString("goalIntent", "");
+        if (!MediaGoalUiPolicy.isMediaPlayGoal(goalIntent)) {
+            return;
+        }
+
+        String targetMetadata =
+                semantic.runtimeArgs
+                        .optString("label", "")
+                        .trim();
+        if (targetMetadata.isEmpty()) {
+            targetMetadata =
+                    semantic.runtimeArgs
+                            .optString(
+                                    "semantic_target", "")
+                            .trim();
+        }
+        boolean observableEffect =
+                verification.screenChanged
+                        || verification.stableScreenChanged
+                        || verification.focusChanged
+                        || verification.code.startsWith(
+                                "TAP_EFFECT_OBSERVED");
+        if (!MediaPlaybackCompletionPolicy
+                .shouldCompleteFromVerifiedEffect(
+                        goalIntent,
+                        targetMetadata,
+                        verification.committed(),
+                        observableEffect)) {
+            return;
+        }
+
+        try {
+            String existingEvidence =
+                    result.optString("completionEvidence", "");
+            if ("DONE".equals(
+                    result.optString("taskState", ""))
+                    && existingEvidence.startsWith("MEDIA_")) {
+                return;
+            }
+            result.put("taskState", "DONE")
+                    .put(
+                            "completionEvidence",
+                            "MEDIA_PLAY_CONTROL_VERIFIED")
+                    .put("nextRequirement", "NONE")
+                    .put("mediaPlaybackAccepted", true)
+                    .put("verified", true);
+        } catch (Exception ignored) {}
+    }
+
     private JSONObject applyMediaPlaybackCompletion(
             JSONObject observed,
             String targetMetadata,
@@ -3753,9 +3955,16 @@ final class NativeGeminiLiveClient {
                         : after.optString(
                                 "package",
                                 currentPackage);
+        String goalIntent =
+                workingContext.toProgressJson()
+                        .optString("goalIntent", "");
+        boolean explicitMediaPlayGoal =
+                MediaGoalUiPolicy.isMediaPlayGoal(goalIntent);
         boolean musicActiveAfter =
-                waitForMusicActiveAfterTap(
-                        musicActiveBefore);
+                explicitMediaPlayGoal
+                        ? isMusicActive()
+                        : waitForMusicActiveAfterTap(
+                                musicActiveBefore);
         boolean uiPlaying =
                 MediaPlaybackCompletionPolicy
                         .uiIndicatesPlaying(
@@ -3764,10 +3973,6 @@ final class NativeGeminiLiveClient {
                                         : after.toString());
         boolean actionSucceeded =
                 observed.optBoolean("success", false);
-
-        String goalIntent =
-                workingContext.toProgressJson()
-                        .optString("goalIntent", "");
         boolean screenChanged =
                 observed.optBoolean("screenChanged", false);
 

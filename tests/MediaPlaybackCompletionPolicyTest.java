@@ -15,6 +15,10 @@ public final class MediaPlaybackCompletionPolicyTest {
                 "Chinese play control recognized");
         check(MediaPlaybackCompletionPolicy.isPlayControl("Play"),
                 "English play control recognized");
+        check(MediaPlaybackCompletionPolicy.isPlayControl("Resume"),
+                "generic resume control recognized");
+        check(MediaPlaybackCompletionPolicy.isPlayControl("繼續播放"),
+                "Chinese resume control recognized");
         check(!MediaPlaybackCompletionPolicy.isPlayControl("播放列表"),
                 "playlist label is not playback control");
 
@@ -65,6 +69,24 @@ public final class MediaPlaybackCompletionPolicyTest {
                         "MEDIA:PLAY",
                         true),
                 "generic explicit media play goal may complete from verified low-risk play-control effect");
+        check(MediaPlaybackCompletionPolicy.shouldCompleteFromVerifiedEffect(
+                        "MEDIA:PLAY",
+                        "播放",
+                        true,
+                        true),
+                "RuntimeV2 verified observable play effect completes media goal");
+        check(!MediaPlaybackCompletionPolicy.shouldCompleteFromVerifiedEffect(
+                        "MEDIA:PLAY",
+                        "播放",
+                        true,
+                        false),
+                "verified play without observable effect does not complete");
+        check(!MediaPlaybackCompletionPolicy.shouldCompleteFromVerifiedEffect(
+                        "MEDIA:PLAY",
+                        "更多",
+                        true,
+                        true),
+                "non-play control never completes media goal");
         check(!MediaPlaybackCompletionPolicy.shouldComplete(
                         "com.apple.android.music",
                         "播放",

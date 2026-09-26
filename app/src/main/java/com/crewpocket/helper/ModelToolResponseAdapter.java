@@ -86,7 +86,21 @@ final class ModelToolResponseAdapter {
                 out.put("message", clip(message, MAX_MESSAGE));
             }
 
-            JSONObject screen = screen(source);
+            String goalText = progressContext == null
+                    ? ""
+                    : progressContext.optString(
+                            "goal",
+                            progressContext.optString("rootGoal", ""));
+            String completedTarget =
+                    latestActivatedTarget(
+                            progressContext,
+                            action,
+                            status);
+            JSONObject screen = screen(
+                    source,
+                    goalIntent,
+                    goalText,
+                    completedTarget);
             if (screen.length() > 0) out.put("screen", screen);
 
             JSONObject context = context(progressContext, action);
@@ -535,7 +549,11 @@ final class ModelToolResponseAdapter {
         return existing.isEmpty() ? "這一步已驗證。" : existing;
     }
 
-    private static JSONObject screen(JSONObject result) {
+    private static JSONObject screen(
+            JSONObject result,
+            String goalIntent,
+            String goalText,
+            String completedTarget) {
         JSONObject out = new JSONObject();
         try {
             JSONObject source = result.optJSONObject("after");
@@ -548,9 +566,16 @@ final class ModelToolResponseAdapter {
 
             if (source != null) {
                 copyString(source, out, "package");
+                if (source.optBoolean("fresh", false)) {
+                    out.put("fresh", true);
+                }
                 JSONArray important = source.optJSONArray("important");
                 if (important != null && important.length() > 0) {
-                    JSONArray items = balancedImportantItems(important);
+                    JSONArray items = balancedImportantItems(
+                            important,
+                            goalIntent,
+                            goalText,
+                            completedTarget);
                     if (items.length() > 0) out.put("items", items);
                 }
 
@@ -589,7 +614,11 @@ final class ModelToolResponseAdapter {
         return out;
     }
 
-    private static JSONArray balancedImportantItems(JSONArray important) {
+    private static JSONArray balancedImportantItems(
+            JSONArray important,
+            final String goalIntent,
+            final String goalText,
+            final String completedTarget) {
         java.util.ArrayList<JSONObject> original =
                 new java.util.ArrayList<JSONObject>();
         java.util.ArrayList<JSONObject> actions =
@@ -622,11 +651,31 @@ final class ModelToolResponseAdapter {
         java.util.Comparator<JSONObject> byPriority =
                 new java.util.Comparator<JSONObject>() {
                     @Override public int compare(JSONObject left, JSONObject right) {
-                        return Integer.compare(screenScore(right), screenScore(left));
+                        return Integer.compare(
+                                screenScore(
+                                        right,
+                                        goalIntent,
+                                        goalText,
+                                        completedTarget),
+                                screenScore(
+                                        left,
+                                        goalIntent,
+                                        goalText,
+                                        completedTarget));
                     }
                 };
         java.util.Collections.sort(actions, byPriority);
         java.util.Collections.sort(ranked, byPriority);
+
+        if (MediaGoalUiPolicy.isMediaPlayGoal(goalIntent)) {
+            JSONArray mediaOrdered = new JSONArray();
+            for (JSONObject item : ranked) {
+                if (mediaOrdered.length() >= MAX_SCREEN_ITEMS) break;
+                JSONObject compact = compactItem(item);
+                if (compact.length() > 0) mediaOrdered.put(compact);
+            }
+            return mediaOrdered;
+        }
 
         int actionLimit = Math.min(6, actions.size());
         int sceneLimit = Math.min(6, scenes.size());
@@ -660,13 +709,52 @@ final class ModelToolResponseAdapter {
         return out;
     }
 
-    private static int screenScore(JSONObject item) {
+    private static int screenScore(
+            JSONObject item,
+            String goalIntent,
+            String goalText,
+            String completedTarget) {
         if (item == null) return 0;
-        return ScreenItemPriorityPolicy.score(
+        return MediaGoalUiPolicy.scoreItem(
                 item.optString("role", ""),
                 item.optString("label", ""),
                 item.optString("semanticHint", ""),
-                item.optString("can", ""));
+                item.optString("can", ""),
+                goalIntent,
+                goalText,
+                completedTarget);
+    }
+
+    private static String latestActivatedTarget(
+            JSONObject progressContext,
+            JSONObject currentAction,
+            String status) {
+        if (currentAction != null
+                && DONE.equals(status)
+                && "UI_ACTIVATED".equals(
+                        currentAction.optString("effect", ""))) {
+            String target =
+                    currentAction.optString("target", "").trim();
+            if (!target.isEmpty()) return target;
+        }
+
+        JSONArray steps =
+                progressContext == null
+                        ? null
+                        : progressContext.optJSONArray("recentSteps");
+        if (steps == null) return "";
+        for (int i = steps.length() - 1; i >= 0; i--) {
+            JSONObject step = steps.optJSONObject(i);
+            if (step == null
+                    || !"UI_ACTIVATED".equals(
+                            step.optString("effect", ""))) {
+                continue;
+            }
+            String target =
+                    step.optString("target", "").trim();
+            if (!target.isEmpty()) return target;
+        }
+        return "";
     }
 
     private static JSONArray choices(JSONObject result) {

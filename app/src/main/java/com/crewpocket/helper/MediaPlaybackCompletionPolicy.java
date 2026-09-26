@@ -22,8 +22,27 @@ final class MediaPlaybackCompletionPolicy {
                 || value.equals("play")
                 || value.equals("playbutton")
                 || value.equals("startplayback")
+                || value.equals("resume")
+                || value.equals("resumeplayback")
+                || value.equals("繼續播放")
+                || value.equals("继续播放")
+                || value.equals("恢復播放")
+                || value.equals("恢复播放")
                 || value.contains("media:play")
-                || value.contains("play_control");
+                || value.contains("media:resume")
+                || value.contains("play_control")
+                || value.contains("resume_control");
+    }
+
+    static boolean shouldCompleteFromVerifiedEffect(
+            String goalIntent,
+            String targetMetadata,
+            boolean committed,
+            boolean observableEffect) {
+        return "MEDIA:PLAY".equals(clean(goalIntent))
+                && isPlayControl(targetMetadata)
+                && committed
+                && observableEffect;
     }
 
     static boolean uiIndicatesPlaying(String compactAfter) {
