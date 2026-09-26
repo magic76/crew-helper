@@ -168,6 +168,24 @@ final class TaskRecipeRuntime {
                                 terminalPackage,
                                 terminalVisibleEvidence);
 
+        String resolvedTerminalState =
+                goalTerminalVerified
+                        ? "DONE"
+                        : terminalTaskState;
+        String resolvedTerminalEvidence =
+                terminalCompletionEvidence;
+        if (goalTerminalVerified
+                && "NAVIGATION:START".equals(goalIntent)) {
+            resolvedTerminalEvidence =
+                    "MAPS_NAVIGATION_ACTIVE_VERIFIED";
+        } else if (goalTerminalVerified
+                && resolvedTerminalEvidence.isEmpty()) {
+            resolvedTerminalEvidence =
+                    "TASK_RECIPE_TERMINAL_VERIFIED";
+        }
+        boolean resolvedTerminalVerified =
+                terminalVerified || goalTerminalVerified;
+
         JSONObject out = new JSONObject()
                 .put("success", true)
                 .put("recipeExecutionSuccess", true)
@@ -188,9 +206,7 @@ final class TaskRecipeRuntime {
                 .put(
                         "completionEvidence",
                         goalTerminalVerified
-                                ? (terminalCompletionEvidence.isEmpty()
-                                        ? "TASK_RECIPE_TERMINAL_VERIFIED"
-                                        : terminalCompletionEvidence)
+                                ? resolvedTerminalEvidence
                                 : "TASK_RECIPE_EXECUTED")
                 .put(
                         "nextRequirement",
@@ -205,13 +221,13 @@ final class TaskRecipeRuntime {
                                 ? "熟悉流程已執行，且最終狀態已驗證。"
                                 : "熟悉流程已執行，但尚未證明整個任務完成；請先檢查目前畫面再作結論。");
 
-        out.put("terminalTaskState", terminalTaskState)
+        out.put("terminalTaskState", resolvedTerminalState)
                 .put(
                         "terminalCompletionEvidence",
-                        terminalCompletionEvidence)
+                        resolvedTerminalEvidence)
                 .put(
                         "terminalVerified",
-                        terminalVerified)
+                        resolvedTerminalVerified)
                 .put(
                         "terminalMediaPlaybackActive",
                         terminalMediaPlaybackActive);
