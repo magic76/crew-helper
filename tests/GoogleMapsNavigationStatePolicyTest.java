@@ -24,6 +24,21 @@ public final class GoogleMapsNavigationStatePolicyTest {
                         "{important:[{label:'結束導航'}]}"),
                 "Chinese active-navigation control is recognized");
 
+        check(GoogleMapsNavigationStatePolicy.isActiveNavigationScreen(
+                        "com.google.android.apps.maps",
+                        "{important:[{label:'Route overview'},{label:'Mute'}]}"),
+                "generic Maps sound control plus route overview proves guidance mode");
+
+        check(GoogleMapsNavigationStatePolicy.isActiveNavigationScreen(
+                        "com.google.android.apps.maps",
+                        "{important:[{label:'重新置中'},{label:'沿路搜尋'}]}"),
+                "Chinese route-search controls prove active navigation");
+
+        check(GoogleMapsNavigationStatePolicy.isActiveNavigationScreen(
+                        "com.google.android.apps.maps",
+                        "{important:[{label:'取消導航'}]}"),
+                "Chinese cancel-navigation control is terminal guidance evidence");
+
         check(!GoogleMapsNavigationStatePolicy.isActiveNavigationScreen(
                         "com.apple.android.music",
                         "{important:[{label:'Exit navigation'}]}"),

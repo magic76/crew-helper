@@ -20,6 +20,10 @@ public final class BubbleTaskPhasePolicyTest {
                         == BubbleTaskPhasePolicy.Phase.WAITING,
                 "verification waits");
         check(BubbleTaskPhasePolicy.classify(
+                        "正在確認導航是否已開始", true)
+                        == BubbleTaskPhasePolicy.Phase.WAITING,
+                "Maps terminal verification waits");
+        check(BubbleTaskPhasePolicy.classify(
                         "對話模式：偵測到聊天室變化，等待檢查新訊息", true)
                         == BubbleTaskPhasePolicy.Phase.WAITING,
                 "screen wait");

@@ -31,6 +31,7 @@ final class GoogleMapsNavigationStatePolicy {
                 "exitnavigation",
                 "endnavigation",
                 "stopnavigation",
+                "cancelnavigation",
                 "exitguidance",
                 "endguidance",
                 "退出導航",
@@ -39,6 +40,8 @@ final class GoogleMapsNavigationStatePolicy {
                 "结束导航",
                 "停止導航",
                 "停止导航",
+                "取消導航",
+                "取消导航",
                 "ออกจากการนำทาง",
                 "หยุดการนำทาง",
                 "สิ้นสุดการนำทาง")) {
@@ -73,9 +76,29 @@ final class GoogleMapsNavigationStatePolicy {
                 "unmuteguidance",
                 "voiceguidance",
                 "guidancevolume",
+                "mute",
+                "unmute",
+                "sound",
                 "語音導航",
                 "语音导航",
+                "靜音",
+                "静音",
+                "取消靜音",
+                "取消静音",
+                "聲音",
+                "声音",
                 "เสียงนำทาง")) {
+            guidanceSignals++;
+        }
+        if (containsAny(
+                text,
+                "searchalongroute",
+                "searchonroute",
+                "沿路搜尋",
+                "沿路搜索",
+                "搜尋路線沿途",
+                "搜索路线沿途",
+                "ค้นหาตามเส้นทาง")) {
             guidanceSignals++;
         }
         if (containsAny(

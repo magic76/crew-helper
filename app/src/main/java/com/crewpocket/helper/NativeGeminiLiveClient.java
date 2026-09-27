@@ -3016,6 +3016,10 @@ final class NativeGeminiLiveClient {
             if (isPhoneContextTool(name)) attachCurrentAppPlaybook(result);
             updateTaskCompletionContract(
                     task, name, result, runtimeV2Enforced);
+            resolveRuntimeOwnedNavigationVerification(
+                    task,
+                    result,
+                    callIntentGeneration);
             String arbitrationEventId =
                     result.optString(
                             "_candidateArbitrationEventId", "").trim();
@@ -3544,6 +3548,111 @@ final class NativeGeminiLiveClient {
                 }
             } catch (Exception ignored) {}
         }
+    }
+
+    /**
+     * Google Maps START is a special terminal boundary. Once Runtime has
+     * physically tapped Start, Runtime owns the short post-action verification
+     * instead of asking Gemini to remember to call inspect_ui.
+     *
+     * This keeps completion deterministic:
+     * - verified active guidance -> DONE
+     * - still not active after bounded fresh reads -> IN_PROGRESS and return
+     *   control to Gemini for recovery, without another verification prompt
+     */
+    private void resolveRuntimeOwnedNavigationVerification(
+            AgentTaskRecord task,
+            JSONObject result,
+            long intentGeneration) {
+        if (task == null || result == null) return;
+        if (!GoogleMapsSemanticContract.START_NAVIGATION.equals(
+                result.optString("semanticTarget", "").trim())) {
+            return;
+        }
+        if (!"MAPS_NAVIGATION_START_NEEDS_ACTIVE_STATE".equals(
+                result.optString("completionEvidence", "").trim())) {
+            return;
+        }
+
+        reportStage("正在確認導航是否已開始");
+
+        final long[] delaysMs = new long[]{280L, 520L};
+        JSONObject latest = null;
+        boolean activeNavigation = false;
+
+        for (long delayMs : delaysMs) {
+            if (task.finished
+                    || task.cancelled
+                    || !isCurrentUserIntent(intentGeneration)) {
+                return;
+            }
+
+            try {
+                Thread.sleep(delayMs);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+
+            latest =
+                    observationVerificationController
+                            .readSemanticScreenQuietly();
+            if (latest == null
+                    || !latest.optBoolean("success", false)) {
+                continue;
+            }
+
+            observationVerificationController
+                    .recordSemanticObservation(latest);
+
+            activeNavigation =
+                    GoogleMapsNavigationStatePolicy
+                            .isActiveNavigationScreen(
+                                    latest.optString("package", ""),
+                                    latest.toString());
+            if (activeNavigation) break;
+        }
+
+        synchronized (agentTaskCoordinator.monitor()) {
+            if (task.finished
+                    || task.cancelled
+                    || !agentTaskCoordinator.isActive(task)) {
+                return;
+            }
+
+            task.requiresPostActionInspection = false;
+            task.postActionInspectionPrompted = false;
+
+            try {
+                if (activeNavigation) {
+                    result.put("taskState", "DONE")
+                            .put(
+                                    "completionEvidence",
+                                    "MAPS_NAVIGATION_ACTIVE_VERIFIED")
+                            .put("nextRequirement", "NONE")
+                            .put("verified", true)
+                            .put("verificationStatus", "VERIFIED")
+                            .put(
+                                    "instruction",
+                                    "Navigation is verified active. Do not call more tools. Give at most one brief completion acknowledgement.");
+                } else {
+                    result.put("taskState", "IN_PROGRESS")
+                            .put(
+                                    "completionEvidence",
+                                    "MAPS_NAVIGATION_ACTIVE_NOT_CONFIRMED")
+                            .put("nextRequirement", "CONTINUE_GOAL")
+                            .put("verified", false)
+                            .put(
+                                    "instruction",
+                                    "Runtime already rechecked the screen and active navigation is not confirmed. Do not claim completion. Continue with one necessary recovery action only.");
+                }
+            } catch (Exception ignored) {}
+        }
+
+        reportStage(
+                activeNavigation
+                        ? "導航已確認啟動"
+                        : "尚未確認導航啟動，繼續處理");
     }
 
     private boolean isMutationTool(String name) {

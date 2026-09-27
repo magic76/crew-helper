@@ -29,6 +29,7 @@ final class BubbleTaskPhasePolicy {
                 "正在驗證上一個操作",
                 "正在確認結果",
                 "正在確認最終狀態",
+                "正在確認導航",
                 "wait_then_action",
                 "waiting_background")) {
             return Phase.WAITING;
