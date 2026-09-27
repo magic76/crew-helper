@@ -634,6 +634,9 @@ public class FloatingBubbleManager {
 
                 bubbleAgentPhase =
                         BubbleTaskPhasePolicy.Phase.STUCK;
+                bubbleDetailState = RuntimeUiState.waitingUser(
+                        "需要你",
+                        "Crew 長時間沒有取得新進展，請告訴我下一步或重新下指令");
                 if (bubbleView != null) {
                     bubbleView.setAgentPhase(
                             BubbleTaskPhasePolicy.Phase.STUCK);
@@ -675,36 +678,48 @@ public class FloatingBubbleManager {
 
                 if (activeTask) {
                     bubbleView.setAgentNeedsAttention(needsAttention);
-                    if (!needsAttention) {
-                        bubbleView.setAgentPhase(bubbleAgentPhase);
-                    }
-                    refreshMorphBubbleStatus();
 
+                    String stage = AgentInspectorStore.friendlyStage(
+                            rawStatus, true);
                     if (needsAttention) {
                         lastShownAgentStage = "";
                         String detail = "需要你選擇".equals(important)
                                 ? "直接說「第一個」或選項名稱"
                                 : ("需要權限".equals(important)
                                         ? "完成權限設定後，再回來繼續"
-                                        : "");
-                        showRuntimeUiState(
-                                RuntimeUiState.waitingUser(important, detail));
+                                        : "請告訴 Crew 下一步要怎麼做");
+                        bubbleDetailState =
+                                RuntimeUiState.waitingUser(
+                                        important,
+                                        detail);
+                        // WAITING_USER is the one active state that must become
+                        // immediately obvious without waiting for the debounce.
+                        bubbleView.setAgentPhase(
+                                BubbleTaskPhasePolicy.Phase.NONE);
+                        refreshMorphBubbleStatus();
                         return;
                     }
 
-                    // Normal progress remains quiet. If the user has explicitly
-                    // expanded the bubble rail, show one compact human-readable
-                    // step beside it instead of exposing Runtime/debug text.
-                    if (bubbleActionStrip != null && bubbleActionStrip.isShowing()) {
-                        String stage = AgentInspectorStore.friendlyStage(
-                                rawStatus, true);
-                        if (stage != null
-                                && !stage.isEmpty()
-                                && !stage.equals(lastShownAgentStage)) {
-                            lastShownAgentStage = stage;
-                            showRuntimeUiState(
-                                    RuntimeUiState.working("Crew 正在處理", stage));
-                        }
+                    if (stage != null && !stage.isEmpty()) {
+                        bubbleDetailState =
+                                RuntimeUiState.working(
+                                        "Crew 正在處理",
+                                        stage);
+                    }
+
+                    // Normal progress remains logo-only. When the user has
+                    // explicitly expanded the action strip, keep the existing
+                    // compact diagnostic card available there.
+                    if (bubbleActionStrip != null
+                            && bubbleActionStrip.isShowing()
+                            && stage != null
+                            && !stage.isEmpty()
+                            && !stage.equals(lastShownAgentStage)) {
+                        lastShownAgentStage = stage;
+                        showRuntimeUiState(
+                                RuntimeUiState.working(
+                                        "Crew 正在處理",
+                                        stage));
                     }
                     return;
                 }
@@ -719,23 +734,27 @@ public class FloatingBubbleManager {
 
                 if (AgentInspectorStore.isSuccessfulTaskEnd(rawStatus)) {
                     bubbleView.flashAgentResult(true);
+                    bubbleDetailState =
+                            RuntimeUiState.success(
+                                    "已完成",
+                                    "");
                     showMorphBubbleStatus(
                             "完成",
                             Color.parseColor("#34D399"),
-                            1300L);
+                            QuietMorphBubblePolicy.DONE_MORPH_MS);
                     return;
                 }
 
                 if ("操作失敗".equals(important)) {
                     bubbleView.flashAgentResult(false);
-                    showMorphBubbleStatus(
-                            "操作失敗",
-                            Color.parseColor("#FB7185"),
-                            1800L);
-                    showRuntimeUiState(
+                    bubbleDetailState =
                             RuntimeUiState.error(
                                     important,
-                                    "可以再說一次，或打開控制台查看狀態"));
+                                    "可以再說一次，或打開控制台查看狀態");
+                    showMorphBubbleStatus(
+                            "沒完成",
+                            Color.parseColor("#FB7185"),
+                            QuietMorphBubblePolicy.ERROR_MORPH_MS);
                     return;
                 }
 
