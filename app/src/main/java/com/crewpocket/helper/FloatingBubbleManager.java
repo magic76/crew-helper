@@ -64,7 +64,15 @@ public class FloatingBubbleManager {
     private BubbleTaskPhasePolicy.Phase bubbleAgentPhase =
             BubbleTaskPhasePolicy.Phase.NONE;
     private boolean bubbleAgentNeedsAttention = false;
+    private boolean bubbleAgentActiveTask = false;
     private String bubbleAgentProgressKey = "";
+    private String bubbleLatestRawStatus = "";
+    private RuntimeUiState bubbleDetailState = null;
+    private Runnable bubblePhaseDebounceRunnable = null;
+    private int bubblePhaseDebounceGeneration = 0;
+    private Runnable bubbleWaitingMorphRunnable = null;
+    private int bubbleWaitingMorphGeneration = 0;
+    private boolean bubbleWaitingMorphVisible = false;
     private Runnable bubbleStuckRunnable = null;
     private int bubbleStuckGeneration = 0;
     private int bubbleNativeVoiceState = 0;
