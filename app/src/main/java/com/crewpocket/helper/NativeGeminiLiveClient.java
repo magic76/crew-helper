@@ -2846,6 +2846,9 @@ final class NativeGeminiLiveClient {
                 : agentStabilityPreflight(stabilityTask, name, args);
         if (stabilityBlock != null && stabilityTask != null) {
             try {
+                stabilityTask.recordBlockedAttempt(
+                        stabilityBlock.optString(
+                                "error", "STABILITY_BLOCK"));
                 stabilityTask.addStep(name, stabilityBlock);
                 sendToolResponse(id, requestedName, stabilityBlock);
                 if (stabilityTask.blockedReason != null) {
@@ -2867,6 +2870,8 @@ final class NativeGeminiLiveClient {
                                 name,
                                 visualTask.consecutiveVisualObservations)) {
             try {
+                visualTask.recordBlockedAttempt(
+                        "REPEATED_VISUAL_OBSERVATION");
                 JSONObject blocked = runtimeBlocked(
                         "REPEATED_VISUAL_OBSERVATION",
                         "目前 goal 已連續取得兩次 visual observation，Runtime 不再重複截同一階段的畫面。"
@@ -3321,6 +3326,7 @@ final class NativeGeminiLiveClient {
                     task.consecutiveVisualObservations++;
                 } else {
                     task.consecutiveVisualObservations = 0;
+                    task.resetVisualObservationLoop();
                 }
                 task.lastSignature = signature;
                 task.incrementTool(name);
@@ -3711,12 +3717,16 @@ final class NativeGeminiLiveClient {
     }
 
     private void sendBlockedToolResponse(String id, String name, String reason) {
+        AgentTaskRecord task = agentTaskCoordinator.activeRunning();
+        if (task != null) task.recordBlockedAttempt(reason);
         try { sendToolResponse(id, name, new JSONObject().put("success", false).put("agentStopped", true).put("error", reason)); }
         catch (Exception ignored) {}
     }
 
     private void sendRuntimeV2Blocked(String id, String name, String code,
                                       String instruction, AgentRuntimeV2.PreflightResult preflight) {
+        AgentTaskRecord task = agentTaskCoordinator.activeRunning();
+        if (task != null) task.recordBlockedAttempt(code);
         try {
             JSONObject blocked = runtimeBlocked(code, instruction);
             blocked.put("verificationStatus", "BLOCKED");
@@ -6029,6 +6039,38 @@ final class NativeGeminiLiveClient {
                 observationVerificationController
                         .consumeReverificationSummary();
 
+        ObservationLoopPolicy.Decision observationLoopDecision = null;
+        AgentTaskRecord observationTask =
+                agentTaskCoordinator.activeRunning();
+        if (observationTask != null
+                && semantic.optBoolean("success", false)) {
+            boolean semanticProgress =
+                    reverification != null
+                            && (reverification.optInt("committed", 0) > 0
+                                || reverification.optInt("failed", 0) > 0);
+            synchronized (agentTaskCoordinator.monitor()) {
+                if (agentTaskCoordinator.isActive(observationTask)
+                        && !observationTask.finished
+                        && !observationTask.cancelled) {
+                    observationLoopDecision =
+                            ObservationLoopPolicy.evaluate(
+                                    observationTask
+                                            .visualObservationFingerprint,
+                                    observationTask
+                                            .sameScreenVisualObservations,
+                                    semantic.optString(
+                                            "fingerprint", ""),
+                                    semanticProgress);
+                    observationTask.applyVisualObservationDecision(
+                            observationLoopDecision);
+                    if (observationLoopDecision.blocked) {
+                        observationTask.recordBlockedAttempt(
+                                ObservationLoopPolicy.BLOCK_CODE);
+                    }
+                }
+            }
+        }
+
         JSONObject out = new JSONObject();
         out.put("success", semantic.optBoolean("success", false))
                 .put("visualSent", false)
@@ -6057,6 +6099,28 @@ final class NativeGeminiLiveClient {
                                 "message",
                                 "上一個操作已由最新畫面確認沒有生效；不要把它當成功，也不要原樣重試。請改用不同 locator 或不同語意方法。");
             }
+        }
+
+        if (observationLoopDecision != null
+                && observationLoopDecision.blocked) {
+            visualTapLease.clear();
+            out.put("success", false)
+                    .put("stepResult", "STEP_FAILED")
+                    .put("blockedByRuntime", true)
+                    .put("error", ObservationLoopPolicy.BLOCK_CODE)
+                    .put("taskState", "IN_PROGRESS")
+                    .put("recoverable", true)
+                    .put("nextRequirement", "TRY_ALTERNATIVE")
+                    .put(
+                            "completionEvidence",
+                            "UNCHANGED_SCREEN_OBSERVED_TWICE")
+                    .put(
+                            "message",
+                            "Runtime 已確認同一 semantic screen 連續兩次沒有進展。"
+                                    + "這次不再傳送重複 screenshot；禁止再次 inspect_ui。"
+                                    + "請改用不同 semantic action、返回/重新聚焦，"
+                                    + "或以目前證據簡短說明唯一卡點。");
+            return out;
         }
 
         if (semanticScreenContainsSensitiveElement(semantic)) {
