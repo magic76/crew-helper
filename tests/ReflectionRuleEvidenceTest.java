@@ -98,6 +98,10 @@ public final class ReflectionRuleEvidenceTest {
                         "UI_TARGET_NOT_FOUND"),
                 "real UI target failure must remain learnable friction");
 
+        check(ReflectionRuleEvidence.isRuntimeInternalFailure(
+                        ObservationLoopPolicy.BLOCK_CODE),
+                "no-progress loop is Runtime-internal, not Experience friction");
+
         List<ReflectionRuleEvidence.Step> plainSuccess =
                 new ArrayList<ReflectionRuleEvidence.Step>();
         plainSuccess.add(step(

@@ -229,7 +229,11 @@ final class AgentInspectorStore {
             int blockedAttempts = task.optInt("blockedAttempts", 0);
             if (blockedAttempts > 0) {
                 out.append("Blocked / preflight attempts: ")
-                        .append(blockedAttempts).append("\n");
+                        .append(blockedAttempts);
+                appendBlockedAttemptReasons(
+                        out,
+                        task.optJSONObject("blockedAttemptReasons"));
+                out.append("\n");
             }
             out.append("Mutations: ").append(task.optInt("mutationActions", 0)).append("\n");
             String cancelCategory = task.optString("cancelCategory", "");
@@ -243,6 +247,7 @@ final class AgentInspectorStore {
             }
             out.append("Visual observations: ")
                     .append(task.optInt("visualObservations", 0)).append("\n");
+            appendRuntimeTerminalState(out, task);
 
             if (task.optBoolean("partialOutcome", false)
                     || task.optBoolean("modelRefusal", false)
@@ -265,8 +270,12 @@ final class AgentInspectorStore {
                         .append(" · blocked/preflight: ")
                         .append(previous.optInt("blockedAttempts", 0))
                         .append(" · mutations: ").append(previous.optInt("mutationActions", 0))
-                        .append(" · visual: ").append(previous.optInt("visualObservations", 0))
-                        .append("\n");
+                        .append(" · visual: ").append(previous.optInt("visualObservations", 0));
+                appendBlockedAttemptReasons(
+                        out,
+                        previous.optJSONObject("blockedAttemptReasons"));
+                out.append("\n");
+                appendRuntimeTerminalState(out, previous);
                 appendSteps(out, previous.optJSONArray("steps"), "Outcomes:\n");
             }
         } else {
@@ -475,8 +484,27 @@ final class AgentInspectorStore {
             out.put("goalTaskIndex", task.optInt("goalTaskIndex", 0));
             out.put("stepCount", task.optInt("stepCount", 0));
             out.put("blockedAttempts", task.optInt("blockedAttempts", 0));
+            JSONObject blockedReasons =
+                    task.optJSONObject("blockedAttemptReasons");
+            if (blockedReasons != null && blockedReasons.length() > 0) {
+                out.put(
+                        "blockedAttemptReasons",
+                        new JSONObject(blockedReasons.toString()));
+            }
             out.put("mutationActions", task.optInt("mutationActions", 0));
             out.put("visualObservations", task.optInt("visualObservations", 0));
+            String lastTaskState =
+                    task.optString("lastTaskState", "");
+            if (!lastTaskState.isEmpty()) {
+                out.put("lastTaskState", lastTaskState);
+            }
+            String completionEvidence =
+                    task.optString("lastCompletionEvidence", "");
+            if (!completionEvidence.isEmpty()) {
+                out.put(
+                        "lastCompletionEvidence",
+                        completionEvidence);
+            }
             out.put("steps", task.optJSONArray("steps") == null
                     ? new JSONArray() : new JSONArray(task.optJSONArray("steps").toString()));
             if (task.optBoolean("partialOutcome", false)) out.put("partialOutcome", true);
@@ -514,6 +542,30 @@ final class AgentInspectorStore {
             safe.put("startedAt", raw.optLong("startedAt", 0L));
             safe.put("stepCount", raw.optInt("stepCount", 0));
             safe.put("mutationActions", raw.optInt("mutationActions", 0));
+            String lastTaskState =
+                    raw.optString("lastTaskState", "").trim();
+            if (SAFE_RUNTIME_TOKEN.matcher(lastTaskState).matches()) {
+                safe.put("lastTaskState", lastTaskState);
+            }
+            String completionEvidence =
+                    raw.optString("lastCompletionEvidence", "").trim();
+            if (SAFE_RUNTIME_TOKEN.matcher(completionEvidence).matches()) {
+                safe.put(
+                        "lastCompletionEvidence",
+                        completionEvidence);
+            }
+            int actualBlockedAttempts =
+                    Math.max(0, raw.optInt("blockedAttempts", 0));
+            safe.put("blockedAttempts", actualBlockedAttempts);
+            JSONObject blockedAttemptReasons =
+                    sanitizeBlockedAttemptReasons(
+                            raw.optJSONObject(
+                                    "blockedAttemptReasons"));
+            if (blockedAttemptReasons.length() > 0) {
+                safe.put(
+                        "blockedAttemptReasons",
+                        blockedAttemptReasons);
+            }
             String cancelCategory = raw.optString("cancelCategory", "").trim();
             if (!cancelCategory.isEmpty()) {
                 safe.put("cancelCategory", cancelCategory);
@@ -635,11 +687,70 @@ final class AgentInspectorStore {
             }
             safe.put("steps", safeSteps);
             safe.put("outcomeCount", safeSteps.length());
-            safe.put("blockedAttempts", Math.max(
-                    0, safeSteps.length() - safe.optInt("stepCount", 0)));
             safe.put("visualObservations", visualObservations);
         } catch (Exception ignored) {}
         return safe;
+    }
+
+    private static void appendBlockedAttemptReasons(
+            StringBuilder out,
+            JSONObject reasons) {
+        if (out == null || reasons == null
+                || reasons.length() == 0) {
+            return;
+        }
+        java.util.Iterator<String> keys = reasons.keys();
+        while (keys.hasNext()) {
+            String key = keys.next();
+            if (!SAFE_RUNTIME_TOKEN.matcher(key).matches()) {
+                continue;
+            }
+            int count = Math.max(
+                    0, reasons.optInt(key, 0));
+            if (count <= 0) continue;
+            out.append(" · ")
+                    .append(key)
+                    .append("=")
+                    .append(count);
+        }
+    }
+
+    private static void appendRuntimeTerminalState(
+            StringBuilder out,
+            JSONObject task) {
+        if (out == null || task == null) return;
+        String state =
+                task.optString("lastTaskState", "");
+        String evidence =
+                task.optString("lastCompletionEvidence", "");
+        if (state.isEmpty() && evidence.isEmpty()) return;
+        out.append("Last Runtime state: ")
+                .append(state.isEmpty() ? "UNKNOWN" : state);
+        if (!evidence.isEmpty()) {
+            out.append(" · evidence=")
+                    .append(evidence);
+        }
+        out.append("\n");
+    }
+
+    private static JSONObject sanitizeBlockedAttemptReasons(
+            JSONObject raw) {
+        JSONObject out = new JSONObject();
+        if (raw == null) return out;
+        java.util.Iterator<String> keys = raw.keys();
+        while (keys.hasNext()) {
+            String key = keys.next();
+            if (!SAFE_RUNTIME_TOKEN.matcher(key).matches()) {
+                continue;
+            }
+            int count = Math.max(
+                    0, Math.min(999, raw.optInt(key, 0)));
+            if (count <= 0) continue;
+            try {
+                out.put(key, count);
+            } catch (Exception ignored) {}
+        }
+        return out;
     }
 
     private static String classifyBlock(String raw) {

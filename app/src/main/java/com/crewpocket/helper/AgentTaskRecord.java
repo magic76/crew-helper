@@ -32,6 +32,11 @@ final class AgentTaskRecord {
     int mutationActions;
     int observationActions;
     int consecutiveVisualObservations;
+    String visualObservationFingerprint = "";
+    int sameScreenVisualObservations;
+    int blockedAttempts;
+    final HashMap<String, Integer> blockedAttemptReasons =
+            new HashMap<String, Integer>();
     int consecutiveMutationFailures;
     int stabilityBlocks;
     boolean requireObservationAfterFailure;
@@ -109,6 +114,40 @@ final class AgentTaskRecord {
 
     void incrementTool(String name) {
         toolCounts.put(name, getToolCount(name) + 1);
+    }
+
+    void resetVisualObservationLoop() {
+        visualObservationFingerprint = "";
+        sameScreenVisualObservations = 0;
+    }
+
+    void applyVisualObservationDecision(
+            ObservationLoopPolicy.Decision decision) {
+        if (decision == null) return;
+        visualObservationFingerprint = safe(decision.fingerprint);
+        sameScreenVisualObservations =
+                Math.max(0, decision.nextSameScreenCount);
+    }
+
+    void recordBlockedAttempt(String rawCode) {
+        String code = blockedCode(rawCode);
+        blockedAttempts++;
+        Integer count = blockedAttemptReasons.get(code);
+        blockedAttemptReasons.put(
+                code,
+                count == null ? 1 : count + 1);
+    }
+
+    private JSONObject blockedAttemptReasonsJson() {
+        JSONObject out = new JSONObject();
+        for (String code : blockedAttemptReasons.keySet()) {
+            try {
+                out.put(code, Math.max(
+                        0,
+                        blockedAttemptReasons.get(code)));
+            } catch (Exception ignored) {}
+        }
+        return out;
     }
 
     void setRecipeContext(String goal, String startPackage) {
@@ -448,6 +487,17 @@ final class AgentTaskRecord {
         if (!value.isEmpty()) to.put(key, value);
     }
 
+    private static String blockedCode(String value) {
+        String raw = safe(value).toUpperCase();
+        int colon = raw.indexOf('：');
+        if (colon < 0) colon = raw.indexOf(':');
+        if (colon > 0) raw = raw.substring(0, colon);
+        raw = raw.replaceAll("[^A-Z0-9_]", "_")
+                .replaceAll("_+", "_");
+        if (raw.length() > 64) raw = raw.substring(0, 64);
+        return raw.isEmpty() ? "RUNTIME_BLOCK" : raw;
+    }
+
     private static String safe(String value) {
         return value == null ? "" : value.trim();
     }
@@ -464,6 +514,9 @@ final class AgentTaskRecord {
                     .put("stepCount", steps)
                     .put("mutationActions", mutationActions)
                     .put("consecutiveVisualObservations", consecutiveVisualObservations)
+                    .put("sameScreenVisualObservations", sameScreenVisualObservations)
+                    .put("blockedAttempts", blockedAttempts)
+                    .put("blockedAttemptReasons", blockedAttemptReasonsJson())
                     .put("blockedReason", blockedReason == null ? "" : blockedReason)
                     .put("endReason", endReason)
                     .put("finalReply", finalReply)
