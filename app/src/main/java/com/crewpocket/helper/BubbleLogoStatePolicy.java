@@ -31,11 +31,11 @@ final class BubbleLogoStatePolicy {
                         : agentPhase;
         if (phase == BubbleTaskPhasePolicy.Phase.STUCK) return Mode.STUCK;
         if (phase == BubbleTaskPhasePolicy.Phase.ACTING) return Mode.ACTING;
-        if (phase == BubbleTaskPhasePolicy.Phase.WAITING) return Mode.WAITING;
         if (phase == BubbleTaskPhasePolicy.Phase.THINKING) return Mode.THINKING;
+        if (conversationWaiting) return Mode.CONVERSATION_WAITING;
+        if (phase == BubbleTaskPhasePolicy.Phase.WAITING) return Mode.WAITING;
 
         if (nativeVoiceState == 2) return Mode.SPEAKING;
-        if (conversationWaiting) return Mode.CONVERSATION_WAITING;
         if (nativeVoiceState == 1) return Mode.LISTENING;
         return Mode.IDLE;
     }
