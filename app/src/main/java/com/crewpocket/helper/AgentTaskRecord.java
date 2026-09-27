@@ -57,6 +57,7 @@ final class AgentTaskRecord {
     long lastSuccessfulMutationAtMs;
     String retryIntentFamily = "";
     int prematureModelReplies;
+    int autonomyRecoveryAttempts;
     boolean requiresPostActionInspection;
     boolean postActionInspectionPrompted;
     boolean cancelled;
@@ -531,6 +532,7 @@ final class AgentTaskRecord {
                     .put("lastSuccessfulMutationAtMs", lastSuccessfulMutationAtMs)
                     .put("retryIntentFamily", retryIntentFamily)
                     .put("prematureModelReplies", prematureModelReplies)
+                    .put("autonomyRecoveryAttempts", autonomyRecoveryAttempts)
                     .put("cancelCategory", cancelCategory)
                     .put("suspended", suspended)
                     .put("suspensionReason", suspensionReason)
