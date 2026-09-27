@@ -3061,7 +3061,9 @@ final class NativeGeminiLiveClient {
             // the task alive merely to wait for Gemini's optional acknowledgement:
             // a new human utterance after DONE must never retroactively convert
             // a successful task into SUPERSEDED_BY_USER.
-            if ("DONE".equals(task.lastTaskState)) {
+            if (AgentTaskLifecyclePolicy
+                    .shouldFinishImmediatelyAfterRuntimeResult(
+                            task.lastTaskState)) {
                 synchronized (agentTaskCoordinator.monitor()) {
                     if (agentTaskCoordinator.isActive(task)
                             && !task.finished
