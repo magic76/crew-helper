@@ -20,6 +20,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/CandidateArbitrationOutcomePolicy.java" \
   "$SRC/LocatorFallbackPolicy.java" \
   "$SRC/AgentTaskLifecyclePolicy.java" \
+  "$SRC/AutonomyEscalationPolicy.java" \
   "$SRC/ObservationLoopPolicy.java" \
   "$SRC/AgentTaskLifecycleClock.java" \
   "$SRC/AgentRuntimeRollout.java" \
@@ -137,6 +138,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/CandidateArbitrationExecutionPolicyTest.java" \
   "$ROOT/tests/CandidateArbitrationOutcomePolicyTest.java" \
   "$ROOT/tests/AgentTaskLifecyclePolicyTest.java" \
+  "$ROOT/tests/AutonomyEscalationPolicyTest.java" \
   "$ROOT/tests/ObservationLoopPolicyTest.java" \
   "$ROOT/tests/AgentTaskLifecycleClockTest.java" \
   "$ROOT/tests/AgentRuntimeV2Test.java" \
@@ -218,6 +220,7 @@ java -cp "$OUT" com.crewpocket.helper.CandidateArbitrationPolicyTest
 java -cp "$OUT" com.crewpocket.helper.CandidateArbitrationExecutionPolicyTest
 java -cp "$OUT" com.crewpocket.helper.CandidateArbitrationOutcomePolicyTest
 java -cp "$OUT" com.crewpocket.helper.AgentTaskLifecyclePolicyTest
+java -cp "$OUT" com.crewpocket.helper.AutonomyEscalationPolicyTest
 java -cp "$OUT" com.crewpocket.helper.ObservationLoopPolicyTest
 java -cp "$OUT" com.crewpocket.helper.AgentTaskLifecycleClockTest
 java -cp "$OUT" com.crewpocket.helper.AgentRuntimeV2Test
