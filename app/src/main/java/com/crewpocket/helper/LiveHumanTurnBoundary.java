@@ -30,6 +30,7 @@ final class LiveHumanTurnBoundary {
         }
     }
 
+    private static final long QUICK_SEGMENT_MERGE_WINDOW_MS = 1_800L;
     private static final long SEGMENT_MERGE_WINDOW_MS = 4_500L;
     private static final long RELATED_SEGMENT_WINDOW_MS = 8_000L;
     private static final long LATE_DUPLICATE_WINDOW_MS = 1_500L;
@@ -101,22 +102,31 @@ final class LiveHumanTurnBoundary {
                     "IN_PROGRESS".equals(status)
                             || waiting
                             || !serverIdleSinceFinalized;
-            boolean silentSegmentGrace =
-                    !modelSpokenSinceFinalized
-                            && elapsed <= SEGMENT_MERGE_WINDOW_MS;
 
-            boolean boundedLiveContinuation =
+            // Gemini may split one spoken sentence into nearby finalized
+            // segments. Keep that grace short so a genuinely new command a few
+            // seconds later is not silently merged into the old Agent turn.
+            boolean quickSegmentContinuation =
+                    elapsed <= QUICK_SEGMENT_MERGE_WINDOW_MS
+                            && (interactionStillOpen
+                                    || !modelSpokenSinceFinalized);
+
+            // Natural follow-ups such as "然後導航過去" may arrive after a
+            // longer pause while the same task is still active. Preserve them
+            // without generation++/cancelling the in-flight task.
+            boolean explicitContinuation =
                     interactionStillOpen
-                            && elapsed <= SEGMENT_MERGE_WINDOW_MS;
+                            && elapsed <= SEGMENT_MERGE_WINDOW_MS
+                            && looksLikeContinuationSegment(text);
 
-            if (boundedLiveContinuation || silentSegmentGrace) {
+            if (quickSegmentContinuation || explicitContinuation) {
                 return commit(
                         Decision.MERGE_CURRENT_SEGMENT,
                         mergeText(currentText, text),
                         nowMs,
-                        boundedLiveContinuation
-                                ? "LIVE_INTERACTION_CONTINUES"
-                                : "SILENT_SEGMENT_GRACE");
+                        explicitContinuation
+                                ? "EXPLICIT_CONTINUATION_SEGMENT"
+                                : "QUICK_FINAL_SEGMENT");
             }
         }
 
@@ -219,9 +229,26 @@ final class LiveHumanTurnBoundary {
                 "imeant", "notthat", "instead", "changeto");
     }
 
+    private static boolean looksLikeContinuationSegment(String value) {
+        String text = comparable(value);
+        if (text.isEmpty()) return false;
+        return startsWithAny(
+                text,
+                "然後", "然后", "接著", "接着", "再", "順便", "顺便",
+                "還有", "还有", "並且", "并且", "以及", "也幫我", "也帮我",
+                "and", "then", "also", "plus");
+    }
+
     private static boolean containsAny(String value, String... terms) {
         for (String term : terms) {
             if (value.contains(comparable(term))) return true;
+        }
+        return false;
+    }
+
+    private static boolean startsWithAny(String value, String... terms) {
+        for (String term : terms) {
+            if (value.startsWith(comparable(term))) return true;
         }
         return false;
     }

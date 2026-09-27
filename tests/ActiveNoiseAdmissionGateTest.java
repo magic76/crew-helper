@@ -8,6 +8,7 @@ public final class ActiveNoiseAdmissionGateTest {
         testStartupNoiseSuppressed();
         testStartupSpeechUsesPreroll();
         testOutdoorNoiseSuppressedThenSpeechAdmitted();
+        testSustainedSoftSpeechEscapesSuppression();
         testVeryNoisyNeedsFourFrames();
         testDiagnosticsCounters();
         System.out.println("ActiveNoiseAdmissionGateTest OK");
@@ -72,6 +73,23 @@ public final class ActiveNoiseAdmissionGateTest {
         assertEquals(ActiveNoiseAdmissionGate.Action.SUPPRESS,
                 gate.accept(FRAME, FRAME.length, 0.050, 0.003,
                         0.050, "auto", 35, true), "gate should close after trailing window");
+    }
+
+    private static void testSustainedSoftSpeechEscapesSuppression() {
+        ActiveNoiseAdmissionGate gate = new ActiveNoiseAdmissionGate(FRAME.length);
+        for (int i = 0; i < 4; i++) {
+            assertEquals(ActiveNoiseAdmissionGate.Action.SUPPRESS,
+                    gate.accept(FRAME, FRAME.length, 0.056, 0.07,
+                            0.050, "auto", 35, true),
+                    "soft voiced speech should confirm slowly before admission");
+        }
+        assertEquals(ActiveNoiseAdmissionGate.Action.FLUSH_PREROLL,
+                gate.accept(FRAME, FRAME.length, 0.056, 0.07,
+                        0.050, "auto", 35, true),
+                "sustained soft voiced speech should not be swallowed forever");
+        if (!"SOFT_SPEECH_ESCAPE".equals(gate.lastReason())) {
+            throw new AssertionError("soft speech admission must be diagnosable");
+        }
     }
 
     private static void testVeryNoisyNeedsFourFrames() {
