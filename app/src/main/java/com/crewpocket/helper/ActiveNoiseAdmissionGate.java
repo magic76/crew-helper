@@ -16,6 +16,10 @@ final class ActiveNoiseAdmissionGate {
     private static final int STARTUP_REQUIRED_SPEECH_FRAMES = 2; // ~80 ms
     private static final int BASE_REQUIRED_SPEECH_FRAMES = 3; // ~120 ms
     private static final int VERY_NOISY_REQUIRED_SPEECH_FRAMES = 4; // ~160 ms
+    // Softer nearby speech can sit just below the adaptive hard threshold.
+    // Keep this path slower than ordinary admission so ambient noise still loses.
+    private static final int SOFT_SPEECH_REQUIRED_FRAMES = 5; // ~200 ms
+    private static final int VERY_NOISY_SOFT_SPEECH_REQUIRED_FRAMES = 6; // ~240 ms
     // Keep admitted trailing audio longer than Gemini's configured 450 ms end-silence.
     private static final int RELEASE_NON_SPEECH_FRAMES = 16; // ~640 ms
 
@@ -24,6 +28,7 @@ final class ActiveNoiseAdmissionGate {
     private int preRollStart;
     private int preRollCount;
     private int consecutiveSpeechFrames;
+    private int consecutiveSoftSpeechFrames;
     private int consecutiveNonSpeechFrames;
     private boolean gateOpen;
     private double lastThreshold;
@@ -67,28 +72,53 @@ final class ActiveNoiseAdmissionGate {
 
         lastThreshold = speechThreshold(noiseFloor, noiseMode, suppression, calibrated);
         boolean speechLike = looksLikeSpeech(rms, zcr, noiseFloor, lastThreshold);
-        lastSpeechLike = speechLike;
+        boolean softSpeechLike = calibrated
+                && !speechLike
+                && looksLikeSoftSpeech(rms, zcr, noiseFloor, lastThreshold);
+        lastSpeechLike = speechLike || softSpeechLike;
 
         if (!gateOpen) {
             buffer(pcm, count);
-            if (speechLike) consecutiveSpeechFrames++;
-            else consecutiveSpeechFrames = 0;
+            if (speechLike) {
+                consecutiveSpeechFrames++;
+                consecutiveSoftSpeechFrames++;
+            } else if (softSpeechLike) {
+                consecutiveSpeechFrames = 0;
+                consecutiveSoftSpeechFrames++;
+            } else {
+                consecutiveSpeechFrames = 0;
+                consecutiveSoftSpeechFrames = 0;
+            }
 
             int required = calibrated
                     ? requiredSpeechFrames(noiseFloor)
                     : STARTUP_REQUIRED_SPEECH_FRAMES;
-            if (consecutiveSpeechFrames >= required) {
+            int softRequired = requiredSoftSpeechFrames(noiseFloor);
+            boolean hardSpeechConfirmed =
+                    consecutiveSpeechFrames >= required;
+            boolean softSpeechConfirmed =
+                    calibrated
+                            && consecutiveSoftSpeechFrames >= softRequired;
+            if (hardSpeechConfirmed || softSpeechConfirmed) {
                 gateOpen = true;
                 consecutiveNonSpeechFrames = 0;
                 consecutiveSpeechFrames = 0;
+                consecutiveSoftSpeechFrames = 0;
                 admitCount++;
-                lastReason = calibrated ? "PERSISTENT_SPEECH" : "STARTUP_SPEECH";
+                if (!calibrated) {
+                    lastReason = "STARTUP_SPEECH";
+                } else {
+                    lastReason = softSpeechConfirmed && !hardSpeechConfirmed
+                            ? "SOFT_SPEECH_ESCAPE"
+                            : "PERSISTENT_SPEECH";
+                }
                 return Action.FLUSH_PREROLL;
             }
             suppressCount++;
             lastReason = speechLike
                     ? (calibrated ? "SPEECH_CONFIRMING" : "STARTUP_CONFIRMING")
-                    : (calibrated ? "NOISE_LIKE" : "STARTUP_NOISE");
+                    : (softSpeechLike ? "SOFT_SPEECH_CONFIRMING"
+                            : (calibrated ? "NOISE_LIKE" : "STARTUP_NOISE"));
             return Action.SUPPRESS;
         }
 
@@ -154,6 +184,7 @@ final class ActiveNoiseAdmissionGate {
     private void resetGateState() {
         gateOpen = false;
         consecutiveSpeechFrames = 0;
+        consecutiveSoftSpeechFrames = 0;
         consecutiveNonSpeechFrames = 0;
     }
 
@@ -184,6 +215,12 @@ final class ActiveNoiseAdmissionGate {
         return Math.max(0.008, noiseFloor) >= 0.060
                 ? VERY_NOISY_REQUIRED_SPEECH_FRAMES
                 : BASE_REQUIRED_SPEECH_FRAMES;
+    }
+
+    private static int requiredSoftSpeechFrames(double noiseFloor) {
+        return Math.max(0.008, noiseFloor) >= 0.060
+                ? VERY_NOISY_SOFT_SPEECH_REQUIRED_FRAMES
+                : SOFT_SPEECH_REQUIRED_FRAMES;
     }
 
     private static double speechThreshold(double noiseFloor,
@@ -221,5 +258,24 @@ final class ActiveNoiseAdmissionGate {
                 && rms < Math.max(threshold * 1.45,
                         Math.max(0.008, noiseFloor) * 1.55)) return false;
         return true;
+    }
+
+    /**
+     * Slow fallback for sustained voiced speech that sits slightly below the
+     * hard adaptive threshold. Server VAD still decides whether this becomes a
+     * semantic user turn; the local gate merely stops permanently swallowing it.
+     */
+    private static boolean looksLikeSoftSpeech(double rms,
+                                               double zcr,
+                                               double noiseFloor,
+                                               double threshold) {
+        double floor = Math.max(0.008, noiseFloor);
+        double softThreshold = Math.max(
+                floor * 1.08,
+                threshold * 0.82);
+        if (rms < softThreshold) return false;
+        // Require a voiced-band texture so fan hiss and low-frequency rumble
+        // cannot use the softer escape path.
+        return zcr >= 0.012 && zcr <= 0.22;
     }
 }
