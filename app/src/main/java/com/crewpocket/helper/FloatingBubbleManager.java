@@ -503,6 +503,7 @@ public class FloatingBubbleManager {
             String rawStatus,
             boolean activeTask,
             boolean needsAttention) {
+        bubbleAgentNeedsAttention = needsAttention;
         if (!activeTask || needsAttention) {
             bubbleAgentPhase = BubbleTaskPhasePolicy.Phase.NONE;
             bubbleAgentProgressKey = "";
