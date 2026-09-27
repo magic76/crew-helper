@@ -512,45 +512,97 @@ public class FloatingBubbleManager {
             boolean activeTask,
             boolean needsAttention) {
         bubbleAgentNeedsAttention = needsAttention;
+        bubbleAgentActiveTask = activeTask;
+        bubbleLatestRawStatus = rawStatus == null ? "" : rawStatus;
+
         if (!activeTask || needsAttention) {
+            cancelBubblePhaseDebounce();
+            cancelBubbleWaitingMorphWatch();
             bubbleAgentPhase = BubbleTaskPhasePolicy.Phase.NONE;
             bubbleAgentProgressKey = "";
             cancelBubbleStuckWatch();
             return;
         }
 
-        BubbleTaskPhasePolicy.Phase nextPhase =
+        final BubbleTaskPhasePolicy.Phase nextPhase =
                 BubbleTaskPhasePolicy.classify(
                         rawStatus,
                         true);
-        String nextKey =
+        final String nextKey =
                 BubbleTaskPhasePolicy.progressKey(rawStatus);
 
-        if (nextPhase == BubbleTaskPhasePolicy.Phase.WAITING) {
-            bubbleAgentPhase = nextPhase;
-            bubbleAgentProgressKey = nextKey;
-            cancelBubbleStuckWatch();
+        if (nextPhase == bubbleAgentPhase
+                && nextKey.equals(bubbleAgentProgressKey)) {
             return;
         }
 
-        boolean sameProgress =
-                nextKey.equals(bubbleAgentProgressKey);
-        if (sameProgress) {
-            // Repeated status heartbeats are not progress. If we already
-            // surfaced STUCK, keep it until a genuinely new Runtime stage
-            // arrives.
-            if (bubbleAgentPhase
-                    == BubbleTaskPhasePolicy.Phase.STUCK) {
-                return;
-            }
-            if (bubbleAgentPhase == nextPhase) {
-                return;
-            }
-        }
+        cancelBubblePhaseDebounce();
+        final int generation = ++bubblePhaseDebounceGeneration;
+        bubblePhaseDebounceRunnable = new Runnable() {
+            @Override public void run() {
+                bubblePhaseDebounceRunnable = null;
+                if (generation != bubblePhaseDebounceGeneration) return;
+                if (!bubbleAgentActiveTask || bubbleAgentNeedsAttention) return;
 
-        bubbleAgentProgressKey = nextKey;
-        bubbleAgentPhase = nextPhase;
-        scheduleBubbleStuckWatch(nextPhase);
+                bubbleAgentProgressKey = nextKey;
+                bubbleAgentPhase = nextPhase;
+
+                if (bubbleView != null) {
+                    bubbleView.setAgentPhase(nextPhase);
+                }
+
+                if (nextPhase == BubbleTaskPhasePolicy.Phase.WAITING) {
+                    cancelBubbleStuckWatch();
+                    scheduleBubbleWaitingMorphWatch();
+                } else {
+                    cancelBubbleWaitingMorphWatch();
+                    scheduleBubbleStuckWatch(nextPhase);
+                }
+                refreshMorphBubbleStatus();
+            }
+        };
+        mainHandler.postDelayed(
+                bubblePhaseDebounceRunnable,
+                QuietMorphBubblePolicy.PHASE_DEBOUNCE_MS);
+    }
+
+    private void cancelBubblePhaseDebounce() {
+        bubblePhaseDebounceGeneration++;
+        if (bubblePhaseDebounceRunnable != null) {
+            mainHandler.removeCallbacks(bubblePhaseDebounceRunnable);
+            bubblePhaseDebounceRunnable = null;
+        }
+    }
+
+    private void scheduleBubbleWaitingMorphWatch() {
+        cancelBubbleWaitingMorphWatch();
+        final int generation = ++bubbleWaitingMorphGeneration;
+        bubbleWaitingMorphRunnable = new Runnable() {
+            @Override public void run() {
+                bubbleWaitingMorphRunnable = null;
+                if (generation != bubbleWaitingMorphGeneration) return;
+                if (!bubbleAgentActiveTask
+                        || bubbleAgentNeedsAttention
+                        || bubbleAgentPhase
+                                != BubbleTaskPhasePolicy.Phase.WAITING) {
+                    return;
+                }
+                bubbleWaitingMorphVisible = true;
+                refreshMorphBubbleStatus();
+            }
+        };
+        mainHandler.postDelayed(
+                bubbleWaitingMorphRunnable,
+                QuietMorphBubblePolicy.WAITING_MORPH_DELAY_MS);
+    }
+
+    private void cancelBubbleWaitingMorphWatch() {
+        bubbleWaitingMorphGeneration++;
+        bubbleWaitingMorphVisible = false;
+        if (bubbleWaitingMorphRunnable != null) {
+            mainHandler.removeCallbacks(bubbleWaitingMorphRunnable);
+            bubbleWaitingMorphRunnable = null;
+        }
     }
 
     private void scheduleBubbleStuckWatch(
