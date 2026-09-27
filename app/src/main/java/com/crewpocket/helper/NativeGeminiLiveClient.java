@@ -3020,6 +3020,7 @@ final class NativeGeminiLiveClient {
                     task,
                     result,
                     callIntentGeneration);
+            applyBoundedAutonomyEscalation(task, result);
             String arbitrationEventId =
                     result.optString(
                             "_candidateArbitrationEventId", "").trim();
@@ -3055,6 +3056,29 @@ final class NativeGeminiLiveClient {
             sendToolResponse(id, requestedName, result);
             PerformanceMetrics.markAgentToolResultSent(
                     task.taskId, task.intentGeneration, name);
+
+            // Runtime terminal evidence owns lifecycle completion. Do not keep
+            // the task alive merely to wait for Gemini's optional acknowledgement:
+            // a new human utterance after DONE must never retroactively convert
+            // a successful task into SUPERSEDED_BY_USER.
+            if (AgentTaskLifecyclePolicy
+                    .shouldFinishImmediatelyAfterRuntimeResult(
+                            task.lastTaskState)) {
+                synchronized (agentTaskCoordinator.monitor()) {
+                    if (agentTaskCoordinator.isActive(task)
+                            && !task.finished
+                            && !task.cancelled) {
+                        task.awaitingModel = false;
+                        task.watchdogPrompted = false;
+                    }
+                }
+                finishAgentTask(
+                        task,
+                        AgentTaskEndReason.COMPLETED,
+                        task.finalReply);
+                return;
+            }
+
             if (task.blockedReason != null) {
                 agentResponseCoordinator.requestConclusion(task, task.blockedReason);
             } else if (shouldSuspendAgentForUser(result)) {
@@ -3096,7 +3120,9 @@ final class NativeGeminiLiveClient {
                         task.awaitingModel = false;
                         task.watchdogPrompted = false;
                         agentResponseCoordinator.clear();
-                        task.status = "等待使用者選擇搜尋結果";
+                        task.status = hasPendingUiChoice()
+                                ? "等待使用者選擇搜尋結果"
+                                : "等待使用者決定下一步";
                     }
                     reportStage(task.status);
                 }
@@ -3256,6 +3282,7 @@ final class NativeGeminiLiveClient {
         if (result != null) {
             String state = result.optString("taskState", "");
             if ("WAITING_USER".equals(state)
+                    || "NEED_USER".equals(state)
                     || "WAITING_BACKGROUND".equals(state)) {
                 return true;
             }
@@ -3653,6 +3680,88 @@ final class NativeGeminiLiveClient {
                 activeNavigation
                         ? "導航已確認啟動"
                         : "尚未確認導航啟動，繼續處理");
+    }
+
+    /**
+     * Low-risk autonomy gets one fresh recovery. Repeated uncertainty or a
+     * deterministic no-progress loop asks the human instead of spending more
+     * tool turns on inspect/retry/back/swipe guesses.
+     */
+    private void applyBoundedAutonomyEscalation(
+            AgentTaskRecord task,
+            JSONObject result) {
+        if (task == null || result == null) return;
+
+        synchronized (agentTaskCoordinator.monitor()) {
+            if (task.finished
+                    || task.cancelled
+                    || !agentTaskCoordinator.isActive(task)) {
+                return;
+            }
+
+            String state =
+                    result.optString("taskState", "").trim();
+            if ("DONE".equals(state)
+                    || "ANSWER_READY".equals(state)
+                    || "BLOCKED".equals(state)
+                    || "WAITING_USER".equals(state)
+                    || "WAITING_BACKGROUND".equals(state)) {
+                return;
+            }
+
+            AutonomyEscalationPolicy.Decision decision =
+                    AutonomyEscalationPolicy.evaluate(
+                            task.autonomyRecoveryAttempts,
+                            result.optString("decision", ""),
+                            result.optString("error", ""),
+                            result.optString("nextRequirement", ""),
+                            result.optString(
+                                    "completionEvidence", ""));
+
+            if (decision
+                    == AutonomyEscalationPolicy.Decision.NONE) {
+                return;
+            }
+
+            if (decision
+                    == AutonomyEscalationPolicy.Decision.RECOVER_ONCE) {
+                task.autonomyRecoveryAttempts++;
+                try {
+                    result.put(
+                                    "autonomyRecoveryAttempt",
+                                    task.autonomyRecoveryAttempts)
+                            .put(
+                                    "autonomyRecoveryLimit",
+                                    AutonomyEscalationPolicy
+                                            .MAX_AUTONOMOUS_UNCERTAIN_RECOVERIES);
+                } catch (Exception ignored) {}
+                return;
+            }
+
+            task.requiresPostActionInspection = false;
+            task.postActionInspectionPrompted = false;
+            try {
+                String previousEvidence =
+                        result.optString(
+                                "completionEvidence", "");
+                if (!previousEvidence.isEmpty()) {
+                    result.put(
+                            "previousCompletionEvidence",
+                            previousEvidence);
+                }
+                result.put("taskState", "WAITING_USER")
+                        .put("nextRequirement", "ASK_USER")
+                        .put("needsUser", true)
+                        .put("recoverable", false)
+                        .put(
+                                "completionEvidence",
+                                "AUTONOMY_RECOVERY_EXHAUSTED")
+                        .put(
+                                "instruction",
+                                AutonomyEscalationPolicy
+                                        .userInstruction());
+            } catch (Exception ignored) {}
+        }
     }
 
     private boolean isMutationTool(String name) {

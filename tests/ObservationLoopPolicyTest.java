@@ -17,24 +17,14 @@ public final class ObservationLoopPolicyTest {
                         first.nextSameScreenCount,
                         "screen-a",
                         false);
-        check(!second.blocked
-                        && second.nextSameScreenCount == 2,
-                "second unchanged observation is allowed");
-
-        ObservationLoopPolicy.Decision third =
-                ObservationLoopPolicy.evaluate(
-                        second.fingerprint,
-                        second.nextSameScreenCount,
-                        "screen-a",
-                        false);
-        check(third.blocked
-                        && third.nextSameScreenCount == 2,
-                "third unchanged observation is blocked");
+        check(second.blocked
+                        && second.nextSameScreenCount == 1,
+                "second unchanged observation is blocked after one recovery");
 
         ObservationLoopPolicy.Decision stillBlocked =
                 ObservationLoopPolicy.evaluate(
-                        third.fingerprint,
-                        third.nextSameScreenCount,
+                        second.fingerprint,
+                        second.nextSameScreenCount,
                         "screen-a",
                         false);
         check(stillBlocked.blocked,
@@ -42,8 +32,8 @@ public final class ObservationLoopPolicyTest {
 
         ObservationLoopPolicy.Decision changed =
                 ObservationLoopPolicy.evaluate(
-                        third.fingerprint,
-                        third.nextSameScreenCount,
+                        second.fingerprint,
+                        second.nextSameScreenCount,
                         "screen-b",
                         false);
         check(!changed.blocked
@@ -53,7 +43,7 @@ public final class ObservationLoopPolicyTest {
         ObservationLoopPolicy.Decision progress =
                 ObservationLoopPolicy.evaluate(
                         "screen-a",
-                        2,
+                        1,
                         "screen-a",
                         true);
         check(!progress.blocked
@@ -63,7 +53,7 @@ public final class ObservationLoopPolicyTest {
         ObservationLoopPolicy.Decision unavailable =
                 ObservationLoopPolicy.evaluate(
                         "screen-a",
-                        2,
+                        1,
                         "",
                         false);
         check(!unavailable.blocked

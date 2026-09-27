@@ -736,56 +736,18 @@ final class PhoneRuntimeExecutor {
                 }
 
                 if (ambiguity) {
-                    if (trustedAutonomy
-                            && !validatedVisualFallback) {
-                        JSONArray candidates =
-                                semantic.optJSONArray("candidates");
-                        JSONObject top =
-                                candidates == null
-                                        ? null
-                                        : candidates.optJSONObject(0);
-                        String trustedElementId =
-                                top == null
-                                        ? ""
-                                        : top.optString("elementId", "");
-                        if (!trustedElementId.isEmpty()) {
-                            JSONObject trustedTap = post(
-                                    "/semantic_tap",
-                                    new JSONObject().put(
-                                            "elementId",
-                                            trustedElementId));
-                            fallbackTrace.put(
-                                    "trusted_top_candidate:"
-                                            + (trustedTap.optBoolean(
-                                                    "success", false)
-                                                    ? "SUCCESS"
-                                                    : "MISS"));
-                            if (trustedTap.optBoolean("success", false)) {
-                                if (locatorArbitrationObserver != null
-                                        && arbitrationEventId != null
-                                        && !arbitrationEventId.isEmpty()) {
-                                    try {
-                                        locatorArbitrationObserver.onBaselineCandidate(
-                                                arbitrationEventId,
-                                                trustedElementId);
-                                    } catch (Exception ignored) {}
-                                }
-                                return trustedTap
-                                        .put(
-                                            "resolvedFrom",
-                                            "trusted_autonomy_top_candidate")
-                                        .put(
-                                            "fallbackTrace",
-                                            fallbackTrace);
-                            }
-                        }
-                    } else if (!validatedVisualFallback) {
+                    if (!validatedVisualFallback) {
+                        // Trust allows autonomous low-risk actions, but it does
+                        // not authorize guessing between genuinely competing
+                        // candidates. High-confidence targets are already AUTO
+                        // before this branch; only close candidates reach here.
                         semantic.put("resolvedFrom", "semantic_v2")
                                 .put("fallbackTrace", fallbackTrace)
                                 .put("stepResult", "STEP_FAILED")
                                 .put("taskState", "NEED_USER")
+                                .put("nextRequirement", "ASK_USER")
                                 .put("instruction",
-                                        "定位候選太接近。列出 Runtime 提供的 candidates 請使用者選；不要降級猜座標。");
+                                        "定位候選太接近。最多列出前兩個 Runtime candidates，直接請使用者選一個；不要再 inspect，也不要降級猜座標。");
                         return semantic;
                     } else {
                         fallbackTrace.put(

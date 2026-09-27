@@ -149,6 +149,12 @@ final class AgentTaskLifecyclePolicy {
                 && isObservationTool(lastToolName);
     }
 
+    static boolean shouldFinishImmediatelyAfterRuntimeResult(
+            String taskState) {
+        return "DONE".equals(
+                safe(taskState).trim().toUpperCase());
+    }
+
     static boolean isOneShotCompletionTool(String name) {
         return "create_note".equals(name)
                 || "remember_app_guidance".equals(name)

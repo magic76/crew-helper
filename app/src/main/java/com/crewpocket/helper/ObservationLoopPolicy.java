@@ -8,7 +8,7 @@ package com.crewpocket.helper;
  * A changed fingerprint or a newly resolved Runtime revalidation resets it.
  */
 final class ObservationLoopPolicy {
-    static final int MAX_SAME_SCREEN_OBSERVATIONS = 2;
+    static final int MAX_SAME_SCREEN_OBSERVATIONS = 1;
     static final String BLOCK_CODE = "NO_PROGRESS_LOOP";
 
     static final class Decision {
