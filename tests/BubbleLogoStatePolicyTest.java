@@ -31,6 +31,9 @@ public final class BubbleLogoStatePolicyTest {
         check(resolve(1, BubbleTaskPhasePolicy.Phase.NONE, false, true)
                         == BubbleLogoStatePolicy.Mode.CONVERSATION_WAITING,
                 "conversation waiting wins over generic listening");
+        check(resolve(1, BubbleTaskPhasePolicy.Phase.WAITING, false, true)
+                        == BubbleLogoStatePolicy.Mode.CONVERSATION_WAITING,
+                "reply waiting wins over generic screen waiting");
         check(resolve(3, BubbleTaskPhasePolicy.Phase.STUCK, true, true)
                         == BubbleLogoStatePolicy.Mode.ERROR,
                 "error wins all");
