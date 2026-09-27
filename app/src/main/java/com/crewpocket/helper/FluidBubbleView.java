@@ -620,12 +620,12 @@ final class FluidBubbleView extends View {
                 mode == BubbleLogoStatePolicy.Mode.ERROR
                         ? errorSweepGradient
                         : mode == BubbleLogoStatePolicy.Mode.WAITING_USER
+                        || mode == BubbleLogoStatePolicy.Mode.STUCK
                         ? attentionSweepGradient
                         : mode == BubbleLogoStatePolicy.Mode.SPEAKING
                         ? speakingSweepGradient
-                        : mode
-                                == BubbleLogoStatePolicy.Mode
-                                        .CONVERSATION_WAITING
+                        : mode == BubbleLogoStatePolicy.Mode.CONVERSATION_WAITING
+                        || mode == BubbleLogoStatePolicy.Mode.WAITING
                         ? conversationWaitingSweepGradient
                         : mode == BubbleLogoStatePolicy.Mode.LISTENING
                         || mode == BubbleLogoStatePolicy.Mode.THINKING
