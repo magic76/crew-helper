@@ -93,6 +93,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/VoiceExecutionPolicy.java" \
   "$SRC/BubbleTaskPhasePolicy.java" \
   "$SRC/BubbleLogoStatePolicy.java" \
+  "$SRC/QuietMorphBubblePolicy.java" \
   "$SRC/ConversationLoopPolicy.java" \
   "$SRC/ConversationLoopTakeoverPolicy.java" \
   "$SRC/ConversationLoopRecipe.java" \
@@ -172,6 +173,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/VoiceExecutionPolicyTest.java" \
   "$ROOT/tests/BubbleTaskPhasePolicyTest.java" \
   "$ROOT/tests/BubbleLogoStatePolicyTest.java" \
+  "$ROOT/tests/QuietMorphBubblePolicyTest.java" \
   "$ROOT/tests/CommitGuardTest.java" \
   "$ROOT/tests/AppAutonomyPolicyTest.java" \
   "$ROOT/tests/ConversationLoopRecipeTest.java" \
@@ -254,6 +256,7 @@ java -cp "$OUT" com.crewpocket.helper.VoiceCommandQualityPolicyTest
 java -cp "$OUT" com.crewpocket.helper.VoiceExecutionPolicyTest
 java -cp "$OUT" com.crewpocket.helper.BubbleTaskPhasePolicyTest
 java -cp "$OUT" com.crewpocket.helper.BubbleLogoStatePolicyTest
+java -cp "$OUT" com.crewpocket.helper.QuietMorphBubblePolicyTest
 java -cp "$OUT" com.crewpocket.helper.CommitGuardTest
 java -cp "$OUT" com.crewpocket.helper.AppAutonomyPolicyTest
 java -cp "$OUT" com.crewpocket.helper.ConversationLoopRecipeTest

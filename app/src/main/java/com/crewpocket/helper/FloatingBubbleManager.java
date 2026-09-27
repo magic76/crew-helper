@@ -64,7 +64,18 @@ public class FloatingBubbleManager {
     private BubbleTaskPhasePolicy.Phase bubbleAgentPhase =
             BubbleTaskPhasePolicy.Phase.NONE;
     private boolean bubbleAgentNeedsAttention = false;
+    private boolean bubbleAgentActiveTask = false;
     private String bubbleAgentProgressKey = "";
+    private String bubbleLatestRawStatus = "";
+    private RuntimeUiState bubbleDetailState = null;
+    private Runnable bubblePhaseDebounceRunnable = null;
+    private int bubblePhaseDebounceGeneration = 0;
+    private BubbleTaskPhasePolicy.Phase bubblePendingAgentPhase =
+            BubbleTaskPhasePolicy.Phase.NONE;
+    private String bubblePendingProgressKey = "";
+    private Runnable bubbleWaitingMorphRunnable = null;
+    private int bubbleWaitingMorphGeneration = 0;
+    private boolean bubbleWaitingMorphVisible = false;
     private Runnable bubbleStuckRunnable = null;
     private int bubbleStuckGeneration = 0;
     private int bubbleNativeVoiceState = 0;
@@ -504,45 +515,110 @@ public class FloatingBubbleManager {
             boolean activeTask,
             boolean needsAttention) {
         bubbleAgentNeedsAttention = needsAttention;
+        bubbleAgentActiveTask = activeTask;
+        bubbleLatestRawStatus = rawStatus == null ? "" : rawStatus;
+
         if (!activeTask || needsAttention) {
+            cancelBubblePhaseDebounce();
+            cancelBubbleWaitingMorphWatch();
             bubbleAgentPhase = BubbleTaskPhasePolicy.Phase.NONE;
             bubbleAgentProgressKey = "";
             cancelBubbleStuckWatch();
             return;
         }
 
-        BubbleTaskPhasePolicy.Phase nextPhase =
+        final BubbleTaskPhasePolicy.Phase nextPhase =
                 BubbleTaskPhasePolicy.classify(
                         rawStatus,
                         true);
-        String nextKey =
+        final String nextKey =
                 BubbleTaskPhasePolicy.progressKey(rawStatus);
 
-        if (nextPhase == BubbleTaskPhasePolicy.Phase.WAITING) {
-            bubbleAgentPhase = nextPhase;
-            bubbleAgentProgressKey = nextKey;
-            cancelBubbleStuckWatch();
+        if (nextPhase == bubbleAgentPhase
+                && nextKey.equals(bubbleAgentProgressKey)) {
+            return;
+        }
+        if (bubblePhaseDebounceRunnable != null
+                && nextPhase == bubblePendingAgentPhase
+                && nextKey.equals(bubblePendingProgressKey)) {
             return;
         }
 
-        boolean sameProgress =
-                nextKey.equals(bubbleAgentProgressKey);
-        if (sameProgress) {
-            // Repeated status heartbeats are not progress. If we already
-            // surfaced STUCK, keep it until a genuinely new Runtime stage
-            // arrives.
-            if (bubbleAgentPhase
-                    == BubbleTaskPhasePolicy.Phase.STUCK) {
-                return;
-            }
-            if (bubbleAgentPhase == nextPhase) {
-                return;
-            }
-        }
+        cancelBubblePhaseDebounce();
+        bubblePendingAgentPhase = nextPhase;
+        bubblePendingProgressKey = nextKey;
+        final int generation = ++bubblePhaseDebounceGeneration;
+        bubblePhaseDebounceRunnable = new Runnable() {
+            @Override public void run() {
+                bubblePhaseDebounceRunnable = null;
+                if (generation != bubblePhaseDebounceGeneration) return;
+                if (!bubbleAgentActiveTask || bubbleAgentNeedsAttention) return;
 
-        bubbleAgentProgressKey = nextKey;
-        bubbleAgentPhase = nextPhase;
-        scheduleBubbleStuckWatch(nextPhase);
+                bubblePendingAgentPhase =
+                        BubbleTaskPhasePolicy.Phase.NONE;
+                bubblePendingProgressKey = "";
+                bubbleAgentProgressKey = nextKey;
+                bubbleAgentPhase = nextPhase;
+
+                if (bubbleView != null) {
+                    bubbleView.setAgentPhase(nextPhase);
+                }
+
+                if (nextPhase == BubbleTaskPhasePolicy.Phase.WAITING) {
+                    cancelBubbleStuckWatch();
+                    scheduleBubbleWaitingMorphWatch();
+                } else {
+                    cancelBubbleWaitingMorphWatch();
+                    scheduleBubbleStuckWatch(nextPhase);
+                }
+                refreshMorphBubbleStatus();
+            }
+        };
+        mainHandler.postDelayed(
+                bubblePhaseDebounceRunnable,
+                QuietMorphBubblePolicy.PHASE_DEBOUNCE_MS);
+    }
+
+    private void cancelBubblePhaseDebounce() {
+        bubblePhaseDebounceGeneration++;
+        bubblePendingAgentPhase =
+                BubbleTaskPhasePolicy.Phase.NONE;
+        bubblePendingProgressKey = "";
+        if (bubblePhaseDebounceRunnable != null) {
+            mainHandler.removeCallbacks(bubblePhaseDebounceRunnable);
+            bubblePhaseDebounceRunnable = null;
+        }
+    }
+
+    private void scheduleBubbleWaitingMorphWatch() {
+        cancelBubbleWaitingMorphWatch();
+        final int generation = ++bubbleWaitingMorphGeneration;
+        bubbleWaitingMorphRunnable = new Runnable() {
+            @Override public void run() {
+                bubbleWaitingMorphRunnable = null;
+                if (generation != bubbleWaitingMorphGeneration) return;
+                if (!bubbleAgentActiveTask
+                        || bubbleAgentNeedsAttention
+                        || bubbleAgentPhase
+                                != BubbleTaskPhasePolicy.Phase.WAITING) {
+                    return;
+                }
+                bubbleWaitingMorphVisible = true;
+                refreshMorphBubbleStatus();
+            }
+        };
+        mainHandler.postDelayed(
+                bubbleWaitingMorphRunnable,
+                QuietMorphBubblePolicy.WAITING_MORPH_DELAY_MS);
+    }
+
+    private void cancelBubbleWaitingMorphWatch() {
+        bubbleWaitingMorphGeneration++;
+        bubbleWaitingMorphVisible = false;
+        if (bubbleWaitingMorphRunnable != null) {
+            mainHandler.removeCallbacks(bubbleWaitingMorphRunnable);
+            bubbleWaitingMorphRunnable = null;
+        }
     }
 
     private void scheduleBubbleStuckWatch(
@@ -574,6 +650,9 @@ public class FloatingBubbleManager {
 
                 bubbleAgentPhase =
                         BubbleTaskPhasePolicy.Phase.STUCK;
+                bubbleDetailState = RuntimeUiState.waitingUser(
+                        "需要你",
+                        "Crew 長時間沒有取得新進展，請告訴我下一步或重新下指令");
                 if (bubbleView != null) {
                     bubbleView.setAgentPhase(
                             BubbleTaskPhasePolicy.Phase.STUCK);
@@ -615,36 +694,48 @@ public class FloatingBubbleManager {
 
                 if (activeTask) {
                     bubbleView.setAgentNeedsAttention(needsAttention);
-                    if (!needsAttention) {
-                        bubbleView.setAgentPhase(bubbleAgentPhase);
-                    }
-                    refreshMorphBubbleStatus();
 
+                    String stage = AgentInspectorStore.friendlyStage(
+                            rawStatus, true);
                     if (needsAttention) {
                         lastShownAgentStage = "";
                         String detail = "需要你選擇".equals(important)
                                 ? "直接說「第一個」或選項名稱"
                                 : ("需要權限".equals(important)
                                         ? "完成權限設定後，再回來繼續"
-                                        : "");
-                        showRuntimeUiState(
-                                RuntimeUiState.waitingUser(important, detail));
+                                        : "請告訴 Crew 下一步要怎麼做");
+                        bubbleDetailState =
+                                RuntimeUiState.waitingUser(
+                                        important,
+                                        detail);
+                        // WAITING_USER is the one active state that must become
+                        // immediately obvious without waiting for the debounce.
+                        bubbleView.setAgentPhase(
+                                BubbleTaskPhasePolicy.Phase.NONE);
+                        refreshMorphBubbleStatus();
                         return;
                     }
 
-                    // Normal progress remains quiet. If the user has explicitly
-                    // expanded the bubble rail, show one compact human-readable
-                    // step beside it instead of exposing Runtime/debug text.
-                    if (bubbleActionStrip != null && bubbleActionStrip.isShowing()) {
-                        String stage = AgentInspectorStore.friendlyStage(
-                                rawStatus, true);
-                        if (stage != null
-                                && !stage.isEmpty()
-                                && !stage.equals(lastShownAgentStage)) {
-                            lastShownAgentStage = stage;
-                            showRuntimeUiState(
-                                    RuntimeUiState.working("Crew 正在處理", stage));
-                        }
+                    if (stage != null && !stage.isEmpty()) {
+                        bubbleDetailState =
+                                RuntimeUiState.working(
+                                        "Crew 正在處理",
+                                        stage);
+                    }
+
+                    // Normal progress remains logo-only. When the user has
+                    // explicitly expanded the action strip, keep the existing
+                    // compact diagnostic card available there.
+                    if (bubbleActionStrip != null
+                            && bubbleActionStrip.isShowing()
+                            && stage != null
+                            && !stage.isEmpty()
+                            && !stage.equals(lastShownAgentStage)) {
+                        lastShownAgentStage = stage;
+                        showRuntimeUiState(
+                                RuntimeUiState.working(
+                                        "Crew 正在處理",
+                                        stage));
                     }
                     return;
                 }
@@ -659,23 +750,27 @@ public class FloatingBubbleManager {
 
                 if (AgentInspectorStore.isSuccessfulTaskEnd(rawStatus)) {
                     bubbleView.flashAgentResult(true);
+                    bubbleDetailState =
+                            RuntimeUiState.success(
+                                    "已完成",
+                                    "");
                     showMorphBubbleStatus(
                             "完成",
                             Color.parseColor("#34D399"),
-                            1300L);
+                            QuietMorphBubblePolicy.DONE_MORPH_MS);
                     return;
                 }
 
                 if ("操作失敗".equals(important)) {
                     bubbleView.flashAgentResult(false);
-                    showMorphBubbleStatus(
-                            "操作失敗",
-                            Color.parseColor("#FB7185"),
-                            1800L);
-                    showRuntimeUiState(
+                    bubbleDetailState =
                             RuntimeUiState.error(
                                     important,
-                                    "可以再說一次，或打開控制台查看狀態"));
+                                    "可以再說一次，或打開控制台查看狀態");
+                    showMorphBubbleStatus(
+                            "沒完成",
+                            Color.parseColor("#FB7185"),
+                            QuietMorphBubblePolicy.ERROR_MORPH_MS);
                     return;
                 }
 
@@ -834,9 +929,15 @@ public class FloatingBubbleManager {
             mainHandler.removeCallbacks(bubbleMorphAutoCollapseRunnable);
             bubbleMorphAutoCollapseRunnable = null;
         }
+        cancelBubblePhaseDebounce();
+        cancelBubbleWaitingMorphWatch();
         cancelBubbleStuckWatch();
         bubbleAgentProgressKey = "";
         bubbleAgentPhase = BubbleTaskPhasePolicy.Phase.NONE;
+        bubbleAgentActiveTask = false;
+        bubbleAgentNeedsAttention = false;
+        bubbleLatestRawStatus = "";
+        bubbleDetailState = null;
         if (bubbleContainer != null) {
             try { windowManager.removeView(bubbleContainer); } catch (Exception ignored) {}
         }
@@ -886,6 +987,16 @@ public class FloatingBubbleManager {
         // Docking is disabled so the floating assistant remains visible.
     }
 
+    private boolean showBubbleDetailIfRelevant() {
+        if (bubbleDetailState == null
+                || bubbleMorphView == null
+                || bubbleMorphView.statusText().isEmpty()) {
+            return false;
+        }
+        showRuntimeUiState(bubbleDetailState);
+        return true;
+    }
+
     private void refreshMorphBubbleStatus() {
         if (bubbleMorphView == null || bubbleParams == null) return;
         if (bubbleActionStrip != null && bubbleActionStrip.isShowing()) return;
@@ -896,54 +1007,22 @@ public class FloatingBubbleManager {
                 bubbleAgentNeedsAttention,
                 conversationWaiting);
 
-        if (mode == BubbleLogoStatePolicy.Mode.WAITING_USER) {
+        if (QuietMorphBubblePolicy.shouldShowPersistentMorph(
+                mode,
+                bubbleWaitingMorphVisible)) {
             showMorphBubbleStatus(
-                    "需要你",
-                    Color.parseColor("#F59E0B"),
+                    QuietMorphBubblePolicy.persistentLabel(
+                            mode,
+                            bubbleWaitingMorphVisible),
+                    QuietMorphBubblePolicy.accentColor(mode),
                     0L);
-        } else if (mode == BubbleLogoStatePolicy.Mode.THINKING) {
-            showMorphBubbleStatus(
-                    "思考中",
-                    Color.parseColor("#818CF8"),
-                    0L);
-        } else if (mode == BubbleLogoStatePolicy.Mode.ACTING) {
-            showMorphBubbleStatus(
-                    "操作中",
-                    Color.parseColor("#22D3EE"),
-                    0L);
-        } else if (mode == BubbleLogoStatePolicy.Mode.WAITING) {
-            showMorphBubbleStatus(
-                    "等畫面",
-                    Color.parseColor("#64748B"),
-                    0L);
-        } else if (mode == BubbleLogoStatePolicy.Mode.STUCK) {
-            showMorphBubbleStatus(
-                    "卡住了",
-                    Color.parseColor("#F59E0B"),
-                    0L);
-        } else if (mode == BubbleLogoStatePolicy.Mode.SPEAKING) {
-            showMorphBubbleStatus(
-                    "回覆中",
-                    Color.parseColor("#A855F7"),
-                    0L);
-        } else if (mode == BubbleLogoStatePolicy.Mode.CONVERSATION_WAITING) {
-            showMorphBubbleStatus(
-                    "等待回覆",
-                    Color.parseColor("#2DD4BF"),
-                    0L);
-        } else if (mode == BubbleLogoStatePolicy.Mode.ERROR) {
-            showMorphBubbleStatus(
-                    "連線異常",
-                    Color.parseColor("#F43F5E"),
-                    0L);
-        } else if (mode == BubbleLogoStatePolicy.Mode.LISTENING) {
-            showMorphBubbleStatus(
-                    "聆聽中",
-                    Color.parseColor("#38BDF8"),
-                    1200L);
-        } else {
-            hideMorphBubbleStatus(true);
+            return;
         }
+
+        // Continuous states stay compact: the logo animation communicates
+        // listening / thinking / acting / speaking / reply-waiting without
+        // repeatedly resizing the overlay.
+        hideMorphBubbleStatus(true);
     }
 
     private void showMorphBubbleStatus(
@@ -1303,7 +1382,9 @@ public class FloatingBubbleManager {
                                                 && dy < dp(14)
                                                 && event.getActionMasked() == MotionEvent.ACTION_UP) {
                                             vibrateShort();
-                                            toggleBubbleActionStrip();
+                                            if (!showBubbleDetailIfRelevant()) {
+                                                toggleBubbleActionStrip();
+                                            }
                                         }
                                     }
                                     snapBubbleToEdge();
@@ -1824,6 +1905,9 @@ public class FloatingBubbleManager {
                 latestLiveStatus = latestLiveUiState.title.isEmpty()
                         ? (active ? "語音通話中" : "待命")
                         : latestLiveUiState.title;
+                if (latestLiveUiState.isError()) {
+                    bubbleDetailState = latestLiveUiState;
+                }
                 if (bubbleView != null) {
                     int voiceState = latestLiveUiState.isError()
                             ? 3
