@@ -128,14 +128,49 @@ public final class LiveHumanTurnBoundaryTest {
                 "server IN_PROGRESS cannot merge unrelated speech forever");
 
         boundary.forceNewTurn("搜尋大皇宮", 50_000L);
-        LiveHumanTurnBoundary.Resolution interrupted =
+        LiveHumanTurnBoundary.Resolution distinctAfterPause =
                 boundary.resolve(
-                        "停止",
-                        50_500L,
+                        "打開相機",
+                        53_000L,
                         true,
                         10L,
                         10L,
                         10L,
+                        "IN_PROGRESS",
+                        false,
+                        false);
+        check(distinctAfterPause.decision
+                        == LiveHumanTurnBoundary.Decision.NEW_INTENT,
+                "distinct command after short pause must not be swallowed by old live turn");
+
+        boundary.forceNewTurn("搜尋大皇宮", 60_000L);
+        LiveHumanTurnBoundary.Resolution continuationAfterPause =
+                boundary.resolve(
+                        "然後導航過去",
+                        63_000L,
+                        true,
+                        11L,
+                        11L,
+                        11L,
+                        "IN_PROGRESS",
+                        false,
+                        false);
+        check(continuationAfterPause.decision
+                        == LiveHumanTurnBoundary.Decision.MERGE_CURRENT_SEGMENT,
+                "explicit continuation may extend the active task after a longer pause");
+        check(continuationAfterPause.effectiveText.contains("搜尋大皇宮")
+                        && continuationAfterPause.effectiveText.contains("然後導航過去"),
+                "continuation keeps prior and new goal text");
+
+        boundary.forceNewTurn("搜尋大皇宮", 70_000L);
+        LiveHumanTurnBoundary.Resolution interrupted =
+                boundary.resolve(
+                        "停止",
+                        70_500L,
+                        true,
+                        12L,
+                        12L,
+                        12L,
                         "IN_PROGRESS",
                         false,
                         true);
