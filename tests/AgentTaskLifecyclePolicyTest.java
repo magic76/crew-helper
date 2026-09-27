@@ -135,6 +135,13 @@ public final class AgentTaskLifecyclePolicyTest {
         check(AgentTaskLifecyclePolicy.canFinishAfterModelReply(
                         "DONE", "tap_screen", false, false, 1),
                 "runtime DONE may close the goal");
+        check(AgentTaskLifecyclePolicy
+                        .shouldFinishImmediatelyAfterRuntimeResult("DONE"),
+                "runtime DONE is an immediate lifecycle terminal");
+        check(!AgentTaskLifecyclePolicy
+                        .shouldFinishImmediatelyAfterRuntimeResult(
+                                "EVIDENCE_AVAILABLE"),
+                "step evidence is not an immediate lifecycle terminal");
         check(AgentTaskLifecyclePolicy.canFinishAfterModelReply(
                         "ANSWER_READY", "inspect_ui", false, false, 2),
                 "answer-ready state may close a mutation goal");
