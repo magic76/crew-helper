@@ -70,6 +70,9 @@ public class FloatingBubbleManager {
     private RuntimeUiState bubbleDetailState = null;
     private Runnable bubblePhaseDebounceRunnable = null;
     private int bubblePhaseDebounceGeneration = 0;
+    private BubbleTaskPhasePolicy.Phase bubblePendingAgentPhase =
+            BubbleTaskPhasePolicy.Phase.NONE;
+    private String bubblePendingProgressKey = "";
     private Runnable bubbleWaitingMorphRunnable = null;
     private int bubbleWaitingMorphGeneration = 0;
     private boolean bubbleWaitingMorphVisible = false;
@@ -535,8 +538,15 @@ public class FloatingBubbleManager {
                 && nextKey.equals(bubbleAgentProgressKey)) {
             return;
         }
+        if (bubblePhaseDebounceRunnable != null
+                && nextPhase == bubblePendingAgentPhase
+                && nextKey.equals(bubblePendingProgressKey)) {
+            return;
+        }
 
         cancelBubblePhaseDebounce();
+        bubblePendingAgentPhase = nextPhase;
+        bubblePendingProgressKey = nextKey;
         final int generation = ++bubblePhaseDebounceGeneration;
         bubblePhaseDebounceRunnable = new Runnable() {
             @Override public void run() {
@@ -544,6 +554,9 @@ public class FloatingBubbleManager {
                 if (generation != bubblePhaseDebounceGeneration) return;
                 if (!bubbleAgentActiveTask || bubbleAgentNeedsAttention) return;
 
+                bubblePendingAgentPhase =
+                        BubbleTaskPhasePolicy.Phase.NONE;
+                bubblePendingProgressKey = "";
                 bubbleAgentProgressKey = nextKey;
                 bubbleAgentPhase = nextPhase;
 
@@ -568,6 +581,9 @@ public class FloatingBubbleManager {
 
     private void cancelBubblePhaseDebounce() {
         bubblePhaseDebounceGeneration++;
+        bubblePendingAgentPhase =
+                BubbleTaskPhasePolicy.Phase.NONE;
+        bubblePendingProgressKey = "";
         if (bubblePhaseDebounceRunnable != null) {
             mainHandler.removeCallbacks(bubblePhaseDebounceRunnable);
             bubblePhaseDebounceRunnable = null;
