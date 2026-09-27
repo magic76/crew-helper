@@ -913,9 +913,15 @@ public class FloatingBubbleManager {
             mainHandler.removeCallbacks(bubbleMorphAutoCollapseRunnable);
             bubbleMorphAutoCollapseRunnable = null;
         }
+        cancelBubblePhaseDebounce();
+        cancelBubbleWaitingMorphWatch();
         cancelBubbleStuckWatch();
         bubbleAgentProgressKey = "";
         bubbleAgentPhase = BubbleTaskPhasePolicy.Phase.NONE;
+        bubbleAgentActiveTask = false;
+        bubbleAgentNeedsAttention = false;
+        bubbleLatestRawStatus = "";
+        bubbleDetailState = null;
         if (bubbleContainer != null) {
             try { windowManager.removeView(bubbleContainer); } catch (Exception ignored) {}
         }
@@ -1883,6 +1889,9 @@ public class FloatingBubbleManager {
                 latestLiveStatus = latestLiveUiState.title.isEmpty()
                         ? (active ? "語音通話中" : "待命")
                         : latestLiveUiState.title;
+                if (latestLiveUiState.isError()) {
+                    bubbleDetailState = latestLiveUiState;
+                }
                 if (bubbleView != null) {
                     int voiceState = latestLiveUiState.isError()
                             ? 3
