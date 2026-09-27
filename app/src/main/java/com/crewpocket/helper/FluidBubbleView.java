@@ -46,8 +46,9 @@ final class FluidBubbleView extends View {
     private boolean contextReadyFlash = false;
     private int contextReadyFlashGeneration = 0;
 
-    // 0090: explicit Agent state, independent of Gemini Live state.
-    private boolean agentWorking = false;
+    // Explicit Agent visual phase, independent of Gemini Live voice state.
+    private BubbleTaskPhasePolicy.Phase agentPhase =
+            BubbleTaskPhasePolicy.Phase.NONE;
     private boolean agentNeedsAttention = false;
     private boolean conversationWaiting = false;
     // 0 none, 1 success, 2 failure
@@ -205,8 +206,14 @@ final class FluidBubbleView extends View {
 
         BubbleLogoStatePolicy.Mode mode = visualMode();
         long duration;
-        if (mode == BubbleLogoStatePolicy.Mode.WORKING) {
-            duration = 850L;
+        if (mode == BubbleLogoStatePolicy.Mode.ACTING) {
+            duration = 780L;
+        } else if (mode == BubbleLogoStatePolicy.Mode.THINKING) {
+            duration = 1850L;
+        } else if (mode == BubbleLogoStatePolicy.Mode.WAITING) {
+            duration = 4300L;
+        } else if (mode == BubbleLogoStatePolicy.Mode.STUCK) {
+            duration = 5200L;
         } else if (isFlowing) {
             duration = 1200L;
         } else if (mode == BubbleLogoStatePolicy.Mode.SPEAKING) {
@@ -222,7 +229,7 @@ final class FluidBubbleView extends View {
         } else if (mode == BubbleLogoStatePolicy.Mode.LISTENING) {
             duration = 2500L;
         } else {
-            duration = 4000L;
+            duration = 8200L;
         }
         continuousRotator.setDuration(duration);
     }
@@ -278,9 +285,20 @@ final class FluidBubbleView extends View {
     }
 
     public void setAgentWorking(boolean working) {
-        if (agentWorking == working) return;
-        agentWorking = working;
-        if (working) {
+        setAgentPhase(
+                working
+                        ? BubbleTaskPhasePolicy.Phase.THINKING
+                        : BubbleTaskPhasePolicy.Phase.NONE);
+    }
+
+    public void setAgentPhase(BubbleTaskPhasePolicy.Phase phase) {
+        BubbleTaskPhasePolicy.Phase resolved =
+                phase == null
+                        ? BubbleTaskPhasePolicy.Phase.NONE
+                        : phase;
+        if (agentPhase == resolved) return;
+        agentPhase = resolved;
+        if (resolved != BubbleTaskPhasePolicy.Phase.NONE) {
             agentNeedsAttention = false;
             agentResultFlash = 0;
             agentResultFlashGeneration++;
@@ -293,7 +311,7 @@ final class FluidBubbleView extends View {
         if (agentNeedsAttention == needsAttention) return;
         agentNeedsAttention = needsAttention;
         if (needsAttention) {
-            agentWorking = false;
+            agentPhase = BubbleTaskPhasePolicy.Phase.NONE;
             agentResultFlash = 0;
             agentResultFlashGeneration++;
         }
@@ -309,7 +327,7 @@ final class FluidBubbleView extends View {
     }
 
     public void flashAgentResult(final boolean success) {
-        agentWorking = false;
+        agentPhase = BubbleTaskPhasePolicy.Phase.NONE;
         agentNeedsAttention = false;
         updateRotationSpeed();
 
@@ -339,7 +357,7 @@ final class FluidBubbleView extends View {
     private BubbleLogoStatePolicy.Mode visualMode() {
         return BubbleLogoStatePolicy.resolve(
                 nativeVoiceState,
-                agentWorking,
+                agentPhase,
                 agentNeedsAttention,
                 conversationWaiting);
     }
@@ -373,12 +391,26 @@ final class FluidBubbleView extends View {
             scale = 0.982f + 0.038f * pulse;
             accentColor = Color.parseColor("#A855F7");
             accentAlpha = 34 + Math.round(26f * pulse);
-        } else if (mode == BubbleLogoStatePolicy.Mode.WORKING) {
+        } else if (mode == BubbleLogoStatePolicy.Mode.THINKING) {
+            scale = 0.988f + 0.024f * pulse;
+            tilt = (float) Math.sin(
+                    Math.toRadians(rotationAngle)) * 0.9f;
+            accentColor = Color.parseColor("#818CF8");
+            accentAlpha = 24 + Math.round(22f * pulse);
+        } else if (mode == BubbleLogoStatePolicy.Mode.ACTING) {
             scale = 0.994f + 0.012f * pulse;
             tilt = (float) Math.sin(
                     Math.toRadians(rotationAngle * 2f)) * 1.8f;
             accentColor = Color.parseColor("#22D3EE");
             accentAlpha = 26 + Math.round(14f * pulse);
+        } else if (mode == BubbleLogoStatePolicy.Mode.WAITING) {
+            scale = 0.996f + 0.010f * pulse;
+            accentColor = Color.parseColor("#64748B");
+            accentAlpha = 14 + Math.round(12f * pulse);
+        } else if (mode == BubbleLogoStatePolicy.Mode.STUCK) {
+            scale = 0.995f + 0.014f * pulse;
+            accentColor = Color.parseColor("#F59E0B");
+            accentAlpha = 24 + Math.round(18f * pulse);
         } else if (mode == BubbleLogoStatePolicy.Mode.WAITING_USER) {
             scale = 0.998f + 0.026f * pulse;
             dy = -radius * 0.035f * Math.max(
@@ -451,8 +483,12 @@ final class FluidBubbleView extends View {
             canvas.drawCircle(cx, cy, radius * 0.64f, accentPaint);
         }
 
-        if (mode == BubbleLogoStatePolicy.Mode.WORKING) {
+        if (mode == BubbleLogoStatePolicy.Mode.THINKING) {
+            drawThinkingOrbit(canvas, cx, cy, radius);
+        } else if (mode == BubbleLogoStatePolicy.Mode.ACTING) {
             drawWorkingScanner(canvas, radius);
+        } else if (mode == BubbleLogoStatePolicy.Mode.WAITING) {
+            drawWaitingDot(canvas, cx, cy, radius, pulse);
         } else if (mode
                 == BubbleLogoStatePolicy.Mode.CONVERSATION_WAITING) {
             drawConversationWaitingDot(canvas, cx, cy, radius, pulse);
@@ -461,6 +497,44 @@ final class FluidBubbleView extends View {
         if (mode == BubbleLogoStatePolicy.Mode.WAITING_USER) {
             drawAttentionBadge(canvas, radius);
         }
+    }
+
+    private void drawThinkingOrbit(
+            Canvas canvas,
+            float cx,
+            float cy,
+            float radius) {
+        double angle = Math.toRadians(rotationAngle);
+        float orbitRadius = radius * 0.70f;
+        for (int i = 0; i < 3; i++) {
+            double a = angle + (Math.PI * 2d * i / 3d);
+            float x = cx + (float) Math.cos(a) * orbitRadius;
+            float y = cy + (float) Math.sin(a) * orbitRadius;
+            accentPaint.setStyle(Paint.Style.FILL);
+            accentPaint.setColor(Color.parseColor("#A5B4FC"));
+            accentPaint.setAlpha(150 - i * 28);
+            canvas.drawCircle(
+                    x,
+                    y,
+                    Math.max(2.2f, radius * (0.045f + i * 0.008f)),
+                    accentPaint);
+        }
+    }
+
+    private void drawWaitingDot(
+            Canvas canvas,
+            float cx,
+            float cy,
+            float radius,
+            float pulse) {
+        accentPaint.setStyle(Paint.Style.FILL);
+        accentPaint.setColor(Color.parseColor("#94A3B8"));
+        accentPaint.setAlpha(120 + Math.round(70f * pulse));
+        canvas.drawCircle(
+                cx + radius * 0.48f,
+                cy + radius * 0.48f,
+                radius * (0.045f + 0.010f * pulse),
+                accentPaint);
     }
 
     private void drawWorkingScanner(Canvas canvas, float radius) {
@@ -546,15 +620,16 @@ final class FluidBubbleView extends View {
                 mode == BubbleLogoStatePolicy.Mode.ERROR
                         ? errorSweepGradient
                         : mode == BubbleLogoStatePolicy.Mode.WAITING_USER
+                        || mode == BubbleLogoStatePolicy.Mode.STUCK
                         ? attentionSweepGradient
                         : mode == BubbleLogoStatePolicy.Mode.SPEAKING
                         ? speakingSweepGradient
-                        : mode
-                                == BubbleLogoStatePolicy.Mode
-                                        .CONVERSATION_WAITING
+                        : mode == BubbleLogoStatePolicy.Mode.CONVERSATION_WAITING
+                        || mode == BubbleLogoStatePolicy.Mode.WAITING
                         ? conversationWaitingSweepGradient
                         : mode == BubbleLogoStatePolicy.Mode.LISTENING
-                        || mode == BubbleLogoStatePolicy.Mode.WORKING
+                        || mode == BubbleLogoStatePolicy.Mode.THINKING
+                        || mode == BubbleLogoStatePolicy.Mode.ACTING
                         ? activeSweepGradient
                         : isFlowing
                         ? rainbowSweepGradient
@@ -572,8 +647,12 @@ final class FluidBubbleView extends View {
                     2f,
                     radius * (0.075f + 0.035f * listeningBoost)));
             ringPaint.setAlpha(
-                    mode == BubbleLogoStatePolicy.Mode.WORKING
-                            ? 78
+                    mode == BubbleLogoStatePolicy.Mode.ACTING
+                            ? 92
+                            : mode == BubbleLogoStatePolicy.Mode.WAITING
+                            ? 52
+                            : mode == BubbleLogoStatePolicy.Mode.STUCK
+                            ? 120
                             : (mode == BubbleLogoStatePolicy.Mode.IDLE
                                     && !isFlowing
                                     ? 90
@@ -603,7 +682,7 @@ final class FluidBubbleView extends View {
             canvas.drawOval(listeningHalo, glowPaint);
         }
 
-        if (agentWorking) {
+        if (mode == BubbleLogoStatePolicy.Mode.ACTING) {
             ringPaint.setStyle(Paint.Style.STROKE);
             ringPaint.setShader(null);
             ringPaint.setStrokeCap(Paint.Cap.ROUND);
@@ -623,6 +702,20 @@ final class FluidBubbleView extends View {
                     92f,
                     false,
                     ringPaint);
+        } else if (mode == BubbleLogoStatePolicy.Mode.STUCK) {
+            ringPaint.setStyle(Paint.Style.STROKE);
+            ringPaint.setShader(null);
+            ringPaint.setStrokeCap(Paint.Cap.ROUND);
+            ringPaint.setStrokeWidth(Math.max(2f, radius * 0.075f));
+            ringPaint.setColor(Color.parseColor("#F59E0B"));
+            ringPaint.setAlpha(150 + Math.round(65f * wave(0.5f)));
+            float inset = ringPaint.getStrokeWidth();
+            RectF stuckRing = new RectF(
+                    inset,
+                    inset,
+                    getWidth() - inset,
+                    getHeight() - inset);
+            canvas.drawOval(stuckRing, ringPaint);
         }
 
         if (agentResultFlash != 0) {

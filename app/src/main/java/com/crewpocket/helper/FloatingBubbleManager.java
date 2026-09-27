@@ -61,8 +61,12 @@ public class FloatingBubbleManager {
     private ValueAnimator bubbleMorphAnimator = null;
     private int bubbleMorphAnimationGeneration = 0;
     private Runnable bubbleMorphAutoCollapseRunnable = null;
-    private boolean bubbleAgentWorking = false;
+    private BubbleTaskPhasePolicy.Phase bubbleAgentPhase =
+            BubbleTaskPhasePolicy.Phase.NONE;
     private boolean bubbleAgentNeedsAttention = false;
+    private String bubbleAgentProgressKey = "";
+    private Runnable bubbleStuckRunnable = null;
+    private int bubbleStuckGeneration = 0;
     private int bubbleNativeVoiceState = 0;
     private boolean bubbleMicHeardLatch = false;
     private TextView bubbleRemoveTargetView = null;
@@ -495,6 +499,101 @@ public class FloatingBubbleManager {
         return conversationWaiting;
     }
 
+    private void updateBubbleAgentPhase(
+            String rawStatus,
+            boolean activeTask,
+            boolean needsAttention) {
+        bubbleAgentNeedsAttention = needsAttention;
+        if (!activeTask || needsAttention) {
+            bubbleAgentPhase = BubbleTaskPhasePolicy.Phase.NONE;
+            bubbleAgentProgressKey = "";
+            cancelBubbleStuckWatch();
+            return;
+        }
+
+        BubbleTaskPhasePolicy.Phase nextPhase =
+                BubbleTaskPhasePolicy.classify(
+                        rawStatus,
+                        true);
+        String nextKey =
+                BubbleTaskPhasePolicy.progressKey(rawStatus);
+
+        if (nextPhase == BubbleTaskPhasePolicy.Phase.WAITING) {
+            bubbleAgentPhase = nextPhase;
+            bubbleAgentProgressKey = nextKey;
+            cancelBubbleStuckWatch();
+            return;
+        }
+
+        boolean sameProgress =
+                nextKey.equals(bubbleAgentProgressKey);
+        if (sameProgress) {
+            // Repeated status heartbeats are not progress. If we already
+            // surfaced STUCK, keep it until a genuinely new Runtime stage
+            // arrives.
+            if (bubbleAgentPhase
+                    == BubbleTaskPhasePolicy.Phase.STUCK) {
+                return;
+            }
+            if (bubbleAgentPhase == nextPhase) {
+                return;
+            }
+        }
+
+        bubbleAgentProgressKey = nextKey;
+        bubbleAgentPhase = nextPhase;
+        scheduleBubbleStuckWatch(nextPhase);
+    }
+
+    private void scheduleBubbleStuckWatch(
+            BubbleTaskPhasePolicy.Phase phase) {
+        cancelBubbleStuckWatch();
+        if (phase != BubbleTaskPhasePolicy.Phase.THINKING
+                && phase != BubbleTaskPhasePolicy.Phase.ACTING) {
+            return;
+        }
+
+        final int generation = ++bubbleStuckGeneration;
+        final String progressKey = bubbleAgentProgressKey;
+        long delayMs = phase == BubbleTaskPhasePolicy.Phase.ACTING
+                ? 12000L
+                : 8000L;
+
+        bubbleStuckRunnable = new Runnable() {
+            @Override public void run() {
+                if (generation != bubbleStuckGeneration) return;
+                bubbleStuckRunnable = null;
+                if (!progressKey.equals(bubbleAgentProgressKey)) return;
+                if (bubbleAgentNeedsAttention) return;
+                if (bubbleAgentPhase
+                                != BubbleTaskPhasePolicy.Phase.THINKING
+                        && bubbleAgentPhase
+                                != BubbleTaskPhasePolicy.Phase.ACTING) {
+                    return;
+                }
+
+                bubbleAgentPhase =
+                        BubbleTaskPhasePolicy.Phase.STUCK;
+                if (bubbleView != null) {
+                    bubbleView.setAgentPhase(
+                            BubbleTaskPhasePolicy.Phase.STUCK);
+                }
+                refreshMorphBubbleStatus();
+            }
+        };
+        mainHandler.postDelayed(
+                bubbleStuckRunnable,
+                delayMs);
+    }
+
+    private void cancelBubbleStuckWatch() {
+        bubbleStuckGeneration++;
+        if (bubbleStuckRunnable != null) {
+            mainHandler.removeCallbacks(bubbleStuckRunnable);
+            bubbleStuckRunnable = null;
+        }
+    }
+
     public void updateAgentTaskStatus(final String rawStatus,
                                       final boolean activeTask) {
         mainHandler.post(new Runnable() {
@@ -507,14 +606,18 @@ public class FloatingBubbleManager {
                         activeTask
                                 && important != null
                                 && !important.isEmpty();
-                bubbleAgentNeedsAttention = needsAttention;
-                bubbleAgentWorking = activeTask && !needsAttention;
+                updateBubbleAgentPhase(
+                        rawStatus,
+                        activeTask,
+                        needsAttention);
 
                 if (bubbleView == null) return;
 
                 if (activeTask) {
                     bubbleView.setAgentNeedsAttention(needsAttention);
-                    bubbleView.setAgentWorking(!needsAttention);
+                    if (!needsAttention) {
+                        bubbleView.setAgentPhase(bubbleAgentPhase);
+                    }
                     refreshMorphBubbleStatus();
 
                     if (needsAttention) {
@@ -547,9 +650,11 @@ public class FloatingBubbleManager {
                 }
 
                 lastShownAgentStage = "";
-                bubbleAgentWorking = false;
+                bubbleAgentPhase = BubbleTaskPhasePolicy.Phase.NONE;
                 bubbleAgentNeedsAttention = false;
-                bubbleView.setAgentWorking(false);
+                bubbleAgentProgressKey = "";
+                cancelBubbleStuckWatch();
+                bubbleView.setAgentPhase(BubbleTaskPhasePolicy.Phase.NONE);
                 bubbleView.setAgentNeedsAttention(false);
 
                 if (AgentInspectorStore.isSuccessfulTaskEnd(rawStatus)) {
@@ -729,6 +834,9 @@ public class FloatingBubbleManager {
             mainHandler.removeCallbacks(bubbleMorphAutoCollapseRunnable);
             bubbleMorphAutoCollapseRunnable = null;
         }
+        cancelBubbleStuckWatch();
+        bubbleAgentProgressKey = "";
+        bubbleAgentPhase = BubbleTaskPhasePolicy.Phase.NONE;
         if (bubbleContainer != null) {
             try { windowManager.removeView(bubbleContainer); } catch (Exception ignored) {}
         }
@@ -784,7 +892,7 @@ public class FloatingBubbleManager {
 
         BubbleLogoStatePolicy.Mode mode = BubbleLogoStatePolicy.resolve(
                 bubbleNativeVoiceState,
-                bubbleAgentWorking,
+                bubbleAgentPhase,
                 bubbleAgentNeedsAttention,
                 conversationWaiting);
 
@@ -793,10 +901,25 @@ public class FloatingBubbleManager {
                     "需要你",
                     Color.parseColor("#F59E0B"),
                     0L);
-        } else if (mode == BubbleLogoStatePolicy.Mode.WORKING) {
+        } else if (mode == BubbleLogoStatePolicy.Mode.THINKING) {
             showMorphBubbleStatus(
-                    "執行中…",
+                    "思考中",
+                    Color.parseColor("#818CF8"),
+                    0L);
+        } else if (mode == BubbleLogoStatePolicy.Mode.ACTING) {
+            showMorphBubbleStatus(
+                    "操作中",
                     Color.parseColor("#22D3EE"),
+                    0L);
+        } else if (mode == BubbleLogoStatePolicy.Mode.WAITING) {
+            showMorphBubbleStatus(
+                    "等畫面",
+                    Color.parseColor("#64748B"),
+                    0L);
+        } else if (mode == BubbleLogoStatePolicy.Mode.STUCK) {
+            showMorphBubbleStatus(
+                    "卡住了",
+                    Color.parseColor("#F59E0B"),
                     0L);
         } else if (mode == BubbleLogoStatePolicy.Mode.SPEAKING) {
             showMorphBubbleStatus(
@@ -1045,7 +1168,7 @@ public class FloatingBubbleManager {
                     bubbleView = new FluidBubbleView(context);
                     bubbleView.setElevation(16f);
                     bubbleView.setConversationWaiting(conversationWaiting);
-                    bubbleView.setAgentWorking(bubbleAgentWorking);
+                    bubbleView.setAgentPhase(bubbleAgentPhase);
                     bubbleView.setAgentNeedsAttention(bubbleAgentNeedsAttention);
                     bubbleView.setNativeVoiceState(bubbleNativeVoiceState);
 
@@ -1749,7 +1872,8 @@ public class FloatingBubbleManager {
                 boolean heardNow = actuallySending && dbfs > -50d;
                 if (heardNow
                         && !bubbleMicHeardLatch
-                        && !bubbleAgentWorking
+                        && bubbleAgentPhase
+                                == BubbleTaskPhasePolicy.Phase.NONE
                         && !bubbleAgentNeedsAttention
                         && !conversationWaiting
                         && bubbleNativeVoiceState == 1) {
