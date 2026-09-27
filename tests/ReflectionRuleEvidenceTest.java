@@ -94,6 +94,21 @@ public final class ReflectionRuleEvidenceTest {
         check(ReflectionRuleEvidence.isRuntimeInternalFailure(
                         "TASK_ALREADY_FINISHED"),
                 "finished-task Runtime guard should be internal");
+        check(ReflectionRuleEvidence.isRuntimeInternalFailure(
+                        "TARGET_REQUIRED"),
+                "missing semantic target is a transient model-contract error, not app friction");
+
+        List<ReflectionRuleEvidence.Step> recoveredMissingTarget =
+                new ArrayList<ReflectionRuleEvidence.Step>();
+        recoveredMissingTarget.add(step(
+                "semantic_error", "FAILED", "TARGET_REQUIRED", "", "TAP"));
+        recoveredMissingTarget.add(step(
+                "inspect_ui", "SUCCESS", "", "", ""));
+        recoveredMissingTarget.add(step(
+                "tap_screen", "SUCCESS", "", "", "TAP"));
+        check(ReflectionRuleEvidence.derive(
+                        null, recoveredMissingTarget).isEmpty(),
+                "TARGET_REQUIRED recovered inside the goal must not become Crew Experience friction");
         check(!ReflectionRuleEvidence.isRuntimeInternalFailure(
                         "UI_TARGET_NOT_FOUND"),
                 "real UI target failure must remain learnable friction");
