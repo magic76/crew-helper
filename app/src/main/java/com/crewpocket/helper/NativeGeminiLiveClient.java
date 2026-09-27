@@ -3282,6 +3282,7 @@ final class NativeGeminiLiveClient {
         if (result != null) {
             String state = result.optString("taskState", "");
             if ("WAITING_USER".equals(state)
+                    || "NEED_USER".equals(state)
                     || "WAITING_BACKGROUND".equals(state)) {
                 return true;
             }
