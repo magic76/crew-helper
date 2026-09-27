@@ -83,7 +83,6 @@ public class FloatingBubbleManager {
     private boolean conversationWaiting = false;
     private ScreenSelectionOverlay screenSelectionOverlay = null;
     private static final int BUBBLE_SIZE_DP = 48;
-    private static final int BUBBLE_MORPH_WIDTH_DP = 164;
 
     private DockIconButton voiceCallButton = null;
     private DockIconButton voiceCameraButton = null;
@@ -853,9 +852,10 @@ public class FloatingBubbleManager {
         bubbleMorphView.setDockOnLeft(onLeft);
         bubbleMorphView.showStatus(text, accentColor);
 
+        int targetWidth = bubbleMorphView.desiredWidthPx(text);
         animateMorphBubbleWidth(
-                dp(BUBBLE_MORPH_WIDTH_DP),
-                165L,
+                targetWidth,
+                195L,
                 onLeft,
                 null);
 
