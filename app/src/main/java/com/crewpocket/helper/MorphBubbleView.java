@@ -115,6 +115,25 @@ final class MorphBubbleView extends LinearLayout {
         }
 
         applyGlassBackground(accentColor);
+
+        if (changed) {
+            orbView.animate().cancel();
+            orbView.animate()
+                    .scaleX(1.055f)
+                    .scaleY(1.055f)
+                    .setDuration(85L)
+                    .withEndAction(new Runnable() {
+                        @Override public void run() {
+                            orbView.animate()
+                                    .scaleX(1f)
+                                    .scaleY(1f)
+                                    .setDuration(110L)
+                                    .setInterpolator(new DecelerateInterpolator())
+                                    .start();
+                        }
+                    })
+                    .start();
+        }
     }
 
     void beginHideStatus() {
