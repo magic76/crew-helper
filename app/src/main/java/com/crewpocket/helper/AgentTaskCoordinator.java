@@ -288,13 +288,13 @@ final class AgentTaskCoordinator {
                             active.blockedReason != null,
                             active.mutationActions);
 
-            // Suppress only the first premature narration for a mutation task.
-            // Runtime gets one chance to nudge Gemini back to tool use. If Gemini
-            // still chooses speech on the next turn, let that single reply through
-            // and stop instead of creating an internal-prompt loop.
+            // Never expose a completion-style narration while Runtime still
+            // considers a mutation goal incomplete. The response coordinator is
+            // already bounded: it nudges Gemini once, then stops the task on a
+            // second premature reply. Keeping this gate closed prevents users
+            // from hearing "done" twice while still avoiding an internal loop.
             return active.mutationActions > 0
-                    && !completionReady
-                    && active.prematureModelReplies == 0;
+                    && !completionReady;
         }
     }
 }
