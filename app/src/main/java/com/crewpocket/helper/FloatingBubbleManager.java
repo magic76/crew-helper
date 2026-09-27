@@ -975,54 +975,22 @@ public class FloatingBubbleManager {
                 bubbleAgentNeedsAttention,
                 conversationWaiting);
 
-        if (mode == BubbleLogoStatePolicy.Mode.WAITING_USER) {
+        if (QuietMorphBubblePolicy.shouldShowPersistentMorph(
+                mode,
+                bubbleWaitingMorphVisible)) {
             showMorphBubbleStatus(
-                    "需要你",
-                    Color.parseColor("#F59E0B"),
+                    QuietMorphBubblePolicy.persistentLabel(
+                            mode,
+                            bubbleWaitingMorphVisible),
+                    QuietMorphBubblePolicy.accentColor(mode),
                     0L);
-        } else if (mode == BubbleLogoStatePolicy.Mode.THINKING) {
-            showMorphBubbleStatus(
-                    "思考中",
-                    Color.parseColor("#818CF8"),
-                    0L);
-        } else if (mode == BubbleLogoStatePolicy.Mode.ACTING) {
-            showMorphBubbleStatus(
-                    "操作中",
-                    Color.parseColor("#22D3EE"),
-                    0L);
-        } else if (mode == BubbleLogoStatePolicy.Mode.WAITING) {
-            showMorphBubbleStatus(
-                    "等畫面",
-                    Color.parseColor("#64748B"),
-                    0L);
-        } else if (mode == BubbleLogoStatePolicy.Mode.STUCK) {
-            showMorphBubbleStatus(
-                    "卡住了",
-                    Color.parseColor("#F59E0B"),
-                    0L);
-        } else if (mode == BubbleLogoStatePolicy.Mode.SPEAKING) {
-            showMorphBubbleStatus(
-                    "回覆中",
-                    Color.parseColor("#A855F7"),
-                    0L);
-        } else if (mode == BubbleLogoStatePolicy.Mode.CONVERSATION_WAITING) {
-            showMorphBubbleStatus(
-                    "等待回覆",
-                    Color.parseColor("#2DD4BF"),
-                    0L);
-        } else if (mode == BubbleLogoStatePolicy.Mode.ERROR) {
-            showMorphBubbleStatus(
-                    "連線異常",
-                    Color.parseColor("#F43F5E"),
-                    0L);
-        } else if (mode == BubbleLogoStatePolicy.Mode.LISTENING) {
-            showMorphBubbleStatus(
-                    "聆聽中",
-                    Color.parseColor("#38BDF8"),
-                    1200L);
-        } else {
-            hideMorphBubbleStatus(true);
+            return;
         }
+
+        // Continuous states stay compact: the logo animation communicates
+        // listening / thinking / acting / speaking / reply-waiting without
+        // repeatedly resizing the overlay.
+        hideMorphBubbleStatus(true);
     }
 
     private void showMorphBubbleStatus(
