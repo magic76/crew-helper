@@ -56,7 +56,15 @@ public class FloatingBubbleManager {
     private final Vibrator vibrator;
 
     private FluidBubbleView bubbleView = null;
+    private MorphBubbleView bubbleMorphView = null;
     private LinearLayout bubbleContainer = null;
+    private ValueAnimator bubbleMorphAnimator = null;
+    private int bubbleMorphAnimationGeneration = 0;
+    private Runnable bubbleMorphAutoCollapseRunnable = null;
+    private boolean bubbleAgentWorking = false;
+    private boolean bubbleAgentNeedsAttention = false;
+    private int bubbleNativeVoiceState = 0;
+    private boolean bubbleMicHeardLatch = false;
     private TextView bubbleRemoveTargetView = null;
     private WindowManager.LayoutParams bubbleRemoveTargetParams = null;
     private boolean bubbleRemoveTargetActive = false;
@@ -75,6 +83,7 @@ public class FloatingBubbleManager {
     private boolean conversationWaiting = false;
     private ScreenSelectionOverlay screenSelectionOverlay = null;
     private static final int BUBBLE_SIZE_DP = 48;
+    private static final int BUBBLE_MORPH_WIDTH_DP = 164;
 
     private DockIconButton voiceCallButton = null;
     private DockIconButton voiceCameraButton = null;
@@ -402,20 +411,21 @@ public class FloatingBubbleManager {
                 lp.gravity = Gravity.TOP | Gravity.START;
 
                 if (bubbleView != null && bubbleParams != null) {
-                    int bubbleSize = bubbleParams.width > 0
+                    int bubbleWidth = bubbleParams.width > 0
                             ? bubbleParams.width
                             : dp(BUBBLE_SIZE_DP);
+                    int bubbleHeight = dp(BUBBLE_SIZE_DP);
                     boolean bubbleOnLeft =
-                            bubbleParams.x + bubbleSize / 2 < screenW / 2;
+                            bubbleParams.x + bubbleWidth / 2 < screenW / 2;
                     int targetX = bubbleOnLeft
-                            ? bubbleParams.x + bubbleSize + dp(8)
+                            ? bubbleParams.x + bubbleWidth + dp(8)
                             : bubbleParams.x - cardWidth - dp(8);
                     lp.x = Math.max(
                             dp(8),
                             Math.min(screenW - cardWidth - dp(8), targetX));
 
                     int targetY =
-                            bubbleParams.y + (bubbleSize - cardHeight) / 2;
+                            bubbleParams.y + (bubbleHeight - cardHeight) / 2;
                     int top = getStatusBarHeight() + dp(4);
                     int bottom = screenH - cardHeight - dp(64);
                     lp.y = Math.max(top, Math.min(bottom, targetY));
@@ -476,6 +486,7 @@ public class FloatingBubbleManager {
                         wakeBubbleFromDock();
                     }
                 }
+                refreshMorphBubbleStatus();
                 refreshBubbleActionStripIfShowing();
             }
         });
@@ -493,14 +504,19 @@ public class FloatingBubbleManager {
                         AgentInspectorStore.quietFeedbackLabel(
                                 rawStatus, activeTask);
 
+                boolean needsAttention =
+                        activeTask
+                                && important != null
+                                && !important.isEmpty();
+                bubbleAgentNeedsAttention = needsAttention;
+                bubbleAgentWorking = activeTask && !needsAttention;
+
                 if (bubbleView == null) return;
 
                 if (activeTask) {
-                    boolean needsAttention =
-                            important != null && !important.isEmpty();
-
                     bubbleView.setAgentNeedsAttention(needsAttention);
                     bubbleView.setAgentWorking(!needsAttention);
+                    refreshMorphBubbleStatus();
 
                     if (needsAttention) {
                         lastShownAgentStage = "";
@@ -532,16 +548,26 @@ public class FloatingBubbleManager {
                 }
 
                 lastShownAgentStage = "";
+                bubbleAgentWorking = false;
+                bubbleAgentNeedsAttention = false;
                 bubbleView.setAgentWorking(false);
                 bubbleView.setAgentNeedsAttention(false);
 
                 if (AgentInspectorStore.isSuccessfulTaskEnd(rawStatus)) {
                     bubbleView.flashAgentResult(true);
+                    showMorphBubbleStatus(
+                            "完成",
+                            Color.parseColor("#34D399"),
+                            1300L);
                     return;
                 }
 
                 if ("操作失敗".equals(important)) {
                     bubbleView.flashAgentResult(false);
+                    showMorphBubbleStatus(
+                            "操作失敗",
+                            Color.parseColor("#FB7185"),
+                            1800L);
                     showRuntimeUiState(
                             RuntimeUiState.error(
                                     important,
@@ -553,6 +579,7 @@ public class FloatingBubbleManager {
                     showRuntimeUiState(
                             RuntimeUiState.info(important, ""));
                 }
+                refreshMorphBubbleStatus();
             }
         });
     }
@@ -694,10 +721,20 @@ public class FloatingBubbleManager {
             bubbleExpandAnimator.cancel();
             bubbleExpandAnimator = null;
         }
+        bubbleMorphAnimationGeneration++;
+        if (bubbleMorphAnimator != null) {
+            bubbleMorphAnimator.cancel();
+            bubbleMorphAnimator = null;
+        }
+        if (bubbleMorphAutoCollapseRunnable != null) {
+            mainHandler.removeCallbacks(bubbleMorphAutoCollapseRunnable);
+            bubbleMorphAutoCollapseRunnable = null;
+        }
         if (bubbleContainer != null) {
             try { windowManager.removeView(bubbleContainer); } catch (Exception ignored) {}
         }
         bubbleContainer = null;
+        bubbleMorphView = null;
         bubbleView = null;
         bubbleActionStrip = null;
     }
@@ -719,10 +756,16 @@ public class FloatingBubbleManager {
             dockAnimator.cancel();
         }
         int screenWidth = windowManager.getDefaultDisplay().getWidth();
-        int bSize = dp(BUBBLE_SIZE_DP);
-        int targetX = (bubbleParams.x < screenWidth / 2)
+        int visibleWidth = Math.max(
+                dp(BUBBLE_SIZE_DP),
+                bubbleParams.width > 0 ? bubbleParams.width : dp(BUBBLE_SIZE_DP));
+        boolean onLeft = bubbleParams.x + visibleWidth / 2 < screenWidth / 2;
+        if (bubbleMorphView != null) {
+            bubbleMorphView.setDockOnLeft(onLeft);
+        }
+        int targetX = onLeft
                 ? dp(4)
-                : (screenWidth - bSize - dp(4));
+                : (screenWidth - visibleWidth - dp(4));
 
         bubbleParams.x = targetX;
         bubbleView.setAlpha(1.0f);
@@ -734,6 +777,231 @@ public class FloatingBubbleManager {
     public void autoDockBubble() {
         // Kept as a harmless compatibility entry point for older callers.
         // Docking is disabled so the floating assistant remains visible.
+    }
+
+    private void refreshMorphBubbleStatus() {
+        if (bubbleMorphView == null || bubbleParams == null) return;
+        if (bubbleActionStrip != null && bubbleActionStrip.isShowing()) return;
+
+        BubbleLogoStatePolicy.Mode mode = BubbleLogoStatePolicy.resolve(
+                bubbleNativeVoiceState,
+                bubbleAgentWorking,
+                bubbleAgentNeedsAttention,
+                conversationWaiting);
+
+        if (mode == BubbleLogoStatePolicy.Mode.WAITING_USER) {
+            showMorphBubbleStatus(
+                    "需要你",
+                    Color.parseColor("#F59E0B"),
+                    0L);
+        } else if (mode == BubbleLogoStatePolicy.Mode.WORKING) {
+            showMorphBubbleStatus(
+                    "執行中…",
+                    Color.parseColor("#22D3EE"),
+                    0L);
+        } else if (mode == BubbleLogoStatePolicy.Mode.SPEAKING) {
+            showMorphBubbleStatus(
+                    "回覆中",
+                    Color.parseColor("#A855F7"),
+                    0L);
+        } else if (mode == BubbleLogoStatePolicy.Mode.CONVERSATION_WAITING) {
+            showMorphBubbleStatus(
+                    "等待回覆",
+                    Color.parseColor("#2DD4BF"),
+                    0L);
+        } else if (mode == BubbleLogoStatePolicy.Mode.ERROR) {
+            showMorphBubbleStatus(
+                    "連線異常",
+                    Color.parseColor("#F43F5E"),
+                    0L);
+        } else if (mode == BubbleLogoStatePolicy.Mode.LISTENING) {
+            showMorphBubbleStatus(
+                    "聆聽中",
+                    Color.parseColor("#38BDF8"),
+                    1200L);
+        } else {
+            hideMorphBubbleStatus(true);
+        }
+    }
+
+    private void showMorphBubbleStatus(
+            final String text,
+            final int accentColor,
+            long autoHideMs) {
+        if (bubbleMorphView == null
+                || bubbleContainer == null
+                || bubbleParams == null) {
+            return;
+        }
+        if (bubbleActionStrip != null && bubbleActionStrip.isShowing()) {
+            return;
+        }
+
+        if (bubbleMorphAutoCollapseRunnable != null) {
+            mainHandler.removeCallbacks(bubbleMorphAutoCollapseRunnable);
+            bubbleMorphAutoCollapseRunnable = null;
+        }
+
+        int screenWidth = windowManager.getDefaultDisplay().getWidth();
+        int currentWidth = Math.max(
+                dp(BUBBLE_SIZE_DP),
+                bubbleParams.width > 0
+                        ? bubbleParams.width
+                        : dp(BUBBLE_SIZE_DP));
+        boolean onLeft =
+                bubbleParams.x + currentWidth / 2 < screenWidth / 2;
+        bubbleMorphView.setDockOnLeft(onLeft);
+        bubbleMorphView.showStatus(text, accentColor);
+
+        animateMorphBubbleWidth(
+                dp(BUBBLE_MORPH_WIDTH_DP),
+                165L,
+                onLeft,
+                null);
+
+        if (autoHideMs > 0L) {
+            bubbleMorphAutoCollapseRunnable = new Runnable() {
+                @Override public void run() {
+                    bubbleMorphAutoCollapseRunnable = null;
+                    if (bubbleMorphView != null
+                            && text.equals(bubbleMorphView.statusText())) {
+                        hideMorphBubbleStatus(true);
+                    }
+                }
+            };
+            mainHandler.postDelayed(
+                    bubbleMorphAutoCollapseRunnable,
+                    autoHideMs);
+        }
+    }
+
+    private void hideMorphBubbleStatus(boolean animated) {
+        if (bubbleMorphAutoCollapseRunnable != null) {
+            mainHandler.removeCallbacks(bubbleMorphAutoCollapseRunnable);
+            bubbleMorphAutoCollapseRunnable = null;
+        }
+        if (bubbleMorphView == null
+                || bubbleContainer == null
+                || bubbleParams == null) {
+            return;
+        }
+
+        final int collapsedWidth = dp(BUBBLE_SIZE_DP);
+        if (bubbleParams.width <= collapsedWidth) {
+            bubbleParams.width = collapsedWidth;
+            bubbleMorphView.hideStatus();
+            return;
+        }
+
+        int screenWidth = windowManager.getDefaultDisplay().getWidth();
+        int currentWidth = Math.max(collapsedWidth, bubbleParams.width);
+        boolean onLeft =
+                bubbleParams.x + currentWidth / 2 < screenWidth / 2;
+        bubbleMorphView.setDockOnLeft(onLeft);
+
+        if (!animated) {
+            bubbleMorphAnimationGeneration++;
+            if (bubbleMorphAnimator != null) {
+                bubbleMorphAnimator.cancel();
+                bubbleMorphAnimator = null;
+            }
+            int anchorRight = bubbleParams.x + currentWidth;
+            bubbleParams.width = collapsedWidth;
+            if (!onLeft) {
+                bubbleParams.x = Math.max(
+                        dp(2),
+                        anchorRight - collapsedWidth);
+            }
+            bubbleMorphView.hideStatus();
+            try {
+                windowManager.updateViewLayout(
+                        bubbleContainer,
+                        bubbleParams);
+            } catch (Exception ignored) {}
+            return;
+        }
+
+        bubbleMorphView.beginHideStatus();
+        animateMorphBubbleWidth(
+                collapsedWidth,
+                145L,
+                onLeft,
+                new Runnable() {
+                    @Override public void run() {
+                        if (bubbleMorphView != null) {
+                            bubbleMorphView.hideStatus();
+                        }
+                    }
+                });
+    }
+
+    private void animateMorphBubbleWidth(
+            int targetWidth,
+            long durationMs,
+            final boolean onLeft,
+            final Runnable endAction) {
+        if (bubbleContainer == null || bubbleParams == null) return;
+
+        final int generation = ++bubbleMorphAnimationGeneration;
+        if (bubbleMorphAnimator != null) {
+            bubbleMorphAnimator.cancel();
+        }
+
+        final int startWidth = Math.max(
+                dp(BUBBLE_SIZE_DP),
+                bubbleParams.width > 0
+                        ? bubbleParams.width
+                        : dp(BUBBLE_SIZE_DP));
+        final int startX = bubbleParams.x;
+        final int anchorRight = startX + startWidth;
+        final int screenWidth =
+                windowManager.getDefaultDisplay().getWidth();
+
+        if (startWidth == targetWidth) {
+            if (endAction != null) endAction.run();
+            return;
+        }
+
+        bubbleMorphAnimator = ValueAnimator.ofInt(startWidth, targetWidth);
+        bubbleMorphAnimator.setDuration(durationMs);
+        bubbleMorphAnimator.setInterpolator(
+                new DecelerateInterpolator());
+        bubbleMorphAnimator.addUpdateListener(animation -> {
+            if (bubbleContainer == null || bubbleParams == null) return;
+            int width = (Integer) animation.getAnimatedValue();
+            bubbleParams.width = width;
+            if (onLeft) {
+                bubbleParams.x = Math.max(
+                        dp(2),
+                        Math.min(
+                                screenWidth - width - dp(2),
+                                startX));
+            } else {
+                bubbleParams.x = Math.max(
+                        dp(2),
+                        Math.min(
+                                screenWidth - width - dp(2),
+                                anchorRight - width));
+            }
+            try {
+                windowManager.updateViewLayout(
+                        bubbleContainer,
+                        bubbleParams);
+            } catch (Exception ignored) {}
+        });
+        bubbleMorphAnimator.addListener(
+                new AnimatorListenerAdapter() {
+                    @Override
+                    public void onAnimationEnd(Animator animation) {
+                        if (generation
+                                != bubbleMorphAnimationGeneration) {
+                            return;
+                        }
+                        bubbleMorphAnimator = null;
+                        if (endAction != null) endAction.run();
+                    }
+                });
+        bubbleMorphAnimator.start();
     }
 
     public void showBubble() {
@@ -771,15 +1039,23 @@ public class FloatingBubbleManager {
                     bubbleContainer = new LinearLayout(context);
                     bubbleContainer.setOrientation(LinearLayout.VERTICAL);
                     bubbleContainer.setGravity(Gravity.CENTER_HORIZONTAL);
-                    bubbleContainer.setClipChildren(true);
+                    bubbleContainer.setClipChildren(false);
                     bubbleContainer.setClipToPadding(false);
 
                     bubbleView = new FluidBubbleView(context);
                     bubbleView.setElevation(16f);
                     bubbleView.setConversationWaiting(conversationWaiting);
+                    bubbleView.setAgentWorking(bubbleAgentWorking);
+                    bubbleView.setAgentNeedsAttention(bubbleAgentNeedsAttention);
+                    bubbleView.setNativeVoiceState(bubbleNativeVoiceState);
+
+                    bubbleMorphView =
+                            new MorphBubbleView(context, bubbleView, size);
                     bubbleContainer.addView(
-                            bubbleView,
-                            new LinearLayout.LayoutParams(size, size));
+                            bubbleMorphView,
+                            new LinearLayout.LayoutParams(
+                                    LinearLayout.LayoutParams.MATCH_PARENT,
+                                    size));
 
                     bubbleActionStrip = new BubbleActionStripOverlay(context);
                     bubbleContainer.addView(
@@ -788,7 +1064,7 @@ public class FloatingBubbleManager {
                                     size,
                                     LinearLayout.LayoutParams.WRAP_CONTENT));
 
-                    bubbleView.setOnTouchListener(new View.OnTouchListener() {
+                    bubbleMorphView.setOnTouchListener(new View.OnTouchListener() {
                         private int initialX, initialY;
                         private float initialTouchX, initialTouchY;
                         private boolean moved = false;
@@ -801,7 +1077,12 @@ public class FloatingBubbleManager {
                             int topLimit = getStatusBarHeight() + dp(4);
                             int bottomLimit = screenHeight - dp(64);
                             int leftLimit = dp(2);
-                            int rightLimit = screenWidth - size - dp(2);
+                            int visibleWidth = Math.max(
+                                    size,
+                                    bubbleParams != null && bubbleParams.width > 0
+                                            ? bubbleParams.width
+                                            : size);
+                            int rightLimit = screenWidth - visibleWidth - dp(2);
 
                             switch (event.getAction()) {
                                 case MotionEvent.ACTION_DOWN:
@@ -916,6 +1197,7 @@ public class FloatingBubbleManager {
                     if (onShown != null) onShown.run();
                 } catch (Exception e) {
                     bubbleContainer = null;
+                    bubbleMorphView = null;
                     bubbleView = null;
                     bubbleActionStrip = null;
                     e.printStackTrace();
@@ -1053,15 +1335,23 @@ public class FloatingBubbleManager {
             int screenWidth = windowManager.getDefaultDisplay().getWidth();
             int screenHeight = windowManager.getDefaultDisplay().getHeight();
             int bSize = dp(BUBBLE_SIZE_DP);
+            int visibleWidth = Math.max(
+                    bSize,
+                    bubbleParams.width > 0 ? bubbleParams.width : bSize);
             int topLimit = getStatusBarHeight() + dp(4);
             int visibleHeight = Math.max(bSize, bubbleParams.height);
             int bottomLimit = Math.max(
                     topLimit,
                     screenHeight - visibleHeight - dp(16));
 
-            bubbleParams.x = (bubbleParams.x < screenWidth / 2)
+            boolean onLeft =
+                    bubbleParams.x + visibleWidth / 2 < screenWidth / 2;
+            if (bubbleMorphView != null) {
+                bubbleMorphView.setDockOnLeft(onLeft);
+            }
+            bubbleParams.x = onLeft
                     ? dp(4)
-                    : (screenWidth - bSize - dp(4));
+                    : (screenWidth - visibleWidth - dp(4));
             bubbleParams.y = Math.max(
                     topLimit,
                     Math.min(bottomLimit, bubbleParams.y));
@@ -1111,6 +1401,7 @@ public class FloatingBubbleManager {
             return;
         }
 
+        hideMorphBubbleStatus(false);
         bubbleActionStrip.show(bubbleActionStripActions());
         ensureShortcutRoomBelow(dp(BUBBLE_SIZE_DP));
         setBubbleContainerExpandedStyle(true);
@@ -1417,11 +1708,24 @@ public class FloatingBubbleManager {
                                             == RuntimeUiState.Phase.SPEAKING
                                     ? 2
                                     : (active ? 1 : 0));
+                    bubbleNativeVoiceState = voiceState;
                     bubbleView.setNativeVoiceState(voiceState);
                     if (!active) {
                         bubbleView.setMicrophoneActivity(-96d, false);
+                        bubbleMicHeardLatch = false;
+                    }
+                } else {
+                    bubbleNativeVoiceState = latestLiveUiState.isError()
+                            ? 3
+                            : (latestLiveUiState.phase
+                                            == RuntimeUiState.Phase.SPEAKING
+                                    ? 2
+                                    : (active ? 1 : 0));
+                    if (!active) {
+                        bubbleMicHeardLatch = false;
                     }
                 }
+                refreshMorphBubbleStatus();
                 refreshVoiceControls();
                 refreshBubbleActionStripIfShowing();
             }
@@ -1434,10 +1738,28 @@ public class FloatingBubbleManager {
             @Override public void run() {
                 latestMicDbfs = dbfs;
                 latestMicSending = sending;
+                boolean actuallySending =
+                        sending && NativeLiveService.isActive();
                 if (bubbleView != null) {
                     bubbleView.setMicrophoneActivity(
                             dbfs,
-                            sending && NativeLiveService.isActive());
+                            actuallySending);
+                }
+
+                boolean heardNow = actuallySending && dbfs > -50d;
+                if (heardNow
+                        && !bubbleMicHeardLatch
+                        && !bubbleAgentWorking
+                        && !bubbleAgentNeedsAttention
+                        && !conversationWaiting
+                        && bubbleNativeVoiceState == 1) {
+                    bubbleMicHeardLatch = true;
+                    showMorphBubbleStatus(
+                            "聽到了",
+                            Color.parseColor("#38BDF8"),
+                            900L);
+                } else if (!actuallySending || dbfs < -58d) {
+                    bubbleMicHeardLatch = false;
                 }
                 updateVoiceTelemetryUi();
             }
