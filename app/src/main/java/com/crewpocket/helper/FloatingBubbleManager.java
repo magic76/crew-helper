@@ -965,6 +965,16 @@ public class FloatingBubbleManager {
         // Docking is disabled so the floating assistant remains visible.
     }
 
+    private boolean showBubbleDetailIfRelevant() {
+        if (bubbleDetailState == null
+                || bubbleMorphView == null
+                || bubbleMorphView.statusText().isEmpty()) {
+            return false;
+        }
+        showRuntimeUiState(bubbleDetailState);
+        return true;
+    }
+
     private void refreshMorphBubbleStatus() {
         if (bubbleMorphView == null || bubbleParams == null) return;
         if (bubbleActionStrip != null && bubbleActionStrip.isShowing()) return;
@@ -1350,7 +1360,9 @@ public class FloatingBubbleManager {
                                                 && dy < dp(14)
                                                 && event.getActionMasked() == MotionEvent.ACTION_UP) {
                                             vibrateShort();
-                                            toggleBubbleActionStrip();
+                                            if (!showBubbleDetailIfRelevant()) {
+                                                toggleBubbleActionStrip();
+                                            }
                                         }
                                     }
                                     snapBubbleToEdge();
