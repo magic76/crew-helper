@@ -34,13 +34,81 @@ final class MediaPlaybackCompletionPolicy {
                 || value.contains("resume_control");
     }
 
+    static boolean isMediaTransportGoal(String goalIntent) {
+        String goal = clean(goalIntent);
+        return "MEDIA:PLAY".equals(goal)
+                || "MEDIA:PAUSE".equals(goal)
+                || "MEDIA:NEXT".equals(goal)
+                || "MEDIA:PREVIOUS".equals(goal);
+    }
+
+    static boolean isPauseControl(String metadata) {
+        String value = fold(metadata);
+        return value.equals("暫停")
+                || value.equals("暂停")
+                || value.equals("pause")
+                || value.equals("pausebutton")
+                || value.equals("pauseplayback")
+                || value.contains("media:pause")
+                || value.contains("pause_control");
+    }
+
+    static boolean isNextControl(String metadata) {
+        String value = fold(metadata);
+        return value.equals("下一首")
+                || value.equals("下一曲")
+                || value.equals("下一個音軌")
+                || value.equals("下一个音轨")
+                || value.equals("next")
+                || value.equals("nexttrack")
+                || value.equals("skip")
+                || value.equals("skiptrack")
+                || value.equals("skipforward")
+                || value.contains("media:next")
+                || value.contains("next_control");
+    }
+
+    static boolean isPreviousControl(String metadata) {
+        String value = fold(metadata);
+        return value.equals("上一首")
+                || value.equals("上一曲")
+                || value.equals("上一個音軌")
+                || value.equals("上一个音轨")
+                || value.equals("previous")
+                || value.equals("previoustrack")
+                || value.equals("prev")
+                || value.equals("prevtrack")
+                || value.equals("skipback")
+                || value.contains("media:previous")
+                || value.contains("previous_control");
+    }
+
+    static boolean isMatchingTransportControl(
+            String goalIntent,
+            String targetMetadata) {
+        String goal = clean(goalIntent);
+        if ("MEDIA:PLAY".equals(goal)) {
+            return isPlayControl(targetMetadata);
+        }
+        if ("MEDIA:PAUSE".equals(goal)) {
+            return isPauseControl(targetMetadata);
+        }
+        if ("MEDIA:NEXT".equals(goal)) {
+            return isNextControl(targetMetadata);
+        }
+        if ("MEDIA:PREVIOUS".equals(goal)) {
+            return isPreviousControl(targetMetadata);
+        }
+        return false;
+    }
+
     static boolean shouldCompleteFromVerifiedEffect(
             String goalIntent,
             String targetMetadata,
             boolean committed,
             boolean observableEffect) {
-        return "MEDIA:PLAY".equals(clean(goalIntent))
-                && isPlayControl(targetMetadata)
+        return isMediaTransportGoal(goalIntent)
+                && isMatchingTransportControl(goalIntent, targetMetadata)
                 && committed
                 && observableEffect;
     }

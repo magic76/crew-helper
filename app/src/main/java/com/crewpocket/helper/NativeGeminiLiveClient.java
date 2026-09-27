@@ -3007,7 +3007,7 @@ final class NativeGeminiLiveClient {
                 ActionVerificationResult verification = agentRuntimeV2.verifyAndRecord(
                         id, evidence, observationVerificationController.latestObservation());
                 applyV2VerificationContract(result, verification);
-                reconcileMediaPlayCompletionAfterV2(
+                reconcileMediaTransportCompletionAfterV2(
                         result,
                         semantic,
                         name,
@@ -4244,7 +4244,7 @@ final class NativeGeminiLiveClient {
         }
     }
 
-    private void reconcileMediaPlayCompletionAfterV2(
+    private void reconcileMediaTransportCompletionAfterV2(
             JSONObject result,
             SemanticPhoneAction.Resolution semantic,
             String runtimeName,
@@ -4261,7 +4261,8 @@ final class NativeGeminiLiveClient {
         String goalIntent =
                 workingContext.toProgressJson()
                         .optString("goalIntent", "");
-        if (!MediaGoalUiPolicy.isMediaPlayGoal(goalIntent)) {
+        if (!MediaPlaybackCompletionPolicy.isMediaTransportGoal(
+                goalIntent)) {
             return;
         }
 
@@ -4299,13 +4300,21 @@ final class NativeGeminiLiveClient {
                     && existingEvidence.startsWith("MEDIA_")) {
                 return;
             }
+            boolean playGoal =
+                    "MEDIA:PLAY".equals(goalIntent);
             result.put("taskState", "DONE")
                     .put(
                             "completionEvidence",
-                            "MEDIA_PLAY_CONTROL_VERIFIED")
+                            playGoal
+                                    ? "MEDIA_PLAY_CONTROL_VERIFIED"
+                                    : "MEDIA_TRANSPORT_CONTROL_VERIFIED")
                     .put("nextRequirement", "NONE")
-                    .put("mediaPlaybackAccepted", true)
-                    .put("verified", true);
+                    .put("mediaPlaybackAccepted", playGoal)
+                    .put("mediaTransportAccepted", true)
+                    .put("verified", true)
+                    .put(
+                            "instruction",
+                            "Verified media control effect. Do not call more tools; finish this goal once.");
         } catch (Exception ignored) {}
     }
 

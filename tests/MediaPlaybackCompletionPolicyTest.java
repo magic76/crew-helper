@@ -87,6 +87,37 @@ public final class MediaPlaybackCompletionPolicyTest {
                         true,
                         true),
                 "non-play control never completes media goal");
+
+        check(MediaPlaybackCompletionPolicy.shouldCompleteFromVerifiedEffect(
+                        "MEDIA:PAUSE",
+                        "暫停",
+                        true,
+                        true),
+                "verified pause control effect completes pause goal");
+        check(MediaPlaybackCompletionPolicy.shouldCompleteFromVerifiedEffect(
+                        "MEDIA:NEXT",
+                        "下一個音軌",
+                        true,
+                        true),
+                "verified next-track effect completes next goal");
+        check(MediaPlaybackCompletionPolicy.shouldCompleteFromVerifiedEffect(
+                        "MEDIA:PREVIOUS",
+                        "上一個音軌",
+                        true,
+                        true),
+                "verified previous-track effect completes previous goal");
+        check(!MediaPlaybackCompletionPolicy.shouldCompleteFromVerifiedEffect(
+                        "MEDIA:PREVIOUS",
+                        "下一個音軌",
+                        true,
+                        true),
+                "mismatched transport control cannot complete the goal");
+        check(!MediaPlaybackCompletionPolicy.shouldCompleteFromVerifiedEffect(
+                        "MEDIA:NEXT",
+                        "下一個音軌",
+                        true,
+                        false),
+                "transport goal still requires an observable verified effect");
         check(!MediaPlaybackCompletionPolicy.shouldComplete(
                         "com.apple.android.music",
                         "播放",

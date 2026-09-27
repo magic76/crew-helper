@@ -255,6 +255,7 @@ final class ReflectionRuleEvidence {
         if (code.isEmpty()) return false;
         if ("OBSERVE_REQUIRED_AFTER_FAILURE".equals(code)
                 || "OBSERVE_REQUIRED".equals(code)
+                || "TARGET_REQUIRED".equals(code)
                 || "STABILITY_BLOCK".equals(code)
                 || "TASK_ALREADY_FINISHED".equals(code)
                 || "MESSAGE_TRANSACTION_ALREADY_HANDLED".equals(code)
