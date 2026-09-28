@@ -1500,6 +1500,7 @@ final class NativeGeminiLiveClient {
             }
 
             String effectiveUserInput = completeUserInput;
+            boolean continuedHumanTurn = false;
             VoiceExecutionGuard.TurnDisposition voiceDisposition;
 
             // A pending sensitive-action confirmation is intentionally a
@@ -1554,6 +1555,7 @@ final class NativeGeminiLiveClient {
                     PerformanceMetrics.recordLiveHumanTurnNewIntent(
                             boundary.reason);
                 } else {
+                    continuedHumanTurn = true;
                     mergeFinalizedVoiceSegmentIntoCurrentIntent(
                             effectiveUserInput,
                             boundary.reason);
@@ -1588,8 +1590,13 @@ final class NativeGeminiLiveClient {
                 workingContext.setPendingTask("");
                 reportStage("語音確認完成，等待執行原動作");
             } else {
-                userActionScope.updateFromUserText(
-                        effectiveUserInput);
+                if (continuedHumanTurn) {
+                    userActionScope.updateFromContinuedUserText(
+                            effectiveUserInput);
+                } else {
+                    userActionScope.updateFromUserText(
+                            effectiveUserInput);
+                }
                 if (voiceDisposition
                         == VoiceExecutionGuard.TurnDisposition.CONFIRMATION_REJECTED) {
                     workingContext.setPendingTask("");
