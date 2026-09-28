@@ -18,10 +18,10 @@ final class ActiveNoiseAdmissionGate {
     private static final int VERY_NOISY_REQUIRED_SPEECH_FRAMES = 4; // ~160 ms
     // Softer nearby speech can sit just below the adaptive hard threshold.
     // Keep this path slower than ordinary admission so ambient noise still loses.
-    private static final int SOFT_SPEECH_REQUIRED_FRAMES = 5; // ~200 ms
+    private static final int SOFT_SPEECH_REQUIRED_FRAMES = 4; // ~160 ms
     private static final int VERY_NOISY_SOFT_SPEECH_REQUIRED_FRAMES = 6; // ~240 ms
-    // Keep admitted trailing audio longer than Gemini's configured 450 ms end-silence.
-    private static final int RELEASE_NON_SPEECH_FRAMES = 16; // ~640 ms
+    // Keep admitted trailing audio longer than Gemini's configured 700 ms end-silence.
+    private static final int RELEASE_NON_SPEECH_FRAMES = 20; // ~800 ms
 
     private final byte[][] preRoll;
     private final int[] preRollLengths;
@@ -207,7 +207,7 @@ final class ActiveNoiseAdmissionGate {
         String safeMode = mode == null ? "auto" : mode.trim().toLowerCase(Locale.ROOT);
         if (!calibrated) return true;
         if ("noisy".equals(safeMode)) return true;
-        double activationFloor = "quiet".equals(safeMode) ? 0.040 : 0.024;
+        double activationFloor = "quiet".equals(safeMode) ? 0.040 : 0.032;
         return Math.max(0.008, noiseFloor) >= activationFloor;
     }
 
