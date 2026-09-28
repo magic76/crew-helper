@@ -5,6 +5,8 @@ public final class ActiveNoiseAdmissionGateTest {
 
     public static void main(String[] args) {
         testQuietBypass();
+        testAutoModerateNoiseBypasses();
+        testNoisyModeStillGuards();
         testStartupNoiseSuppressed();
         testStartupSpeechUsesPreroll();
         testOutdoorNoiseSuppressedThenSpeechAdmitted();
@@ -19,6 +21,22 @@ public final class ActiveNoiseAdmissionGateTest {
         assertEquals(ActiveNoiseAdmissionGate.Action.BYPASS,
                 gate.accept(FRAME, FRAME.length, 0.012, 0.02,
                         0.010, "auto", 35, true), "quiet environment must bypass after calibration");
+    }
+
+    private static void testAutoModerateNoiseBypasses() {
+        ActiveNoiseAdmissionGate gate = new ActiveNoiseAdmissionGate(FRAME.length);
+        assertEquals(ActiveNoiseAdmissionGate.Action.BYPASS,
+                gate.accept(FRAME, FRAME.length, 0.034, 0.10,
+                        0.030, "auto", 35, true),
+                "auto mode should leave moderate ambient noise to Gemini server VAD");
+    }
+
+    private static void testNoisyModeStillGuards() {
+        ActiveNoiseAdmissionGate gate = new ActiveNoiseAdmissionGate(FRAME.length);
+        assertEquals(ActiveNoiseAdmissionGate.Action.SUPPRESS,
+                gate.accept(FRAME, FRAME.length, 0.034, 0.10,
+                        0.030, "noisy", 35, true),
+                "explicit noisy mode must keep the local admission guard");
     }
 
     private static void testStartupNoiseSuppressed() {
@@ -65,7 +83,7 @@ public final class ActiveNoiseAdmissionGateTest {
         }
         gate.clearBufferedFrames();
 
-        for (int i = 0; i < 16; i++) {
+        for (int i = 0; i < 20; i++) {
             assertEquals(ActiveNoiseAdmissionGate.Action.SEND,
                     gate.accept(FRAME, FRAME.length, 0.050, 0.003,
                             0.050, "auto", 35, true), "trailing audio should reach server VAD");
@@ -77,16 +95,16 @@ public final class ActiveNoiseAdmissionGateTest {
 
     private static void testSustainedSoftSpeechEscapesSuppression() {
         ActiveNoiseAdmissionGate gate = new ActiveNoiseAdmissionGate(FRAME.length);
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < 3; i++) {
             assertEquals(ActiveNoiseAdmissionGate.Action.SUPPRESS,
                     gate.accept(FRAME, FRAME.length, 0.056, 0.07,
                             0.050, "auto", 35, true),
-                    "soft voiced speech should confirm slowly before admission");
+                    "soft voiced speech should confirm briefly before admission");
         }
         assertEquals(ActiveNoiseAdmissionGate.Action.FLUSH_PREROLL,
                 gate.accept(FRAME, FRAME.length, 0.056, 0.07,
                         0.050, "auto", 35, true),
-                "sustained soft voiced speech should not be swallowed forever");
+                "fourth soft voiced frame should open the gate");
         if (!"SOFT_SPEECH_ESCAPE".equals(gate.lastReason())) {
             throw new AssertionError("soft speech admission must be diagnosable");
         }
