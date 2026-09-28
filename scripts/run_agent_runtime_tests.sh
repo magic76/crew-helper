@@ -7,6 +7,7 @@ mkdir -p "$OUT"
 trap 'rm -rf "$OUT"' EXIT
 
 javac -encoding UTF-8 -d "$OUT" \
+  "$SRC/CameraCapturePolicy.java" \
   "$SRC/ActionTransaction.java" \
   "$SRC/ActionObservation.java" \
   "$SRC/ExecutionEvidence.java" \
@@ -102,6 +103,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/ContextPayloadBudget.java" \
   "$SRC/ScreenItemPriorityPolicy.java" \
   "$SRC/SecretMigrationPolicy.java" \
+  "$ROOT/tests/CameraCapturePolicyTest.java" \
   "$ROOT/tests/SendAuthorizationTest.java" \
   "$ROOT/tests/LiveTurnCoordinatorTest.java" \
   "$ROOT/tests/LiveTurnOrderingPolicyTest.java" \
@@ -185,6 +187,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/SecretMigrationPolicyTest.java" \
   "$ROOT/tests/AgentReplayRunner.java"
 
+java -cp "$OUT" com.crewpocket.helper.CameraCapturePolicyTest
 java -cp "$OUT" com.crewpocket.helper.SendAuthorizationTest
 java -cp "$OUT" com.crewpocket.helper.LiveTurnCoordinatorTest
 java -cp "$OUT" com.crewpocket.helper.LiveTurnOrderingPolicyTest
