@@ -1049,6 +1049,32 @@ final class PhoneRuntimeExecutor {
                 || "SET_TEXT_AND_PASTE_REJECTED".equals(code);
     }
 
+    JSONObject takePhoto(String camera) throws Exception {
+        String facing = camera == null ? "" : camera.trim().toLowerCase(Locale.ROOT);
+        if (!"front".equals(facing) && !"back".equals(facing)) {
+            facing = "back";
+        }
+        JSONObject reply = post(
+                "/photo",
+                new JSONObject().put("camera", facing),
+                6500);
+        if (reply.optBoolean("success", false)) {
+            reply.put("verified", true)
+                    .put("stepResult", "STEP_OK")
+                    .put("taskState", "DONE")
+                    .put("completionEvidence",
+                            "front".equals(facing)
+                                    ? "PHOTO_CAPTURED_FRONT"
+                                    : "PHOTO_CAPTURED_BACK")
+                    .put("nextRequirement", "NONE")
+                    .put("message",
+                            "front".equals(facing)
+                                    ? "已使用前鏡頭拍照"
+                                    : "已使用後鏡頭拍照");
+        }
+        return reply;
+    }
+
     JSONObject pressKey(String key) throws Exception {
         String normalized = key == null ? "" : key.toUpperCase();
         if (!("HOME".equals(normalized)
