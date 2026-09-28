@@ -29,7 +29,7 @@ final class LiveToolCatalog {
                 .put("action", new JSONObject().put("type", "STRING")
                                 .put("enum", new JSONArray()
                                 .put("OPEN_APP").put("SEARCH").put("COMMIT_SEARCH").put("TAP").put("TYPE")
-                                .put("SCROLL").put("BACK").put("HOME"))
+                                .put("SCROLL").put("BACK").put("HOME").put("TAKE_PHOTO"))
                         .put("description", "Choose exactly one semantic next action; Runtime decides Android implementation."))
                 .put("target", new JSONObject().put("type", "STRING")
                         .put("description", "Human semantic target or App name. Examples: Google, Search, Wi-Fi, first result. Never pass Android resource IDs. For visual TAP fallback this target is still required as the human-readable action being attempted."))
@@ -48,10 +48,13 @@ final class LiveToolCatalog {
                         .put("description", "Only for SCROLL. This is CONTENT/NAVIGATION direction, never finger gesture direction. forward = reveal later/below content or next page; backward = reveal earlier/above content or previous page. Use left/right only for explicitly horizontal content. Runtime converts this semantic direction into Android scrolling/swiping."))
                 .put("distance", new JSONObject().put("type", "STRING")
                         .put("enum", new JSONArray().put("short").put("normal").put("long").put("page"))
-                        .put("description", "Optional SCROLL distance."));
+                        .put("description", "Optional SCROLL distance."))
+                .put("camera", new JSONObject().put("type", "STRING")
+                        .put("enum", new JSONArray().put("FRONT").put("BACK"))
+                        .put("description", "For TAKE_PHOTO only. FRONT for selfie/front camera; BACK for the rear camera. Omit only when the user did not specify; Runtime defaults to BACK."));
         tools.put(new JSONObject().put("name", "phone_action")
                 .put("description",
-                        "Perform exactly ONE semantic phone step. Choose WHAT: OPEN_APP, SEARCH, COMMIT_SEARCH, TAP, TYPE, SCROLL, BACK or HOME; Runtime owns HOW and verification. For TAP, prefer latest screen.items[].id, then target. Only when inspect_ui visually shows a low-risk target that has no usable semantic item, use the one-shot screen.visualTapLease with target + visual_lease_id + normalized visual_x/visual_y. Never use visual TAP for SEND, payment, deletion, account, credential or other sensitive commits. TYPE never submits. SEARCH owns query entry; do not manually TAP+TYPE a search. Use send_text only for message submission.")
+                        "Perform exactly ONE semantic phone step. Choose WHAT: OPEN_APP, SEARCH, COMMIT_SEARCH, TAP, TYPE, SCROLL, BACK, HOME or TAKE_PHOTO; Runtime owns HOW and verification. TAKE_PHOTO is a deterministic camera capture and must be preferred over TAP on a shutter button; use camera=FRONT for selfies and camera=BACK for the rear camera. For TAP, prefer latest screen.items[].id, then target. Only when inspect_ui visually shows a low-risk target that has no usable semantic item, use the one-shot screen.visualTapLease with target + visual_lease_id + normalized visual_x/visual_y. Never use visual TAP for SEND, payment, deletion, account, credential or other sensitive commits. TYPE never submits. SEARCH owns query entry; do not manually TAP+TYPE a search. Use send_text only for message submission.")
                 .put("parameters", new JSONObject().put("type", "OBJECT")
                         .put("properties", phoneActionProperties)
                         .put("required", new JSONArray().put("action"))));
