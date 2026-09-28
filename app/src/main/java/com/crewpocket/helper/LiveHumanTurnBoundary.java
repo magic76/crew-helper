@@ -33,7 +33,7 @@ final class LiveHumanTurnBoundary {
     private static final long QUICK_SEGMENT_MERGE_WINDOW_MS = 1_800L;
     private static final long SEGMENT_MERGE_WINDOW_MS = 4_500L;
     private static final long RELATED_SEGMENT_WINDOW_MS = 8_000L;
-    private static final long LATE_DUPLICATE_WINDOW_MS = 1_500L;
+    private static final long LATE_DUPLICATE_WINDOW_MS = 4_500L;
 
     private String currentText = "";
     private long lastFinalizedAtMs;
@@ -88,7 +88,8 @@ final class LiveHumanTurnBoundary {
         if (related
                 && ((sameGenerationTask
                         && elapsed <= RELATED_SEGMENT_WINDOW_MS)
-                    || elapsed <= LATE_DUPLICATE_WINDOW_MS)) {
+                    || (!modelSpokenSinceFinalized
+                        && elapsed <= LATE_DUPLICATE_WINDOW_MS))) {
             return commit(
                     Decision.MERGE_CURRENT_SEGMENT,
                     mergeText(currentText, text),

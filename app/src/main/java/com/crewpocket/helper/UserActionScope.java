@@ -72,6 +72,61 @@ final class UserActionScope {
                 ElementReferenceCommand.isUserOpenRequest(text);
     }
 
+    /**
+     * Reparse a later finalized segment that belongs to the same human turn
+     * without regressing an in-flight search transaction.
+     *
+     * Live transcription can arrive cumulatively after Runtime already typed
+     * or submitted the search. The merged text may add a continuation such as
+     * navigation, so intent fields must be refreshed, while transaction
+     * evidence must remain monotonic.
+     */
+    synchronized void updateFromContinuedUserText(String text) {
+        expireIfNeeded();
+
+        boolean preserveSearchProgress = searchIntent
+                && (searchQueryEntered
+                    || searchSubmissionDispatched
+                    || searchCommitted
+                    || searchResultsObserved
+                    || searchResultSelectionDispatched
+                    || searchResultSelected);
+
+        boolean previousQueryEntered = searchQueryEntered;
+        boolean previousCommitted = searchCommitted;
+        boolean previousSubmissionDispatched = searchSubmissionDispatched;
+        String previousTransactionQuery = searchTransactionQuery;
+        String previousTransactionPackage = searchTransactionPackage;
+        long previousTransactionGeneration = searchTransactionGeneration;
+        boolean previousResultSelected = searchResultSelected;
+        boolean previousResultsObserved = searchResultsObserved;
+        boolean previousResultSelectionDispatched =
+                searchResultSelectionDispatched;
+        String previousSelectedResult = selectedSearchResult;
+        String previousDispatchedResult = dispatchedSearchResult;
+
+        TextEntryGoalGuard.updateFromUserText(text);
+        update(text);
+        elementReferenceAuthorized =
+                ElementReferenceCommand.isUserOpenRequest(text);
+
+        if (!preserveSearchProgress) return;
+
+        searchIntent = true;
+        searchQueryEntered = previousQueryEntered;
+        searchCommitted = previousCommitted;
+        searchSubmissionDispatched = previousSubmissionDispatched;
+        searchTransactionQuery = previousTransactionQuery;
+        searchTransactionPackage = previousTransactionPackage;
+        searchTransactionGeneration = previousTransactionGeneration;
+        searchResultSelected = previousResultSelected;
+        searchResultsObserved = previousResultsObserved;
+        searchResultSelectionDispatched =
+                previousResultSelectionDispatched;
+        selectedSearchResult = previousSelectedResult;
+        dispatchedSearchResult = previousDispatchedResult;
+    }
+
     synchronized void updateFromTrustedAction(String action) {
         update(action);
         elementReferenceAuthorized = false;
