@@ -178,6 +178,43 @@ public final class LiveHumanTurnBoundaryTest {
                         == LiveHumanTurnBoundary.Decision.NEW_INTENT,
                 "server interruption always creates a new human turn");
 
+        // 0134: Runtime may finish the first tool before Gemini emits the
+        // cumulative finalized transcript. If the model has not spoken yet,
+        // the related text is still the same human turn even without an active
+        // task and must not reset the search transaction.
+        boundary.forceNewTurn("搜尋林家花園", 80_000L);
+        LiveHumanTurnBoundary.Resolution lateCumulative =
+                boundary.resolve(
+                        "搜尋林家花園",
+                        83_200L,
+                        false,
+                        -1L,
+                        13L,
+                        13L,
+                        "IDLE",
+                        false,
+                        false);
+        check(lateCumulative.decision
+                        == LiveHumanTurnBoundary.Decision.MERGE_CURRENT_SEGMENT,
+                "late cumulative transcript before model speech stays same human turn");
+
+        boundary.forceNewTurn("搜尋林家花園", 90_000L);
+        boundary.noteModelSpeech();
+        LiveHumanTurnBoundary.Resolution repeatedAfterReply =
+                boundary.resolve(
+                        "搜尋林家花園",
+                        93_200L,
+                        false,
+                        -1L,
+                        14L,
+                        14L,
+                        "IDLE",
+                        false,
+                        false);
+        check(repeatedAfterReply.decision
+                        == LiveHumanTurnBoundary.Decision.NEW_INTENT,
+                "same words after model speech remain a genuine new human command");
+
         System.out.println(
                 "PASS LiveHumanTurnBoundaryTest: "
                         + checks + " checks");
