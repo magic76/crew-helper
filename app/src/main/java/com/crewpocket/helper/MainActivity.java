@@ -963,9 +963,7 @@ public class MainActivity extends Activity
                         + " · " + audioOutputSummary()
                         + " · " + (AppConfig.isMessageSendNoConfirmationEnabled(this)
                                 ? I18n.get(this, "送訊息免確認 ON", "Message no-confirm ON")
-                                : I18n.get(this, "送訊息免確認 OFF", "Message no-confirm OFF"))
-                        + " · " + liveIdleTimeoutSummary(
-                                AppConfig.getLiveIdleTimeoutSeconds(this));
+                                : I18n.get(this, "送訊息免確認 OFF", "Message no-confirm OFF"));
         pageContent.addView(makeSettingsOverviewRow(
                 CrewIcons.AUDIO,
                 I18n.get(this, "對話體驗", "Conversation Experience"),
@@ -1285,40 +1283,6 @@ public class MainActivity extends Activity
         } else {
             requestPermissions(new String[]{android.Manifest.permission.CAMERA}, 101);
         }
-    }
-
-    private void showLiveIdleTimeoutDialog() {
-        final int[] values = new int[]{0, 15, 30, 60, 120, 180, 300, 600, 900, 1800};
-        final String[] labels = new String[]{
-            I18n.get(this, "關閉自動結束", "Disable auto-end"),
-            I18n.get(this, "15 秒", "15 seconds"),
-            I18n.get(this, "30 秒", "30 seconds"),
-            I18n.get(this, "1 分鐘", "1 minute"),
-            I18n.get(this, "2 分鐘（預設）", "2 minutes (default)"),
-            I18n.get(this, "3 分鐘", "3 minutes"),
-            I18n.get(this, "5 分鐘", "5 minutes"),
-            I18n.get(this, "10 分鐘", "10 minutes"),
-            I18n.get(this, "15 分鐘", "15 minutes"),
-            I18n.get(this, "30 分鐘", "30 minutes")
-        };
-        int current = AppConfig.getLiveIdleTimeoutSeconds(this);
-        int checked = 0;
-        for (int i = 0; i < values.length; i++) {
-            if (values[i] == current) { checked = i; break; }
-        }
-
-        new android.app.AlertDialog.Builder(this)
-            .setTitle(I18n.get(this, "語音閒置自動結束", "Live Idle Auto-End"))
-            .setSingleChoiceItems(labels, checked, new android.content.DialogInterface.OnClickListener() {
-                @Override public void onClick(android.content.DialogInterface dialog, int which) {
-                    AppConfig.setLiveIdleTimeoutSeconds(MainActivity.this, values[which]);
-                    NativeLiveService.refreshLiveIdleTimeout();
-                    dialog.dismiss();
-                    renderSettingsPage();
-                }
-            })
-            .setNegativeButton(I18n.get(this, "取消", "Cancel"), null)
-            .show();
     }
 
     private void showDiagnosticsDialog() {
@@ -2031,14 +1995,12 @@ public class MainActivity extends Activity
                 new int[]{
                         CrewIcons.INTERRUPT,
                         CrewIcons.AUDIO,
-                        CrewIcons.PHONE_ACTIONS,
-                        CrewIcons.CLOCK
+                        CrewIcons.PHONE_ACTIONS
                 },
                 new String[]{
                         I18n.get(this, "插話靈敏度", "Interruption Sensitivity"),
                         I18n.get(this, "音訊輸出", "Audio Output"),
-                        I18n.get(this, "訊息送出免確認", "Message Send No Confirmation"),
-                        I18n.get(this, "閒置自動結束", "Live Idle Auto-End")
+                        I18n.get(this, "訊息送出免確認", "Message Send No Confirmation")
                 },
                 new String[]{
                         interruptionSummary(
@@ -2050,17 +2012,14 @@ public class MainActivity extends Activity
                                         "ON · Commit explicit sends directly")
                                 : I18n.get(this,
                                         "OFF · 保留語音確認門檻",
-                                        "OFF · Keep voice confirmation gate"),
-                        liveIdleTimeoutSummary(
-                                AppConfig.getLiveIdleTimeoutSeconds(this))
+                                        "OFF · Keep voice confirmation gate")
                 },
                 new int[]{
                         CrewTheme.EMERALD_400,
                         CrewTheme.CYAN_400,
                         messageNoConfirm
                                 ? CrewTheme.EMERALD_400
-                                : CrewTheme.TEXT_MUTED,
-                        CrewTheme.CYAN_400
+                                : CrewTheme.TEXT_MUTED
                 },
                 new Runnable[]{
                         () -> showInterruptionSensitivityDialog(),
@@ -2084,8 +2043,7 @@ public class MainActivity extends Activity
                                                     "Message no-confirm disabled"),
                                     Toast.LENGTH_SHORT).show();
                             renderSettingsPage();
-                        },
-                        () -> showLiveIdleTimeoutDialog()
+                        }
                 });
     }
 
@@ -2379,12 +2337,6 @@ public class MainActivity extends Activity
         return "media".equals(AppConfig.getAudioOutput(this))
                 ? I18n.get(this, "媒體模式", "Media")
                 : I18n.get(this, "通話模式", "Call");
-    }
-
-    private String liveIdleTimeoutSummary(int seconds) {
-        if (seconds <= 0) return I18n.get(this, "關閉", "Off");
-        if (seconds < 60) return seconds + " " + I18n.get(this, "秒", "sec");
-        return (seconds / 60) + " " + I18n.get(this, "分鐘", "min");
     }
 
     private String appVersionSummary() {
