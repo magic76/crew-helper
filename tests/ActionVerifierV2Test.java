@@ -98,6 +98,12 @@ public final class ActionVerifierV2Test {
         check(nav.status == ActionVerificationResult.Status.VERIFIED,
                 "navigation verified");
 
+        ActionVerificationResult photo = ActionVerifierV2.verify("take_photo",
+                ActionExpectation.forRuntimeAction("take_photo"),
+                ExecutionEvidence.accepted(true), a, a);
+        check(photo.status == ActionVerificationResult.Status.VERIFIED,
+                "domain-verified photo capture does not require screen change");
+
         ActionVerificationResult blocked = ActionVerifierV2.verify("tap_screen",
                 ActionExpectation.forRuntimeAction("tap_screen"),
                 ExecutionEvidence.blocked("POLICY_BLOCK"), a, changed);
