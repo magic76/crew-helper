@@ -67,6 +67,52 @@ public final class SearchTransactionPolicyTest {
         check(maps.shouldSelectSearchResult(),
                 "navigation flow should retain deterministic result selection");
 
+        // 0133: once a search submit has left Runtime, the same human intent is
+        // monotonic. A weak model may emit SEARCH/TYPE again after results
+        // appear; Runtime must preserve the result surface instead of reopening
+        // the editor. Identity drift must not bypass this guard.
+        UserActionScope monotonic = new UserActionScope();
+        monotonic.updateFromUserText("搜尋林家花園");
+        monotonic.markSearchQueryEntered(
+                "林家花園", "com.google.android.apps.maps", 7L);
+        monotonic.markSearchSubmissionDispatched();
+        check(monotonic.shouldSuppressDuplicateSearch(
+                        "林家花園",
+                        "com.google.android.apps.maps",
+                        7L),
+                "identical search after submit must be suppressed");
+        check(monotonic.shouldSuppressDuplicateSearch(
+                        "林家花園 ",
+                        "com.google.android.apps.maps",
+                        8L),
+                "generation drift must not reopen submitted search");
+        check(monotonic.shouldSuppressDuplicateSearch(
+                        "林家花園景點",
+                        "com.google.android.apps.maps",
+                        7L),
+                "query drift from weak model must not overwrite result surface");
+        check(monotonic.shouldSuppressDuplicateSearch(
+                        "林家花園",
+                        "com.google.android.apps.maps.beta",
+                        7L),
+                "package observation drift must not reopen submitted search");
+
+        monotonic.markSearchResultsObserved();
+        check(monotonic.shouldSuppressDuplicateSearch(
+                        "林家花園",
+                        "com.google.android.apps.maps",
+                        7L),
+                "results-observed search must never regress to query entry");
+
+        // A genuinely new human instruction resets the search transaction and
+        // permits a new search.
+        monotonic.updateFromUserText("搜尋板橋車站");
+        check(!monotonic.shouldSuppressDuplicateSearch(
+                        "板橋車站",
+                        "com.google.android.apps.maps",
+                        8L),
+                "new human search intent must release prior monotonic guard");
+
         System.out.println("PASS SearchTransactionPolicyTest: "
                 + assertions + " checks");
     }

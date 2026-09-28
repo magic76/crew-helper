@@ -302,15 +302,16 @@ final class UserActionScope {
     synchronized boolean shouldSuppressDuplicateSearch(
             String query, String packageName, long generation) {
         expireIfNeeded();
-        if (!searchIntent || !searchSubmissionDispatched) return false;
-        if (generation < 0L || generation != searchTransactionGeneration) return false;
 
-        String normalizedQuery = normalizeSearchTransactionQuery(query);
-        String normalizedPackage = normalizeSearchPackage(packageName);
-        return !normalizedQuery.isEmpty()
-                && normalizedQuery.equals(searchTransactionQuery)
-                && !normalizedPackage.isEmpty()
-                && normalizedPackage.equals(searchTransactionPackage);
+        // A dispatched search is a monotonic transaction boundary for the
+        // current user intent. Once Search/Enter has left Runtime, a later
+        // SEARCH/TYPE from the model must never reopen the editor and overwrite
+        // an already-loading or already-visible result surface.
+        //
+        // New human intents call updateFromUserText(), which resets this lease,
+        // so query/package/generation matching is intentionally not required
+        // here. Those fields remain useful as transaction diagnostics only.
+        return searchIntent && searchSubmissionDispatched;
     }
 
     synchronized boolean markSearchCommitted() {
