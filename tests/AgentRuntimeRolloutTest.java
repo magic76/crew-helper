@@ -24,6 +24,7 @@ public final class AgentRuntimeRolloutTest {
         check(AgentRuntimeRollout.shouldEnforce("type_text", normal), "type staged");
         check(AgentRuntimeRollout.shouldEnforce("swipe_screen", normal), "semantic scroll staged");
         check(AgentRuntimeRollout.shouldEnforce("press_key", normal), "back/home staged");
+        check(AgentRuntimeRollout.shouldEnforce("take_photo", normal), "photo capture staged");
         check(AgentRuntimeRollout.shouldEnforce("tap_screen", normal), "normal semantic tap staged");
 
         check(!AgentRuntimeRollout.shouldEnforce("tap_screen", maps), "maps tap legacy");

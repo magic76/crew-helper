@@ -636,6 +636,11 @@ final class NativeGeminiLiveClient {
                         return NativeGeminiLiveClient.this.pressKey(args);
                     }
 
+                    @Override public JSONObject takePhoto(JSONObject args)
+                            throws Exception {
+                        return NativeGeminiLiveClient.this.takePhoto(args);
+                    }
+
                     @Override public JSONObject startScreenMonitor(
                             JSONObject args) throws Exception {
                         return NativeGeminiLiveClient.this
@@ -3935,6 +3940,11 @@ final class NativeGeminiLiveClient {
         if ("BACK".equals(action) || "HOME".equals(action)) {
             return action;
         }
+        if ("TAKE_PHOTO".equals(action)
+                || "take_photo".equals(runtimeName)) {
+            return "CAMERA:" + safe.optString("camera", "BACK")
+                    .trim().toUpperCase(Locale.ROOT);
+        }
         if ("OPEN_APP".equals(action)
                 || "launch_app".equals(runtimeName)) {
             return AgentTapDiagnostic.sanitizeTarget(
@@ -6199,6 +6209,7 @@ final class NativeGeminiLiveClient {
                 || "search_current_app".equals(name)
                 || "commit_search".equals(name)
                 || "press_key".equals(name)
+                || "take_photo".equals(name)
                 || "take_screenshot".equals(name);
     }
 
@@ -7145,6 +7156,18 @@ final class NativeGeminiLiveClient {
                 reply.optBoolean("success", false)
                         ? "submitted" : "failed");
         return observationVerificationController.autoObserveAfterMutation(reply, "press_key");
+    }
+
+    private JSONObject takePhoto(JSONObject args) throws Exception {
+        String camera = args == null
+                ? "BACK"
+                : args.optString("camera", "BACK").trim().toUpperCase(Locale.ROOT);
+        JSONObject reply = phoneRuntimeExecutor.takePhoto(camera);
+        workingContext.recordAction(
+                "take_photo:" + camera.toLowerCase(Locale.ROOT),
+                reply.optBoolean("success", false)
+                        ? "verified" : "failed");
+        return reply;
     }
 
     /** Explicitly commits the currently focused search field via the IME key. */

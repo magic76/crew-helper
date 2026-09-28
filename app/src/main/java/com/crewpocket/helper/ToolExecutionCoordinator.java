@@ -25,6 +25,7 @@ final class ToolExecutionCoordinator {
         JSONObject commitSearch() throws Exception;
         JSONObject sendText(JSONObject args) throws Exception;
         JSONObject pressKey(JSONObject args) throws Exception;
+        JSONObject takePhoto(JSONObject args) throws Exception;
         JSONObject startScreenMonitor(JSONObject args) throws Exception;
         JSONObject waitThenAction(JSONObject args) throws Exception;
         JSONObject startConversationLoop(JSONObject args) throws Exception;
@@ -110,6 +111,9 @@ final class ToolExecutionCoordinator {
         }
         if ("press_key".equals(name)) {
             return host.pressKey(safeArgs);
+        }
+        if ("take_photo".equals(name)) {
+            return host.takePhoto(safeArgs);
         }
         if ("start_screen_monitor".equals(name)) {
             return host.startScreenMonitor(safeArgs);

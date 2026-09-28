@@ -23,6 +23,7 @@ final class AgentRuntimeRollout {
     static final boolean SCROLL_ENABLED = true;
     static final boolean BACK_HOME_ENABLED = true;
     static final boolean TAP_ENABLED = true;
+    static final boolean TAKE_PHOTO_ENABLED = true;
 
     private static final String MAPS_PACKAGE = "com.google.android.apps.maps";
     private static final String SYSTEM_UI_PACKAGE = "com.android.systemui";
@@ -36,6 +37,7 @@ final class AgentRuntimeRollout {
         if ("commit_search".equals(name)) return COMMIT_SEARCH_ENABLED;
         if ("type_text".equals(name)) return TYPE_ENABLED;
         if ("press_key".equals(name)) return BACK_HOME_ENABLED;
+        if ("take_photo".equals(name)) return TAKE_PHOTO_ENABLED;
 
         if ("swipe_screen".equals(name)) {
             // Accessibility cannot prove progress on many games/canvas surfaces.

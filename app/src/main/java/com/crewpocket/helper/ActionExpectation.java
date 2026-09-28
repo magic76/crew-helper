@@ -25,6 +25,7 @@ final class ActionExpectation {
             return ActionTransaction.ExpectedEffect.ANY_OBSERVABLE_CHANGE;
         }
         if ("press_key".equals(name)) return ActionTransaction.ExpectedEffect.SCREEN_CHANGE;
+        if ("take_photo".equals(name)) return ActionTransaction.ExpectedEffect.DOMAIN_VERIFIED;
         return ActionTransaction.ExpectedEffect.UNKNOWN;
     }
 }

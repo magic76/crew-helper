@@ -40,6 +40,7 @@ final class SemanticPhoneAction {
         String text = args.optString("text", "");
         String direction = args.optString("direction", "").trim().toLowerCase(Locale.ROOT);
         String distance = args.optString("distance", "").trim().toLowerCase(Locale.ROOT);
+        String camera = args.optString("camera", "").trim().toUpperCase(Locale.ROOT);
         String visualLeaseId =
                 args.optString("visual_lease_id", "").trim();
         boolean hasVisualX = args.has("visual_x");
@@ -209,6 +210,20 @@ final class SemanticPhoneAction {
             return mapped(action, "commit_search", new JSONObject());
         }
 
+        if ("TAKE_PHOTO".equals(action)) {
+            String facing = camera.isEmpty() ? "BACK" : camera;
+            if (!"FRONT".equals(facing) && !"BACK".equals(facing)) {
+                return error(
+                        action,
+                        "BAD_CAMERA",
+                        "TAKE_PHOTO camera 只能是 FRONT 或 BACK。自拍請用 FRONT，拍前方請用 BACK。");
+            }
+            return mapped(
+                    action,
+                    "take_photo",
+                    new JSONObject().put("camera", facing));
+        }
+
         if ("SCROLL".equals(action)) {
             // Direction is semantic content/navigation direction, never the
             // physical finger gesture. Runtime owns the Android gesture.
@@ -235,7 +250,7 @@ final class SemanticPhoneAction {
         }
 
         return error(action, "UNKNOWN_SEMANTIC_ACTION",
-                "只支援 OPEN_APP/SEARCH/COMMIT_SEARCH/TAP/TYPE/SCROLL/BACK/HOME。請改用支援的 action 後重試。");
+                "只支援 OPEN_APP/SEARCH/COMMIT_SEARCH/TAP/TYPE/SCROLL/BACK/HOME/TAKE_PHOTO。請改用支援的 action 後重試。");
     }
 
     private static String normalizeElementId(String value) {
@@ -275,6 +290,7 @@ final class SemanticPhoneAction {
             return "text";
         }
         if ("BAD_SCROLL_DIRECTION".equals(code)) return "direction";
+        if ("BAD_CAMERA".equals(code)) return "camera";
         return "";
     }
 

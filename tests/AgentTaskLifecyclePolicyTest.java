@@ -41,6 +41,8 @@ public final class AgentTaskLifecyclePolicyTest {
                 "tap_screen is mutation");
         check(AgentTaskLifecyclePolicy.isMutationTool("send_text"),
                 "send_text remains mutation");
+        check(AgentTaskLifecyclePolicy.isMutationTool("take_photo"),
+                "take_photo is mutation");
         check(!AgentTaskLifecyclePolicy.isMutationTool("inspect_ui"),
                 "inspect_ui is not mutation");
 
