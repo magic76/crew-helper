@@ -2319,7 +2319,20 @@ final class NativeGeminiLiveClient {
         } else {
             setup.put("sessionResumption", new JSONObject());
         }
-        setup.put("inputAudioTranscription", new JSONObject());
+        JSONObject inputAudioTranscription = new JSONObject()
+                .put("mode", "SMART")
+                .put("customVocabulary", new JSONArray()
+                        .put("Crew")
+                        .put("Crew Helper")
+                        .put("Gemini")
+                        .put("Google Maps")
+                        .put("Apple Music")
+                        .put("WhatsApp")
+                        .put("LINE")
+                        .put("YouTube")
+                        .put("Samsung")
+                        .put("One UI"));
+        setup.put("inputAudioTranscription", inputAudioTranscription);
         setup.put("outputAudioTranscription", new JSONObject());
         JSONArray modelTools =
                 LiveToolCatalog.build(
@@ -7401,10 +7414,10 @@ final class NativeGeminiLiveClient {
 
 
 
-    // 0097 tuning: deliberately easy to start, reluctant to cut a natural pause.
+    // Voice-turn tuning: preserve natural Mandarin pauses and enough onset context.
     // Change these only with recorded A/B evidence from a real device.
-    private static final int SERVER_VAD_PREFIX_PADDING_MS = 80;
-    private static final int SERVER_VAD_SILENCE_DURATION_MS = 450;
+    private static final int SERVER_VAD_PREFIX_PADDING_MS = 120;
+    private static final int SERVER_VAD_SILENCE_DURATION_MS = 700;
 
     // 0101: while Gemini is audibly speaking, keep a tiny Android-side admission
     // gate in front of server VAD. Runtime does NOT decide the turn and does NOT
