@@ -6,6 +6,17 @@ public final class UserActionScopeTest {
     public static void main(String[] args) {
         UserActionScope scope = new UserActionScope();
 
+        check(UserActionScope.isExplicitEndCallCommand("結束通話"),
+                "explicit end-call command is recognized locally");
+        check(UserActionScope.isExplicitEndCallCommand("小酷休息吧"),
+                "wake assistant can be sent back to standby explicitly");
+        check(UserActionScope.isExplicitEndCallCommand("休息吧"),
+                "short explicit rest command is recognized");
+        check(!UserActionScope.isExplicitEndCallCommand("導航結束後提醒我"),
+                "task text containing 結束 must not close the voice session");
+        check(!UserActionScope.isExplicitEndCallCommand("可以了"),
+                "ambiguous conversational phrases must not close the voice session");
+
         scope.updateFromUserText("顯示元素");
         check(scope.consumeElementReferenceAuthorization(),
                 "explicit user command grants one overlay open");
