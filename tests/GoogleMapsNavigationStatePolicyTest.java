@@ -36,6 +36,21 @@ public final class GoogleMapsNavigationStatePolicyTest {
 
         check(GoogleMapsNavigationStatePolicy.isActiveNavigationScreen(
                         "com.google.android.apps.maps",
+                        "{elements:[{label:'結束'},{label:'重新置中'}]}"),
+                "short localized end label plus guidance control proves active navigation");
+
+        check(GoogleMapsNavigationStatePolicy.isActiveNavigationScreen(
+                        "com.google.android.apps.maps",
+                        "{elements:[{label:'Exit'},{label:'Route overview'}]}"),
+                "short English exit label plus guidance control proves active navigation");
+
+        check(!GoogleMapsNavigationStatePolicy.isActiveNavigationScreen(
+                        "com.google.android.apps.maps",
+                        "{elements:[{label:'結束'}]}"),
+                "generic short end label alone is insufficient");
+
+        check(GoogleMapsNavigationStatePolicy.isActiveNavigationScreen(
+                        "com.google.android.apps.maps",
                         "{important:[{label:'取消導航'}]}"),
                 "Chinese cancel-navigation control is terminal guidance evidence");
 
