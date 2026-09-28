@@ -3625,7 +3625,11 @@ final class NativeGeminiLiveClient {
 
         reportStage("正在確認導航是否已開始");
 
-        final long[] delaysMs = new long[]{280L, 520L};
+        // Google Maps often animates from route planning into turn-by-turn
+        // guidance for well over 1s. Keep verification Runtime-owned, but give
+        // the UI a bounded ~2.7s total settle window before asking Gemini to
+        // recover. This is still much cheaper than a failed tool/model loop.
+        final long[] delaysMs = new long[]{450L, 850L, 1400L};
         JSONObject latest = null;
         boolean activeNavigation = false;
 
@@ -3693,7 +3697,7 @@ final class NativeGeminiLiveClient {
                             .put("verified", false)
                             .put(
                                     "instruction",
-                                    "Runtime already rechecked the screen and active navigation is not confirmed. Do not claim completion. Continue with one necessary recovery action only.");
+                                    "Runtime already performed three bounded fresh checks over ~2.7s and active navigation is still not confirmed. Do not ask the user yet. Continue autonomously with one necessary low-risk recovery action only.");
                 }
             } catch (Exception ignored) {}
         }

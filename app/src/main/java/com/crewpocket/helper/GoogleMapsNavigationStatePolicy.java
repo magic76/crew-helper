@@ -52,6 +52,23 @@ final class GoogleMapsNavigationStatePolicy {
         // single generic route-planning control cannot satisfy the terminal
         // check.
         int guidanceSignals = 0;
+        // Some localized Maps builds shorten the active-guidance
+        // exit control to just "結束" / "退出" (or "Exit") instead of
+        // "結束導航". Treat that as a weak cue only: it must pair with another
+        // guidance-specific control below, so a generic close/stop label cannot
+        // make route planning look terminal.
+        if (containsAny(
+                text,
+                "label結束",
+                "label结束",
+                "label退出",
+                "label停止",
+                "labelexit",
+                "labelstop",
+                "labelออก",
+                "labelหยุด")) {
+            guidanceSignals++;
+        }
         if (containsAny(
                 text,
                 "recenter",
