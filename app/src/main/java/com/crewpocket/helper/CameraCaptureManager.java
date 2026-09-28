@@ -1,121 +1,307 @@
 package com.crewpocket.helper;
 
 import android.content.Context;
+import android.graphics.Rect;
 import android.graphics.SurfaceTexture;
 import android.hardware.Camera;
-import android.os.Handler;
-import android.os.Looper;
+import android.view.Surface;
+import android.view.WindowManager;
 
 import java.io.File;
 import java.io.FileOutputStream;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 public class CameraCaptureManager {
+    private static final long EXPOSURE_SETTLE_MS = 450L;
+    private static final long AUTOFOCUS_TIMEOUT_MS = 1200L;
+
     public interface CaptureCallback {
         void onSuccess(String filePath);
         void onError(String error);
     }
 
-    public static void capturePhoto(final Context context, final boolean isFront, final CaptureCallback callback) {
+    public static void capturePhoto(
+            final Context context,
+            final boolean isFront,
+            final CaptureCallback callback) {
         new Thread(new Runnable() {
             @Override
             public void run() {
                 Camera camera = null;
+                SurfaceTexture surfaceTexture = null;
                 try {
-                    int cameraId = 0;
-                    int numCameras = Camera.getNumberOfCameras();
-                    for (int i = 0; i < numCameras; i++) {
-                        Camera.CameraInfo info = new Camera.CameraInfo();
-                        Camera.getCameraInfo(i, info);
-                        if (isFront && info.facing == Camera.CameraInfo.CAMERA_FACING_FRONT) {
-                            cameraId = i;
-                            break;
-                        } else if (!isFront && info.facing == Camera.CameraInfo.CAMERA_FACING_BACK) {
-                            cameraId = i;
-                            break;
-                        }
+                    int cameraId = findCameraId(isFront);
+                    if (cameraId < 0) {
+                        callback.onError(
+                                isFront
+                                        ? "Front camera unavailable"
+                                        : "Back camera unavailable");
+                        return;
                     }
+
+                    Camera.CameraInfo cameraInfo = new Camera.CameraInfo();
+                    Camera.getCameraInfo(cameraId, cameraInfo);
 
                     camera = Camera.open(cameraId);
                     int[] textures = new int[1];
-                    android.opengl.GLES20.glGenTextures(1, textures, 0);
-                    SurfaceTexture st = new SurfaceTexture(textures[0]);
-                    camera.setPreviewTexture(st);
+                    android.opengl.GLES20.glGenTextures(
+                            1, textures, 0);
+                    surfaceTexture =
+                            new SurfaceTexture(textures[0]);
+                    camera.setPreviewTexture(surfaceTexture);
 
                     Camera.Parameters params = camera.getParameters();
-                    List<Camera.Size> sizes = params.getSupportedPictureSizes();
-                    
-                    // 🌟 Pick Maximum Sensor Resolution for Phone Storage
-                    if (sizes != null && !sizes.isEmpty()) {
-                        Camera.Size maxResolution = sizes.get(0);
-                        long maxPixels = maxResolution.width * (long) maxResolution.height;
-                        for (Camera.Size s : sizes) {
-                            long pixels = s.width * (long) s.height;
-                            if (pixels > maxPixels) {
-                                maxResolution = s;
-                                maxPixels = pixels;
-                            }
-                        }
-                        params.setPictureSize(maxResolution.width, maxResolution.height);
-                    }
+                    configurePictureQuality(params);
+                    configureJpegRotation(
+                            context,
+                            params,
+                            cameraInfo,
+                            isFront);
+                    boolean shouldAutoFocus =
+                            configureFocusAndMetering(
+                                    params,
+                                    isFront);
 
-                    // 🌟 100% Maximum Full Quality JPEG for pristine clarity in album
-                    params.setJpegQuality(100);
-
-                    List<String> focusModes = params.getSupportedFocusModes();
-                    if (focusModes != null && focusModes.contains(Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE)) {
-                        params.setFocusMode(Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE);
-                    }
                     camera.setParameters(params);
                     camera.startPreview();
 
-                    // Allow auto-exposure stabilization
-                    Thread.sleep(400);
+                    // Give AE/AWB a brief deterministic settling window before
+                    // asking AF to lock. This is not used as proof of focus.
+                    Thread.sleep(EXPOSURE_SETTLE_MS);
+
+                    if (shouldAutoFocus) {
+                        awaitAutoFocus(camera);
+                    }
 
                     final Camera finalCam = camera;
-                    camera.takePicture(null, null, new Camera.PictureCallback() {
-                        @Override
-                        public void onPictureTaken(byte[] data, Camera cam) {
-                            try {
-                                File dir = new File("/sdcard/Pictures/CrewPocket");
-                                dir.mkdirs();
+                    final SurfaceTexture finalSurfaceTexture =
+                            surfaceTexture;
+                    camera.takePicture(
+                            null,
+                            null,
+                            new Camera.PictureCallback() {
+                                @Override
+                                public void onPictureTaken(
+                                        byte[] data,
+                                        Camera cam) {
+                                    try {
+                                        File dir = new File(
+                                                "/sdcard/Pictures/CrewPocket");
+                                        dir.mkdirs();
 
-                                String timeStamp = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(new Date());
-                                String fileName = "IMG_" + timeStamp + ".jpg";
-                                File file = new File(dir, fileName);
+                                        String timeStamp =
+                                                new SimpleDateFormat(
+                                                        "yyyyMMdd_HHmmss",
+                                                        Locale.getDefault())
+                                                        .format(new Date());
+                                        File file = new File(
+                                                dir,
+                                                "IMG_" + timeStamp + ".jpg");
 
-                                FileOutputStream fos = new FileOutputStream(file);
-                                fos.write(data);
-                                fos.flush();
-                                fos.close();
+                                        writeBytes(file, data);
 
-                                // Also update latest_camera_photo.jpg
-                                try {
-                                    File latestFile = new File(dir, "latest_camera_photo.jpg");
-                                    FileOutputStream lfos = new FileOutputStream(latestFile);
-                                    lfos.write(data);
-                                    lfos.flush();
-                                    lfos.close();
-                                } catch (Exception ignored) {}
+                                        // Keep a stable path for downstream
+                                        // Runtime consumers.
+                                        try {
+                                            writeBytes(
+                                                    new File(
+                                                            dir,
+                                                            "latest_camera_photo.jpg"),
+                                                    data);
+                                        } catch (Exception ignored) {}
 
-                                callback.onSuccess(file.getAbsolutePath());
-                            } catch (Exception e) {
-                                callback.onError("Save failed: " + e.getMessage());
-                            } finally {
-                                try { finalCam.release(); } catch (Exception ignored) {}
-                            }
-                        }
-                    });
-                } catch (Exception e) {
-                    if (camera != null) {
-                        try { camera.release(); } catch (Exception ignored) {}
-                    }
-                    callback.onError("Camera error: " + e.getMessage());
+                                        callback.onSuccess(
+                                                file.getAbsolutePath());
+                                    } catch (Exception error) {
+                                        callback.onError(
+                                                "Save failed: "
+                                                        + error.getMessage());
+                                    } finally {
+                                        release(
+                                                finalCam,
+                                                finalSurfaceTexture);
+                                    }
+                                }
+                            });
+                } catch (Exception error) {
+                    release(camera, surfaceTexture);
+                    callback.onError(
+                            "Camera error: " + error.getMessage());
                 }
             }
-        }).start();
+        }, "CrewPhotoCapture").start();
+    }
+
+    private static int findCameraId(boolean front) {
+        int numCameras = Camera.getNumberOfCameras();
+        for (int i = 0; i < numCameras; i++) {
+            Camera.CameraInfo info = new Camera.CameraInfo();
+            Camera.getCameraInfo(i, info);
+            int expected = front
+                    ? Camera.CameraInfo.CAMERA_FACING_FRONT
+                    : Camera.CameraInfo.CAMERA_FACING_BACK;
+            if (info.facing == expected) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private static void configurePictureQuality(
+            Camera.Parameters params) {
+        List<Camera.Size> sizes =
+                params.getSupportedPictureSizes();
+        if (sizes != null && !sizes.isEmpty()) {
+            Camera.Size maxResolution = sizes.get(0);
+            long maxPixels =
+                    maxResolution.width
+                            * (long) maxResolution.height;
+            for (Camera.Size size : sizes) {
+                long pixels =
+                        size.width * (long) size.height;
+                if (pixels > maxPixels) {
+                    maxResolution = size;
+                    maxPixels = pixels;
+                }
+            }
+            params.setPictureSize(
+                    maxResolution.width,
+                    maxResolution.height);
+        }
+        params.setJpegQuality(100);
+    }
+
+    private static void configureJpegRotation(
+            Context context,
+            Camera.Parameters params,
+            Camera.CameraInfo info,
+            boolean isFront) {
+        int surfaceRotation = Surface.ROTATION_0;
+        try {
+            WindowManager windowManager =
+                    (WindowManager) context.getSystemService(
+                            Context.WINDOW_SERVICE);
+            if (windowManager != null) {
+                surfaceRotation =
+                        windowManager.getDefaultDisplay()
+                                .getRotation();
+            }
+        } catch (Exception ignored) {}
+
+        int displayDegrees =
+                CameraCapturePolicy.displayDegrees(
+                        surfaceRotation);
+        int jpegRotation =
+                CameraCapturePolicy.jpegRotation(
+                        info.orientation,
+                        displayDegrees,
+                        isFront);
+        params.setRotation(jpegRotation);
+    }
+
+    private static boolean configureFocusAndMetering(
+            Camera.Parameters params,
+            boolean isFront) {
+        List<String> focusModes =
+                params.getSupportedFocusModes();
+        boolean hasAuto =
+                focusModes != null
+                        && focusModes.contains(
+                                Camera.Parameters.FOCUS_MODE_AUTO);
+        boolean hasContinuousPicture =
+                focusModes != null
+                        && focusModes.contains(
+                                Camera.Parameters
+                                        .FOCUS_MODE_CONTINUOUS_PICTURE);
+
+        // A real AF callback is preferred whenever the hardware exposes it.
+        // Fixed-focus front cameras simply fall through without waiting.
+        if (hasAuto) {
+            params.setFocusMode(
+                    Camera.Parameters.FOCUS_MODE_AUTO);
+        } else if (hasContinuousPicture) {
+            params.setFocusMode(
+                    Camera.Parameters
+                            .FOCUS_MODE_CONTINUOUS_PICTURE);
+        }
+
+        Camera.Area centerArea =
+                new Camera.Area(
+                        new Rect(-300, -300, 300, 300),
+                        1000);
+        ArrayList<Camera.Area> areas =
+                new ArrayList<Camera.Area>();
+        areas.add(centerArea);
+
+        try {
+            if (params.getMaxNumFocusAreas() > 0
+                    && (hasAuto || hasContinuousPicture)) {
+                params.setFocusAreas(areas);
+            }
+        } catch (Exception ignored) {}
+
+        try {
+            if (params.getMaxNumMeteringAreas() > 0) {
+                params.setMeteringAreas(areas);
+            }
+        } catch (Exception ignored) {}
+
+        return hasAuto;
+    }
+
+    private static void awaitAutoFocus(Camera camera) {
+        final CountDownLatch focused =
+                new CountDownLatch(1);
+        try {
+            camera.autoFocus(
+                    new Camera.AutoFocusCallback() {
+                        @Override
+                        public void onAutoFocus(
+                                boolean success,
+                                Camera camera) {
+                            focused.countDown();
+                        }
+                    });
+            focused.await(
+                    AUTOFOCUS_TIMEOUT_MS,
+                    TimeUnit.MILLISECONDS);
+        } catch (Exception ignored) {
+            // AF failure/timeout is non-fatal. Capture still proceeds so a
+            // difficult scene cannot stall a voice command indefinitely.
+        }
+    }
+
+    private static void writeBytes(
+            File file,
+            byte[] data) throws Exception {
+        FileOutputStream output =
+                new FileOutputStream(file);
+        try {
+            output.write(data);
+            output.flush();
+        } finally {
+            output.close();
+        }
+    }
+
+    private static void release(
+            Camera camera,
+            SurfaceTexture surfaceTexture) {
+        if (camera != null) {
+            try {
+                camera.release();
+            } catch (Exception ignored) {}
+        }
+        if (surfaceTexture != null) {
+            try {
+                surfaceTexture.release();
+            } catch (Exception ignored) {}
+        }
     }
 }
