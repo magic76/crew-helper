@@ -1476,6 +1476,15 @@ final class NativeGeminiLiveClient {
             listener.onTranscript(
                     "你", completeUserInput);
 
+            // Session lifetime is user-owned. Explicit close phrases are handled
+            // locally so Gemini cannot forget, delay, or reinterpret the request.
+            if (UserActionScope.isExplicitEndCallCommand(
+                    completeUserInput)) {
+                reportStage("已收到結束指令");
+                stop();
+                return;
+            }
+
             if (consumePendingUiChoiceInput(
                     completeUserInput)) {
                 return;
