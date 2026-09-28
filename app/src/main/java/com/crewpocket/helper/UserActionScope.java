@@ -42,6 +42,22 @@ final class UserActionScope {
         return authorized;
     }
 
+    static boolean isExplicitEndCallCommand(String text) {
+        String value = normalize(text);
+        if (value.isEmpty()) return false;
+        return value.matches(
+                        "(?:請|幫我|请|帮我)?"
+                                + "(?:結束通話|结束通话|掛斷電話|挂断电话|"
+                                + "退出語音助理|退出语音助理|關閉語音助理|关闭语音助理)"
+                                + "(?:吧|謝謝|谢谢)?")
+                || value.matches(
+                        "(?:小酷小酷|小酷)?(?:休息|休息吧|關閉|关闭|關掉|关掉)")
+                || value.matches("(?:你)?休息吧")
+                || value.matches(
+                        "(?:please)?(?:endthecall|hangup|exitthevoiceassistant|"
+                                + "closethevoiceassistant|got_sleep|gotosleep)(?:please)?");
+    }
+
     synchronized boolean consumeAppLearningAuthorization() {
         expireIfNeeded();
         boolean authorized = appLearningAuthorized;
@@ -95,8 +111,7 @@ final class UserActionScope {
             return;
         }
 
-        endCallAuthorized = value.matches("(?:請|幫我|请|帮我)?(?:結束通話|结束通话|掛斷電話|挂断电话|退出語音助理|退出语音助理)(?:吧|謝謝|谢谢)?")
-                || value.matches("(?:please)?(?:endthecall|hangup|exitthevoiceassistant)(?:please)?");
+        endCallAuthorized = isExplicitEndCallCommand(text);
 
         appLearningAuthorized = explicitAppLearning;
         futureWaitAuthorized = hasExplicitFutureWaitIntent(text);
