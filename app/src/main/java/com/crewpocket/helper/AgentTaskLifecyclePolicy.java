@@ -202,7 +202,8 @@ final class AgentTaskLifecyclePolicy {
                 || "search_current_app".equals(name)
                 || "commit_search".equals(name)
                 || "send_text".equals(name)
-                || "press_key".equals(name);
+                || "press_key".equals(name)
+                || "take_photo".equals(name);
     }
 
     private static StepDecision blocked(String reason) {
