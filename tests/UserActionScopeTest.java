@@ -91,6 +91,34 @@ public final class UserActionScopeTest {
         check(!scope.shouldBlockTapForSearch("大皇宮", false),
                 "navigation continuation remains allowed after search");
 
+        scope.updateFromUserText("搜尋林家花園");
+        scope.markSearchQueryEntered(
+                "林家花園", "com.google.android.apps.maps", 21L);
+        scope.markSearchSubmissionDispatched();
+        scope.updateFromContinuedUserText(
+                "搜尋林家花園 然後導航過去");
+        check("COMMIT_DISPATCHED".equals(scope.modelSearchPhase()),
+                "continued finalized segment preserves submitted search phase");
+        check(scope.shouldSuppressDuplicateSearch(
+                        "林家花園",
+                        "com.google.android.apps.maps",
+                        22L),
+                "continued finalized segment cannot reopen submitted search");
+        check("NAVIGATE".equals(scope.searchContinuation()),
+                "continued finalized segment may add navigation continuation");
+
+        scope.markSearchResultsObserved();
+        scope.updateFromContinuedUserText(
+                "搜尋林家花園 然後導航過去");
+        check("RESULTS_OBSERVED".equals(scope.modelSearchPhase()),
+                "continued finalized segment preserves observed results");
+        check(scope.shouldSelectSearchResult(),
+                "preserved results may continue into deterministic navigation selection");
+
+        scope.updateFromUserText("搜尋板橋車站");
+        check("STARTED".equals(scope.modelSearchPhase()),
+                "genuinely new human turn resets prior search transaction");
+
         scope.updateFromUserText("element_reference:open");
         check(!scope.consumeElementReferenceAuthorization(),
                 "model marker text is not user authorization");
