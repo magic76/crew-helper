@@ -1606,6 +1606,7 @@ final class NativeGeminiLiveClient {
                                 foregroundPackage,
                                 conversationGoalHint);
                 PerformanceMetrics.recordJevSpeechReview(
+                        userIntentGeneration,
                         jevSpeechReview.applied,
                         jevSpeechReview.strategy,
                         jevSpeechReview.reason,
