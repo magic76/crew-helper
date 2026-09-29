@@ -399,7 +399,18 @@ final class LiveAudioController {
             // run of speech-like frames before exposing audio to Gemini Server VAD.
             // A fixed pre-roll preserves the first word, and trailing audio remains
             // long enough for the server's 450 ms end-of-speech detector to close.
-            if (!host.isAiSpeaking()) {
+            //
+            // turnComplete can flip host.isAiSpeaking() to false before locally
+            // queued AudioTrack/Oboe output has physically drained. Keep using the
+            // stricter playback/barge-in gate during that tail, otherwise Crew can
+            // re-transcribe its own final sentence as a brand-new human turn.
+            long micNow = System.currentTimeMillis();
+            boolean playbackProtected =
+                    PlaybackTailMicPolicy.shouldUsePlaybackGate(
+                            host.isAiSpeaking(),
+                            micNow,
+                            lastPlaybackActiveAt);
+            if (!playbackProtected) {
                 bargeInGateOpen = false;
                 consecutiveBargeInFrames = 0;
                 bargeInCandidateCount = 0;
@@ -465,6 +476,13 @@ final class LiveAudioController {
             }
 
             // 0101 remains the sole local admission policy while AI output is audible.
+            // This also covers the local playback tail after server turnComplete.
+            if (PlaybackTailMicPolicy.isPlaybackTailOnly(
+                    host.isAiSpeaking(),
+                    micNow,
+                    lastPlaybackActiveAt)) {
+                PerformanceMetrics.recordPlaybackTailFrameProtected();
+            }
             activeNoiseGate.reset();
 
             if (!host.isVoiceInterruptionAllowed()) {
@@ -484,7 +502,7 @@ final class LiveAudioController {
             if (!bargeInGateOpen) {
                 // AEC/NS remain the first line of defense. This gate is deliberately
                 // active only during assistant playback to catch residual self-echo.
-                boolean outputAudible = System.currentTimeMillis() < lastPlaybackActiveAt;
+                boolean outputAudible = micNow < lastPlaybackActiveAt;
                 double sensitivity = host.getInterruptionSensitivity() / 100.0;
                 // 0119 noisy barge-in speech discriminator: auto mode becomes
                 // deliberately more conservative once the calibrated ambient floor
