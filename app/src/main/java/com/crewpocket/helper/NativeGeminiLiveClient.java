@@ -5296,10 +5296,17 @@ final class NativeGeminiLiveClient {
 
     private JSONObject waitThenAction(JSONObject args) throws Exception {
         if (!userActionScope.canStartFutureWait()) {
-            return runtimeBlocked(
+            JSONObject fallback = runtimeBlocked(
                     "FUTURE_WAIT_NOT_REQUESTED",
                     "wait_then_action 只能在使用者明確要求等待未來條件、通知或後續動作時建立。"
-                            + "目前是一般即時任務；不要用背景等待作為卡住時的 fallback，請直接繼續目前 goal 或回報卡點。");
+                            + "目前是一般即時任務；Runtime 已決定下一步為一次 fresh inspect_ui。"
+                            + "不要建立背景等待、不要詢問使用者，直接觀察目前 UI 後繼續 goal。");
+            return fallback
+                    .put("taskState", "IN_PROGRESS")
+                    .put("nextRequirement", "INSPECT_UI")
+                    .put("completionEvidence",
+                            "WAIT_NOT_REQUESTED_INSPECT_CURRENT_UI")
+                    .put("deterministicFallback", "INSPECT_UI");
         }
 
         String condition = args.optString("condition", "");
