@@ -175,6 +175,19 @@ final class CandidateArbitrationExperimentController {
         if (trigger == CandidateArbitrationPolicy.TriggerType.NONE) {
             return Decision.none();
         }
+        if (candidates.size() < 2
+                || !CandidateArbitrationPolicy
+                        .hasUsefulSemanticSeparation(
+                                candidates.get(0).label,
+                                candidates.get(0).role,
+                                candidates.get(0).viewId,
+                                candidates.get(0).semanticHint,
+                                candidates.get(1).label,
+                                candidates.get(1).role,
+                                candidates.get(1).viewId,
+                                candidates.get(1).semanticHint)) {
+            return Decision.none();
+        }
 
         final String observedPackage =
                 locatorDecision.optString(
