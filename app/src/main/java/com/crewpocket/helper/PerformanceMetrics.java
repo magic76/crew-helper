@@ -327,6 +327,7 @@ final class PerformanceMetrics {
     }
 
     static synchronized void recordJevSpeechReview(
+            long generation,
             boolean applied,
             String strategy,
             String reason,
@@ -337,9 +338,20 @@ final class PerformanceMetrics {
         } else {
             jevSpeechReviewFallbacks++;
         }
-        jevSpeechReviewLastLatencyMs = Math.max(0L, latencyMs);
-        jevSpeechReviewLastStrategy = safeReason(strategy);
-        jevSpeechReviewLastReason = safeReason(reason);
+        long safeLatency = Math.max(0L, latencyMs);
+        String safeStrategy = safeReason(strategy);
+        String safeReviewReason = safeReason(reason);
+        jevSpeechReviewLastLatencyMs = safeLatency;
+        jevSpeechReviewLastStrategy = safeStrategy;
+        jevSpeechReviewLastReason = safeReviewReason;
+
+        if (activeTrace != null && activeTrace.generation == generation) {
+            activeTrace.jevReviewed = true;
+            activeTrace.jevApplied = applied;
+            activeTrace.jevLatencyMs = safeLatency;
+            activeTrace.jevStrategy = safeStrategy;
+            activeTrace.jevReason = safeReviewReason;
+        }
     }
 
     static synchronized String buildReport() {
@@ -358,6 +370,11 @@ final class PerformanceMetrics {
             out.put("intentToFirstToolMs", duration(trace.intentAt, trace.firstToolAt));
             out.put("toolRuntimeMs", trace.toolRuntimeTotalMs);
             out.put("geminiWaitMs", trace.geminiBetweenToolsMs);
+            out.put("jevReviewed", trace.jevReviewed);
+            out.put("jevApplied", trace.jevApplied);
+            out.put("jevLatencyMs", trace.jevLatencyMs);
+            out.put("jevStrategy", trace.jevStrategy);
+            out.put("jevReason", trace.jevReason);
             out.put("resultToSpeechMs", duration(trace.lastToolResultAt, trace.finalSpeechAt));
             out.put("answerReadyToSpeechMs",
                     duration(trace.answerReadyAt, trace.finalSpeechAt));
@@ -478,6 +495,23 @@ final class PerformanceMetrics {
         long speechTail = duration(trace.finalSpeechAt, trace.finishedAt);
 
         out.append("Outcome: ").append(trace.outcome).append("\n");
+        if (trace.jevReviewed) {
+            out.append("Jev: ")
+                    .append(trace.jevApplied ? "APPLIED" : "FALLBACK")
+                    .append(" · ")
+                    .append(trace.jevStrategy.isEmpty()
+                            ? "NO_OVERRIDE"
+                            : trace.jevStrategy)
+                    .append(" · ")
+                    .append(trace.jevLatencyMs)
+                    .append(" ms");
+            if (!trace.jevReason.isEmpty()) {
+                out.append(" · ").append(trace.jevReason);
+            }
+            out.append("\n");
+        } else {
+            out.append("Jev: NOT_USED\n");
+        }
         out.append("User intent -> first tool: ")
                 .append(intentToFirstTool).append(" ms\n");
         out.append("Runtime tool execution total: ")
@@ -704,6 +738,11 @@ final class PerformanceMetrics {
         long finishedAt;
         long toolRuntimeTotalMs;
         long geminiBetweenToolsMs;
+        boolean jevReviewed;
+        boolean jevApplied;
+        long jevLatencyMs;
+        String jevStrategy = "";
+        String jevReason = "";
         String outcome = "FINISHED";
         final ArrayList<ToolTrace> steps = new ArrayList<ToolTrace>();
         ToolTrace currentStep;
@@ -723,6 +762,11 @@ final class PerformanceMetrics {
             out.finishedAt = finishedAt;
             out.toolRuntimeTotalMs = toolRuntimeTotalMs;
             out.geminiBetweenToolsMs = geminiBetweenToolsMs;
+            out.jevReviewed = jevReviewed;
+            out.jevApplied = jevApplied;
+            out.jevLatencyMs = jevLatencyMs;
+            out.jevStrategy = jevStrategy;
+            out.jevReason = jevReason;
             out.outcome = outcome;
             for (ToolTrace step : steps) out.steps.add(step.copy());
             if (!out.steps.isEmpty()) out.currentStep = out.steps.get(out.steps.size() - 1);
