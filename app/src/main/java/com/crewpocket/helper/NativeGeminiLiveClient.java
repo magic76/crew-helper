@@ -1531,6 +1531,12 @@ final class NativeGeminiLiveClient {
             } else {
                 AgentTaskRecord activeVoiceTask =
                         agentTaskCoordinator.activeRunning();
+                Thread foregroundToolWorker = activeToolThread;
+                boolean activeForegroundOperation =
+                        activeVoiceTask != null
+                                && (activeVoiceTask.requiresPostActionInspection
+                                    || (foregroundToolWorker != null
+                                        && foregroundToolWorker.isAlive()));
                 LiveHumanTurnBoundary.Resolution boundary =
                         liveHumanTurnBoundary.resolve(
                                 completeUserInput,
@@ -1543,7 +1549,8 @@ final class NativeGeminiLiveClient {
                                 liveTurnCoordinator.latest().generation,
                                 frame.interactionStatus,
                                 frame.waitingForInput,
-                                frame.interrupted);
+                                frame.interrupted,
+                                activeForegroundOperation);
 
                 effectiveUserInput = boundary.effectiveText;
                 if (boundary.decision
