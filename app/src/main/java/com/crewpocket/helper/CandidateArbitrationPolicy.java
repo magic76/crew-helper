@@ -123,11 +123,19 @@ final class CandidateArbitrationPolicy {
             String label,
             String viewId,
             String semanticHint) {
-        return (clean(label)
+        String safeLabel = clean(label);
+        String safeViewId = clean(viewId);
+        String safeHint = clean(semanticHint);
+        if (safeLabel.isEmpty()
+                && safeViewId.isEmpty()
+                && safeHint.isEmpty()) {
+            return "";
+        }
+        return (safeLabel
                 + "|"
-                + clean(viewId)
+                + safeViewId
                 + "|"
-                + clean(semanticHint))
+                + safeHint)
                 .toLowerCase(Locale.ROOT)
                 .replaceAll("\\s+", "");
     }
