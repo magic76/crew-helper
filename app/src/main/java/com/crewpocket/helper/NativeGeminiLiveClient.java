@@ -146,6 +146,25 @@ final class NativeGeminiLiveClient {
     private volatile boolean pendingChoiceExecuting = false;
     private volatile SelectedRegionContext latestSelectedRegion;
 
+    // Optional Jev voice A/B. CONTROL runs in shadow and never delays or changes
+    // user execution; TREATMENT may apply bounded review and one post-search
+    // candidate match. Pending transcript stays in-memory only.
+    private final java.util.concurrent.ExecutorService jevShadowExecutor =
+            java.util.concurrent.Executors.newSingleThreadExecutor(
+                    new java.util.concurrent.ThreadFactory() {
+                        @Override public Thread newThread(Runnable runnable) {
+                            Thread thread = new Thread(
+                                    runnable,
+                                    "jev-speech-shadow");
+                            thread.setDaemon(true);
+                            return thread;
+                        }
+                    });
+    private volatile long pendingJevUiVerificationGeneration = -1L;
+    private volatile String pendingJevUiVerificationTranscript = "";
+    private volatile double pendingJevUiVerificationConfidence = -1d;
+    private volatile String pendingJevExperimentEventId = "";
+
     // 0046: Gemini Live may split toolCall/modelTurn/turnComplete across
     // different WebSocket frames. These flags describe the whole current
     // server model turn, not one handleJson() invocation.
@@ -889,10 +908,17 @@ final class NativeGeminiLiveClient {
                                 userText,
                                 transcriptConfidence);
         if (reliableCorrection) {
+            long correctionAt = System.currentTimeMillis();
             candidateArbitrationController.recordCorrection(
                     userIntentGeneration,
-                    System.currentTimeMillis(),
+                    correctionAt,
                     CORRECTION_WINDOW_MS);
+            JevSpeechExperimentTelemetryStore
+                    .recordCorrectionForGeneration(
+                            appContext,
+                            userIntentGeneration,
+                            correctionAt,
+                            CORRECTION_WINDOW_MS);
         }
         if (!correctionLike) {
             // The user moved on. Do not let a later unrelated correction
@@ -1588,29 +1614,109 @@ final class NativeGeminiLiveClient {
                     JevVoiceSemanticResolver.Result.skipped("NOT_REVIEWED");
             boolean jevConfigured =
                     AppConfig.hasJevApiKey(appContext);
+
+            if (!continuedHumanTurn) {
+                clearPendingJevUiVerification();
+            }
+
             if (!continuedHumanTurn
                     && !pendingVoiceConfirmation
                     && JevSpeechReviewPolicy.shouldReview(
                             effectiveUserInput,
                             frame.inputConfidence,
                             jevConfigured)) {
+                JSONObject jevScreen =
+                        observationVerificationController
+                                .readSemanticScreenQuietly();
                 ActionObservation latest =
                         observationVerificationController.latestObservation();
                 String foregroundPackage =
-                        latest == null ? "" : latest.packageName;
-                jevSpeechReview =
-                        JevVoiceSemanticResolver.review(
+                        jevScreen != null
+                                ? jevScreen.optString("package", "")
+                                : (latest == null ? "" : latest.packageName);
+                final JSONArray uiCandidates =
+                        JevUiCandidateExtractor.extract(jevScreen);
+                final JevSpeechExperimentPolicy.Bucket jevBucket =
+                        JevSpeechExperimentPolicy.bucket(
+                                userIntentGeneration,
+                                foregroundPackage);
+                final String jevEventId =
+                        JevSpeechExperimentTelemetryStore.recordStart(
                                 appContext,
+                                userIntentGeneration,
+                                jevBucket,
+                                uiCandidates.length());
+                PerformanceMetrics.markJevExperiment(
+                        userIntentGeneration,
+                        jevEventId,
+                        jevBucket.name());
+
+                if (JevSpeechExperimentPolicy
+                        .appliesToUserPath(jevBucket)) {
+                    jevSpeechReview =
+                            JevVoiceSemanticResolver.review(
+                                    appContext,
+                                    effectiveUserInput,
+                                    frame.inputConfidence,
+                                    foregroundPackage,
+                                    conversationGoalHint,
+                                    uiCandidates);
+                    JevSpeechExperimentTelemetryStore.recordReview(
+                            appContext,
+                            jevEventId,
+                            jevSpeechReview,
+                            true);
+                    PerformanceMetrics.recordJevSpeechReview(
+                            userIntentGeneration,
+                            jevSpeechReview.applied,
+                            jevSpeechReview.strategy,
+                            jevSpeechReview.reason,
+                            jevSpeechReview.latencyMs);
+
+                    if (jevSpeechReview.applied
+                            && "VERIFY_WITH_UI".equals(
+                                    jevSpeechReview.strategy)) {
+                        armPendingJevUiVerification(
+                                userIntentGeneration,
                                 effectiveUserInput,
                                 frame.inputConfidence,
-                                foregroundPackage,
-                                conversationGoalHint);
-                PerformanceMetrics.recordJevSpeechReview(
-                        userIntentGeneration,
-                        jevSpeechReview.applied,
-                        jevSpeechReview.strategy,
-                        jevSpeechReview.reason,
-                        jevSpeechReview.latencyMs);
+                                jevEventId);
+                    }
+                } else {
+                    final long shadowGeneration =
+                            userIntentGeneration;
+                    final String shadowTranscript =
+                            effectiveUserInput;
+                    final double shadowConfidence =
+                            frame.inputConfidence;
+                    final String shadowPackage =
+                            foregroundPackage;
+                    final String shadowGoal =
+                            conversationGoalHint;
+                    jevShadowExecutor.execute(new Runnable() {
+                        @Override public void run() {
+                            JevVoiceSemanticResolver.Result shadow =
+                                    JevVoiceSemanticResolver.review(
+                                            appContext,
+                                            shadowTranscript,
+                                            shadowConfidence,
+                                            shadowPackage,
+                                            shadowGoal,
+                                            uiCandidates);
+                            JevSpeechExperimentTelemetryStore.recordReview(
+                                    appContext,
+                                    jevEventId,
+                                    shadow,
+                                    false);
+                            PerformanceMetrics.recordJevSpeechReview(
+                                    shadowGeneration,
+                                    false,
+                                    shadow.strategy,
+                                    "SHADOW_" + shadow.reason,
+                                    shadow.latencyMs);
+                        }
+                    });
+                }
             }
 
             authorizationTranscript =
@@ -4130,6 +4236,26 @@ final class NativeGeminiLiveClient {
             Log.w(TAG, "Agent 結論指令傳送失敗：" + error.getMessage());
             return false;
         }
+    }
+
+    private void armPendingJevUiVerification(
+            long generation,
+            String transcript,
+            double confidence,
+            String eventId) {
+        pendingJevUiVerificationGeneration = generation;
+        pendingJevUiVerificationTranscript =
+                transcript == null ? "" : transcript.trim();
+        pendingJevUiVerificationConfidence = confidence;
+        pendingJevExperimentEventId =
+                eventId == null ? "" : eventId.trim();
+    }
+
+    private void clearPendingJevUiVerification() {
+        pendingJevUiVerificationGeneration = -1L;
+        pendingJevUiVerificationTranscript = "";
+        pendingJevUiVerificationConfidence = -1d;
+        pendingJevExperimentEventId = "";
     }
 
     private boolean sendConversationWakeDirective(
