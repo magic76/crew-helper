@@ -80,6 +80,7 @@ final class PerformanceMetrics {
     private static long liveHumanTurnNewIntents;
     private static long liveHumanTurnBoundCurrent;
     private static long liveHumanTurnMergedSegments;
+    private static long liveHumanTurnThinkGraceHits;
     private static String liveHumanTurnLastReason = "";
 
     private static long jevSpeechReviewCalls;
@@ -324,6 +325,10 @@ final class PerformanceMetrics {
     static synchronized void recordLiveHumanTurnBoundCurrent(String reason) {
         liveHumanTurnBoundCurrent++;
         liveHumanTurnLastReason = safeReason(reason);
+        if ("ACTIVE_AGENT_THINK_GRACE".equals(
+                liveHumanTurnLastReason)) {
+            liveHumanTurnThinkGraceHits++;
+        }
     }
 
     static synchronized void recordLiveHumanTurnMergedSegment(String reason) {
@@ -468,7 +473,9 @@ final class PerformanceMetrics {
                 .append(" bound-current=")
                 .append(liveHumanTurnBoundCurrent)
                 .append(" merged-segments=")
-                .append(liveHumanTurnMergedSegments);
+                .append(liveHumanTurnMergedSegments)
+                .append(" think-grace=")
+                .append(liveHumanTurnThinkGraceHits);
         if (!liveHumanTurnLastReason.isEmpty()) {
             out.append(" last=").append(liveHumanTurnLastReason);
         }
@@ -666,6 +673,7 @@ final class PerformanceMetrics {
         liveHumanTurnNewIntents = 0L;
         liveHumanTurnBoundCurrent = 0L;
         liveHumanTurnMergedSegments = 0L;
+        liveHumanTurnThinkGraceHits = 0L;
         liveHumanTurnLastReason = "";
         jevSpeechReviewCalls = 0L;
         jevSpeechReviewApplied = 0L;
