@@ -37,6 +37,10 @@ final class LiveHumanTurnBoundary {
     // replacement. Keep this window short; explicit takeover phrases still
     // bypass it immediately.
     private static final long ACTIVE_OPERATION_BIND_WINDOW_MS = 3_500L;
+    // After a Runtime tool result is returned, Gemini commonly spends a few
+    // seconds deciding the next step. A nearby finalized transcript fragment
+    // during that gap must not supersede the still-active Agent task.
+    private static final long ACTIVE_AGENT_THINK_BIND_WINDOW_MS = 4_000L;
     private static final long SEGMENT_MERGE_WINDOW_MS = 4_500L;
     private static final long RELATED_SEGMENT_WINDOW_MS = 8_000L;
     private static final long LATE_DUPLICATE_WINDOW_MS = 4_500L;
@@ -75,6 +79,7 @@ final class LiveHumanTurnBoundary {
                 frameInteractionStatus,
                 frameWaitingForInput,
                 frameInterrupted,
+                false,
                 false);
     }
 
@@ -89,6 +94,32 @@ final class LiveHumanTurnBoundary {
             boolean frameWaitingForInput,
             boolean frameInterrupted,
             boolean activeForegroundOperation) {
+        return resolve(
+                rawText,
+                nowMs,
+                hasActiveTask,
+                activeTaskGeneration,
+                currentGeneration,
+                latestFinalizedGeneration,
+                frameInteractionStatus,
+                frameWaitingForInput,
+                frameInterrupted,
+                activeForegroundOperation,
+                false);
+    }
+
+    synchronized Resolution resolve(
+            String rawText,
+            long nowMs,
+            boolean hasActiveTask,
+            long activeTaskGeneration,
+            long currentGeneration,
+            long latestFinalizedGeneration,
+            String frameInteractionStatus,
+            boolean frameWaitingForInput,
+            boolean frameInterrupted,
+            boolean activeForegroundOperation,
+            boolean activeAgentThinking) {
         String text = clean(rawText);
         long elapsed = lastFinalizedAtMs <= 0L
                 ? Long.MAX_VALUE
@@ -208,6 +239,18 @@ final class LiveHumanTurnBoundary {
                         mergeText(currentText, text),
                         nowMs,
                         "ACTIVE_OPERATION_DEBOUNCE");
+            }
+
+            boolean agentThinkGrace =
+                    activeAgentThinking
+                            && !modelSpokenSinceFinalized
+                            && elapsed <= ACTIVE_AGENT_THINK_BIND_WINDOW_MS;
+            if (agentThinkGrace) {
+                return commit(
+                        Decision.BIND_CURRENT_GENERATION,
+                        mergeText(currentText, text),
+                        nowMs,
+                        "ACTIVE_AGENT_THINK_GRACE");
             }
         }
 
