@@ -183,6 +183,28 @@ public final class LiveHumanTurnBoundaryTest {
                         && operationDebounced.effectiveText.contains("唯一"),
                 "operation debounce preserves both parts of the spoken goal");
 
+        boundary.forceNewTurn("播放鄧紫棋", 68_500L);
+        LiveHumanTurnBoundary.Resolution thinkingDebounced =
+                boundary.resolve(
+                        "唯一",
+                        71_300L,
+                        true,
+                        11L,
+                        11L,
+                        11L,
+                        "IN_PROGRESS",
+                        false,
+                        false,
+                        false,
+                        true);
+        check(thinkingDebounced.decision
+                        == LiveHumanTurnBoundary.Decision
+                                .BIND_CURRENT_GENERATION,
+                "active Agent thinking debounces a nearby finalized fragment after the tool has returned");
+        check("ACTIVE_AGENT_THINK_GRACE".equals(
+                        thinkingDebounced.reason),
+                "Agent thinking grace exposes a deterministic diagnostic reason");
+
         boundary.forceNewTurn("播放鄧紫棋", 69_000L);
         LiveHumanTurnBoundary.Resolution operationTakeover =
                 boundary.resolve(
@@ -199,6 +221,24 @@ public final class LiveHumanTurnBoundaryTest {
         check(operationTakeover.decision
                         == LiveHumanTurnBoundary.Decision.NEW_INTENT,
                 "explicit takeover bypasses active-operation debounce");
+
+        boundary.forceNewTurn("播放鄧紫棋", 72_500L);
+        LiveHumanTurnBoundary.Resolution thinkingTakeover =
+                boundary.resolve(
+                        "不對，停止",
+                        75_000L,
+                        true,
+                        11L,
+                        11L,
+                        11L,
+                        "IN_PROGRESS",
+                        false,
+                        false,
+                        false,
+                        true);
+        check(thinkingTakeover.decision
+                        == LiveHumanTurnBoundary.Decision.NEW_INTENT,
+                "explicit takeover bypasses Agent thinking grace");
 
         boundary.forceNewTurn("播放鄧紫棋", 73_000L);
         LiveHumanTurnBoundary.Resolution operationGraceExpired =
@@ -217,11 +257,29 @@ public final class LiveHumanTurnBoundaryTest {
                         == LiveHumanTurnBoundary.Decision.NEW_INTENT,
                 "active-operation debounce expires quickly for a genuine new command");
 
-        boundary.forceNewTurn("搜尋大皇宮", 80_000L);
+        boundary.forceNewTurn("播放鄧紫棋", 78_000L);
+        LiveHumanTurnBoundary.Resolution thinkingGraceExpired =
+                boundary.resolve(
+                        "打開相機",
+                        82_100L,
+                        true,
+                        11L,
+                        11L,
+                        11L,
+                        "IN_PROGRESS",
+                        false,
+                        false,
+                        false,
+                        true);
+        check(thinkingGraceExpired.decision
+                        == LiveHumanTurnBoundary.Decision.NEW_INTENT,
+                "Agent thinking grace expires after four seconds");
+
+        boundary.forceNewTurn("搜尋大皇宮", 83_000L);
         LiveHumanTurnBoundary.Resolution interrupted =
                 boundary.resolve(
                         "停止",
-                        80_500L,
+                        83_500L,
                         true,
                         12L,
                         12L,
