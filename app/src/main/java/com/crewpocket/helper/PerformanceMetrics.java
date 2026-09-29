@@ -81,6 +81,13 @@ final class PerformanceMetrics {
     private static long liveHumanTurnMergedSegments;
     private static String liveHumanTurnLastReason = "";
 
+    private static long jevSpeechReviewCalls;
+    private static long jevSpeechReviewApplied;
+    private static long jevSpeechReviewFallbacks;
+    private static long jevSpeechReviewLastLatencyMs;
+    private static String jevSpeechReviewLastStrategy = "";
+    private static String jevSpeechReviewLastReason = "";
+
     private PerformanceMetrics() {}
 
     static synchronized void markLiveRequested() {
@@ -319,6 +326,22 @@ final class PerformanceMetrics {
         liveHumanTurnLastReason = safeReason(reason);
     }
 
+    static synchronized void recordJevSpeechReview(
+            boolean applied,
+            String strategy,
+            String reason,
+            long latencyMs) {
+        jevSpeechReviewCalls++;
+        if (applied) {
+            jevSpeechReviewApplied++;
+        } else {
+            jevSpeechReviewFallbacks++;
+        }
+        jevSpeechReviewLastLatencyMs = Math.max(0L, latencyMs);
+        jevSpeechReviewLastStrategy = safeReason(strategy);
+        jevSpeechReviewLastReason = safeReason(reason);
+    }
+
     static synchronized String buildReport() {
         return buildReportForTask("");
     }
@@ -408,6 +431,26 @@ final class PerformanceMetrics {
                 .append(liveHumanTurnMergedSegments);
         if (!liveHumanTurnLastReason.isEmpty()) {
             out.append(" last=").append(liveHumanTurnLastReason);
+        }
+        out.append("\n");
+        out.append("Jev speech review: calls=")
+                .append(jevSpeechReviewCalls)
+                .append(" applied=")
+                .append(jevSpeechReviewApplied)
+                .append(" fallback=")
+                .append(jevSpeechReviewFallbacks);
+        if (jevSpeechReviewLastLatencyMs > 0L) {
+            out.append(" last-latency=")
+                    .append(jevSpeechReviewLastLatencyMs)
+                    .append("ms");
+        }
+        if (!jevSpeechReviewLastStrategy.isEmpty()) {
+            out.append(" strategy=")
+                    .append(jevSpeechReviewLastStrategy);
+        }
+        if (!jevSpeechReviewLastReason.isEmpty()) {
+            out.append(" reason=")
+                    .append(jevSpeechReviewLastReason);
         }
         out.append("\n");
 
@@ -552,6 +595,12 @@ final class PerformanceMetrics {
         liveHumanTurnBoundCurrent = 0L;
         liveHumanTurnMergedSegments = 0L;
         liveHumanTurnLastReason = "";
+        jevSpeechReviewCalls = 0L;
+        jevSpeechReviewApplied = 0L;
+        jevSpeechReviewFallbacks = 0L;
+        jevSpeechReviewLastLatencyMs = 0L;
+        jevSpeechReviewLastStrategy = "";
+        jevSpeechReviewLastReason = "";
     }
 
     private static AgentTrace ensureTrace(String taskId, long generation) {
