@@ -47,6 +47,13 @@ final class LiveHumanTurnBoundary {
     private boolean serverIdleSinceFinalized;
     private String interactionStatus = "";
     private boolean waitingForInput;
+    // Transient only: used to tell a genuinely new repeated command from a
+    // finalized transcript that arrived after Runtime had already completed
+    // the task. No transcript text is persisted outside this process object.
+    private String lastInterimText = "";
+    private long lastInterimAtMs;
+    private long lastTaskCompletedAtMs;
+    private long lastTaskCompletedGeneration = -1L;
 
     synchronized Resolution resolve(
             String rawText,
@@ -103,6 +110,32 @@ final class LiveHumanTurnBoundary {
                     frameInterrupted
                             ? "SERVER_INTERRUPTED"
                             : "EXPLICIT_USER_TAKEOVER");
+        }
+
+        // A tool may complete before Gemini emits the authoritative final
+        // transcript. If we already saw a related interim BEFORE that task
+        // completed, a matching final arriving shortly afterwards belongs to
+        // the completed utterance even if the model has already spoken.
+        //
+        // A genuine user retry after completion produces a fresh interim after
+        // lastTaskCompletedAtMs, so it remains a NEW_INTENT.
+        boolean lateFinalFromCompletedUtterance =
+                !hasActiveTask
+                        && currentGeneration == lastTaskCompletedGeneration
+                        && lastTaskCompletedAtMs > 0L
+                        && nowMs >= lastTaskCompletedAtMs
+                        && nowMs - lastTaskCompletedAtMs
+                                <= RELATED_SEGMENT_WINDOW_MS
+                        && lastInterimAtMs > 0L
+                        && lastInterimAtMs <= lastTaskCompletedAtMs
+                        && relatedText(lastInterimText, text)
+                        && relatedText(currentText, text);
+        if (lateFinalFromCompletedUtterance) {
+            return commit(
+                    Decision.MERGE_CURRENT_SEGMENT,
+                    mergeText(currentText, text),
+                    nowMs,
+                    "FINAL_FROM_PRE_COMPLETION_INTERIM");
         }
 
         if (sameGenerationTask
@@ -203,6 +236,20 @@ final class LiveHumanTurnBoundary {
         }
     }
 
+    synchronized void noteInterim(
+            String text,
+            long nowMs) {
+        lastInterimText = clean(text);
+        lastInterimAtMs = Math.max(0L, nowMs);
+    }
+
+    synchronized void noteTaskCompleted(
+            long generation,
+            long nowMs) {
+        lastTaskCompletedGeneration = generation;
+        lastTaskCompletedAtMs = Math.max(0L, nowMs);
+    }
+
     synchronized void noteModelSpeech() {
         modelSpokenSinceFinalized = true;
     }
@@ -223,6 +270,10 @@ final class LiveHumanTurnBoundary {
         serverIdleSinceFinalized = false;
         waitingForInput = false;
         interactionStatus = "";
+        lastInterimText = "";
+        lastInterimAtMs = 0L;
+        lastTaskCompletedAtMs = 0L;
+        lastTaskCompletedGeneration = -1L;
     }
 
     private Resolution commit(

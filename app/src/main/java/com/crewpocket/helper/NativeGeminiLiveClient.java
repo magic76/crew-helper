@@ -1453,6 +1453,9 @@ final class NativeGeminiLiveClient {
                 geminiLiveTurnHandler.parse(raw);
 
         if (!frame.interimInputText.isEmpty()) {
+            liveHumanTurnBoundary.noteInterim(
+                    frame.interimInputText,
+                    System.currentTimeMillis());
             liveTurnCoordinator.closeOperationalGeneration(
                     userIntentGeneration);
             clearPendingInternalDirectiveTurn();
@@ -4783,6 +4786,11 @@ final class NativeGeminiLiveClient {
         agentResponseCoordinator.clear();
         if (!agentTaskCoordinator.finish(task, reason, finalReply)) {
             return;
+        }
+        if (AgentTaskEndReason.COMPLETED.equals(reason)) {
+            liveHumanTurnBoundary.noteTaskCompleted(
+                    task.intentGeneration,
+                    System.currentTimeMillis());
         }
         liveTurnCoordinator.closeOperationalGeneration(
                 task.intentGeneration);
