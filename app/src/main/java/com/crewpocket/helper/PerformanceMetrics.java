@@ -51,6 +51,7 @@ final class PerformanceMetrics {
     // 0108: privacy-safe counters only; no PCM, dB values or classifications retained.
     private static long activeNoiseFramesSuppressed;
     private static long activeNoiseSpeechAdmissions;
+    private static long playbackTailFramesProtected;
     // 0112: selected-region routing counts only. No crop, text, package, bounds or query is retained.
     private static long selectedRegionCropContexts;
     private static long selectedRegionMetadataFallbacks;
@@ -245,6 +246,10 @@ final class PerformanceMetrics {
         activeNoiseSpeechAdmissions++;
     }
 
+    static synchronized void recordPlaybackTailFrameProtected() {
+        playbackTailFramesProtected++;
+    }
+
     static synchronized void recordSelectedRegionCropContext() {
         selectedRegionCropContexts++;
     }
@@ -422,6 +427,8 @@ final class PerformanceMetrics {
         out.append("Active noise guard: suppressed-frames=")
                 .append(activeNoiseFramesSuppressed)
                 .append(" speech-admissions=").append(activeNoiseSpeechAdmissions)
+                .append(" playback-tail-protected=")
+                .append(playbackTailFramesProtected)
                 .append("\n");
         out.append("Selected region routing: crop-context=")
                 .append(selectedRegionCropContexts)
@@ -635,6 +642,7 @@ final class PerformanceMetrics {
         duplicateSearchesSuppressed = 0L;
         activeNoiseFramesSuppressed = 0L;
         activeNoiseSpeechAdmissions = 0L;
+        playbackTailFramesProtected = 0L;
         selectedRegionCropContexts = 0L;
         selectedRegionMetadataFallbacks = 0L;
         selectedRegionFullScreenInspects = 0L;
