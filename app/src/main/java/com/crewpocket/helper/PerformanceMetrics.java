@@ -516,7 +516,9 @@ final class PerformanceMetrics {
         }
         if (trace.jevReviewed) {
             out.append("Jev: ")
-                    .append(trace.jevApplied ? "APPLIED" : "FALLBACK")
+                    .append("CONTROL".equals(trace.jevBucket)
+                            ? "SHADOW"
+                            : (trace.jevApplied ? "APPLIED" : "FALLBACK"))
                     .append(" · ")
                     .append(trace.jevStrategy.isEmpty()
                             ? "NO_OVERRIDE"
