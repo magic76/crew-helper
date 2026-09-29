@@ -11,6 +11,25 @@ public final class CameraCapturePolicyTest {
         }
     }
 
+    private static void checkSize(
+            int[] actual,
+            int expectedWidth,
+            int expectedHeight,
+            String name) {
+        assertions++;
+        if (actual == null
+                || actual.length < 2
+                || actual[0] != expectedWidth
+                || actual[1] != expectedHeight) {
+            throw new AssertionError(
+                    name + ": expected=" + expectedWidth + "x" + expectedHeight
+                            + ", actual="
+                            + (actual == null
+                                    ? "null"
+                                    : actual[0] + "x" + actual[1]));
+        }
+    }
+
     public static void main(String[] args) {
         check(CameraCapturePolicy.displayDegrees(0), 0, "rotation 0");
         check(CameraCapturePolicy.displayDegrees(1), 90, "rotation 90");
@@ -30,6 +49,31 @@ public final class CameraCapturePolicyTest {
                 0, "landscape front camera");
         check(CameraCapturePolicy.jpegRotation(270, 270, true),
                 180, "reverse landscape front camera");
+
+        checkSize(
+                CameraCapturePolicy.selectPictureSize(
+                        new int[][]{
+                                {4000, 3000},
+                                {2048, 1536},
+                                {1920, 1080},
+                                {1600, 1200}
+                        }),
+                2048,
+                1536,
+                "largest still size within budget");
+        checkSize(
+                CameraCapturePolicy.selectPictureSize(
+                        new int[][]{
+                                {8000, 6000},
+                                {4000, 3000}
+                        }),
+                4000,
+                3000,
+                "smallest fallback when all sizes exceed budget");
+        check(
+                CameraCapturePolicy.JPEG_QUALITY,
+                82,
+                "jpeg quality");
 
         System.out.println(
                 "PASS CameraCapturePolicyTest: "
