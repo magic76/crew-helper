@@ -261,6 +261,7 @@ final class ReflectionRuleEvidence {
                 || "MESSAGE_TRANSACTION_ALREADY_HANDLED".equals(code)
                 || "WAITING_USER_CHOICE".equals(code)
                 || "SEND_TEXT_REQUIRED".equals(code)
+                || "FUTURE_WAIT_NOT_REQUESTED".equals(code)
                 || ObservationLoopPolicy.BLOCK_CODE.equals(code)) {
             return true;
         }
