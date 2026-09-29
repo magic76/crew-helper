@@ -53,6 +53,7 @@ public class AppConfig {
 
     // ── 1. Gemini API Key (BYOK) ──
     private static final String SECURE_GEMINI_SECRET = "gemini_api_key";
+    private static final String SECURE_JEV_SECRET = "typesafe_jev_api_key";
     private static final String LEGACY_LIVE_PREFS = "crew_native_live";
     private static final String LEGACY_ACTIVITY_PREFS =
             "com.crewpocket.helper.NativeLiveActivity";
@@ -211,7 +212,44 @@ public class AppConfig {
         return primary && live && activity;
     }
 
-    // ── 2. Gemini Live Voice Persona ──
+    // ── Optional TypeSafe Jev API Key ──
+
+    /** Optional BYOK key for fast typed voice-semantic arbitration. */
+    public static synchronized String getJevApiKey(Context context) {
+        if (context == null) return "";
+        return SecureSecretStore.read(
+                context.getApplicationContext(),
+                SECURE_JEV_SECRET);
+    }
+
+    /**
+     * Jev is optional. Empty input disables the integration. The key never
+     * enters SharedPreferences, logs, model context, or Runtime diagnostics.
+     */
+    public static synchronized boolean setJevApiKey(
+            Context context,
+            String key) {
+        if (context == null) return false;
+        Context app = context.getApplicationContext();
+        String clean = key == null ? "" : key.trim();
+        if (clean.isEmpty()) {
+            return SecureSecretStore.delete(app, SECURE_JEV_SECRET);
+        }
+        if (clean.indexOf('\n') >= 0 || clean.indexOf('\r') >= 0) {
+            return false;
+        }
+        boolean written =
+                SecureSecretStore.write(app, SECURE_JEV_SECRET, clean);
+        if (!written) return false;
+        return clean.equals(
+                SecureSecretStore.read(app, SECURE_JEV_SECRET));
+    }
+
+    public static synchronized boolean hasJevApiKey(Context context) {
+        return !getJevApiKey(context).isEmpty();
+    }
+
+        // ── 2. Gemini Live Voice Persona ──
     public static String getVoiceName(Context context) {
         if (context == null) return DEFAULT_VOICE;
         return getPrefs(context).getString(KEY_VOICE_NAME, DEFAULT_VOICE);
