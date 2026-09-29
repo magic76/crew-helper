@@ -5578,6 +5578,51 @@ final class NativeGeminiLiveClient {
                     .put("taskState", "IN_PROGRESS");
         }
 
+        if (pendingJevUiVerificationGeneration
+                        == userIntentGeneration
+                && !pendingJevUiVerificationTranscript.isEmpty()
+                && !pendingJevExperimentEventId.isEmpty()) {
+            JSONArray jevCandidates =
+                    JevUiCandidateExtractor.fromSearchOptions(
+                            rawOptions);
+            if (jevCandidates.length() > 0) {
+                JevVoiceSemanticResolver.CandidateMatch match =
+                        JevVoiceSemanticResolver.matchUiCandidates(
+                                appContext,
+                                pendingJevUiVerificationTranscript,
+                                conversationGoalHint,
+                                jevCandidates);
+                JevSpeechExperimentTelemetryStore.recordPostSearch(
+                        appContext,
+                        pendingJevExperimentEventId,
+                        match);
+                PerformanceMetrics.recordJevPostSearch(
+                        userIntentGeneration,
+                        match.accepted,
+                        match.latencyMs);
+
+                int sourceIndex =
+                        match.accepted
+                                ? JevUiCandidateExtractor.sourceIndex(
+                                        jevCandidates,
+                                        match.candidateId)
+                                : -1;
+                clearPendingJevUiVerification();
+
+                if (sourceIndex >= 0
+                        && sourceIndex < rawOptions.length()) {
+                    JSONObject jevCandidate =
+                            rawOptions.optJSONObject(sourceIndex);
+                    if (jevCandidate != null) {
+                        return selectCommittedSearchCandidate(
+                                query,
+                                jevCandidate,
+                                "JEV_UI_EVIDENCE");
+                    }
+                }
+            }
+        }
+
         ArrayList<SearchResultAutonomyPolicy.Candidate>
                 autonomyCandidates =
                         new ArrayList<SearchResultAutonomyPolicy.Candidate>();
