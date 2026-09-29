@@ -20,11 +20,41 @@ import java.util.concurrent.atomic.AtomicLong;
 final class CandidateArbitrationTelemetryStore {
     private static final String PREFS = "crew_candidate_arbitration";
     private static final String KEY_EVENTS = "events_v1";
+    private static final String KEY_ADMISSION_GATES = "admission_gates_v1";
     private static final int MAX_EVENTS = 100;
     private static final Object LOCK = new Object();
     private static final AtomicLong SEQUENCE = new AtomicLong();
 
     private CandidateArbitrationTelemetryStore() {}
+
+    static void recordAdmissionGate(
+            Context context,
+            String rawReason) {
+        if (context == null) return;
+        String reason = safe(rawReason, 64);
+        if (reason.isEmpty()) reason = "OTHER";
+        synchronized (LOCK) {
+            try {
+                SharedPreferences prefs =
+                        context.getApplicationContext()
+                                .getSharedPreferences(
+                                        PREFS,
+                                        Context.MODE_PRIVATE);
+                JSONObject gates = new JSONObject(
+                        prefs.getString(
+                                KEY_ADMISSION_GATES, "{}"));
+                gates.put("total",
+                                Math.max(0, gates.optInt("total", 0)) + 1)
+                        .put(reason,
+                                Math.max(0, gates.optInt(reason, 0)) + 1);
+                prefs.edit()
+                        .putString(
+                                KEY_ADMISSION_GATES,
+                                gates.toString())
+                        .apply();
+            } catch (Exception ignored) {}
+        }
+    }
 
     static String recordStart(
             Context context,
@@ -217,8 +247,18 @@ final class CandidateArbitrationTelemetryStore {
             events = read(context);
         }
         int total = events.length();
+        JSONObject admissionGates = readAdmissionGates(context);
+        int gatedTotal = Math.max(
+                0, admissionGates.optInt("total", 0));
         if (total == 0) {
-            return "Candidate arbitration · no qualifying samples yet.";
+            StringBuilder empty = new StringBuilder(
+                    "Candidate arbitration · no admitted model samples yet.");
+            if (gatedTotal > 0) {
+                empty.append("\nPre-model admission gated: ")
+                        .append(gatedTotal)
+                        .append(formatGateReasons(admissionGates));
+            }
+            return empty.toString();
         }
 
         int legacy = 0;
@@ -341,8 +381,13 @@ final class CandidateArbitrationTelemetryStore {
             out.append(" · legacy shadow excluded=")
                     .append(legacy);
         }
+        if (gatedTotal > 0) {
+            out.append("\nPre-model admission gated: ")
+                    .append(gatedTotal)
+                    .append(formatGateReasons(admissionGates));
+        }
         out.append("\n")
-                .append("Arbitration coverage: ")
+                .append("Advisor completion on admitted events: ")
                 .append(percent(completed, control + treatment))
                 .append("% · decisive: ")
                 .append(percent(decisive, control + treatment))
@@ -439,6 +484,45 @@ final class CandidateArbitrationTelemetryStore {
                 return;
             }
         }
+    }
+
+    private static JSONObject readAdmissionGates(
+            Context context) {
+        if (context == null) return new JSONObject();
+        try {
+            SharedPreferences prefs =
+                    context.getApplicationContext()
+                            .getSharedPreferences(
+                                    PREFS,
+                                    Context.MODE_PRIVATE);
+            return new JSONObject(
+                    prefs.getString(
+                            KEY_ADMISSION_GATES, "{}"));
+        } catch (Exception ignored) {
+            return new JSONObject();
+        }
+    }
+
+    private static String formatGateReasons(JSONObject gates) {
+        if (gates == null) return "";
+        int lowSignal = Math.max(
+                0,
+                gates.optInt(
+                        "LOW_SIGNAL_OR_NOT_COMPETING", 0));
+        int noSemantics = Math.max(
+                0,
+                gates.optInt(
+                        "NO_SEMANTIC_SEPARATION", 0));
+        StringBuilder out = new StringBuilder();
+        if (lowSignal > 0) {
+            out.append(" · low-signal/not-competing=")
+                    .append(lowSignal);
+        }
+        if (noSemantics > 0) {
+            out.append(" · no-semantic-separation=")
+                    .append(noSemantics);
+        }
+        return out.toString();
     }
 
     private static JSONArray read(Context context) {
