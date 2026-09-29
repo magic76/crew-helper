@@ -12,6 +12,15 @@ final class SearchTransactionPolicy {
 
     private SearchTransactionPolicy() {}
 
+    /**
+     * Never dispatch IME Search/Enter after verified text entry has already
+     * produced a non-editor result-surface change. The visible result is
+     * stronger progress evidence than another commit attempt.
+     */
+    static boolean shouldDispatchCommit(boolean liveSurfaceChanged) {
+        return !liveSurfaceChanged;
+    }
+
     static Decision decide(boolean textVerified,
                            boolean liveSurfaceChanged,
                            boolean commitDispatched,
