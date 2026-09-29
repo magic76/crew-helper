@@ -1584,6 +1584,34 @@ final class NativeGeminiLiveClient {
                                 frame.inputConfidence);
             }
 
+            JevVoiceSemanticResolver.Result jevSpeechReview =
+                    JevVoiceSemanticResolver.Result.skipped("NOT_REVIEWED");
+            boolean jevConfigured =
+                    AppConfig.hasJevApiKey(appContext);
+            if (!continuedHumanTurn
+                    && !pendingVoiceConfirmation
+                    && JevSpeechReviewPolicy.shouldReview(
+                            effectiveUserInput,
+                            frame.inputConfidence,
+                            jevConfigured)) {
+                ActionObservation latest =
+                        observationVerificationController.latestObservation();
+                String foregroundPackage =
+                        latest == null ? "" : latest.packageName;
+                jevSpeechReview =
+                        JevVoiceSemanticResolver.review(
+                                appContext,
+                                effectiveUserInput,
+                                frame.inputConfidence,
+                                foregroundPackage,
+                                conversationGoalHint);
+                PerformanceMetrics.recordJevSpeechReview(
+                        jevSpeechReview.applied,
+                        jevSpeechReview.strategy,
+                        jevSpeechReview.reason,
+                        jevSpeechReview.latencyMs);
+            }
+
             authorizationTranscript =
                     effectiveUserInput;
             if (authorizationTranscript.length() > 4096) {
@@ -1612,6 +1640,22 @@ final class NativeGeminiLiveClient {
             }
             recordFinalizedSendAuthorization(
                     effectiveUserInput);
+
+            // Jev is a decision layer, never a transcript rewriter. Only when
+            // it confidently asks for verification/clarification do we send a
+            // hidden Runtime directive to the current Live generation.
+            String speechReviewDirective =
+                    jevSpeechReview.directive();
+            if (!speechReviewDirective.isEmpty()
+                    && voiceDisposition
+                            == VoiceExecutionGuard.TurnDisposition.NORMAL) {
+                markPendingInternalDirectiveTurn(
+                        userIntentGeneration);
+                if (!sendInternalAgentDirective(
+                        speechReviewDirective)) {
+                    clearPendingInternalDirectiveTurn();
+                }
+            }
             if (tryHandleRuntimeAppTeaching(
                     effectiveUserInput)) {
                 return;
