@@ -34,20 +34,54 @@ final class CandidateArbitrationPolicy {
                 ? ""
                 : locatorDecision.trim().toUpperCase(Locale.ROOT);
 
-        if ("AMBIGUOUS".equals(decision)) {
-            return TriggerType.AMBIGUOUS;
-        }
-        if (!"FALLBACK".equals(decision) || candidateCount < 2) {
+        if (candidateCount < 2
+                || bestConfidence
+                        < LocatorConfidencePolicy.RETRY_MIN_CONFIDENCE) {
             return TriggerType.NONE;
         }
 
-        return LocatorConfidencePolicy.hasAmbiguousCompetition(
+        boolean competing =
+                LocatorConfidencePolicy.hasAmbiguousCompetition(
                         bestConfidence,
                         runnerUpConfidence,
                         bestExactViewId,
-                        runnerUpExactViewId)
-                ? TriggerType.FALLBACK
-                : TriggerType.NONE;
+                        runnerUpExactViewId);
+        if (!competing) return TriggerType.NONE;
+
+        if ("AMBIGUOUS".equals(decision)) {
+            return TriggerType.AMBIGUOUS;
+        }
+        if ("FALLBACK".equals(decision)) {
+            return TriggerType.FALLBACK;
+        }
+        return TriggerType.NONE;
+    }
+
+    /**
+     * The advisor is useful only when the top two candidates expose some
+     * semantic difference for it to reason about. Bounds are intentionally not
+     * considered: geometry remains deterministic Runtime evidence, not a reason
+     * to spend a model call.
+     */
+    static boolean hasUsefulSemanticSeparation(
+            String bestLabel,
+            String bestRole,
+            String bestViewId,
+            String bestSemanticHint,
+            String runnerLabel,
+            String runnerRole,
+            String runnerViewId,
+            String runnerSemanticHint) {
+        String bestAnchor = semanticAnchor(
+                bestLabel, bestViewId, bestSemanticHint);
+        String runnerAnchor = semanticAnchor(
+                runnerLabel, runnerViewId, runnerSemanticHint);
+        if (bestAnchor.isEmpty() && runnerAnchor.isEmpty()) {
+            return false;
+        }
+        String best = bestAnchor + "|" + clean(bestRole).toLowerCase(Locale.ROOT);
+        String runner = runnerAnchor + "|" + clean(runnerRole).toLowerCase(Locale.ROOT);
+        return !best.equals(runner);
     }
 
     /**
@@ -83,6 +117,19 @@ final class CandidateArbitrationPolicy {
     // Regression guard retained for the merged Phase-0 invariant.
     static boolean phase0MayOverrideBaseline() {
         return false;
+    }
+
+    private static String semanticAnchor(
+            String label,
+            String viewId,
+            String semanticHint) {
+        return (clean(label)
+                + "|"
+                + clean(viewId)
+                + "|"
+                + clean(semanticHint))
+                .toLowerCase(Locale.ROOT)
+                .replaceAll("\\s+", "");
     }
 
     private static String clean(String value) {
