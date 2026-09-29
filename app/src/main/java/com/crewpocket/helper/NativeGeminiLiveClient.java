@@ -6820,7 +6820,11 @@ final class NativeGeminiLiveClient {
             observed.put("taskState", "EVIDENCE_AVAILABLE")
                     .put("completionEvidence",
                             reply.optString("resultEvidence",
-                                    "SEARCH_RESULT_SURFACE_OBSERVED"));
+                                    "SEARCH_RESULT_SURFACE_OBSERVED"))
+                    .put("nextRequirement", "CONTINUE_GOAL")
+                    .put("instruction",
+                            "搜尋結果畫面已可用。禁止再呼叫 commit_search、SEARCH 或重新輸入查詢；"
+                            + "直接依目前結果繼續使用者目標，例如點選結果、播放或導航。");
             if (userActionScope.shouldSelectSearchResult()) {
                 return resolveCommittedSearchSelection(text, observed);
             }
