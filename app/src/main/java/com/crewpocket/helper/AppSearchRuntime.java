@@ -23,8 +23,8 @@ import java.util.Locale;
 final class AppSearchRuntime {
     private static final long SEARCH_FOCUS_TIMEOUT_MS = 1300L;
     private static final long SEARCH_FOCUS_POLL_MS = 120L;
-    private static final long LIVE_RESULT_WAIT_MS = 360L;
-    private static final long LIVE_RESULT_POLL_MS = 120L;
+    private static final long LIVE_RESULT_WAIT_MS = 800L;
+    private static final long LIVE_RESULT_POLL_MS = 100L;
 
     private AppSearchRuntime() {}
 
@@ -163,22 +163,39 @@ final class AppSearchRuntime {
                         LIVE_RESULT_WAIT_MS,
                         LIVE_RESULT_POLL_MS);
 
-        JSONObject commit;
-        try {
-            commit = SearchCommitRuntime.commit(service);
-        } catch (Exception ignored) {
-            commit = new JSONObject();
+        JSONObject commit = new JSONObject();
+        boolean commitDispatched = false;
+        boolean postCommitSurfaceChanged = false;
+
+        // Live-filter/search-result UIs (Maps, media apps, contacts, etc.) can
+        // render a usable result surface shortly after verified text entry.
+        // Once that non-editor surface has changed, do not send IME Search/Enter:
+        // doing so can reopen/refocus the search editor and visually regress a
+        // result screen that was already usable.
+        if (SearchTransactionPolicy.shouldDispatchCommit(
+                liveObservation.changed)) {
+            try {
+                commit = SearchCommitRuntime.commit(service);
+            } catch (Exception ignored) {
+                try {
+                    commit.put("success", false)
+                            .put("method", "NONE")
+                            .put("error", "SEARCH_COMMIT_EXCEPTION")
+                            .put("resultsObserved", false);
+                } catch (Exception ignoredAgain) {}
+            }
+
+            commitDispatched = commit.optBoolean("success", false);
+            postCommitSurfaceChanged =
+                    commit.optBoolean("resultsObserved", false);
+        } else {
             try {
                 commit.put("success", false)
-                        .put("method", "NONE")
-                        .put("error", "SEARCH_COMMIT_EXCEPTION")
-                        .put("resultsObserved", false);
-            } catch (Exception ignoredAgain) {}
+                        .put("method", "SKIPPED_LIVE_RESULTS")
+                        .put("error", "")
+                        .put("resultsObserved", true);
+            } catch (Exception ignored) {}
         }
-
-        boolean commitDispatched = commit.optBoolean("success", false);
-        boolean postCommitSurfaceChanged =
-                commit.optBoolean("resultsObserved", false);
 
         SearchTransactionPolicy.Decision decision =
                 SearchTransactionPolicy.decide(
@@ -202,9 +219,14 @@ final class AppSearchRuntime {
                     // From 0077 this means evidence-backed SEARCH completion.
                     .put("committed", decision.resultsObserved);
 
-            if (!commitDispatched) {
+            if (!commitDispatched && !liveObservation.changed) {
                 out.put("commitError",
                         commit.optString("error", "NO_SEARCH_COMMIT_ACTION"));
+            }
+            if (liveObservation.changed) {
+                out.put("commitSkipped", true)
+                        .put("commitSkipReason",
+                                "LIVE_RESULT_SURFACE_ALREADY_AVAILABLE");
             }
 
             if (SearchTransactionPolicy.RESULTS_OBSERVED.equals(decision.state)) {

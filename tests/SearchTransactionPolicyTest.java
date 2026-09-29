@@ -26,6 +26,10 @@ public final class SearchTransactionPolicyTest {
         check(SearchTransactionPolicy.LIVE_RESULTS_OBSERVED.equals(liveNoCommit.state),
                 "live-filter search supported without IME commit");
         check(liveNoCommit.resultsObserved, "live results observed");
+        check(!SearchTransactionPolicy.shouldDispatchCommit(true),
+                "visible live results must suppress IME commit");
+        check(SearchTransactionPolicy.shouldDispatchCommit(false),
+                "IME commit remains available when no live result appeared");
 
         SearchTransactionPolicy.Decision liveWithCommitNoExtra =
                 SearchTransactionPolicy.decide(true, true, true, false);
