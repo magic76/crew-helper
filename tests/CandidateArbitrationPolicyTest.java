@@ -11,7 +11,29 @@ public final class CandidateArbitrationPolicyTest {
                         0.90,
                         false,
                         false),
-                "AMBIGUOUS always qualifies");
+                "strong competing AMBIGUOUS candidates qualify");
+
+        expect(
+                CandidateArbitrationPolicy.TriggerType.NONE,
+                CandidateArbitrationPolicy.qualify(
+                        "AMBIGUOUS",
+                        1,
+                        0.94,
+                        0.0,
+                        false,
+                        false),
+                "single-candidate ambiguity must not call the advisor");
+
+        expect(
+                CandidateArbitrationPolicy.TriggerType.NONE,
+                CandidateArbitrationPolicy.qualify(
+                        "AMBIGUOUS",
+                        2,
+                        0.64,
+                        0.62,
+                        false,
+                        false),
+                "low-signal ambiguity stays deterministic instead of paying model latency");
 
         expect(
                 CandidateArbitrationPolicy.TriggerType.NONE,
@@ -57,6 +79,22 @@ public final class CandidateArbitrationPolicyTest {
                         false),
                 "AUTO never enters the experiment");
 
+        check(
+                CandidateArbitrationPolicy.hasUsefulSemanticSeparation(
+                        "Play", "button", "play_button", "media play",
+                        "Pause", "button", "pause_button", "media pause"),
+                "different semantic candidates are worth bounded arbitration");
+        check(
+                !CandidateArbitrationPolicy.hasUsefulSemanticSeparation(
+                        "Play", "button", "play_button", "media play",
+                        "Play", "button", "play_button", "media play"),
+                "semantically identical candidates must not call the advisor");
+        check(
+                !CandidateArbitrationPolicy.hasUsefulSemanticSeparation(
+                        "", "button", "", "",
+                        "", "button", "", ""),
+                "role-only candidates lack enough semantic evidence for arbitration");
+
         CandidateArbitrationPolicy.Bucket first =
                 CandidateArbitrationPolicy.deterministicBucket(
                         "task-123",
@@ -80,6 +118,10 @@ public final class CandidateArbitrationPolicyTest {
         }
 
         System.out.println("CandidateArbitrationPolicyTest passed");
+    }
+
+    private static void check(boolean value, String message) {
+        if (!value) throw new AssertionError(message);
     }
 
     private static void expect(

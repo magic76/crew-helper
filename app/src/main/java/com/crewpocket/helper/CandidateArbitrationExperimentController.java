@@ -173,6 +173,33 @@ final class CandidateArbitrationExperimentController {
                         bestExact,
                         runnerExact);
         if (trigger == CandidateArbitrationPolicy.TriggerType.NONE) {
+            String decision =
+                    locatorDecision.optString(
+                            "decision", "").trim().toUpperCase();
+            if ("AMBIGUOUS".equals(decision)
+                    || "FALLBACK".equals(decision)) {
+                CandidateArbitrationTelemetryStore
+                        .recordAdmissionGate(
+                                appContext,
+                                "LOW_SIGNAL_OR_NOT_COMPETING");
+            }
+            return Decision.none();
+        }
+        if (candidates.size() < 2
+                || !CandidateArbitrationPolicy
+                        .hasUsefulSemanticSeparation(
+                                candidates.get(0).label,
+                                candidates.get(0).role,
+                                candidates.get(0).viewId,
+                                candidates.get(0).semanticHint,
+                                candidates.get(1).label,
+                                candidates.get(1).role,
+                                candidates.get(1).viewId,
+                                candidates.get(1).semanticHint)) {
+            CandidateArbitrationTelemetryStore
+                    .recordAdmissionGate(
+                            appContext,
+                            "NO_SEMANTIC_SEPARATION");
             return Decision.none();
         }
 

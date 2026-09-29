@@ -69,6 +69,9 @@ final class AgentPerformanceStore {
                 JSONObject item = new JSONObject()
                         .put("taskId", taskId)
                         .put("at", System.currentTimeMillis())
+                        .put("buildVersion", currentBuildVersion(context))
+                        .put("runtimePolicyEpoch",
+                                AgentRuntimePolicyEpoch.CURRENT_REVISION)
                         .put("outcome", outcome)
                         .put("success", terminalSuccess)
                         .put("cancelled", cancelled)
@@ -176,6 +179,7 @@ final class AgentPerformanceStore {
         }
 
         StringBuilder out = new StringBuilder();
+        out.append(buildCurrentWindowReport(context, tasks)).append("\n\n");
         out.append("Agent performance · last ").append(total).append("/").append(MAX_TASKS).append(" finished tasks\n");
         if (total == 0) {
             out.append("No persistent task samples yet.");
@@ -242,6 +246,112 @@ final class AgentPerformanceStore {
         context.getApplicationContext()
                 .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .edit().clear().apply();
+    }
+
+    private static String buildCurrentWindowReport(
+            Context context,
+            JSONArray tasks) {
+        String build = currentBuildVersion(context);
+        int epoch = AgentRuntimePolicyEpoch.CURRENT_REVISION;
+        int total = 0;
+        int success = 0;
+        int recovered = 0;
+        int partial = 0;
+        int hardFailure = 0;
+        int cancelled = 0;
+        int excluded = 0;
+        LinkedHashMap<String, Integer> cancelCategories =
+                new LinkedHashMap<String, Integer>();
+
+        if (tasks != null) {
+            for (int i = 0; i < tasks.length(); i++) {
+                JSONObject item = tasks.optJSONObject(i);
+                if (item == null
+                        || !build.equals(item.optString("buildVersion", ""))
+                        || epoch != item.optInt("runtimePolicyEpoch", -1)) {
+                    continue;
+                }
+                total++;
+                String outcome = normalizedOutcome(item);
+                if ("SUCCESS".equals(outcome)) success++;
+                else if ("RECOVERED_SUCCESS".equals(outcome)) recovered++;
+                else if ("PARTIAL".equals(outcome)) partial++;
+                else if ("CANCELLED".equals(outcome)) {
+                    cancelled++;
+                    String category =
+                            item.optString("cancelCategory", "").trim();
+                    if (category.isEmpty()) category = "UNKNOWN";
+                    if (isExcludedFromSuccessRate(category)) excluded++;
+                    Integer count = cancelCategories.get(category);
+                    cancelCategories.put(
+                            category,
+                            count == null ? 1 : count + 1);
+                } else {
+                    hardFailure++;
+                }
+            }
+        }
+
+        StringBuilder out = new StringBuilder();
+        out.append("Current build / Runtime policy epoch\n")
+                .append("Build: ")
+                .append(build.isEmpty() ? "unknown" : build)
+                .append(" · epoch ")
+                .append(epoch)
+                .append("\n")
+                .append("Fresh tasks: ")
+                .append(total);
+        if (total == 0) {
+            out.append(" · waiting for post-update samples");
+            return out.toString();
+        }
+
+        int evaluated = Math.max(0, total - excluded);
+        int fullSuccess = success + recovered;
+        out.append("\nSuccess: ").append(success)
+                .append(" · recovered: ").append(recovered)
+                .append(" · partial: ").append(partial)
+                .append(" · hard failure: ").append(hardFailure)
+                .append("\nCancelled / superseded: ").append(cancelled);
+        if (!cancelCategories.isEmpty()) {
+            out.append(" · ");
+            boolean first = true;
+            for (Map.Entry<String, Integer> entry
+                    : cancelCategories.entrySet()) {
+                if (!first) out.append(" · ");
+                first = false;
+                out.append(entry.getKey())
+                        .append("=")
+                        .append(entry.getValue());
+            }
+        }
+        out.append("\nFull-success rate: ");
+        if (evaluated == 0) {
+            out.append("n/a");
+        } else {
+            out.append(Math.round(
+                    fullSuccess * 100.0d / evaluated))
+                    .append("%");
+        }
+        out.append(" · evaluated=").append(evaluated);
+        if (excluded > 0) {
+            out.append(" · user-controlled exclusions=")
+                    .append(excluded);
+        }
+        return out.toString();
+    }
+
+    private static String currentBuildVersion(Context context) {
+        if (context == null) return "";
+        try {
+            android.content.pm.PackageInfo info =
+                    context.getPackageManager().getPackageInfo(
+                            context.getPackageName(), 0);
+            return info.versionName == null
+                    ? "" : info.versionName.trim();
+        } catch (Exception ignored) {
+            return "";
+        }
     }
 
     private static String normalizedOutcome(JSONObject item) {
