@@ -268,7 +268,55 @@ public final class LiveHumanTurnBoundaryTest {
                         false);
         check(repeatedAfterReply.decision
                         == LiveHumanTurnBoundary.Decision.NEW_INTENT,
-                "same words after model speech remain a genuine new human command");
+                "same words after model speech remain a genuine new human command when no pre-completion interim proves it was late");
+
+        // A late final may arrive after Runtime has already completed the
+        // tool-driven task. The pre-completion interim proves this final belongs
+        // to the already-finished utterance, even if model speech happened.
+        boundary.forceNewTurn("播放周杰倫", 110_000L);
+        boundary.noteInterim("播放周杰倫", 110_200L);
+        boundary.noteTaskCompleted(20L, 111_000L);
+        boundary.noteModelSpeech();
+        LiveHumanTurnBoundary.Resolution delayedFinalAfterDone =
+                boundary.resolve(
+                        "播放周杰倫",
+                        112_300L,
+                        false,
+                        -1L,
+                        20L,
+                        20L,
+                        "IDLE",
+                        false,
+                        false);
+        check(delayedFinalAfterDone.decision
+                        == LiveHumanTurnBoundary.Decision.MERGE_CURRENT_SEGMENT,
+                "final derived from pre-completion interim must not start a ghost task after DONE");
+        check("FINAL_FROM_PRE_COMPLETION_INTERIM".equals(
+                        delayedFinalAfterDone.reason),
+                "late final after DONE exposes a deterministic diagnostic reason");
+
+        // If the human genuinely repeats the same command after completion,
+        // the new interim timestamp is newer than completion and must remain a
+        // new intent rather than being swallowed by dedupe.
+        boundary.forceNewTurn("播放周杰倫", 120_000L);
+        boundary.noteInterim("播放周杰倫", 120_200L);
+        boundary.noteTaskCompleted(21L, 121_000L);
+        boundary.noteModelSpeech();
+        boundary.noteInterim("播放周杰倫", 122_000L);
+        LiveHumanTurnBoundary.Resolution genuineRetryAfterDone =
+                boundary.resolve(
+                        "播放周杰倫",
+                        122_200L,
+                        false,
+                        -1L,
+                        21L,
+                        21L,
+                        "IDLE",
+                        false,
+                        false);
+        check(genuineRetryAfterDone.decision
+                        == LiveHumanTurnBoundary.Decision.NEW_INTENT,
+                "fresh interim after DONE preserves a genuine immediate repeat command");
 
         System.out.println(
                 "PASS LiveHumanTurnBoundaryTest: "
