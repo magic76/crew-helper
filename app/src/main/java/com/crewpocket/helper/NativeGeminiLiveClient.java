@@ -1566,6 +1566,9 @@ final class NativeGeminiLiveClient {
                                 && (activeVoiceTask.requiresPostActionInspection
                                     || (foregroundToolWorker != null
                                         && foregroundToolWorker.isAlive()));
+                boolean activeAgentThinking =
+                        activeVoiceTask != null
+                                && activeVoiceTask.awaitingModel;
                 LiveHumanTurnBoundary.Resolution boundary =
                         liveHumanTurnBoundary.resolve(
                                 completeUserInput,
@@ -1579,7 +1582,8 @@ final class NativeGeminiLiveClient {
                                 frame.interactionStatus,
                                 frame.waitingForInput,
                                 frame.interrupted,
-                                activeForegroundOperation);
+                                activeForegroundOperation,
+                                activeAgentThinking);
 
                 effectiveUserInput = boundary.effectiveText;
                 if (boundary.decision
