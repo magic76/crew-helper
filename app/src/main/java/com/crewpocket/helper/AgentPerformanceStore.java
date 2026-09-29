@@ -69,7 +69,7 @@ final class AgentPerformanceStore {
                 JSONObject item = new JSONObject()
                         .put("taskId", taskId)
                         .put("at", System.currentTimeMillis())
-                        .put("buildVersion", BuildConfig.VERSION_NAME)
+                        .put("buildVersion", currentBuildVersion(context))
                         .put("runtimePolicyEpoch",
                                 AgentRuntimePolicyEpoch.CURRENT_REVISION)
                         .put("outcome", outcome)
@@ -179,7 +179,7 @@ final class AgentPerformanceStore {
         }
 
         StringBuilder out = new StringBuilder();
-        out.append(buildCurrentWindowReport(tasks)).append("\n\n");
+        out.append(buildCurrentWindowReport(context, tasks)).append("\n\n");
         out.append("Agent performance · last ").append(total).append("/").append(MAX_TASKS).append(" finished tasks\n");
         if (total == 0) {
             out.append("No persistent task samples yet.");
@@ -248,9 +248,10 @@ final class AgentPerformanceStore {
                 .edit().clear().apply();
     }
 
-    private static String buildCurrentWindowReport(JSONArray tasks) {
-        String build = BuildConfig.VERSION_NAME == null
-                ? "" : BuildConfig.VERSION_NAME.trim();
+    private static String buildCurrentWindowReport(
+            Context context,
+            JSONArray tasks) {
+        String build = currentBuildVersion(context);
         int epoch = AgentRuntimePolicyEpoch.CURRENT_REVISION;
         int total = 0;
         int success = 0;
@@ -338,6 +339,19 @@ final class AgentPerformanceStore {
                     .append(excluded);
         }
         return out.toString();
+    }
+
+    private static String currentBuildVersion(Context context) {
+        if (context == null) return "";
+        try {
+            android.content.pm.PackageInfo info =
+                    context.getPackageManager().getPackageInfo(
+                            context.getPackageName(), 0);
+            return info.versionName == null
+                    ? "" : info.versionName.trim();
+        } catch (Exception ignored) {
+            return "";
+        }
     }
 
     private static String normalizedOutcome(JSONObject item) {
