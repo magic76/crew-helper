@@ -97,6 +97,9 @@ public final class ReflectionRuleEvidenceTest {
         check(ReflectionRuleEvidence.isRuntimeInternalFailure(
                         "TARGET_REQUIRED"),
                 "missing semantic target is a transient model-contract error, not app friction");
+        check(ReflectionRuleEvidence.isRuntimeInternalFailure(
+                        "FUTURE_WAIT_NOT_REQUESTED"),
+                "immediate-task wait rejection is deterministic Runtime routing, not app friction");
 
         List<ReflectionRuleEvidence.Step> recoveredMissingTarget =
                 new ArrayList<ReflectionRuleEvidence.Step>();
