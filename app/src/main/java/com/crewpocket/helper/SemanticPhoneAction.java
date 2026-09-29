@@ -41,6 +41,7 @@ final class SemanticPhoneAction {
         String direction = args.optString("direction", "").trim().toLowerCase(Locale.ROOT);
         String distance = args.optString("distance", "").trim().toLowerCase(Locale.ROOT);
         String camera = args.optString("camera", "").trim().toUpperCase(Locale.ROOT);
+        String purpose = args.optString("purpose", "").trim().toUpperCase(Locale.ROOT);
         String visualLeaseId =
                 args.optString("visual_lease_id", "").trim();
         boolean hasVisualX = args.has("visual_x");
@@ -218,10 +219,20 @@ final class SemanticPhoneAction {
                         "BAD_CAMERA",
                         "TAKE_PHOTO camera 只能是 FRONT 或 BACK。自拍請用 FRONT，拍前方請用 BACK。");
             }
+            String photoPurpose = purpose.isEmpty() ? "CAPTURE" : purpose;
+            if (!"CAPTURE".equals(photoPurpose)
+                    && !"INSPECT".equals(photoPurpose)) {
+                return error(
+                        action,
+                        "BAD_PHOTO_PURPOSE",
+                        "TAKE_PHOTO purpose 只能是 CAPTURE 或 INSPECT。只要保存照片用 CAPTURE；需要看照片後回答或繼續任務用 INSPECT。");
+            }
             return mapped(
                     action,
                     "take_photo",
-                    new JSONObject().put("camera", facing));
+                    new JSONObject()
+                            .put("camera", facing)
+                            .put("purpose", photoPurpose));
         }
 
         if ("SCROLL".equals(action)) {
@@ -291,6 +302,7 @@ final class SemanticPhoneAction {
         }
         if ("BAD_SCROLL_DIRECTION".equals(code)) return "direction";
         if ("BAD_CAMERA".equals(code)) return "camera";
+        if ("BAD_PHOTO_PURPOSE".equals(code)) return "purpose";
         return "";
     }
 

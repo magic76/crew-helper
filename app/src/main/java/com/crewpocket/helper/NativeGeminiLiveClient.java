@@ -4110,8 +4110,12 @@ final class NativeGeminiLiveClient {
         }
         if ("TAKE_PHOTO".equals(action)
                 || "take_photo".equals(runtimeName)) {
-            return "CAMERA:" + safe.optString("camera", "BACK")
-                    .trim().toUpperCase(Locale.ROOT);
+            return "CAMERA:"
+                    + safe.optString("camera", "BACK")
+                            .trim().toUpperCase(Locale.ROOT)
+                    + ":"
+                    + safe.optString("purpose", "CAPTURE")
+                            .trim().toUpperCase(Locale.ROOT);
         }
         if ("OPEN_APP".equals(action)
                 || "launch_app".equals(runtimeName)) {
@@ -7404,11 +7408,21 @@ final class NativeGeminiLiveClient {
         String camera = args == null
                 ? "BACK"
                 : args.optString("camera", "BACK").trim().toUpperCase(Locale.ROOT);
-        JSONObject reply = phoneRuntimeExecutor.takePhoto(camera);
+        String purpose = args == null
+                ? "CAPTURE"
+                : args.optString("purpose", "CAPTURE").trim().toUpperCase(Locale.ROOT);
+        JSONObject reply =
+                phoneRuntimeExecutor.takePhoto(camera, purpose);
         workingContext.recordAction(
-                "take_photo:" + camera.toLowerCase(Locale.ROOT),
+                "take_photo:"
+                        + camera.toLowerCase(Locale.ROOT)
+                        + ":"
+                        + purpose.toLowerCase(Locale.ROOT),
                 reply.optBoolean("success", false)
-                        ? "verified" : "failed");
+                        ? ("INSPECT".equals(purpose)
+                                ? "evidence_ready"
+                                : "verified")
+                        : "failed");
         return reply;
     }
 

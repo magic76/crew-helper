@@ -116,6 +116,10 @@ public class CameraCaptureManager {
                                                     data);
                                         } catch (Exception ignored) {}
 
+                                        PhotoCapturePreviewOverlay.show(
+                                                context,
+                                                file.getAbsolutePath(),
+                                                isFront);
                                         callback.onSuccess(
                                                 file.getAbsolutePath());
                                     } catch (Exception error) {
@@ -158,23 +162,19 @@ public class CameraCaptureManager {
         List<Camera.Size> sizes =
                 params.getSupportedPictureSizes();
         if (sizes != null && !sizes.isEmpty()) {
-            Camera.Size maxResolution = sizes.get(0);
-            long maxPixels =
-                    maxResolution.width
-                            * (long) maxResolution.height;
-            for (Camera.Size size : sizes) {
-                long pixels =
-                        size.width * (long) size.height;
-                if (pixels > maxPixels) {
-                    maxResolution = size;
-                    maxPixels = pixels;
-                }
+            int[][] candidates = new int[sizes.size()][2];
+            for (int i = 0; i < sizes.size(); i++) {
+                Camera.Size size = sizes.get(i);
+                candidates[i][0] = size.width;
+                candidates[i][1] = size.height;
             }
-            params.setPictureSize(
-                    maxResolution.width,
-                    maxResolution.height);
+            int[] selected =
+                    CameraCapturePolicy.selectPictureSize(candidates);
+            if (selected != null) {
+                params.setPictureSize(selected[0], selected[1]);
+            }
         }
-        params.setJpegQuality(100);
+        params.setJpegQuality(CameraCapturePolicy.JPEG_QUALITY);
     }
 
     private static void configureJpegRotation(

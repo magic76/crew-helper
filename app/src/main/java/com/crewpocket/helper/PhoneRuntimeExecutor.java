@@ -1049,30 +1049,66 @@ final class PhoneRuntimeExecutor {
                 || "SET_TEXT_AND_PASTE_REJECTED".equals(code);
     }
 
-    JSONObject takePhoto(String camera) throws Exception {
+    JSONObject takePhoto(String camera, String purpose) throws Exception {
         String facing = camera == null ? "" : camera.trim().toLowerCase(Locale.ROOT);
         if (!"front".equals(facing) && !"back".equals(facing)) {
             facing = "back";
         }
+        String photoPurpose =
+                "INSPECT".equalsIgnoreCase(purpose)
+                        ? "INSPECT"
+                        : "CAPTURE";
         JSONObject reply = post(
                 "/photo",
                 new JSONObject().put("camera", facing),
                 6500);
-        if (reply.optBoolean("success", false)) {
-            reply.put("verified", true)
-                    .put("stepResult", "STEP_OK")
-                    .put("taskState", "DONE")
+        if (!reply.optBoolean("success", false)) {
+            return reply.put("purpose", photoPurpose);
+        }
+
+        reply.put("verified", true)
+                .put("stepResult", "STEP_OK")
+                .put("purpose", photoPurpose);
+
+        if ("INSPECT".equals(photoPurpose)) {
+            String path = reply.optString("path", "").trim();
+            boolean visualDelivered =
+                    !path.isEmpty()
+                            && visionController != null
+                            && visionController.sendImageFile(path, false);
+            reply.put("visualDelivered", visualDelivered);
+            if (!visualDelivered) {
+                return reply.put("success", false)
+                        .put("verified", false)
+                        .put("stepResult", "STEP_FAILED")
+                        .put("taskState", "IN_PROGRESS")
+                        .put("completionEvidence",
+                                "PHOTO_CAPTURED_VISUAL_NOT_DELIVERED")
+                        .put("nextRequirement", "TRY_ALTERNATIVE")
+                        .put("error", "PHOTO_VISUAL_DELIVERY_FAILED")
+                        .put("message",
+                                "照片已拍攝，但無法送回視覺模型分析。");
+            }
+            return reply.put("taskState", "ANSWER_READY")
                     .put("completionEvidence",
                             "front".equals(facing)
-                                    ? "PHOTO_CAPTURED_FRONT"
-                                    : "PHOTO_CAPTURED_BACK")
-                    .put("nextRequirement", "NONE")
+                                    ? "PHOTO_INSPECTION_READY_FRONT"
+                                    : "PHOTO_INSPECTION_READY_BACK")
+                    .put("nextRequirement", "ANSWER_IF_SUFFICIENT")
                     .put("message",
-                            "front".equals(facing)
-                                    ? "已使用前鏡頭拍照"
-                                    : "已使用後鏡頭拍照");
+                            "照片已拍攝並提供為最新視覺證據。請直接根據照片完成使用者要求；不要再次拍照，除非照片明顯無法判讀。");
         }
-        return reply;
+
+        return reply.put("taskState", "DONE")
+                .put("completionEvidence",
+                        "front".equals(facing)
+                                ? "PHOTO_CAPTURED_FRONT"
+                                : "PHOTO_CAPTURED_BACK")
+                .put("nextRequirement", "NONE")
+                .put("message",
+                        "front".equals(facing)
+                                ? "已使用前鏡頭拍照"
+                                : "已使用後鏡頭拍照");
     }
 
     JSONObject pressKey(String key) throws Exception {
