@@ -326,6 +326,16 @@ final class PerformanceMetrics {
         liveHumanTurnLastReason = safeReason(reason);
     }
 
+    static synchronized void markJevExperiment(
+            long generation,
+            String eventId,
+            String bucket) {
+        AgentTrace trace = traceForGeneration(generation);
+        if (trace == null) return;
+        trace.jevEventId = safeEventId(eventId);
+        trace.jevBucket = safeReason(bucket);
+    }
+
     static synchronized void recordJevSpeechReview(
             long generation,
             boolean applied,
@@ -345,12 +355,13 @@ final class PerformanceMetrics {
         jevSpeechReviewLastStrategy = safeStrategy;
         jevSpeechReviewLastReason = safeReviewReason;
 
-        if (activeTrace != null && activeTrace.generation == generation) {
-            activeTrace.jevReviewed = true;
-            activeTrace.jevApplied = applied;
-            activeTrace.jevLatencyMs = safeLatency;
-            activeTrace.jevStrategy = safeStrategy;
-            activeTrace.jevReason = safeReviewReason;
+        AgentTrace trace = traceForGeneration(generation);
+        if (trace != null) {
+            trace.jevReviewed = true;
+            trace.jevApplied = applied;
+            trace.jevLatencyMs = safeLatency;
+            trace.jevStrategy = safeStrategy;
+            trace.jevReason = safeReviewReason;
         }
     }
 
@@ -370,7 +381,12 @@ final class PerformanceMetrics {
             out.put("intentToFirstToolMs", duration(trace.intentAt, trace.firstToolAt));
             out.put("toolRuntimeMs", trace.toolRuntimeTotalMs);
             out.put("geminiWaitMs", trace.geminiBetweenToolsMs);
+            out.put("jevEventId", trace.jevEventId);
+            out.put("jevBucket", trace.jevBucket);
             out.put("jevReviewed", trace.jevReviewed);
+            out.put("jevPostSearchReviewed", trace.jevPostSearchReviewed);
+            out.put("jevPostSearchMatched", trace.jevPostSearchMatched);
+            out.put("jevPostSearchLatencyMs", trace.jevPostSearchLatencyMs);
             out.put("jevApplied", trace.jevApplied);
             out.put("jevLatencyMs", trace.jevLatencyMs);
             out.put("jevStrategy", trace.jevStrategy);
@@ -495,6 +511,9 @@ final class PerformanceMetrics {
         long speechTail = duration(trace.finalSpeechAt, trace.finishedAt);
 
         out.append("Outcome: ").append(trace.outcome).append("\n");
+        if (!trace.jevBucket.isEmpty()) {
+            out.append("Jev bucket: ").append(trace.jevBucket).append("\n");
+        }
         if (trace.jevReviewed) {
             out.append("Jev: ")
                     .append(trace.jevApplied ? "APPLIED" : "FALLBACK")
@@ -511,6 +530,15 @@ final class PerformanceMetrics {
             out.append("\n");
         } else {
             out.append("Jev: NOT_USED\n");
+        }
+        if (trace.jevPostSearchReviewed) {
+            out.append("Jev UI evidence: ")
+                    .append(trace.jevPostSearchMatched
+                            ? "MATCHED"
+                            : "AMBIGUOUS")
+                    .append(" · ")
+                    .append(trace.jevPostSearchLatencyMs)
+                    .append(" ms\n");
         }
         out.append("User intent -> first tool: ")
                 .append(intentToFirstTool).append(" ms\n");
@@ -637,7 +665,29 @@ final class PerformanceMetrics {
         jevSpeechReviewLastReason = "";
     }
 
-    private static AgentTrace ensureTrace(String taskId, long generation) {
+    static synchronized void recordJevPostSearch(
+            long generation,
+            boolean matched,
+            long latencyMs) {
+        AgentTrace trace = traceForGeneration(generation);
+        if (trace == null) return;
+        trace.jevPostSearchReviewed = true;
+        trace.jevPostSearchMatched = matched;
+        trace.jevPostSearchLatencyMs = Math.max(0L, latencyMs);
+    }
+
+    private static AgentTrace traceForGeneration(long generation) {
+        if (activeTrace != null && activeTrace.generation == generation) {
+            return activeTrace;
+        }
+        if (lastFinishedTrace != null
+                && lastFinishedTrace.generation == generation) {
+            return lastFinishedTrace;
+        }
+        return null;
+    }
+
+        private static AgentTrace ensureTrace(String taskId, long generation) {
         if (activeTrace == null || activeTrace.generation != generation) {
             activeTrace = new AgentTrace(generation, 0L);
         }
@@ -701,7 +751,13 @@ final class PerformanceMetrics {
         return clean.length() <= 48 ? clean : clean.substring(0, 48);
     }
 
-    private static String safeTaskId(String value) {
+    private static String safeEventId(String value) {
+        if (value == null) return "";
+        String clean = value.replaceAll("[^A-Za-z0-9_]", "");
+        return clean.length() <= 64 ? clean : clean.substring(0, 64);
+    }
+
+        private static String safeTaskId(String value) {
         if (value == null || value.isEmpty()) return "";
         String clean = value.replaceAll("[^A-Za-z0-9_]", "");
         if (clean.length() <= 12) return clean;
@@ -738,9 +794,14 @@ final class PerformanceMetrics {
         long finishedAt;
         long toolRuntimeTotalMs;
         long geminiBetweenToolsMs;
+        String jevEventId = "";
+        String jevBucket = "";
         boolean jevReviewed;
         boolean jevApplied;
         long jevLatencyMs;
+        boolean jevPostSearchReviewed;
+        boolean jevPostSearchMatched;
+        long jevPostSearchLatencyMs;
         String jevStrategy = "";
         String jevReason = "";
         String outcome = "FINISHED";
@@ -762,9 +823,14 @@ final class PerformanceMetrics {
             out.finishedAt = finishedAt;
             out.toolRuntimeTotalMs = toolRuntimeTotalMs;
             out.geminiBetweenToolsMs = geminiBetweenToolsMs;
+            out.jevEventId = jevEventId;
+            out.jevBucket = jevBucket;
             out.jevReviewed = jevReviewed;
             out.jevApplied = jevApplied;
             out.jevLatencyMs = jevLatencyMs;
+            out.jevPostSearchReviewed = jevPostSearchReviewed;
+            out.jevPostSearchMatched = jevPostSearchMatched;
+            out.jevPostSearchLatencyMs = jevPostSearchLatencyMs;
             out.jevStrategy = jevStrategy;
             out.jevReason = jevReason;
             out.outcome = outcome;
