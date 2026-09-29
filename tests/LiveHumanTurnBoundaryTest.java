@@ -162,11 +162,66 @@ public final class LiveHumanTurnBoundaryTest {
                         && continuationAfterPause.effectiveText.contains("然後導航過去"),
                 "continuation keeps prior and new goal text");
 
-        boundary.forceNewTurn("搜尋大皇宮", 70_000L);
+        boundary.forceNewTurn("播放鄧紫棋", 65_000L);
+        LiveHumanTurnBoundary.Resolution operationDebounced =
+                boundary.resolve(
+                        "唯一",
+                        68_000L,
+                        true,
+                        11L,
+                        11L,
+                        11L,
+                        "IN_PROGRESS",
+                        false,
+                        false,
+                        true);
+        check(operationDebounced.decision
+                        == LiveHumanTurnBoundary.Decision
+                                .BIND_CURRENT_GENERATION,
+                "active foreground operation debounces a nearby finalized fragment");
+        check(operationDebounced.effectiveText.contains("播放鄧紫棋")
+                        && operationDebounced.effectiveText.contains("唯一"),
+                "operation debounce preserves both parts of the spoken goal");
+
+        boundary.forceNewTurn("播放鄧紫棋", 69_000L);
+        LiveHumanTurnBoundary.Resolution operationTakeover =
+                boundary.resolve(
+                        "停止",
+                        72_000L,
+                        true,
+                        11L,
+                        11L,
+                        11L,
+                        "IN_PROGRESS",
+                        false,
+                        false,
+                        true);
+        check(operationTakeover.decision
+                        == LiveHumanTurnBoundary.Decision.NEW_INTENT,
+                "explicit takeover bypasses active-operation debounce");
+
+        boundary.forceNewTurn("播放鄧紫棋", 73_000L);
+        LiveHumanTurnBoundary.Resolution operationGraceExpired =
+                boundary.resolve(
+                        "打開相機",
+                        77_000L,
+                        true,
+                        11L,
+                        11L,
+                        11L,
+                        "IN_PROGRESS",
+                        false,
+                        false,
+                        true);
+        check(operationGraceExpired.decision
+                        == LiveHumanTurnBoundary.Decision.NEW_INTENT,
+                "active-operation debounce expires quickly for a genuine new command");
+
+        boundary.forceNewTurn("搜尋大皇宮", 80_000L);
         LiveHumanTurnBoundary.Resolution interrupted =
                 boundary.resolve(
                         "停止",
-                        70_500L,
+                        80_500L,
                         true,
                         12L,
                         12L,
@@ -182,11 +237,11 @@ public final class LiveHumanTurnBoundaryTest {
         // cumulative finalized transcript. If the model has not spoken yet,
         // the related text is still the same human turn even without an active
         // task and must not reset the search transaction.
-        boundary.forceNewTurn("搜尋林家花園", 80_000L);
+        boundary.forceNewTurn("搜尋林家花園", 100_000L);
         LiveHumanTurnBoundary.Resolution lateCumulative =
                 boundary.resolve(
                         "搜尋林家花園",
-                        83_200L,
+                        103_200L,
                         false,
                         -1L,
                         13L,

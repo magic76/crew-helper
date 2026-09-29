@@ -31,6 +31,12 @@ final class LiveHumanTurnBoundary {
     }
 
     private static final long QUICK_SEGMENT_MERGE_WINDOW_MS = 1_800L;
+    // While a foreground tool is still executing (or Runtime is waiting to
+    // observe its effect), a nearby finalized segment is more likely to be a
+    // split/late part of the same spoken instruction than a deliberate
+    // replacement. Keep this window short; explicit takeover phrases still
+    // bypass it immediately.
+    private static final long ACTIVE_OPERATION_BIND_WINDOW_MS = 3_500L;
     private static final long SEGMENT_MERGE_WINDOW_MS = 4_500L;
     private static final long RELATED_SEGMENT_WINDOW_MS = 8_000L;
     private static final long LATE_DUPLICATE_WINDOW_MS = 4_500L;
@@ -52,6 +58,30 @@ final class LiveHumanTurnBoundary {
             String frameInteractionStatus,
             boolean frameWaitingForInput,
             boolean frameInterrupted) {
+        return resolve(
+                rawText,
+                nowMs,
+                hasActiveTask,
+                activeTaskGeneration,
+                currentGeneration,
+                latestFinalizedGeneration,
+                frameInteractionStatus,
+                frameWaitingForInput,
+                frameInterrupted,
+                false);
+    }
+
+    synchronized Resolution resolve(
+            String rawText,
+            long nowMs,
+            boolean hasActiveTask,
+            long activeTaskGeneration,
+            long currentGeneration,
+            long latestFinalizedGeneration,
+            String frameInteractionStatus,
+            boolean frameWaitingForInput,
+            boolean frameInterrupted,
+            boolean activeForegroundOperation) {
         String text = clean(rawText);
         long elapsed = lastFinalizedAtMs <= 0L
                 ? Long.MAX_VALUE
@@ -128,6 +158,23 @@ final class LiveHumanTurnBoundary {
                         explicitContinuation
                                 ? "EXPLICIT_CONTINUATION_SEGMENT"
                                 : "QUICK_FINAL_SEGMENT");
+            }
+
+            // Do not kill an in-flight mutation merely because Gemini Live
+            // finalized another nearby fragment. Runtime still owns the
+            // foreground operation, so bind the text to the same generation
+            // until either the short grace expires or the user explicitly
+            // takes over.
+            boolean operationDebounce =
+                    activeForegroundOperation
+                            && !modelSpokenSinceFinalized
+                            && elapsed <= ACTIVE_OPERATION_BIND_WINDOW_MS;
+            if (operationDebounce) {
+                return commit(
+                        Decision.BIND_CURRENT_GENERATION,
+                        mergeText(currentText, text),
+                        nowMs,
+                        "ACTIVE_OPERATION_DEBOUNCE");
             }
         }
 
