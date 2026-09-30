@@ -1578,12 +1578,10 @@ public class FloatingBubbleManager {
                     bubbleView.setAgentNeedsAttention(bubbleAgentNeedsAttention);
                     bubbleView.setNativeVoiceState(bubbleNativeVoiceState);
 
-                    bubbleMorphView =
-                            new MorphBubbleView(context, bubbleView, size);
                     bubbleContainer.addView(
-                            bubbleMorphView,
+                            bubbleView,
                             new LinearLayout.LayoutParams(
-                                    LinearLayout.LayoutParams.MATCH_PARENT,
+                                    size,
                                     size));
 
                     bubbleActionStrip = new BubbleActionStripOverlay(context);
@@ -1593,7 +1591,7 @@ public class FloatingBubbleManager {
                                     size,
                                     LinearLayout.LayoutParams.WRAP_CONTENT));
 
-                    bubbleMorphView.setOnTouchListener(new View.OnTouchListener() {
+                    bubbleView.setOnTouchListener(new View.OnTouchListener() {
                         private int initialX, initialY;
                         private float initialTouchX, initialTouchY;
                         private boolean moved = false;
@@ -1636,6 +1634,8 @@ public class FloatingBubbleManager {
                                     if (moveDist > dp(32) && !moved) {
                                         moved = true;
                                         collapseBubbleActions(false);
+                                        hideBubbleActionChip(false);
+                                        hideBubbleTaskTimeline(false);
                                         showBubbleRemoveTarget();
                                         initialX = bubbleParams.x;
                                         initialY = bubbleParams.y;
@@ -1715,6 +1715,7 @@ public class FloatingBubbleManager {
                                         }
                                     }
                                     snapBubbleToEdge();
+                                    restoreBubbleActionChipIfNeeded();
                                     scheduleAutoDock();
                                     return true;
                             }
@@ -1728,7 +1729,6 @@ public class FloatingBubbleManager {
                     if (onShown != null) onShown.run();
                 } catch (Exception e) {
                     bubbleContainer = null;
-                    bubbleMorphView = null;
                     bubbleView = null;
                     bubbleActionStrip = null;
                     e.printStackTrace();
@@ -1877,9 +1877,6 @@ public class FloatingBubbleManager {
 
             boolean onLeft =
                     bubbleParams.x + visibleWidth / 2 < screenWidth / 2;
-            if (bubbleMorphView != null) {
-                bubbleMorphView.setDockOnLeft(onLeft);
-            }
             bubbleParams.x = onLeft
                     ? dp(4)
                     : (screenWidth - visibleWidth - dp(4));
@@ -1887,6 +1884,8 @@ public class FloatingBubbleManager {
                     topLimit,
                     Math.min(bottomLimit, bubbleParams.y));
             windowManager.updateViewLayout(bubbleContainer, bubbleParams);
+            positionBubbleActionChip();
+            positionBubbleTaskTimeline();
         } catch (Exception ignored) {}
     }
 
@@ -1932,7 +1931,8 @@ public class FloatingBubbleManager {
             return;
         }
 
-        hideMorphBubbleStatus(false);
+        hideBubbleActionChip(true);
+        hideBubbleTaskTimeline(false);
         bubbleActionStrip.show(bubbleActionStripActions());
         ensureShortcutRoomBelow(dp(BUBBLE_SIZE_DP));
         setBubbleContainerExpandedStyle(true);
@@ -1957,6 +1957,7 @@ public class FloatingBubbleManager {
                     bubbleActionStrip.dismiss();
                 }
                 setBubbleContainerExpandedStyle(false);
+                restoreBubbleActionChipIfNeeded();
             }
         };
 
@@ -1982,17 +1983,9 @@ public class FloatingBubbleManager {
     }
 
     private void setBubbleContainerExpandedStyle(boolean expanded) {
-        if (bubbleContainer == null) return;
-        if (!expanded) {
+        if (bubbleContainer != null) {
             bubbleContainer.setBackground(null);
-            return;
         }
-
-        GradientDrawable bg = new GradientDrawable();
-        bg.setColor(Color.argb(238, 58, 58, 60));
-        bg.setCornerRadius(dp(24));
-        bg.setStroke(dp(1), Color.parseColor("#666B7280"));
-        bubbleContainer.setBackground(bg);
     }
 
     private void animateBubbleContainerHeight(
