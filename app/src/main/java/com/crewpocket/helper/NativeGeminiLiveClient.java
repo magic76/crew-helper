@@ -5482,8 +5482,7 @@ final class NativeGeminiLiveClient {
                 args == null ? "" : args.optString("direction", ""),
                 observed.optBoolean("success", false))) {
             observed.put("taskState", "DONE")
-                    .put("completionEvidence", "DIRECT_GESTURE_COMPLETED")
-                    .put("verified", true)
+                    .put("completionEvidence", "DIRECT_GESTURE_DISPATCHED")
                     .put("nextRequirement", "NONE")
                     .put(
                             "instruction",
