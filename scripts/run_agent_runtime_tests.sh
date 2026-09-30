@@ -21,6 +21,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/CandidateArbitrationOutcomePolicy.java" \
   "$SRC/LocatorFallbackPolicy.java" \
   "$SRC/AgentTaskLifecyclePolicy.java" \
+  "$SRC/DirectGestureCompletionPolicy.java" \
   "$SRC/AutonomyEscalationPolicy.java" \
   "$SRC/ObservationLoopPolicy.java" \
   "$SRC/AgentTaskLifecycleClock.java" \
@@ -111,6 +112,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/LiveTurnCoordinatorTest.java" \
   "$ROOT/tests/LiveTurnOrderingPolicyTest.java" \
   "$ROOT/tests/LiveHumanTurnBoundaryTest.java" \
+  "$ROOT/tests/DirectGestureCompletionPolicyTest.java" \
   "$ROOT/tests/LiveModelProgressPolicyTest.java" \
   "$ROOT/tests/MediaPlaybackCompletionPolicyTest.java" \
   "$ROOT/tests/MediaGoalUiPolicyTest.java" \
@@ -198,6 +200,7 @@ java -cp "$OUT" com.crewpocket.helper.SendAuthorizationTest
 java -cp "$OUT" com.crewpocket.helper.LiveTurnCoordinatorTest
 java -cp "$OUT" com.crewpocket.helper.LiveTurnOrderingPolicyTest
 java -cp "$OUT" com.crewpocket.helper.LiveHumanTurnBoundaryTest
+java -cp "$OUT" com.crewpocket.helper.DirectGestureCompletionPolicyTest
 java -cp "$OUT" com.crewpocket.helper.LiveModelProgressPolicyTest
 java -cp "$OUT" com.crewpocket.helper.MediaPlaybackCompletionPolicyTest
 java -cp "$OUT" com.crewpocket.helper.MediaGoalUiPolicyTest
