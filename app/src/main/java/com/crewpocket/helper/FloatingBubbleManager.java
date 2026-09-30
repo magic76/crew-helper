@@ -1042,33 +1042,17 @@ public class FloatingBubbleManager {
     }
 
     private boolean showBubbleDetailIfRelevant() {
-        if (!bubbleAgentActiveTask) {
+        if (!bubbleAgentActiveTask || bubbleRecentActions.isEmpty()) {
             return false;
         }
 
-        if (bubbleAgentNeedsAttention && bubbleDetailState != null) {
-            showRuntimeUiState(bubbleDetailState, 0L);
-            return true;
+        if (bubbleTaskTimelineVisible) {
+            hideBubbleTaskTimeline(true);
+            return false;
         }
 
-        if (!bubbleRecentActions.isEmpty()) {
-            // First tap shows the short task trail. A second tap while the
-            // trail is visible falls through to the existing action strip so
-            // history never blocks the bubble controls.
-            if (compactStatusIsTaskHistory) {
-                hideCompactStatus();
-                return false;
-            }
-            showRuntimeUiState(
-                    RuntimeUiState.info(
-                            "Crew 正在執行",
-                            buildBubbleActionHistorySummary()),
-                    4_500L,
-                    true);
-            return true;
-        }
-
-        return false;
+        showBubbleTaskTimeline();
+        return true;
     }
 
     private void recordBubbleAction(String action) {
@@ -1084,25 +1068,10 @@ public class FloatingBubbleManager {
             bubbleRecentActions.removeFirst();
         }
         bubbleRecentActions.addLast(clean);
-    }
 
-    private String buildBubbleActionHistorySummary() {
-        if (bubbleRecentActions.isEmpty()) return "";
-
-        StringBuilder summary = new StringBuilder();
-        int index = 0;
-        int size = bubbleRecentActions.size();
-        for (String action : bubbleRecentActions) {
-            if (summary.length() > 0) {
-                summary.append("  ·  ");
-            }
-            boolean current =
-                    bubbleAgentActiveTask && index == size - 1;
-            summary.append(current ? "● " : "✓ ");
-            summary.append(action);
-            index++;
+        if (bubbleTaskTimelineVisible) {
+            refreshBubbleTaskTimeline();
         }
-        return summary.toString();
     }
 
     private void scheduleBubbleActionChipLongWatch(
@@ -1138,10 +1107,13 @@ public class FloatingBubbleManager {
                     return;
                 }
 
-                showRuntimeUiState(
-                        RuntimeUiState.working(
+                bubbleActionChipPinned = true;
+                showBubbleActionChip(
+                        actionLabel,
+                        BubbleActionChipPolicy.kind(
                                 actionLabel,
-                                ""),
+                                latestPhase),
+                        BubbleActionChipView.Tone.NORMAL,
                         0L);
             }
         };
@@ -1158,192 +1130,407 @@ public class FloatingBubbleManager {
         }
     }
 
-    private void refreshMorphBubbleStatus() {
-        // The floating orb now has a fixed 48dp footprint. Persistent state is
-        // shown by the logo/ring; all text is rendered in the adjacent Action
-        // Chip so the bubble never stretches into a toolbar.
-        hideMorphBubbleStatus(true);
+    private void showBubbleActionChip(
+            final String label,
+            final BubbleActionChipPolicy.Kind kind,
+            final BubbleActionChipView.Tone tone,
+            final long autoHideMs) {
+        if (label == null || label.trim().isEmpty()) return;
+        if (!canDrawOverlays()) return;
+
+        if (bubbleActionChipHideRunnable != null) {
+            mainHandler.removeCallbacks(bubbleActionChipHideRunnable);
+            bubbleActionChipHideRunnable = null;
+        }
+
+        if (bubbleTaskTimelineVisible
+                || (bubbleActionStrip != null
+                        && bubbleActionStrip.isShowing())) {
+            return;
+        }
+
+        try {
+            int screenW = windowManager.getDefaultDisplay().getWidth();
+            int maxWidth = Math.min(dp(238), screenW - dp(76));
+
+            if (bubbleActionChipView == null) {
+                bubbleActionChipView =
+                        new BubbleActionChipView(context);
+                bubbleActionChipView.setVisibility(View.INVISIBLE);
+            }
+
+            bubbleActionChipView.setAction(label, kind, tone);
+            int width =
+                    bubbleActionChipView.desiredWidthPx(maxWidth);
+
+            if (bubbleActionChipParams == null) {
+                bubbleActionChipParams =
+                        new WindowManager.LayoutParams(
+                                width,
+                                dp(36),
+                                Build.VERSION.SDK_INT >= 26
+                                        ? 2038
+                                        : WindowManager.LayoutParams.TYPE_PHONE,
+                                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                                        | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                                PixelFormat.TRANSLUCENT);
+                bubbleActionChipParams.gravity =
+                        Gravity.TOP | Gravity.START;
+                positionBubbleActionChipParams(width);
+
+                bubbleActionChipView.setAlpha(0f);
+                windowManager.addView(
+                        bubbleActionChipView,
+                        bubbleActionChipParams);
+            } else {
+                bubbleActionChipParams.width = width;
+                positionBubbleActionChipParams(width);
+                windowManager.updateViewLayout(
+                        bubbleActionChipView,
+                        bubbleActionChipParams);
+            }
+
+            bubbleActionChipView.setVisibility(View.VISIBLE);
+            if (bubbleActionChipView.getAlpha() < 0.99f) {
+                bubbleActionChipView.setTranslationX(
+                        isBubbleOnLeft() ? -dp(5) : dp(5));
+                bubbleActionChipView.animate().cancel();
+                bubbleActionChipView.animate()
+                        .alpha(1f)
+                        .translationX(0f)
+                        .setDuration(120L)
+                        .start();
+            }
+
+            if (autoHideMs > 0L) {
+                bubbleActionChipHideRunnable = new Runnable() {
+                    @Override public void run() {
+                        bubbleActionChipHideRunnable = null;
+                        hideBubbleActionChip(true);
+                    }
+                };
+                mainHandler.postDelayed(
+                        bubbleActionChipHideRunnable,
+                        autoHideMs);
+            }
+        } catch (Exception ignored) {}
     }
 
-    private void showMorphBubbleStatus(
-            final String text,
-            final int accentColor,
-            long autoHideMs) {
-        if (bubbleMorphView == null
-                || bubbleContainer == null
-                || bubbleParams == null) {
-            return;
-        }
-        if (bubbleActionStrip != null && bubbleActionStrip.isShowing()) {
-            return;
-        }
-
-        if (bubbleMorphAutoCollapseRunnable != null) {
-            mainHandler.removeCallbacks(bubbleMorphAutoCollapseRunnable);
-            bubbleMorphAutoCollapseRunnable = null;
-        }
-
-        int screenWidth = windowManager.getDefaultDisplay().getWidth();
-        int currentWidth = Math.max(
-                dp(BUBBLE_SIZE_DP),
-                bubbleParams.width > 0
-                        ? bubbleParams.width
-                        : dp(BUBBLE_SIZE_DP));
+    private void positionBubbleActionChipParams(int width) {
+        if (bubbleActionChipParams == null) return;
+        int screenW = windowManager.getDefaultDisplay().getWidth();
+        int screenH = windowManager.getDefaultDisplay().getHeight();
+        int bubbleSize = dp(BUBBLE_SIZE_DP);
+        int bubbleX =
+                bubbleParams == null ? dp(4) : bubbleParams.x;
+        int bubbleY =
+                bubbleParams == null
+                        ? getStatusBarHeight() + dp(72)
+                        : bubbleParams.y;
         boolean onLeft =
-                bubbleParams.x + currentWidth / 2 < screenWidth / 2;
-        bubbleMorphView.setDockOnLeft(onLeft);
-        bubbleMorphView.showStatus(text, accentColor);
+                bubbleX + bubbleSize / 2 < screenW / 2;
 
-        int targetWidth = bubbleMorphView.desiredWidthPx(text);
-        animateMorphBubbleWidth(
-                targetWidth,
-                195L,
-                onLeft,
-                null);
+        int targetX =
+                onLeft
+                        ? bubbleX + bubbleSize + dp(8)
+                        : bubbleX - width - dp(8);
+        bubbleActionChipParams.x = Math.max(
+                dp(8),
+                Math.min(screenW - width - dp(8), targetX));
 
-        if (autoHideMs > 0L) {
-            bubbleMorphAutoCollapseRunnable = new Runnable() {
-                @Override public void run() {
-                    bubbleMorphAutoCollapseRunnable = null;
-                    if (bubbleMorphView != null
-                            && text.equals(bubbleMorphView.statusText())) {
-                        hideMorphBubbleStatus(true);
+        int targetY = bubbleY + (bubbleSize - dp(36)) / 2;
+        bubbleActionChipParams.y = Math.max(
+                getStatusBarHeight() + dp(4),
+                Math.min(screenH - dp(100), targetY));
+    }
+
+    private void positionBubbleActionChip() {
+        if (bubbleActionChipView == null
+                || bubbleActionChipParams == null
+                || bubbleActionChipView.getVisibility()
+                        != View.VISIBLE) {
+            return;
+        }
+        try {
+            positionBubbleActionChipParams(
+                    bubbleActionChipParams.width);
+            windowManager.updateViewLayout(
+                    bubbleActionChipView,
+                    bubbleActionChipParams);
+        } catch (Exception ignored) {}
+    }
+
+    private void hideBubbleActionChip(boolean animated) {
+        if (bubbleActionChipHideRunnable != null) {
+            mainHandler.removeCallbacks(bubbleActionChipHideRunnable);
+            bubbleActionChipHideRunnable = null;
+        }
+        if (bubbleActionChipView == null
+                || bubbleActionChipView.getVisibility()
+                        != View.VISIBLE) {
+            return;
+        }
+
+        if (!animated) {
+            bubbleActionChipView.animate().cancel();
+            bubbleActionChipView.setAlpha(0f);
+            bubbleActionChipView.setVisibility(View.INVISIBLE);
+            return;
+        }
+
+        bubbleActionChipView.animate().cancel();
+        bubbleActionChipView.animate()
+                .alpha(0f)
+                .translationX(isBubbleOnLeft() ? -dp(4) : dp(4))
+                .setDuration(90L)
+                .withEndAction(() -> {
+                    if (bubbleActionChipView != null) {
+                        bubbleActionChipView.setVisibility(View.INVISIBLE);
+                        bubbleActionChipView.setTranslationX(0f);
                     }
+                })
+                .start();
+    }
+
+    private void dismissBubbleActionChip() {
+        if (bubbleActionChipHideRunnable != null) {
+            mainHandler.removeCallbacks(bubbleActionChipHideRunnable);
+            bubbleActionChipHideRunnable = null;
+        }
+        if (bubbleActionChipView != null) {
+            try {
+                windowManager.removeViewImmediate(
+                        bubbleActionChipView);
+            } catch (Exception ignored) {}
+        }
+        bubbleActionChipView = null;
+        bubbleActionChipParams = null;
+    }
+
+    private void restoreBubbleActionChipIfNeeded() {
+        if (!bubbleAgentActiveTask
+                || bubbleActionChipLabel == null
+                || bubbleActionChipLabel.isEmpty()
+                || bubbleTaskTimelineVisible
+                || (bubbleActionStrip != null
+                        && bubbleActionStrip.isShowing())) {
+            return;
+        }
+
+        BubbleTaskPhasePolicy.Phase phase =
+                bubbleAgentNeedsAttention
+                        ? BubbleTaskPhasePolicy.Phase.WAITING
+                        : BubbleTaskPhasePolicy.classify(
+                                bubbleLatestRawStatus,
+                                true);
+        showBubbleActionChip(
+                bubbleActionChipLabel,
+                BubbleActionChipPolicy.kind(
+                        bubbleActionChipLabel,
+                        phase),
+                bubbleAgentNeedsAttention
+                        ? BubbleActionChipView.Tone.ATTENTION
+                        : BubbleActionChipView.Tone.NORMAL,
+                bubbleActionChipPinned
+                        ? 0L
+                        : BubbleActionChipPolicy.TRANSIENT_MS);
+    }
+
+    private void showBubbleTaskTimeline() {
+        if (!canDrawOverlays()) return;
+        hideBubbleActionChip(true);
+
+        try {
+            if (bubbleTaskTimelineHideRunnable != null) {
+                mainHandler.removeCallbacks(
+                        bubbleTaskTimelineHideRunnable);
+                bubbleTaskTimelineHideRunnable = null;
+            }
+
+            if (bubbleTaskTimelineView == null) {
+                bubbleTaskTimelineView =
+                        new BubbleTaskTimelineView(context);
+            }
+            refreshBubbleTaskTimeline();
+
+            int screenW = windowManager.getDefaultDisplay().getWidth();
+            int screenH = windowManager.getDefaultDisplay().getHeight();
+            int width = Math.min(dp(238), screenW - dp(76));
+            bubbleTaskTimelineView.measure(
+                    View.MeasureSpec.makeMeasureSpec(
+                            width,
+                            View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(
+                            screenH,
+                            View.MeasureSpec.AT_MOST));
+            int height = Math.max(
+                    dp(70),
+                    bubbleTaskTimelineView.getMeasuredHeight());
+
+            if (bubbleTaskTimelineParams == null) {
+                bubbleTaskTimelineParams =
+                        new WindowManager.LayoutParams(
+                                width,
+                                height,
+                                Build.VERSION.SDK_INT >= 26
+                                        ? 2038
+                                        : WindowManager.LayoutParams.TYPE_PHONE,
+                                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                                        | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                                PixelFormat.TRANSLUCENT);
+                bubbleTaskTimelineParams.gravity =
+                        Gravity.TOP | Gravity.START;
+                positionBubbleTaskTimelineParams(
+                        width,
+                        height);
+                bubbleTaskTimelineView.setAlpha(0f);
+                windowManager.addView(
+                        bubbleTaskTimelineView,
+                        bubbleTaskTimelineParams);
+            } else {
+                bubbleTaskTimelineParams.width = width;
+                bubbleTaskTimelineParams.height = height;
+                positionBubbleTaskTimelineParams(
+                        width,
+                        height);
+                windowManager.updateViewLayout(
+                        bubbleTaskTimelineView,
+                        bubbleTaskTimelineParams);
+            }
+
+            bubbleTaskTimelineVisible = true;
+            bubbleTaskTimelineView.setVisibility(View.VISIBLE);
+            bubbleTaskTimelineView.animate().cancel();
+            bubbleTaskTimelineView.animate()
+                    .alpha(1f)
+                    .setDuration(120L)
+                    .start();
+
+            bubbleTaskTimelineHideRunnable = new Runnable() {
+                @Override public void run() {
+                    bubbleTaskTimelineHideRunnable = null;
+                    hideBubbleTaskTimeline(true);
                 }
             };
             mainHandler.postDelayed(
-                    bubbleMorphAutoCollapseRunnable,
-                    autoHideMs);
-        }
+                    bubbleTaskTimelineHideRunnable,
+                    4_500L);
+        } catch (Exception ignored) {}
     }
 
-    private void hideMorphBubbleStatus(boolean animated) {
-        if (bubbleMorphAutoCollapseRunnable != null) {
-            mainHandler.removeCallbacks(bubbleMorphAutoCollapseRunnable);
-            bubbleMorphAutoCollapseRunnable = null;
-        }
-        if (bubbleMorphView == null
-                || bubbleContainer == null
-                || bubbleParams == null) {
-            return;
-        }
+    private void refreshBubbleTaskTimeline() {
+        if (bubbleTaskTimelineView == null) return;
+        bubbleTaskTimelineView.setActions(
+                new ArrayList<>(bubbleRecentActions),
+                bubbleAgentActiveTask,
+                bubbleAgentNeedsAttention);
+    }
 
-        final int collapsedWidth = dp(BUBBLE_SIZE_DP);
-        if (bubbleParams.width <= collapsedWidth) {
-            bubbleParams.width = collapsedWidth;
-            bubbleMorphView.hideStatus();
-            return;
-        }
-
-        int screenWidth = windowManager.getDefaultDisplay().getWidth();
-        int currentWidth = Math.max(collapsedWidth, bubbleParams.width);
+    private void positionBubbleTaskTimelineParams(
+            int width,
+            int height) {
+        if (bubbleTaskTimelineParams == null) return;
+        int screenW = windowManager.getDefaultDisplay().getWidth();
+        int screenH = windowManager.getDefaultDisplay().getHeight();
+        int bubbleSize = dp(BUBBLE_SIZE_DP);
+        int bubbleX =
+                bubbleParams == null ? dp(4) : bubbleParams.x;
+        int bubbleY =
+                bubbleParams == null
+                        ? getStatusBarHeight() + dp(72)
+                        : bubbleParams.y;
         boolean onLeft =
-                bubbleParams.x + currentWidth / 2 < screenWidth / 2;
-        bubbleMorphView.setDockOnLeft(onLeft);
+                bubbleX + bubbleSize / 2 < screenW / 2;
+        int targetX =
+                onLeft
+                        ? bubbleX + bubbleSize + dp(8)
+                        : bubbleX - width - dp(8);
+        bubbleTaskTimelineParams.x = Math.max(
+                dp(8),
+                Math.min(screenW - width - dp(8), targetX));
 
-        if (!animated) {
-            bubbleMorphAnimationGeneration++;
-            if (bubbleMorphAnimator != null) {
-                bubbleMorphAnimator.cancel();
-                bubbleMorphAnimator = null;
-            }
-            int anchorRight = bubbleParams.x + currentWidth;
-            bubbleParams.width = collapsedWidth;
-            if (!onLeft) {
-                bubbleParams.x = Math.max(
-                        dp(2),
-                        anchorRight - collapsedWidth);
-            }
-            bubbleMorphView.hideStatus();
-            try {
-                windowManager.updateViewLayout(
-                        bubbleContainer,
-                        bubbleParams);
-            } catch (Exception ignored) {}
-            return;
-        }
-
-        bubbleMorphView.beginHideStatus();
-        animateMorphBubbleWidth(
-                collapsedWidth,
-                145L,
-                onLeft,
-                new Runnable() {
-                    @Override public void run() {
-                        if (bubbleMorphView != null) {
-                            bubbleMorphView.hideStatus();
-                        }
-                    }
-                });
+        int targetY =
+                bubbleY + (bubbleSize - height) / 2;
+        int top = getStatusBarHeight() + dp(4);
+        bubbleTaskTimelineParams.y = Math.max(
+                top,
+                Math.min(screenH - height - dp(64), targetY));
     }
 
-    private void animateMorphBubbleWidth(
-            int targetWidth,
-            long durationMs,
-            final boolean onLeft,
-            final Runnable endAction) {
-        if (bubbleContainer == null || bubbleParams == null) return;
-
-        final int generation = ++bubbleMorphAnimationGeneration;
-        if (bubbleMorphAnimator != null) {
-            bubbleMorphAnimator.cancel();
+    private void positionBubbleTaskTimeline() {
+        if (!bubbleTaskTimelineVisible
+                || bubbleTaskTimelineView == null
+                || bubbleTaskTimelineParams == null) {
+            return;
         }
+        try {
+            positionBubbleTaskTimelineParams(
+                    bubbleTaskTimelineParams.width,
+                    bubbleTaskTimelineParams.height);
+            windowManager.updateViewLayout(
+                    bubbleTaskTimelineView,
+                    bubbleTaskTimelineParams);
+        } catch (Exception ignored) {}
+    }
 
-        final int startWidth = Math.max(
-                dp(BUBBLE_SIZE_DP),
-                bubbleParams.width > 0
-                        ? bubbleParams.width
-                        : dp(BUBBLE_SIZE_DP));
-        final int startX = bubbleParams.x;
-        final int anchorRight = startX + startWidth;
-        final int screenWidth =
-                windowManager.getDefaultDisplay().getWidth();
-
-        if (startWidth == targetWidth) {
-            if (endAction != null) endAction.run();
+    private void hideBubbleTaskTimeline(boolean animated) {
+        if (bubbleTaskTimelineHideRunnable != null) {
+            mainHandler.removeCallbacks(
+                    bubbleTaskTimelineHideRunnable);
+            bubbleTaskTimelineHideRunnable = null;
+        }
+        if (!bubbleTaskTimelineVisible
+                || bubbleTaskTimelineView == null) {
+            bubbleTaskTimelineVisible = false;
             return;
         }
 
-        bubbleMorphAnimator = ValueAnimator.ofInt(startWidth, targetWidth);
-        bubbleMorphAnimator.setDuration(durationMs);
-        bubbleMorphAnimator.setInterpolator(
-                new DecelerateInterpolator());
-        bubbleMorphAnimator.addUpdateListener(animation -> {
-            if (bubbleContainer == null || bubbleParams == null) return;
-            int width = (Integer) animation.getAnimatedValue();
-            bubbleParams.width = width;
-            if (onLeft) {
-                bubbleParams.x = Math.max(
-                        dp(2),
-                        Math.min(
-                                screenWidth - width - dp(2),
-                                startX));
-            } else {
-                bubbleParams.x = Math.max(
-                        dp(2),
-                        Math.min(
-                                screenWidth - width - dp(2),
-                                anchorRight - width));
-            }
-            try {
-                windowManager.updateViewLayout(
-                        bubbleContainer,
-                        bubbleParams);
-            } catch (Exception ignored) {}
-        });
-        bubbleMorphAnimator.addListener(
-                new AnimatorListenerAdapter() {
-                    @Override
-                    public void onAnimationEnd(Animator animation) {
-                        if (generation
-                                != bubbleMorphAnimationGeneration) {
-                            return;
-                        }
-                        bubbleMorphAnimator = null;
-                        if (endAction != null) endAction.run();
+        bubbleTaskTimelineVisible = false;
+        if (!animated) {
+            bubbleTaskTimelineView.animate().cancel();
+            bubbleTaskTimelineView.setAlpha(0f);
+            bubbleTaskTimelineView.setVisibility(View.INVISIBLE);
+            restoreBubbleActionChipIfNeeded();
+            return;
+        }
+
+        bubbleTaskTimelineView.animate().cancel();
+        bubbleTaskTimelineView.animate()
+                .alpha(0f)
+                .setDuration(90L)
+                .withEndAction(() -> {
+                    if (bubbleTaskTimelineView != null) {
+                        bubbleTaskTimelineView.setVisibility(View.INVISIBLE);
                     }
-                });
-        bubbleMorphAnimator.start();
+                    restoreBubbleActionChipIfNeeded();
+                })
+                .start();
+    }
+
+    private void dismissBubbleTaskTimeline() {
+        if (bubbleTaskTimelineHideRunnable != null) {
+            mainHandler.removeCallbacks(
+                    bubbleTaskTimelineHideRunnable);
+            bubbleTaskTimelineHideRunnable = null;
+        }
+        bubbleTaskTimelineVisible = false;
+        if (bubbleTaskTimelineView != null) {
+            try {
+                windowManager.removeViewImmediate(
+                        bubbleTaskTimelineView);
+            } catch (Exception ignored) {}
+        }
+        bubbleTaskTimelineView = null;
+        bubbleTaskTimelineParams = null;
+    }
+
+    private boolean isBubbleOnLeft() {
+        if (bubbleParams == null) return true;
+        int screenW = windowManager.getDefaultDisplay().getWidth();
+        return bubbleParams.x + dp(BUBBLE_SIZE_DP) / 2
+                < screenW / 2;
     }
 
     public void showBubble() {
