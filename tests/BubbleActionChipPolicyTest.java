@@ -30,7 +30,7 @@ public final class BubbleActionChipPolicyTest {
                 "waiting fallback");
         check(BubbleActionChipPolicy.stillSameAction(
                         "正在操作",
-                        "正在操作"),
+                        "  正在操作  "),
                 "same action stays pinned");
         check(!BubbleActionChipPolicy.stillSameAction(
                         "正在操作",
