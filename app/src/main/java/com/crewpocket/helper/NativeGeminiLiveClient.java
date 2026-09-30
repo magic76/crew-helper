@@ -5456,6 +5456,17 @@ final class NativeGeminiLiveClient {
             visual.put("success", false).put("error", error.getMessage());
         }
 
+        // Screenshot capture intentionally removes Crew overlays so Vision sees
+        // a clean frame. Replay the swipe trace only after capture completes,
+        // giving the human a clear ~1 second confirmation without contaminating
+        // model perception or delaying the actual gesture.
+        if (reply.optBoolean("success", false)) {
+            ActionVisualOverlay.showSwipeFeedback(
+                    appContext,
+                    reply.optString("direction", "up"),
+                    reply.optString("distance", "normal"));
+        }
+
         boolean changed = reply.optBoolean("screenChanged", false);
         reply.put("screenFrameSent", visual.optBoolean("success"));
         reply.put(
