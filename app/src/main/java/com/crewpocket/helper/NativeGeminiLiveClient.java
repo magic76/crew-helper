@@ -441,6 +441,12 @@ final class NativeGeminiLiveClient {
                         return NativeGeminiLiveClient.this.allowVoiceInterruption;
                     }
 
+                    @Override public boolean isExploreGestureListeningMode() {
+                        return NativeGeminiLiveClient.this
+                                .exploreGestureLease
+                                .isActive(System.currentTimeMillis());
+                    }
+
                     @Override public String getNoiseMode() {
                         return NativeGeminiLiveClient.this.noiseMode;
                     }
@@ -2451,7 +2457,7 @@ final class NativeGeminiLiveClient {
                 FloatingBubbleManager.getInstance(appContext)
                         .showCompactStatus(
                                 "↕ 探索中",
-                                "說上／下／左／右／繼續；15 秒無方向指令自動退出");
+                                "說上／下／左／右／繼續；90 秒無操作自動退出");
             } catch (Exception ignored) {}
             return true;
         }
