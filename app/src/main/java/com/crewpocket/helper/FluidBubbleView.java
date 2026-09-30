@@ -374,124 +374,33 @@ final class FluidBubbleView extends View {
             float cy,
             float radius,
             BubbleLogoStatePolicy.Mode mode) {
-        float pulse = wave(1f);
-        float scale = 1f;
-        float dx = 0f;
-        float dy = 0f;
-        float tilt = 0f;
-        int accentColor = Color.TRANSPARENT;
-        int accentAlpha = 0;
-
-        if (mode == BubbleLogoStatePolicy.Mode.LISTENING) {
-            scale = 0.992f + 0.018f * pulse;
-            accentColor = Color.parseColor("#38BDF8");
-            accentAlpha = 14 + Math.round(24f * Math.max(
-                    microphoneActivity, 0.15f));
-        } else if (mode == BubbleLogoStatePolicy.Mode.SPEAKING) {
-            scale = 0.982f + 0.038f * pulse;
-            accentColor = Color.parseColor("#A855F7");
-            accentAlpha = 34 + Math.round(26f * pulse);
-        } else if (mode == BubbleLogoStatePolicy.Mode.THINKING) {
-            scale = 0.988f + 0.024f * pulse;
-            tilt = (float) Math.sin(
-                    Math.toRadians(rotationAngle)) * 0.9f;
-            accentColor = Color.parseColor("#818CF8");
-            accentAlpha = 24 + Math.round(22f * pulse);
-        } else if (mode == BubbleLogoStatePolicy.Mode.ACTING) {
-            scale = 0.994f + 0.012f * pulse;
-            tilt = (float) Math.sin(
-                    Math.toRadians(rotationAngle * 2f)) * 1.8f;
-            accentColor = Color.parseColor("#22D3EE");
-            accentAlpha = 26 + Math.round(14f * pulse);
-        } else if (mode == BubbleLogoStatePolicy.Mode.WAITING) {
-            scale = 0.996f + 0.010f * pulse;
-            accentColor = Color.parseColor("#64748B");
-            accentAlpha = 14 + Math.round(12f * pulse);
-        } else if (mode == BubbleLogoStatePolicy.Mode.STUCK) {
-            scale = 0.995f + 0.014f * pulse;
-            accentColor = Color.parseColor("#F59E0B");
-            accentAlpha = 24 + Math.round(18f * pulse);
-        } else if (mode == BubbleLogoStatePolicy.Mode.WAITING_USER) {
-            scale = 0.998f + 0.026f * pulse;
-            dy = -radius * 0.035f * Math.max(
-                    0f,
-                    (float) Math.sin(
-                            Math.toRadians(rotationAngle * 1.4f)));
-            accentColor = Color.parseColor("#F59E0B");
-            accentAlpha = 34 + Math.round(22f * pulse);
-        } else if (mode
-                == BubbleLogoStatePolicy.Mode.CONVERSATION_WAITING) {
-            float heartbeat = (float) Math.pow(
-                    Math.max(
-                            0f,
-                            Math.sin(
-                                    Math.toRadians(rotationAngle * 2f))),
-                    4d);
-            scale = 0.992f + 0.026f * heartbeat;
-            accentColor = Color.parseColor("#2DD4BF");
-            accentAlpha = 24 + Math.round(34f * heartbeat);
-        } else if (mode == BubbleLogoStatePolicy.Mode.ERROR) {
-            dx = (float) Math.sin(
-                    Math.toRadians(rotationAngle * 4f))
-                    * radius * 0.018f;
-            accentColor = Color.parseColor("#F43F5E");
-            accentAlpha = 34;
-        }
-
-        if (agentResultFlash == 1) {
-            scale += 0.025f * pulse;
-            accentColor = Color.parseColor("#34D399");
-            accentAlpha = 62;
-        } else if (agentResultFlash == 2) {
-            dx += (float) Math.sin(
-                    Math.toRadians(rotationAngle * 8f))
-                    * radius * 0.04f;
-            accentColor = Color.parseColor("#FB7185");
-            accentAlpha = 62;
-        }
-
-        if (accentAlpha > 0) {
-            accentPaint.setStyle(Paint.Style.FILL);
-            accentPaint.setColor(accentColor);
-            accentPaint.setAlpha(accentAlpha);
-            canvas.drawCircle(
-                    cx,
-                    cy,
-                    radius * (0.72f + 0.025f * pulse),
-                    accentPaint);
-        }
-
-        canvas.save();
-        canvas.translate(dx, dy);
-        canvas.rotate(tilt, cx, cy);
-        canvas.scale(scale, scale, cx, cy);
-
+        // Keep the Crew mark visually stable. State belongs to the outer ring
+        // and small badges; the logo itself should not wobble, tilt, scan, or
+        // change shape while the user is trying to read the screen.
         bgPaint.setShader(null);
         bgPaint.setAlpha(255);
         if (logoBitmap != null && !logoBitmap.isRecycled()) {
-            canvas.drawBitmap(logoBitmap, null, logoBounds, bgPaint);
+            canvas.drawBitmap(
+                    logoBitmap,
+                    null,
+                    logoBounds,
+                    bgPaint);
         } else {
             bgPaint.setColor(Color.parseColor("#071426"));
             canvas.drawCircle(cx, cy, radius, bgPaint);
         }
-        canvas.restore();
 
-        if (accentAlpha > 0) {
-            accentPaint.setStyle(Paint.Style.FILL);
-            accentPaint.setColor(accentColor);
-            accentPaint.setAlpha(Math.max(8, accentAlpha / 3));
-            canvas.drawCircle(cx, cy, radius * 0.64f, accentPaint);
-        }
-
-        if (mode == BubbleLogoStatePolicy.Mode.THINKING) {
-            drawThinkingOrbit(canvas, cx, cy, radius);
-        } else if (mode == BubbleLogoStatePolicy.Mode.ACTING) {
-            drawWorkingScanner(canvas, radius);
-        } else if (mode == BubbleLogoStatePolicy.Mode.WAITING) {
+        float pulse = wave(1f);
+        if (mode == BubbleLogoStatePolicy.Mode.WAITING) {
             drawWaitingDot(canvas, cx, cy, radius, pulse);
         } else if (mode
                 == BubbleLogoStatePolicy.Mode.CONVERSATION_WAITING) {
-            drawConversationWaitingDot(canvas, cx, cy, radius, pulse);
+            drawConversationWaitingDot(
+                    canvas,
+                    cx,
+                    cy,
+                    radius,
+                    pulse);
         }
 
         if (mode == BubbleLogoStatePolicy.Mode.WAITING_USER) {
@@ -613,8 +522,8 @@ final class FluidBubbleView extends View {
                 radius,
                 mode);
 
-        // Keep the state rim as secondary redundancy; the logo itself now also
-        // breathes/glows/scans so state is readable without memorizing colors.
+        // The state rim is now the primary persistent state signal. The Crew
+        // mark stays fixed so the floating control remains calm and readable.
         matrix.setRotate(rotationAngle, cx, cy);
         SweepGradient rimGradient =
                 mode == BubbleLogoStatePolicy.Mode.ERROR
