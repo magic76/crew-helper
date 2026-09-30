@@ -353,6 +353,33 @@ public final class LiveHumanTurnBoundaryTest {
                         delayedFinalAfterDone.reason),
                 "late final after DONE exposes a deterministic diagnostic reason");
 
+        // Gemini may split one short gesture command into complementary
+        // finalized fragments such as "往右" + "滑動". If a pre-completion
+        // interim already contained the whole utterance, the second fragment
+        // belongs to the completed human turn even though neither final
+        // fragment contains the other.
+        boundary.forceNewTurn("往右", 115_000L);
+        boundary.noteInterim("往右滑動", 115_200L);
+        boundary.noteTaskCompleted(22L, 116_000L);
+        boundary.noteModelSpeech();
+        LiveHumanTurnBoundary.Resolution complementaryGestureFinal =
+                boundary.resolve(
+                        "滑動",
+                        116_500L,
+                        false,
+                        -1L,
+                        22L,
+                        22L,
+                        "IDLE",
+                        false,
+                        false);
+        check(complementaryGestureFinal.decision
+                        == LiveHumanTurnBoundary.Decision.MERGE_CURRENT_SEGMENT,
+                "complementary late final fragment must not create a ghost gesture task");
+        check("FINAL_FROM_PRE_COMPLETION_INTERIM".equals(
+                        complementaryGestureFinal.reason),
+                "complementary late final exposes the completed-utterance reason");
+
         // If the human genuinely repeats the same command after completion,
         // the new interim timestamp is newer than completion and must remain a
         // new intent rather than being swallowed by dedupe.
