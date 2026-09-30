@@ -61,8 +61,86 @@ final class ActionVisualOverlay {
                         y1,
                         x2,
                         y2,
-                        Math.max(300L, Math.min(650L, durationMs))),
+                        durationMs),
                 false);
+    }
+
+    /**
+     * Replays a clear user-facing swipe trace after Runtime takes its clean
+     * post-action screenshot. This keeps Vision free of Crew's own overlay
+     * while leaving the human enough time to see what just happened.
+     */
+    static void showSwipeFeedback(
+            Context context,
+            String rawDirection,
+            String rawDistance) {
+        if (context == null) return;
+        android.util.DisplayMetrics metrics =
+                context.getResources().getDisplayMetrics();
+        int width = Math.max(1, metrics.widthPixels);
+        int height = Math.max(1, metrics.heightPixels);
+
+        String direction = rawDirection == null
+                ? "up"
+                : rawDirection.trim().toLowerCase();
+        String distance = rawDistance == null
+                ? "normal"
+                : rawDistance.trim().toLowerCase();
+
+        float x1 = width * 0.50f;
+        float y1 = height * 0.74f;
+        float x2 = width * 0.50f;
+        float y2 = height * 0.22f;
+
+        if ("down".equals(direction)) {
+            y1 = height * 0.22f;
+            y2 = height * 0.74f;
+        } else if ("left".equals(direction)) {
+            x1 = width * 0.87f;
+            y1 = height * 0.50f;
+            x2 = width * 0.13f;
+            y2 = height * 0.50f;
+        } else if ("right".equals(direction)) {
+            x1 = width * 0.13f;
+            y1 = height * 0.50f;
+            x2 = width * 0.87f;
+            y2 = height * 0.50f;
+        }
+
+        if ("long".equals(distance)
+                || "page".equals(distance)
+                || "fast".equals(distance)) {
+            if ("up".equals(direction)) {
+                y1 = height * 0.87f;
+                y2 = height * 0.13f;
+            } else if ("down".equals(direction)) {
+                y1 = height * 0.13f;
+                y2 = height * 0.87f;
+            } else if ("left".equals(direction)) {
+                x1 = width * 0.94f;
+                x2 = width * 0.06f;
+            } else if ("right".equals(direction)) {
+                x1 = width * 0.06f;
+                x2 = width * 0.94f;
+            }
+        } else if ("short".equals(distance)
+                || "little".equals(distance)) {
+            if ("up".equals(direction)) {
+                y1 = height * 0.58f;
+                y2 = height * 0.38f;
+            } else if ("down".equals(direction)) {
+                y1 = height * 0.38f;
+                y2 = height * 0.58f;
+            } else if ("left".equals(direction)) {
+                x1 = width * 0.66f;
+                x2 = width * 0.34f;
+            } else if ("right".equals(direction)) {
+                x1 = width * 0.34f;
+                x2 = width * 0.66f;
+            }
+        }
+
+        show(context, Event.swipe(x1, y1, x2, y2, 320L), false);
     }
 
     static void showScroll(Context context, String direction) {
@@ -220,9 +298,15 @@ final class ActionVisualOverlay {
                 float x2,
                 float y2,
                 long durationMs) {
+            // Visual feedback deliberately outlives the physical gesture.
+            // The action itself remains ~260-650 ms; the overlay gets a slower
+            // travel plus a short end-state hold so it is actually readable.
+            long visualDuration = Math.max(
+                    980L,
+                    Math.min(1_150L, durationMs + 720L));
             return new Event(
                     Kind.SWIPE,
-                    Math.max(420L, durationMs),
+                    visualDuration,
                     x1,
                     y1,
                     x2,
@@ -391,29 +475,129 @@ final class ActionVisualOverlay {
             float x2 = e.x2 - screenOrigin[0];
             float y2 = e.y2 - screenOrigin[1];
 
+            // Travel for the first ~62%, then hold the completed trace long
+            // enough for the user to register direction and endpoint.
+            float motion = clamp01(p / 0.62f);
+            float hold = clamp01((p - 0.62f) / 0.38f);
             float eased = (float) Math.sin(
-                    Math.min(1f, p) * (Math.PI / 2.0));
+                    motion * (Math.PI / 2.0));
             float cx = x1 + (x2 - x1) * eased;
             float cy = y1 + (y2 - y1) * eased;
+            float fade = 1f - hold * 0.68f;
+
+            // Soft halo makes the trail readable on Maps and other visually
+            // busy screens without covering the underlying UI.
+            secondary.setStyle(Paint.Style.STROKE);
+            secondary.setStrokeWidth(dp(12f));
+            secondary.setColor(Color.argb(
+                    Math.max(22, Math.round(76f * fade)),
+                    34,
+                    211,
+                    238));
+            canvas.drawLine(x1, y1, cx, cy, secondary);
 
             primary.setStyle(Paint.Style.STROKE);
-            primary.setStrokeWidth(dp(4.2f));
+            primary.setStrokeWidth(dp(6.2f));
             primary.setColor(Color.argb(
-                    Math.max(70, Math.round(210f * (1f - p * 0.55f))),
+                    Math.max(105, Math.round(238f * fade)),
                     34,
                     211,
                     238));
             canvas.drawLine(x1, y1, cx, cy, primary);
 
+            // Large moving pointer + halo.
             secondary.setStyle(Paint.Style.FILL);
             secondary.setColor(Color.argb(
-                    Math.max(90, Math.round(240f * (1f - p * 0.35f))),
+                    Math.max(24, Math.round(82f * fade)),
+                    34,
+                    211,
+                    238));
+            canvas.drawCircle(cx, cy, dp(14f), secondary);
+
+            secondary.setColor(Color.argb(
+                    Math.max(120, Math.round(250f * fade)),
                     255,
                     255,
                     255));
-            canvas.drawCircle(cx, cy, dp(5.2f), secondary);
+            canvas.drawCircle(cx, cy, dp(7.2f), secondary);
 
+            primary.setColor(Color.argb(
+                    Math.max(105, Math.round(238f * fade)),
+                    34,
+                    211,
+                    238));
             drawArrowHead(canvas, x1, y1, cx, cy);
+
+            if (motion >= 1f) {
+                primary.setStyle(Paint.Style.STROKE);
+                primary.setStrokeWidth(dp(2.6f));
+                primary.setColor(Color.argb(
+                        Math.max(20, Math.round(150f * (1f - hold))),
+                        34,
+                        211,
+                        238));
+                canvas.drawCircle(
+                        x2,
+                        y2,
+                        dp(18f + 10f * hold),
+                        primary);
+            }
+
+            drawSwipeLabel(canvas, x1, y1, x2, y2, fade);
+        }
+
+        private void drawSwipeLabel(
+                Canvas canvas,
+                float x1,
+                float y1,
+                float x2,
+                float y2,
+                float fade) {
+            float dx = x2 - x1;
+            float dy = y2 - y1;
+            String arrow;
+            if (Math.abs(dx) >= Math.abs(dy)) {
+                arrow = dx >= 0f ? "→" : "←";
+            } else {
+                arrow = dy >= 0f ? "↓" : "↑";
+            }
+
+            String label = "Swipe " + arrow;
+            float padX = dp(10f);
+            float padY = dp(6f);
+            float width = text.measureText(label) + padX * 2f;
+            float height = text.getTextSize() + padY * 2f;
+            float centerX = (x1 + x2) * 0.5f;
+            float centerY = (y1 + y2) * 0.5f - dp(30f);
+            float left = Math.max(
+                    dp(8f),
+                    Math.min(
+                            getWidth() - width - dp(8f),
+                            centerX - width * 0.5f));
+            float top = Math.max(
+                    dp(8f),
+                    Math.min(
+                            getHeight() - height - dp(8f),
+                            centerY - height * 0.5f));
+
+            chip.setColor(Color.argb(
+                    Math.max(75, Math.round(218f * fade)),
+                    10,
+                    18,
+                    28));
+            RectF box = new RectF(left, top, left + width, top + height);
+            canvas.drawRoundRect(box, dp(10f), dp(10f), chip);
+
+            text.setColor(Color.argb(
+                    Math.max(125, Math.round(255f * fade)),
+                    255,
+                    255,
+                    255));
+            canvas.drawText(
+                    label,
+                    box.left + padX,
+                    box.top + padY + text.getTextSize() * 0.82f,
+                    text);
         }
 
         private void drawScroll(Canvas canvas, Event e, float p) {
@@ -555,7 +739,7 @@ final class ActionVisualOverlay {
 
             float ux = dx / len;
             float uy = dy / len;
-            float size = dp(10f);
+            float size = dp(14f);
             float px = -uy;
             float py = ux;
 
