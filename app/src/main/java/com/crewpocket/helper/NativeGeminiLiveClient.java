@@ -139,6 +139,9 @@ final class NativeGeminiLiveClient {
     private final VoiceExecutionGuard voiceExecutionGuard =
             new VoiceExecutionGuard();
     private volatile long runtimeSendCurrentHandledGeneration = -1L;
+    private final ExploreGestureLease exploreGestureLease =
+            new ExploreGestureLease();
+    private volatile long runtimeExploreHandledGeneration = -1L;
     private AudioIncidentRecorder audioIncidentRecorder;
     private volatile PendingCondition pendingCondition = null;
     private final Object pendingChoiceLock = new Object();
@@ -1106,6 +1109,10 @@ final class NativeGeminiLiveClient {
                     input, System.currentTimeMillis());
             voiceExecutionGuard.onFinalizedTypedTurn(
                     userIntentGeneration, input);
+            if (tryHandleRuntimeExploreGesture(input)) {
+                listener.onTranscript("你", input);
+                return true;
+            }
             userActionScope.updateFromUserText(input);
             recordFinalizedSendAuthorization(input);
             if (tryHandleRuntimeAppTeaching(input)) {
@@ -1350,6 +1357,10 @@ final class NativeGeminiLiveClient {
 
     private boolean isRuntimeAppTeachHandledGeneration(long generation) {
         return generation >= 0L && generation == runtimeAppTeachHandledGeneration;
+    }
+
+    private boolean isRuntimeExploreHandledGeneration(long generation) {
+        return generation >= 0L && generation == runtimeExploreHandledGeneration;
     }
 
     boolean isAiSpeaking() { return aiSpeaking; }
@@ -1615,6 +1626,14 @@ final class NativeGeminiLiveClient {
                                 userIntentGeneration,
                                 effectiveUserInput,
                                 frame.inputConfidence);
+            }
+
+            if (!continuedHumanTurn
+                    && voiceDisposition
+                            == VoiceExecutionGuard.TurnDisposition.NORMAL
+                    && tryHandleRuntimeExploreGesture(
+                            effectiveUserInput)) {
+                return;
             }
 
             JevVoiceSemanticResolver.Result jevSpeechReview =
@@ -1907,6 +1926,8 @@ final class NativeGeminiLiveClient {
 
         if (!frame.outputText.isEmpty()
                 && !runtimeSendCurrentExecuting
+                && !isRuntimeExploreHandledGeneration(
+                        userIntentGeneration)
                 && !shouldWithholdUnverifiedAgentReply()) {
             if (!responseHasToolCall) {
                 Log.d(
@@ -1926,7 +1947,9 @@ final class NativeGeminiLiveClient {
 
             boolean withholdForVerification =
                     shouldWithholdUnverifiedAgentReply()
-                            || runtimeSendCurrentExecuting;
+                            || runtimeSendCurrentExecuting
+                            || isRuntimeExploreHandledGeneration(
+                                    userIntentGeneration);
             if (!interruptedCurrentTurn
                     && !withholdForVerification) {
                 if (substantiveModelProgress
@@ -2362,6 +2385,145 @@ final class NativeGeminiLiveClient {
         reportStage("自動聊天已讓出控制");
     }
 
+    private boolean tryHandleRuntimeExploreGesture(String inputText) {
+        final long now = System.currentTimeMillis();
+        ExploreGestureLease.Command command =
+                exploreGestureLease.interpret(inputText, now);
+
+        if (command.kind == ExploreGestureLease.Kind.NONE
+                || command.kind
+                        == ExploreGestureLease.Kind.PASS_TO_MODEL) {
+            return false;
+        }
+
+        final long generation;
+        synchronized (agentLock) {
+            generation = userIntentGeneration;
+        }
+        runtimeExploreHandledGeneration = generation;
+        liveTurnCoordinator.onFinalizedUserTurn(
+                generation,
+                inputText == null ? "" : inputText);
+
+        if (command.kind == ExploreGestureLease.Kind.START) {
+            PerformanceMetrics.recordExploreLeaseArmed(true);
+            reportStage("探索模式已開啟");
+            try {
+                FloatingBubbleManager.getInstance(appContext)
+                        .showCompactStatus(
+                                "↕ 探索中",
+                                "說上／下／左／右／繼續；15 秒無方向指令自動退出");
+            } catch (Exception ignored) {}
+            return true;
+        }
+
+        if (command.kind == ExploreGestureLease.Kind.STOP) {
+            reportStage("探索模式已結束");
+            try {
+                FloatingBubbleManager.getInstance(appContext)
+                        .showCompactStatus(
+                                "探索模式已結束",
+                                "已恢復一般語音操作");
+            } catch (Exception ignored) {}
+            return true;
+        }
+
+        if (command.kind != ExploreGestureLease.Kind.SCROLL) {
+            return false;
+        }
+
+        final String semanticDirection =
+                command.semanticDirection;
+        final String physicalDirection =
+                ScrollDirectionPolicy.toPhysical(
+                        semanticDirection);
+        final String distance =
+                command.distance.isEmpty()
+                        ? "normal"
+                        : command.distance;
+
+        new Thread(new Runnable() {
+            @Override public void run() {
+                JSONObject result = new JSONObject();
+                try {
+                    result = phoneRuntimeExecutor.swipe(
+                            new JSONObject()
+                                    .put(
+                                            "direction",
+                                            physicalDirection)
+                                    .put(
+                                            "distance",
+                                            distance));
+                } catch (Exception error) {
+                    try {
+                        result.put("success", false)
+                                .put(
+                                        "error",
+                                        error.getMessage() == null
+                                                ? "EXPLORE_SWIPE_FAILED"
+                                                : error.getMessage());
+                    } catch (Exception ignored) {}
+                }
+
+                boolean success =
+                        result.optBoolean("success", false);
+                PerformanceMetrics.recordExploreFastPath(success);
+                workingContext.recordAction(
+                        "explore_scroll:"
+                                + semanticDirection,
+                        success ? "submitted" : "failed");
+                workingContext.updateLastResult(
+                        success ? "STEP_OK" : "STEP_FAILED");
+
+                if (success) {
+                    ActionVisualOverlay.showSwipeFeedback(
+                            appContext,
+                            physicalDirection,
+                            distance);
+                }
+
+                if (!isCurrentUserIntent(generation)) {
+                    return;
+                }
+
+                String directionLabel =
+                        exploreDirectionLabel(
+                                semanticDirection);
+                reportStage(
+                        success
+                                ? "探索模式：已往"
+                                        + directionLabel
+                                        + "移動"
+                                : "探索模式：滑動未生效");
+                try {
+                    FloatingBubbleManager.getInstance(appContext)
+                            .showCompactStatus(
+                                    success
+                                            ? "↕ 探索中"
+                                            : "探索滑動未完成",
+                                    success
+                                            ? "已往"
+                                                    + directionLabel
+                                                    + " · 可直接說繼續／再一點"
+                                            : result.optString(
+                                                    "error",
+                                                    "請換個方向或改用一般指令"));
+                } catch (Exception ignored) {}
+            }
+        }, "CrewExploreGesture").start();
+
+        return true;
+    }
+
+    private static String exploreDirectionLabel(
+            String semanticDirection) {
+        if ("forward".equals(semanticDirection)) return "下";
+        if ("backward".equals(semanticDirection)) return "上";
+        if ("right".equals(semanticDirection)) return "右";
+        if ("left".equals(semanticDirection)) return "左";
+        return "";
+    }
+
     private boolean tryHandleRuntimeSendCurrent(String inputText) {
         if (!UserActionScope.isStandaloneCurrentScreenSendCommand(inputText)) {
             return false;
@@ -2704,6 +2866,19 @@ final class NativeGeminiLiveClient {
                 handled.put("message", runtimeAppTeachHandledMessage.isEmpty()
                         ? "Runtime 已處理這次 App 教學；不要再呼叫工具，只要簡短回覆使用者。"
                         : runtimeAppTeachHandledMessage);
+                sendToolResponse(id, requestedName, handled);
+            } catch (Exception ignored) {}
+            return;
+        }
+        if (isRuntimeExploreHandledGeneration(callIntentGeneration)) {
+            JSONObject handled = new JSONObject();
+            try {
+                handled.put("success", true)
+                        .put("taskState", "DONE")
+                        .put("runtimeHandled", "EXPLORE_GESTURE")
+                        .put(
+                                "message",
+                                "Runtime 已直接處理這次探索手勢；不要再呼叫工具或重複滑動。");
                 sendToolResponse(id, requestedName, handled);
             } catch (Exception ignored) {}
             return;
@@ -5488,10 +5663,28 @@ final class NativeGeminiLiveClient {
 
         String latestUserTurn =
                 workingContext.toJson().optString("latestUserTurn", "");
+        String semanticDirection = args == null
+                ? ""
+                : args.optString("semantic_direction", "").trim();
+        if (semanticDirection.isEmpty() && args != null) {
+            semanticDirection =
+                    ScrollDirectionPolicy.fromPhysical(
+                            args.optString("direction", ""));
+        }
         if (DirectGestureCompletionPolicy.shouldFinish(
                 latestUserTurn,
-                args == null ? "" : args.optString("direction", ""),
+                semanticDirection,
                 observed.optBoolean("success", false))) {
+            exploreGestureLease.armFromSuccessfulGesture(
+                    semanticDirection,
+                    System.currentTimeMillis());
+            PerformanceMetrics.recordExploreLeaseArmed(false);
+            try {
+                FloatingBubbleManager.getInstance(appContext)
+                        .showCompactStatus(
+                                "↕ 探索中",
+                                "15 秒內可說上／下／左／右／繼續");
+            } catch (Exception ignored) {}
             observed.put("taskState", "DONE")
                     .put("completionEvidence", "DIRECT_GESTURE_DISPATCHED")
                     .put("nextRequirement", "NONE")

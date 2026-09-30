@@ -13,6 +13,15 @@ public final class DirectGestureCompletionPolicyTest {
         check(DirectGestureCompletionPolicy.shouldFinish(
                         "swipe right", "right", true),
                 "plain English swipe is one-shot");
+        check(DirectGestureCompletionPolicy.shouldFinish(
+                        "往下滑", "forward", true),
+                "reveal-below semantic direction completes a down-content request");
+        check(DirectGestureCompletionPolicy.shouldFinish(
+                        "往上滑", "backward", true),
+                "reveal-above semantic direction completes an up-content request");
+        check(DirectGestureCompletionPolicy.shouldFinish(
+                        "下一頁", "forward", true),
+                "page-down semantic request is one-shot");
 
         check(!DirectGestureCompletionPolicy.shouldFinish(
                         "往右滑動然後打開設定", "right", true),
@@ -23,6 +32,9 @@ public final class DirectGestureCompletionPolicyTest {
         check(!DirectGestureCompletionPolicy.shouldFinish(
                         "往左滑動", "right", true),
                 "direction mismatch must not complete");
+        check(!DirectGestureCompletionPolicy.shouldFinish(
+                        "往下滑", "backward", true),
+                "semantic content direction mismatch must not complete");
         check(!DirectGestureCompletionPolicy.shouldFinish(
                         "往右滑動", "right", false),
                 "failed swipe must not complete");

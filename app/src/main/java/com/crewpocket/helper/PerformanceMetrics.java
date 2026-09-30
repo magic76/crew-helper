@@ -82,6 +82,10 @@ final class PerformanceMetrics {
     private static long liveHumanTurnMergedSegments;
     private static long liveHumanTurnThinkGraceHits;
     private static String liveHumanTurnLastReason = "";
+    private static long exploreLeaseArmed;
+    private static long exploreLeaseExplicitStarts;
+    private static long exploreFastPathRuns;
+    private static long exploreFastPathFailures;
 
     private static long jevSpeechReviewCalls;
     private static long jevSpeechReviewApplied;
@@ -336,6 +340,16 @@ final class PerformanceMetrics {
         liveHumanTurnLastReason = safeReason(reason);
     }
 
+    static synchronized void recordExploreLeaseArmed(boolean explicit) {
+        exploreLeaseArmed++;
+        if (explicit) exploreLeaseExplicitStarts++;
+    }
+
+    static synchronized void recordExploreFastPath(boolean success) {
+        exploreFastPathRuns++;
+        if (!success) exploreFastPathFailures++;
+    }
+
     static synchronized void markJevExperiment(
             long generation,
             String eventId,
@@ -480,6 +494,15 @@ final class PerformanceMetrics {
             out.append(" last=").append(liveHumanTurnLastReason);
         }
         out.append("\n");
+        out.append("Explore gesture lease: armed=")
+                .append(exploreLeaseArmed)
+                .append(" explicit=")
+                .append(exploreLeaseExplicitStarts)
+                .append(" fast-path=")
+                .append(exploreFastPathRuns)
+                .append(" failed=")
+                .append(exploreFastPathFailures)
+                .append("\n");
         out.append("Jev speech review: calls=")
                 .append(jevSpeechReviewCalls)
                 .append(" applied=")
@@ -675,6 +698,10 @@ final class PerformanceMetrics {
         liveHumanTurnMergedSegments = 0L;
         liveHumanTurnThinkGraceHits = 0L;
         liveHumanTurnLastReason = "";
+        exploreLeaseArmed = 0L;
+        exploreLeaseExplicitStarts = 0L;
+        exploreFastPathRuns = 0L;
+        exploreFastPathFailures = 0L;
         jevSpeechReviewCalls = 0L;
         jevSpeechReviewApplied = 0L;
         jevSpeechReviewFallbacks = 0L;

@@ -11,6 +11,11 @@ public final class ScrollDirectionPolicyTest {
         assertEquals("left", ScrollDirectionPolicy.toPhysical("right"));
         assertEquals("right", ScrollDirectionPolicy.toPhysical("left"));
 
+        assertEquals("forward", ScrollDirectionPolicy.fromPhysical("up"));
+        assertEquals("backward", ScrollDirectionPolicy.fromPhysical("down"));
+        assertEquals("right", ScrollDirectionPolicy.fromPhysical("left"));
+        assertEquals("left", ScrollDirectionPolicy.fromPhysical("right"));
+
         assertTrue(ScrollDirectionPolicy.isSupported("right"));
         assertTrue(ScrollDirectionPolicy.isSupported("left"));
         assertFalse(ScrollDirectionPolicy.isSupported("diagonal"));
