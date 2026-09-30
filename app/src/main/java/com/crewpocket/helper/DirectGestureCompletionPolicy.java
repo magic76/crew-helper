@@ -1,7 +1,5 @@
 package com.crewpocket.helper;
 
-import org.json.JSONObject;
-
 import java.util.Locale;
 
 /**
@@ -16,12 +14,11 @@ final class DirectGestureCompletionPolicy {
 
     static boolean shouldFinish(
             String latestUserTurn,
-            JSONObject args,
-            JSONObject result) {
-        if (result == null || !result.optBoolean("success", false)) return false;
+            String rawDirection,
+            boolean success) {
+        if (!success) return false;
 
-        String direction = normalizeDirection(
-                args == null ? "" : args.optString("direction", ""));
+        String direction = normalizeDirection(rawDirection);
         if (direction.isEmpty()) return false;
 
         String command = normalizeCommand(latestUserTurn);
