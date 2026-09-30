@@ -1046,6 +1046,10 @@ public class FloatingBubbleManager {
     }
 
     private boolean showBubbleDetailIfRelevant() {
+        if (bubbleActionStrip != null
+                && bubbleActionStrip.isShowing()) {
+            return false;
+        }
         if (!bubbleAgentActiveTask || bubbleRecentActions.isEmpty()) {
             return false;
         }
