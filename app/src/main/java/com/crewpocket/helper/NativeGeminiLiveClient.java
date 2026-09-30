@@ -5479,8 +5479,8 @@ final class NativeGeminiLiveClient {
                 workingContext.toJson().optString("latestUserTurn", "");
         if (DirectGestureCompletionPolicy.shouldFinish(
                 latestUserTurn,
-                args,
-                observed)) {
+                args == null ? "" : args.optString("direction", ""),
+                observed.optBoolean("success", false))) {
             observed.put("taskState", "DONE")
                     .put("completionEvidence", "DIRECT_GESTURE_COMPLETED")
                     .put("verified", true)
