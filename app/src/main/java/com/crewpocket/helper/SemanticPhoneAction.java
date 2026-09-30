@@ -251,7 +251,9 @@ final class SemanticPhoneAction {
             // dragging the page left.
             String runtimeDirection = ScrollDirectionPolicy.toPhysical(semanticDirection);
 
-            JSONObject out = new JSONObject().put("direction", runtimeDirection);
+            JSONObject out = new JSONObject()
+                    .put("direction", runtimeDirection)
+                    .put("semantic_direction", semanticDirection);
             if (!distance.isEmpty()) out.put("distance", distance);
             return mapped(action, "swipe_screen", out);
         }
