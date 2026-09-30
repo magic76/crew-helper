@@ -37,6 +37,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
+import java.util.ArrayDeque;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 
@@ -94,6 +95,11 @@ public class FloatingBubbleManager {
     private WindowManager.LayoutParams compactStatusParams = null;
     private FloatingPanelController compactStatusController = null;
     private Runnable compactStatusAutoHideRunnable = null;
+    private Runnable bubbleActionChipLongRunnable = null;
+    private int bubbleActionChipLongGeneration = 0;
+    private String bubbleActionChipKey = "";
+    private String bubbleActionChipLabel = "";
+    private final ArrayDeque<String> bubbleRecentActions = new ArrayDeque<>();
     private String lastShownAgentStage = "";
     private boolean conversationWaiting = false;
     private ScreenSelectionOverlay screenSelectionOverlay = null;
@@ -307,6 +313,12 @@ public class FloatingBubbleManager {
     }
 
     public void showRuntimeUiState(final RuntimeUiState state) {
+        showRuntimeUiState(state, -1L);
+    }
+
+    private void showRuntimeUiState(
+            final RuntimeUiState state,
+            final long autoHideOverrideMs) {
         mainHandler.post(new Runnable() {
             @Override
             public void run() {
@@ -337,6 +349,9 @@ public class FloatingBubbleManager {
                 boolean contextReady =
                         resolved.phase == RuntimeUiState.Phase.CONTEXT_READY;
                 boolean done = resolved.isSuccess();
+                boolean working =
+                        resolved.phase == RuntimeUiState.Phase.WORKING;
+                boolean compactChip = secondary.isEmpty() && !attention;
 
                 if (compactStatusView != null) {
                     try { windowManager.removeViewImmediate(compactStatusView); }
@@ -346,20 +361,29 @@ public class FloatingBubbleManager {
 
                 int screenW = windowManager.getDefaultDisplay().getWidth();
                 int screenH = windowManager.getDefaultDisplay().getHeight();
-                int maxCardWidth = Math.min(dp(236), screenW - dp(24));
-                int maxCardContentWidth = Math.max(dp(48), maxCardWidth - dp(24));
+                int maxCardWidth = Math.min(
+                        dp(compactChip ? 220 : 236),
+                        screenW - dp(24));
+                int maxCardContentWidth = Math.max(
+                        dp(48),
+                        maxCardWidth - dp(24));
 
                 final LinearLayout card = new LinearLayout(context);
                 card.setOrientation(LinearLayout.VERTICAL);
                 card.setGravity(Gravity.CENTER_VERTICAL);
-                card.setPadding(dp(12), dp(6), dp(12), dp(6));
+                card.setPadding(
+                        dp(12),
+                        dp(compactChip ? 4 : 6),
+                        dp(12),
+                        dp(compactChip ? 4 : 6));
                 card.setContentDescription(message);
 
                 TextView headingView = new TextView(context);
                 headingView.setText(primary);
                 headingView.setSingleLine(true);
-                headingView.setEllipsize(android.text.TextUtils.TruncateAt.END);
-                headingView.setTextSize(12.5f);
+                headingView.setEllipsize(
+                        android.text.TextUtils.TruncateAt.END);
+                headingView.setTextSize(compactChip ? 12f : 12.5f);
                 headingView.setTextColor(Color.parseColor("#F8FAFC"));
                 headingView.setTypeface(
                         android.graphics.Typeface.DEFAULT,
@@ -374,42 +398,47 @@ public class FloatingBubbleManager {
                 if (!secondary.isEmpty()) {
                     TextView detailView = new TextView(context);
                     detailView.setText(secondary);
-                    detailView.setMaxLines(2);
-                    detailView.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                    detailView.setMaxLines(3);
+                    detailView.setEllipsize(
+                            android.text.TextUtils.TruncateAt.END);
                     detailView.setTextSize(11f);
                     detailView.setTextColor(Color.parseColor("#CBD5E1"));
                     detailView.setMaxWidth(maxCardContentWidth);
-                    LinearLayout.LayoutParams detailLp = new LinearLayout.LayoutParams(
-                            LinearLayout.LayoutParams.WRAP_CONTENT,
-                            android.view.ViewGroup.LayoutParams.WRAP_CONTENT);
-                    detailLp.topMargin = dp(1);
+                    LinearLayout.LayoutParams detailLp =
+                            new LinearLayout.LayoutParams(
+                                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                                    android.view.ViewGroup.LayoutParams.WRAP_CONTENT);
+                    detailLp.topMargin = dp(2);
                     card.addView(detailView, detailLp);
                 }
 
                 GradientDrawable bg = new GradientDrawable();
-                bg.setColor(Color.argb(242, 30, 41, 59));
-                bg.setCornerRadius(dp(16));
+                bg.setColor(Color.argb(238, 15, 23, 42));
+                bg.setCornerRadius(dp(compactChip ? 18 : 16));
                 String stroke = error ? "#E11D48"
                         : attention ? "#D97706"
                         : contextReady ? "#0EA5E9"
                         : done ? "#0F766E"
+                        : working ? "#0E7490"
                         : "#475569";
                 bg.setStroke(dp(1), Color.parseColor(stroke));
                 card.setBackground(bg);
                 card.setElevation(dp(10));
 
-                // Measure the content first so short status messages stay compact,
-                // while long messages remain bounded and ellipsized near the edge.
                 card.measure(
                         View.MeasureSpec.makeMeasureSpec(
-                                maxCardWidth, View.MeasureSpec.AT_MOST),
+                                maxCardWidth,
+                                View.MeasureSpec.AT_MOST),
                         View.MeasureSpec.makeMeasureSpec(
-                                screenH, View.MeasureSpec.AT_MOST));
+                                screenH,
+                                View.MeasureSpec.AT_MOST));
                 int cardWidth = Math.max(
-                        dp(48),
+                        dp(compactChip ? 72 : 48),
                         Math.min(maxCardWidth, card.getMeasuredWidth()));
                 int cardHeight = Math.max(
-                        secondary.isEmpty() ? dp(40) : dp(58),
+                        compactChip
+                                ? dp(36)
+                                : (secondary.isEmpty() ? dp(40) : dp(58)),
                         card.getMeasuredHeight());
 
                 final WindowManager.LayoutParams lp =
@@ -436,10 +465,13 @@ public class FloatingBubbleManager {
                             : bubbleParams.x - cardWidth - dp(8);
                     lp.x = Math.max(
                             dp(8),
-                            Math.min(screenW - cardWidth - dp(8), targetX));
+                            Math.min(
+                                    screenW - cardWidth - dp(8),
+                                    targetX));
 
                     int targetY =
-                            bubbleParams.y + (bubbleHeight - cardHeight) / 2;
+                            bubbleParams.y
+                                    + (bubbleHeight - cardHeight) / 2;
                     int top = getStatusBarHeight() + dp(4);
                     int bottom = screenH - cardHeight - dp(64);
                     lp.y = Math.max(top, Math.min(bottom, targetY));
@@ -450,8 +482,8 @@ public class FloatingBubbleManager {
 
                 try {
                     card.setAlpha(0f);
-                    card.setScaleX(0.96f);
-                    card.setScaleY(0.96f);
+                    card.setScaleX(0.98f);
+                    card.setScaleY(0.98f);
                     windowManager.addView(card, lp);
                     compactStatusView = card;
                     compactStatusParams = lp;
@@ -460,7 +492,7 @@ public class FloatingBubbleManager {
                             .alpha(1f)
                             .scaleX(1f)
                             .scaleY(1f)
-                            .setDuration(140L)
+                            .setDuration(110L)
                             .start();
                 } catch (Exception ignored) {
                     compactStatusView = null;
@@ -468,15 +500,20 @@ public class FloatingBubbleManager {
                     return;
                 }
 
-                final long autoHideMs = resolved.recommendedAutoHideMs();
-                compactStatusAutoHideRunnable = new Runnable() {
-                    @Override public void run() {
-                        hideCompactStatus();
-                    }
-                };
-                mainHandler.postDelayed(
-                        compactStatusAutoHideRunnable,
-                        autoHideMs);
+                final long autoHideMs =
+                        autoHideOverrideMs < 0L
+                                ? resolved.recommendedAutoHideMs()
+                                : autoHideOverrideMs;
+                if (autoHideMs > 0L) {
+                    compactStatusAutoHideRunnable = new Runnable() {
+                        @Override public void run() {
+                            hideCompactStatus();
+                        }
+                    };
+                    mainHandler.postDelayed(
+                            compactStatusAutoHideRunnable,
+                            autoHideMs);
+                }
             }
         });
     }
@@ -657,7 +694,10 @@ public class FloatingBubbleManager {
                     bubbleView.setAgentPhase(
                             BubbleTaskPhasePolicy.Phase.STUCK);
                 }
+                cancelBubbleActionChipLongWatch();
+                recordBubbleAction("需要你");
                 refreshMorphBubbleStatus();
+                showRuntimeUiState(bubbleDetailState, 0L);
             }
         };
         mainHandler.postDelayed(
@@ -677,6 +717,7 @@ public class FloatingBubbleManager {
                                       final boolean activeTask) {
         mainHandler.post(new Runnable() {
             @Override public void run() {
+                final boolean wasActiveTask = bubbleAgentActiveTask;
                 String important =
                         AgentInspectorStore.quietFeedbackLabel(
                                 rawStatus, activeTask);
@@ -690,6 +731,13 @@ public class FloatingBubbleManager {
                         activeTask,
                         needsAttention);
 
+                if (activeTask && !wasActiveTask) {
+                    cancelBubbleActionChipLongWatch();
+                    bubbleActionChipKey = "";
+                    bubbleActionChipLabel = "";
+                    bubbleRecentActions.clear();
+                }
+
                 if (bubbleView == null) return;
 
                 if (activeTask) {
@@ -699,6 +747,10 @@ public class FloatingBubbleManager {
                             rawStatus, true);
                     if (needsAttention) {
                         lastShownAgentStage = "";
+                        cancelBubbleActionChipLongWatch();
+                        bubbleActionChipKey = "";
+                        bubbleActionChipLabel = "";
+
                         String detail = "需要你選擇".equals(important)
                                 ? "直接說「第一個」或選項名稱"
                                 : ("需要權限".equals(important)
@@ -708,44 +760,65 @@ public class FloatingBubbleManager {
                                 RuntimeUiState.waitingUser(
                                         important,
                                         detail);
-                        // WAITING_USER is the one active state that must become
-                        // immediately obvious without waiting for the debounce.
+                        recordBubbleAction(important);
+                        // WAITING_USER is immediately obvious and remains
+                        // visible until the task advances or the user responds.
                         bubbleView.setAgentPhase(
                                 BubbleTaskPhasePolicy.Phase.NONE);
                         refreshMorphBubbleStatus();
+                        showRuntimeUiState(bubbleDetailState, 0L);
                         return;
                     }
+
+                    BubbleTaskPhasePolicy.Phase phase =
+                            BubbleTaskPhasePolicy.classify(
+                                    rawStatus,
+                                    true);
+                    String actionLabel =
+                            BubbleActionChipPolicy.label(
+                                    stage,
+                                    phase);
+                    String progressKey =
+                            BubbleTaskPhasePolicy.progressKey(rawStatus);
 
                     if (stage != null && !stage.isEmpty()) {
                         bubbleDetailState =
                                 RuntimeUiState.working(
-                                        "Crew 正在處理",
-                                        stage);
+                                        actionLabel,
+                                        "");
                     }
 
-                    // Normal progress remains logo-only. When the user has
-                    // explicitly expanded the action strip, keep the existing
-                    // compact diagnostic card available there.
-                    if (bubbleActionStrip != null
-                            && bubbleActionStrip.isShowing()
-                            && stage != null
-                            && !stage.isEmpty()
-                            && !stage.equals(lastShownAgentStage)) {
-                        lastShownAgentStage = stage;
+                    if (!actionLabel.isEmpty()
+                            && (!progressKey.equals(bubbleActionChipKey)
+                                    || !actionLabel.equals(
+                                            bubbleActionChipLabel))) {
+                        bubbleActionChipKey = progressKey;
+                        bubbleActionChipLabel = actionLabel;
+                        lastShownAgentStage = stage == null ? "" : stage;
+                        recordBubbleAction(actionLabel);
+
                         showRuntimeUiState(
                                 RuntimeUiState.working(
-                                        "Crew 正在處理",
-                                        stage));
+                                        actionLabel,
+                                        ""),
+                                BubbleActionChipPolicy.TRANSIENT_MS);
+                        scheduleBubbleActionChipLongWatch(
+                                progressKey,
+                                actionLabel);
                     }
                     return;
                 }
 
                 lastShownAgentStage = "";
+                cancelBubbleActionChipLongWatch();
+                bubbleActionChipKey = "";
+                bubbleActionChipLabel = "";
                 bubbleAgentPhase = BubbleTaskPhasePolicy.Phase.NONE;
                 bubbleAgentNeedsAttention = false;
                 bubbleAgentProgressKey = "";
                 cancelBubbleStuckWatch();
-                bubbleView.setAgentPhase(BubbleTaskPhasePolicy.Phase.NONE);
+                bubbleView.setAgentPhase(
+                        BubbleTaskPhasePolicy.Phase.NONE);
                 bubbleView.setAgentNeedsAttention(false);
 
                 if (AgentInspectorStore.isSuccessfulTaskEnd(rawStatus)) {
@@ -754,10 +827,9 @@ public class FloatingBubbleManager {
                             RuntimeUiState.success(
                                     "已完成",
                                     "");
-                    showMorphBubbleStatus(
-                            "完成",
-                            Color.parseColor("#34D399"),
-                            QuietMorphBubblePolicy.DONE_MORPH_MS);
+                    showRuntimeUiState(
+                            bubbleDetailState,
+                            BubbleActionChipPolicy.DONE_MS);
                     return;
                 }
 
@@ -767,17 +839,19 @@ public class FloatingBubbleManager {
                             RuntimeUiState.error(
                                     important,
                                     "可以再說一次，或打開控制台查看狀態");
-                    showMorphBubbleStatus(
-                            "沒完成",
-                            Color.parseColor("#FB7185"),
-                            QuietMorphBubblePolicy.ERROR_MORPH_MS);
+                    showRuntimeUiState(
+                            bubbleDetailState,
+                            BubbleActionChipPolicy.ERROR_MS);
                     return;
                 }
 
                 if (important != null && !important.isEmpty()) {
                     showRuntimeUiState(
                             RuntimeUiState.info(important, ""));
+                    return;
                 }
+
+                hideCompactStatus();
                 refreshMorphBubbleStatus();
             }
         });
@@ -932,6 +1006,10 @@ public class FloatingBubbleManager {
         cancelBubblePhaseDebounce();
         cancelBubbleWaitingMorphWatch();
         cancelBubbleStuckWatch();
+        cancelBubbleActionChipLongWatch();
+        bubbleActionChipKey = "";
+        bubbleActionChipLabel = "";
+        bubbleRecentActions.clear();
         bubbleAgentProgressKey = "";
         bubbleAgentPhase = BubbleTaskPhasePolicy.Phase.NONE;
         bubbleAgentActiveTask = false;
@@ -988,40 +1066,97 @@ public class FloatingBubbleManager {
     }
 
     private boolean showBubbleDetailIfRelevant() {
-        if (bubbleDetailState == null
-                || bubbleMorphView == null
-                || bubbleMorphView.statusText().isEmpty()) {
+        if (bubbleAgentActiveTask && !bubbleRecentActions.isEmpty()) {
+            showRuntimeUiState(
+                    RuntimeUiState.info(
+                            "Crew 正在執行",
+                            buildBubbleActionHistorySummary()),
+                    4_500L);
+            return true;
+        }
+
+        if (bubbleDetailState == null) {
             return false;
         }
         showRuntimeUiState(bubbleDetailState);
         return true;
     }
 
-    private void refreshMorphBubbleStatus() {
-        if (bubbleMorphView == null || bubbleParams == null) return;
-        if (bubbleActionStrip != null && bubbleActionStrip.isShowing()) return;
+    private void recordBubbleAction(String action) {
+        String clean = action == null
+                ? ""
+                : action.replaceAll("\\s+", " ").trim();
+        if (clean.isEmpty()) return;
+        String last = bubbleRecentActions.peekLast();
+        if (clean.equals(last)) return;
 
-        BubbleLogoStatePolicy.Mode mode = BubbleLogoStatePolicy.resolve(
-                bubbleNativeVoiceState,
-                bubbleAgentPhase,
-                bubbleAgentNeedsAttention,
-                conversationWaiting);
-
-        if (QuietMorphBubblePolicy.shouldShowPersistentMorph(
-                mode,
-                bubbleWaitingMorphVisible)) {
-            showMorphBubbleStatus(
-                    QuietMorphBubblePolicy.persistentLabel(
-                            mode,
-                            bubbleWaitingMorphVisible),
-                    QuietMorphBubblePolicy.accentColor(mode),
-                    0L);
-            return;
+        while (bubbleRecentActions.size()
+                >= BubbleActionChipPolicy.HISTORY_LIMIT) {
+            bubbleRecentActions.removeFirst();
         }
+        bubbleRecentActions.addLast(clean);
+    }
 
-        // Continuous states stay compact: the logo animation communicates
-        // listening / thinking / acting / speaking / reply-waiting without
-        // repeatedly resizing the overlay.
+    private String buildBubbleActionHistorySummary() {
+        if (bubbleRecentActions.isEmpty()) return "";
+
+        StringBuilder summary = new StringBuilder();
+        int index = 0;
+        int size = bubbleRecentActions.size();
+        for (String action : bubbleRecentActions) {
+            if (summary.length() > 0) {
+                summary.append("  ·  ");
+            }
+            boolean current =
+                    bubbleAgentActiveTask && index == size - 1;
+            summary.append(current ? "● " : "✓ ");
+            summary.append(action);
+            index++;
+        }
+        return summary.toString();
+    }
+
+    private void scheduleBubbleActionChipLongWatch(
+            final String progressKey,
+            final String actionLabel) {
+        cancelBubbleActionChipLongWatch();
+        final int generation = ++bubbleActionChipLongGeneration;
+        bubbleActionChipLongRunnable = new Runnable() {
+            @Override public void run() {
+                bubbleActionChipLongRunnable = null;
+                if (generation != bubbleActionChipLongGeneration) return;
+                if (!bubbleAgentActiveTask || bubbleAgentNeedsAttention) return;
+                if (!actionLabel.equals(bubbleActionChipLabel)) return;
+                if (!BubbleActionChipPolicy.stillSameAction(
+                        progressKey,
+                        bubbleLatestRawStatus)) {
+                    return;
+                }
+
+                showRuntimeUiState(
+                        RuntimeUiState.working(
+                                actionLabel,
+                                ""),
+                        0L);
+            }
+        };
+        mainHandler.postDelayed(
+                bubbleActionChipLongRunnable,
+                BubbleActionChipPolicy.LONG_ACTION_DELAY_MS);
+    }
+
+    private void cancelBubbleActionChipLongWatch() {
+        bubbleActionChipLongGeneration++;
+        if (bubbleActionChipLongRunnable != null) {
+            mainHandler.removeCallbacks(bubbleActionChipLongRunnable);
+            bubbleActionChipLongRunnable = null;
+        }
+    }
+
+    private void refreshMorphBubbleStatus() {
+        // The floating orb now has a fixed 48dp footprint. Persistent state is
+        // shown by the logo/ring; all text is rendered in the adjacent Action
+        // Chip so the bubble never stretches into a toolbar.
         hideMorphBubbleStatus(true);
     }
 
@@ -1962,9 +2097,8 @@ public class FloatingBubbleManager {
                         && !conversationWaiting
                         && bubbleNativeVoiceState == 1) {
                     bubbleMicHeardLatch = true;
-                    showMorphBubbleStatus(
-                            "聽到了",
-                            Color.parseColor("#38BDF8"),
+                    showRuntimeUiState(
+                            RuntimeUiState.listening("聽到了"),
                             900L);
                 } else if (!actuallySending || dbfs < -58d) {
                     bubbleMicHeardLatch = false;
