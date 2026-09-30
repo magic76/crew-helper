@@ -147,8 +147,14 @@ final class ExploreGestureLease {
             return new Command(Kind.SCROLL, "backward", "page");
         }
 
-        String distance = hasShortModifier(text) ? "short" : "normal";
-        String base = stripShortModifier(text);
+        String directionalText =
+                text.startsWith("再") && text.length() > 1
+                        ? text.substring(1)
+                        : text;
+        String distance = hasShortModifier(directionalText)
+                ? "short"
+                : "normal";
+        String base = stripShortModifier(directionalText);
 
         if (equalsAny(base,
                 "下", "往下", "向下", "下滑", "往下滑", "向下滑",
