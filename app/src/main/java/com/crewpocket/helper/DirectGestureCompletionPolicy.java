@@ -14,11 +14,12 @@ final class DirectGestureCompletionPolicy {
 
     static boolean shouldFinish(
             String latestUserTurn,
-            String rawDirection,
+            String rawSemanticDirection,
             boolean success) {
         if (!success) return false;
 
-        String direction = normalizeDirection(rawDirection);
+        String direction = normalizeSemanticDirection(
+                rawSemanticDirection);
         if (direction.isEmpty()) return false;
 
         String command = normalizeCommand(latestUserTurn);
@@ -43,17 +44,27 @@ final class DirectGestureCompletionPolicy {
                     || command.equals("slideleft")
                     || command.equals("scrollleft");
         }
-        if ("up".equals(direction)) {
-            return matchesChinese(command, "上")
-                    || command.equals("swipeup")
-                    || command.equals("slideup")
-                    || command.equals("scrollup");
-        }
-        if ("down".equals(direction)) {
+        if ("forward".equals(direction)) {
             return matchesChinese(command, "下")
+                    || command.equals("下一頁")
+                    || command.equals("下一页")
+                    || command.equals("下頁")
+                    || command.equals("下页")
                     || command.equals("swipedown")
                     || command.equals("slidedown")
-                    || command.equals("scrolldown");
+                    || command.equals("scrolldown")
+                    || command.equals("nextpage");
+        }
+        if ("backward".equals(direction)) {
+            return matchesChinese(command, "上")
+                    || command.equals("上一頁")
+                    || command.equals("上一页")
+                    || command.equals("上頁")
+                    || command.equals("上页")
+                    || command.equals("swipeup")
+                    || command.equals("slideup")
+                    || command.equals("scrollup")
+                    || command.equals("previouspage");
         }
         return false;
     }
@@ -127,12 +138,17 @@ final class DirectGestureCompletionPolicy {
         return text;
     }
 
-    private static String normalizeDirection(String value) {
-        String text = value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
+    private static String normalizeSemanticDirection(String value) {
+        String text = value == null
+                ? ""
+                : value.trim().toLowerCase(Locale.ROOT);
+        if ("forward".equals(text)) return "forward";
+        if ("backward".equals(text)) return "backward";
         if ("right".equals(text) || "右".equals(text)) return "right";
         if ("left".equals(text) || "左".equals(text)) return "left";
-        if ("up".equals(text) || "上".equals(text)) return "up";
-        if ("down".equals(text) || "下".equals(text)) return "down";
+        // Backward-compatible physical directions from older Runtime paths.
+        if ("up".equals(text) || "上".equals(text)) return "forward";
+        if ("down".equals(text) || "下".equals(text)) return "backward";
         return "";
     }
 
