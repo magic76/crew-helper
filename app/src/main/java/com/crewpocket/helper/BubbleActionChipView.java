@@ -46,6 +46,7 @@ final class BubbleActionChipView extends LinearLayout {
         labelView.setTextSize(12f);
         labelView.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         labelView.setTextColor(Color.parseColor("#F8FAFC"));
+        labelView.setGravity(Gravity.CENTER_VERTICAL);
         addView(
                 labelView,
                 new LinearLayout.LayoutParams(
