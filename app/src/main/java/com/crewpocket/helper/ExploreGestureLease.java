@@ -12,6 +12,7 @@ import java.util.Locale;
  */
 final class ExploreGestureLease {
     static final long TTL_MS = 15_000L;
+    static final long EXPLICIT_IDLE_TTL_MS = 90_000L;
 
     enum Kind {
         NONE,
@@ -38,6 +39,7 @@ final class ExploreGestureLease {
     }
 
     private long activeUntilMs;
+    private boolean explicitMode;
     private String lastSemanticDirection = "";
 
     synchronized Command previewActive(String rawText, long nowMs) {
@@ -71,7 +73,9 @@ final class ExploreGestureLease {
         }
 
         if (isStart(text)) {
-            activeUntilMs = Math.max(0L, nowMs) + TTL_MS;
+            explicitMode = true;
+            activeUntilMs = Math.max(0L, nowMs)
+                    + EXPLICIT_IDLE_TTL_MS;
             return new Command(Kind.START, lastSemanticDirection, "");
         }
 
@@ -102,6 +106,7 @@ final class ExploreGestureLease {
             long nowMs) {
         String direction = normalizeSemanticDirection(rawSemanticDirection);
         if (!ScrollDirectionPolicy.isSupported(direction)) return;
+        explicitMode = false;
         lastSemanticDirection = direction;
         touch(nowMs);
     }
@@ -113,6 +118,10 @@ final class ExploreGestureLease {
             return false;
         }
         return true;
+    }
+
+    synchronized boolean isExplicitMode(long nowMs) {
+        return isActive(nowMs) && explicitMode;
     }
 
     synchronized String lastSemanticDirection() {
@@ -127,11 +136,15 @@ final class ExploreGestureLease {
 
     synchronized void clear() {
         activeUntilMs = 0L;
+        explicitMode = false;
         lastSemanticDirection = "";
     }
 
     private void touch(long nowMs) {
-        activeUntilMs = Math.max(0L, nowMs) + TTL_MS;
+        long ttl = explicitMode
+                ? EXPLICIT_IDLE_TTL_MS
+                : TTL_MS;
+        activeUntilMs = Math.max(0L, nowMs) + ttl;
     }
 
     private Command parseScroll(String text) {

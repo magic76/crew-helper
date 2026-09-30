@@ -88,6 +88,7 @@ final class PerformanceMetrics {
     private static long exploreFastPathFailures;
     private static long exploreInterimFastPathRuns;
     private static long exploreFinalDedupes;
+    private static long exploreAudioBypassFrames;
 
     private static long jevSpeechReviewCalls;
     private static long jevSpeechReviewApplied;
@@ -360,6 +361,10 @@ final class PerformanceMetrics {
         exploreFinalDedupes++;
     }
 
+    static synchronized void recordExploreAudioBypassFrame() {
+        exploreAudioBypassFrames++;
+    }
+
     static synchronized void markJevExperiment(
             long generation,
             String eventId,
@@ -516,6 +521,8 @@ final class PerformanceMetrics {
                 .append(exploreInterimFastPathRuns)
                 .append(" final-dedup=")
                 .append(exploreFinalDedupes)
+                .append(" audio-bypass=")
+                .append(exploreAudioBypassFrames)
                 .append("\n");
         out.append("Jev speech review: calls=")
                 .append(jevSpeechReviewCalls)
@@ -718,6 +725,7 @@ final class PerformanceMetrics {
         exploreFastPathFailures = 0L;
         exploreInterimFastPathRuns = 0L;
         exploreFinalDedupes = 0L;
+        exploreAudioBypassFrames = 0L;
         jevSpeechReviewCalls = 0L;
         jevSpeechReviewApplied = 0L;
         jevSpeechReviewFallbacks = 0L;
