@@ -598,6 +598,10 @@ final class ActionVisualOverlay {
                     box.left + padX,
                     box.top + padY + text.getTextSize() * 0.82f,
                     text);
+
+            // Shared paints are reused by the next event.
+            text.setColor(Color.WHITE);
+            chip.setColor(Color.argb(205, 10, 18, 28));
         }
 
         private void drawScroll(Canvas canvas, Event e, float p) {
