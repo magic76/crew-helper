@@ -7,12 +7,12 @@ import android.view.Gravity;
 import android.widget.LinearLayout;
 
 /**
- * Compact first-level bubble action rail.
- * 0111 shares its icon language with Live Console/Main UI through CrewIcons.
+ * Short first-level bubble menu.
+ *
+ * Keep only three immediate actions here. Less common controls live in the
+ * full console so opening the bubble never turns into a tall toolbar.
  */
 final class BubbleActionStripOverlay extends LinearLayout {
-    static final int ACTION_STRIP_GAP_DP = 0;
-
     interface Actions {
         void onToggleCall();
         void onToggleMute();
@@ -29,7 +29,6 @@ final class BubbleActionStripOverlay extends LinearLayout {
     private static final int ICON_MIC_MUTED = 5;
     private static final int ICON_SPEAKER = 6;
     private static final int ICON_REGION = 7;
-    private static final int ICON_TEACH = 8;
 
     private final Context context;
     private boolean showing = false;
@@ -39,11 +38,16 @@ final class BubbleActionStripOverlay extends LinearLayout {
         this.context = context.getApplicationContext();
         setOrientation(VERTICAL);
         setGravity(Gravity.CENTER_HORIZONTAL);
-        setPadding(dp(4), dp(2), dp(4), dp(4));
+        setPadding(dp(4), dp(5), dp(4), dp(5));
         setClipToPadding(false);
         setClipChildren(false);
         setVisibility(GONE);
-        setBackgroundColor(Color.TRANSPARENT);
+
+        GradientDrawable bg = new GradientDrawable();
+        bg.setCornerRadius(dp(18));
+        bg.setColor(Color.argb(238, 15, 23, 42));
+        bg.setStroke(dp(1), Color.parseColor("#334155"));
+        setBackground(bg);
     }
 
     boolean isShowing() {
@@ -51,8 +55,7 @@ final class BubbleActionStripOverlay extends LinearLayout {
     }
 
     int desiredHeightPx() {
-        int itemCount = NativeLiveService.isActive() ? 5 : 3;
-        return dp(6) + itemCount * dp(44);
+        return dp(130);
     }
 
     void show(Actions actions) {
@@ -60,7 +63,14 @@ final class BubbleActionStripOverlay extends LinearLayout {
         rebuild(actions);
         setVisibility(VISIBLE);
         setAlpha(0f);
-        animate().alpha(1f).setDuration(120L).start();
+        setScaleX(0.96f);
+        setScaleY(0.96f);
+        animate()
+                .alpha(1f)
+                .scaleX(1f)
+                .scaleY(1f)
+                .setDuration(120L)
+                .start();
     }
 
     void refresh(Actions actions) {
@@ -72,6 +82,8 @@ final class BubbleActionStripOverlay extends LinearLayout {
         showing = false;
         animate().cancel();
         setAlpha(1f);
+        setScaleX(1f);
+        setScaleY(1f);
         setVisibility(GONE);
         removeAllViews();
     }
@@ -80,17 +92,25 @@ final class BubbleActionStripOverlay extends LinearLayout {
         removeAllViews();
 
         final boolean live = NativeLiveService.isActive();
-        final boolean speaking = live && NativeLiveService.isAiSpeaking();
-        final boolean muted = live && NativeLiveService.isAgentMuted();
+        final boolean speaking =
+                live && NativeLiveService.isAiSpeaking();
+        final boolean muted =
+                live && NativeLiveService.isAgentMuted();
 
         if (live) {
             final int primaryIcon =
-                    speaking ? ICON_SPEAKER
-                            : (muted ? ICON_MIC_MUTED : ICON_MIC_ACTIVE);
+                    speaking
+                            ? ICON_SPEAKER
+                            : (muted
+                                    ? ICON_MIC_MUTED
+                                    : ICON_MIC_ACTIVE);
             CrewIconView primary = iconButton(primaryIcon);
             primary.setContentDescription(
-                    speaking ? "打斷助理"
-                            : (muted ? "取消靜音" : "麥克風靜音"));
+                    speaking
+                            ? "打斷助理"
+                            : (muted
+                                    ? "取消靜音"
+                                    : "麥克風靜音"));
             primary.setOnClickListener(v -> {
                 if (actions == null) return;
                 if (speaking) actions.onInterrupt();
@@ -111,6 +131,13 @@ final class BubbleActionStripOverlay extends LinearLayout {
                 if (actions != null) actions.onToggleCall();
             });
             addView(start, itemParams());
+
+            CrewIconView region = iconButton(ICON_REGION);
+            region.setContentDescription("框選截圖");
+            region.setOnClickListener(v -> {
+                if (actions != null) actions.onRegionSelection();
+            });
+            addView(region, itemParams());
         }
 
         CrewIconView more = iconButton(ICON_MORE);
@@ -119,42 +146,25 @@ final class BubbleActionStripOverlay extends LinearLayout {
             if (actions != null) actions.onOpenConsole();
         });
         addView(more, itemParams());
-
-        if (live) {
-            final boolean teaching = NativeLiveService.isAppTeachModeArmed();
-            CrewIconView teach = iconButton(ICON_TEACH);
-            teach.setContentDescription(teaching ? "取消教 Crew" : "教 Crew");
-            teach.setOnClickListener(v -> {
-                if (actions != null) actions.onTeachCurrentApp();
-            });
-            addView(teach, itemParams());
-        }
-
-        CrewIconView region = iconButton(ICON_REGION);
-        region.setContentDescription("框選截圖");
-        region.setOnClickListener(v -> {
-            if (actions != null) actions.onRegionSelection();
-        });
-        addView(region, itemParams());
     }
 
     private LinearLayout.LayoutParams itemParams() {
         LinearLayout.LayoutParams lp =
-                new LinearLayout.LayoutParams(dp(40), dp(40));
+                new LinearLayout.LayoutParams(dp(38), dp(38));
         lp.gravity = Gravity.CENTER_HORIZONTAL;
-        lp.setMargins(0, dp(2), 0, dp(2));
+        lp.setMargins(0, dp(1), 0, dp(1));
         return lp;
     }
 
     private CrewIconView iconButton(int icon) {
         CrewIconView button = new CrewIconView(context);
-        button.setIconScale(0.64f);
+        button.setIconScale(0.62f);
 
         int color;
         int fill;
         if (icon == ICON_SPEAKER) {
             color = Color.parseColor("#FCD34D");
-            fill = Color.argb(72, 120, 53, 15);
+            fill = Color.argb(62, 120, 53, 15);
             button.setIcon(CrewIcons.INTERRUPT, color);
         } else if (icon == ICON_MIC_MUTED) {
             color = Color.parseColor("#FDA4AF");
@@ -166,23 +176,16 @@ final class BubbleActionStripOverlay extends LinearLayout {
             button.setIcon(CrewIcons.HANGUP, color);
         } else if (icon == ICON_MIC_ACTIVE) {
             color = Color.parseColor("#5EEAD4");
-            fill = Color.argb(52, 19, 78, 74);
+            fill = Color.argb(48, 19, 78, 74);
             button.setIcon(CrewIcons.MIC, color);
         } else if (icon == ICON_CALL) {
             color = Color.parseColor("#67E8F9");
-            fill = Color.argb(52, 19, 78, 74);
+            fill = Color.argb(48, 19, 78, 74);
             button.setIcon(CrewIcons.VOICE, color);
         } else if (icon == ICON_REGION) {
             color = Color.parseColor("#93C5FD");
-            fill = Color.argb(52, 30, 64, 175);
+            fill = Color.argb(48, 30, 64, 175);
             button.setIcon(CrewIcons.REGION, color);
-        } else if (icon == ICON_TEACH) {
-            boolean teaching = NativeLiveService.isAppTeachModeArmed();
-            color = Color.parseColor(teaching ? "#FCD34D" : "#A7F3D0");
-            fill = teaching
-                    ? Color.argb(72, 120, 53, 15)
-                    : Color.argb(52, 19, 78, 74);
-            button.setIcon(CrewIcons.BRAIN, color);
         } else {
             color = Color.parseColor("#CBD5E1");
             fill = Color.TRANSPARENT;

@@ -1,297 +1,213 @@
 package com.crewpocket.helper;
 
-import android.animation.Animator;
-import android.animation.AnimatorListenerAdapter;
 import android.animation.ValueAnimator;
 import android.content.Context;
-import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
-import android.graphics.Matrix;
 import android.graphics.Paint;
-import android.graphics.Path;
 import android.graphics.RectF;
-import android.graphics.SweepGradient;
 import android.graphics.Typeface;
 import android.view.View;
-import android.view.animation.DecelerateInterpolator;
 import android.view.animation.LinearInterpolator;
 
-/** 0106: animated Crew orb rendering extracted from FloatingBubbleManager. */
+/**
+ * Minimal Crew orb.
+ *
+ * The center mark is intentionally stable. Persistent state lives on the outer
+ * ring, while concrete phone actions are rendered by BubbleActionChipView.
+ */
 final class FluidBubbleView extends View {
-    private Paint bgPaint;
-    private Paint ringPaint;
-    private Paint glowPaint;
-    private Paint accentPaint;
-    private Paint badgePaint;
-    private Paint badgeTextPaint;
-    private Bitmap logoBitmap;
-    private RectF ringBounds = new RectF();
-    private Path logoClipPath = new Path();
-    private SweepGradient idleSweepGradient;
-    private SweepGradient activeSweepGradient;
-    private SweepGradient speakingSweepGradient;
-    private SweepGradient errorSweepGradient;
-    private SweepGradient attentionSweepGradient;
-    private SweepGradient conversationWaitingSweepGradient;
-    private SweepGradient rainbowSweepGradient;
-    private Matrix matrix = new Matrix();
+    private final Paint bgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint markPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint ringPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint haloPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint badgePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint badgeTextPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+    private final RectF arcBounds = new RectF();
     private float rotationAngle = 0f;
+
     private boolean isFlowing = false;
     private boolean isSuccessFlash = false;
-    // 0110: visual-only microphone activity. This never gates audio.
     private float microphoneActivity = 0f;
     private boolean microphoneSending = false;
     private boolean contextReadyFlash = false;
     private int contextReadyFlashGeneration = 0;
 
-    // Explicit Agent visual phase, independent of Gemini Live voice state.
     private BubbleTaskPhasePolicy.Phase agentPhase =
             BubbleTaskPhasePolicy.Phase.NONE;
     private boolean agentNeedsAttention = false;
     private boolean conversationWaiting = false;
-    // 0 none, 1 success, 2 failure
+
+    // 0 none, 1 success, 2 failure.
     private int agentResultFlash = 0;
     private int agentResultFlashGeneration = 0;
 
-    // 0 idle, 1 connected/listening, 2 AI speaking, 3 connection error
+    // 0 idle, 1 listening, 2 speaking, 3 error.
     private int nativeVoiceState = 0;
-    private ValueAnimator continuousRotator;
+    private ValueAnimator animator;
 
-    public FluidBubbleView(Context context) {
+    FluidBubbleView(Context context) {
         super(context);
         init();
     }
 
     private void init() {
-        bgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         bgPaint.setStyle(Paint.Style.FILL);
-        logoBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.crew_assistant_bubble);
 
-        ringPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        markPaint.setStrokeCap(Paint.Cap.ROUND);
+        markPaint.setStrokeJoin(Paint.Join.ROUND);
+
         ringPaint.setStyle(Paint.Style.STROKE);
-        ringPaint.setStrokeWidth(6.5f);
         ringPaint.setStrokeCap(Paint.Cap.ROUND);
 
-        glowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        glowPaint.setStyle(Paint.Style.STROKE);
-        glowPaint.setStrokeWidth(12f);
+        haloPaint.setStyle(Paint.Style.STROKE);
+        haloPaint.setStrokeCap(Paint.Cap.ROUND);
 
-        accentPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        accentPaint.setStyle(Paint.Style.FILL);
-
-        badgePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         badgePaint.setStyle(Paint.Style.FILL);
 
-        badgeTextPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         badgeTextPaint.setStyle(Paint.Style.FILL);
         badgeTextPaint.setTextAlign(Paint.Align.CENTER);
         badgeTextPaint.setTypeface(Typeface.DEFAULT_BOLD);
-
-        startContinuousRotation();
-    }
-
-    private void startContinuousRotation() {
-        if (continuousRotator == null) {
-            continuousRotator = ValueAnimator.ofFloat(0f, 360f);
-            continuousRotator.setDuration(4000); // 4s full rotation (identical to Web CSS)
-            continuousRotator.setRepeatCount(ValueAnimator.INFINITE);
-            continuousRotator.setInterpolator(new LinearInterpolator());
-            continuousRotator.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
-                @Override
-                public void onAnimationUpdate(ValueAnimator animation) {
-                    rotationAngle = (float) animation.getAnimatedValue();
-                    invalidate();
-                }
-            });
-        }
-        if (!continuousRotator.isRunning()) {
-            continuousRotator.start();
-        }
     }
 
     @Override
     protected void onAttachedToWindow() {
         super.onAttachedToWindow();
-        startContinuousRotation();
+        updateAnimationState();
     }
 
     @Override
     protected void onDetachedFromWindow() {
         super.onDetachedFromWindow();
-        if (continuousRotator != null) {
-            continuousRotator.cancel();
+        stopAnimator();
+    }
+
+    private void ensureAnimator() {
+        if (animator != null) return;
+        animator = ValueAnimator.ofFloat(0f, 360f);
+        animator.setRepeatCount(ValueAnimator.INFINITE);
+        animator.setInterpolator(new LinearInterpolator());
+        animator.addUpdateListener(animation -> {
+            rotationAngle = (Float) animation.getAnimatedValue();
+            invalidate();
+        });
+    }
+
+    private void stopAnimator() {
+        if (animator != null && animator.isRunning()) {
+            animator.cancel();
         }
     }
 
-    @Override
-    protected void onSizeChanged(int w, int h, int oldw, int oldh) {
-        super.onSizeChanged(w, h, oldw, oldh);
-        float stroke = ringPaint.getStrokeWidth();
-        ringBounds.set(stroke / 2f + 2f, stroke / 2f + 2f, w - stroke / 2f - 2f, h - stroke / 2f - 2f);
-
-        float cx = w / 2f;
-        float cy = h / 2f;
-
-        // 1. Idle is deliberately neutral: it should not look as if it is listening.
-        int[] idleColors = new int[]{
-            Color.parseColor("#64748B"),
-            Color.parseColor("#94A3B8"),
-            Color.parseColor("#475569"),
-            Color.parseColor("#64748B")
-        };
-        float[] idlePositions = new float[]{0.0f, 0.32f, 0.72f, 1.0f};
-        idleSweepGradient = new SweepGradient(cx, cy, idleColors, idlePositions);
-
-        // 2. Blue says "connected and listening".
-        int[] activeColors = new int[]{
-            Color.parseColor("#38BDF8"),
-            Color.parseColor("#2563EB"),
-            Color.parseColor("#818CF8"),
-            Color.parseColor("#38BDF8")
-        };
-        activeSweepGradient = new SweepGradient(cx, cy, activeColors, null);
-
-        // 3. Purple is reserved for the assistant speaking.
-        int[] speakColors = new int[]{
-            Color.parseColor("#A855F7"),
-            Color.parseColor("#C084FC"),
-            Color.parseColor("#7C3AED"),
-            Color.parseColor("#A855F7")
-        };
-        speakingSweepGradient = new SweepGradient(cx, cy, speakColors, null);
-
-        int[] errorColors = new int[]{
-            Color.parseColor("#F43F5E"), Color.parseColor("#EF4444"),
-            Color.parseColor("#FB7185"), Color.parseColor("#F43F5E")
-        };
-        errorSweepGradient = new SweepGradient(cx, cy, errorColors, null);
-
-        int[] attentionColors = new int[]{
-            Color.parseColor("#F59E0B"), Color.parseColor("#FCD34D"),
-            Color.parseColor("#FBBF24"), Color.parseColor("#F59E0B")
-        };
-        attentionSweepGradient =
-                new SweepGradient(cx, cy, attentionColors, null);
-
-        int[] conversationWaitingColors = new int[]{
-            Color.parseColor("#2DD4BF"),
-            Color.parseColor("#14B8A6"),
-            Color.parseColor("#22D3EE"),
-            Color.parseColor("#2DD4BF")
-        };
-        conversationWaitingSweepGradient =
-                new SweepGradient(cx, cy, conversationWaitingColors, null);
-
-        logoClipPath.reset();
-        logoClipPath.addCircle(
-                cx,
-                cy,
-                Math.min(w, h) * 0.42f,
-                Path.Direction.CW);
-
-        int[] rainbowColors = new int[]{
-            Color.parseColor("#38BDF8"),
-            Color.parseColor("#818CF8"),
-            Color.parseColor("#C084FC"),
-            Color.parseColor("#F43F5E"),
-            Color.parseColor("#38BDF8")
-        };
-        rainbowSweepGradient = new SweepGradient(cx, cy, rainbowColors, null);
-    }
-
-    private void updateRotationSpeed() {
-        if (continuousRotator == null) return;
-
+    private void updateAnimationState() {
         BubbleLogoStatePolicy.Mode mode = visualMode();
-        long duration;
-        if (mode == BubbleLogoStatePolicy.Mode.ACTING) {
-            duration = 780L;
-        } else if (mode == BubbleLogoStatePolicy.Mode.THINKING) {
-            duration = 1850L;
-        } else if (mode == BubbleLogoStatePolicy.Mode.WAITING) {
-            duration = 4300L;
-        } else if (mode == BubbleLogoStatePolicy.Mode.STUCK) {
-            duration = 5200L;
-        } else if (isFlowing) {
-            duration = 1200L;
-        } else if (mode == BubbleLogoStatePolicy.Mode.SPEAKING) {
-            duration = 1500L;
-        } else if (mode == BubbleLogoStatePolicy.Mode.WAITING_USER) {
-            duration = 1900L;
-        } else if (mode == BubbleLogoStatePolicy.Mode.CONVERSATION_WAITING) {
-            duration = 3200L;
-        } else if (mode == BubbleLogoStatePolicy.Mode.LISTENING
-                && microphoneSending
-                && microphoneActivity > 0.12f) {
-            duration = 1550L;
-        } else if (mode == BubbleLogoStatePolicy.Mode.LISTENING) {
-            duration = 2500L;
-        } else {
-            duration = 8200L;
+        boolean animate =
+                isFlowing
+                        || isSuccessFlash
+                        || contextReadyFlash
+                        || agentResultFlash != 0
+                        || mode != BubbleLogoStatePolicy.Mode.IDLE;
+
+        if (!animate) {
+            stopAnimator();
+            rotationAngle = 0f;
+            invalidate();
+            return;
         }
-        continuousRotator.setDuration(duration);
+
+        ensureAnimator();
+        long duration;
+        switch (mode) {
+            case ACTING:
+                duration = 900L;
+                break;
+            case THINKING:
+                duration = 1_850L;
+                break;
+            case SPEAKING:
+                duration = 1_550L;
+                break;
+            case LISTENING:
+                duration = microphoneSending && microphoneActivity > 0.12f
+                        ? 1_650L
+                        : 2_500L;
+                break;
+            case WAITING:
+                duration = 3_600L;
+                break;
+            case WAITING_USER:
+            case STUCK:
+                duration = 2_200L;
+                break;
+            case CONVERSATION_WAITING:
+                duration = 2_900L;
+                break;
+            case ERROR:
+                duration = 1_300L;
+                break;
+            default:
+                duration = 2_400L;
+                break;
+        }
+
+        animator.setDuration(duration);
+        if (isAttachedToWindow() && !animator.isRunning()) {
+            animator.start();
+        }
+        invalidate();
     }
 
-    public void startWaterFlow() {
+    void startWaterFlow() {
         isFlowing = true;
         isSuccessFlash = false;
-        updateRotationSpeed();
-        invalidate();
+        updateAnimationState();
     }
 
-    public void stopWaterFlow() {
+    void stopWaterFlow() {
         isFlowing = false;
-        updateRotationSpeed();
         isSuccessFlash = true;
-        invalidate();
-
-        postDelayed(new Runnable() {
-            @Override
-            public void run() {
-                isSuccessFlash = false;
-                invalidate();
-            }
-        }, 850);
+        updateAnimationState();
+        postDelayed(() -> {
+            isSuccessFlash = false;
+            updateAnimationState();
+        }, 700L);
     }
 
-    /** 0110: microphone telemetry drives visuals only; Server VAD remains authoritative. */
-    public void setMicrophoneActivity(double dbfs, boolean sending) {
+    void setMicrophoneActivity(double dbfs, boolean sending) {
         float normalized = 0f;
         if (sending && dbfs > -72d) {
             normalized = (float) ((dbfs + 58d) / 40d);
             normalized = Math.max(0f, Math.min(1f, normalized));
         }
-        microphoneActivity = microphoneActivity * 0.42f + normalized * 0.58f;
-        if (!sending && microphoneActivity < 0.04f) microphoneActivity = 0f;
+        microphoneActivity =
+                microphoneActivity * 0.42f + normalized * 0.58f;
+        if (!sending && microphoneActivity < 0.04f) {
+            microphoneActivity = 0f;
+        }
         microphoneSending = sending;
-        updateRotationSpeed();
-        invalidate();
+        updateAnimationState();
     }
 
-    /** Explicit selected-region context is ready for the next voice instruction. */
-    public void flashContextReady() {
+    void flashContextReady() {
         final int generation = ++contextReadyFlashGeneration;
         contextReadyFlash = true;
-        invalidate();
-        postDelayed(new Runnable() {
-            @Override public void run() {
-                if (generation != contextReadyFlashGeneration) return;
-                contextReadyFlash = false;
-                invalidate();
-            }
-        }, 900L);
+        updateAnimationState();
+        postDelayed(() -> {
+            if (generation != contextReadyFlashGeneration) return;
+            contextReadyFlash = false;
+            updateAnimationState();
+        }, 850L);
     }
 
-    public void setAgentWorking(boolean working) {
+    void setAgentWorking(boolean working) {
         setAgentPhase(
                 working
                         ? BubbleTaskPhasePolicy.Phase.THINKING
                         : BubbleTaskPhasePolicy.Phase.NONE);
     }
 
-    public void setAgentPhase(BubbleTaskPhasePolicy.Phase phase) {
+    void setAgentPhase(BubbleTaskPhasePolicy.Phase phase) {
         BubbleTaskPhasePolicy.Phase resolved =
                 phase == null
                         ? BubbleTaskPhasePolicy.Phase.NONE
@@ -303,11 +219,10 @@ final class FluidBubbleView extends View {
             agentResultFlash = 0;
             agentResultFlashGeneration++;
         }
-        updateRotationSpeed();
-        invalidate();
+        updateAnimationState();
     }
 
-    public void setAgentNeedsAttention(boolean needsAttention) {
+    void setAgentNeedsAttention(boolean needsAttention) {
         if (agentNeedsAttention == needsAttention) return;
         agentNeedsAttention = needsAttention;
         if (needsAttention) {
@@ -315,43 +230,37 @@ final class FluidBubbleView extends View {
             agentResultFlash = 0;
             agentResultFlashGeneration++;
         }
-        updateRotationSpeed();
-        invalidate();
+        updateAnimationState();
     }
 
-    public void setConversationWaiting(boolean waiting) {
+    void setConversationWaiting(boolean waiting) {
         if (conversationWaiting == waiting) return;
         conversationWaiting = waiting;
-        updateRotationSpeed();
-        invalidate();
+        updateAnimationState();
     }
 
-    public void flashAgentResult(final boolean success) {
+    void flashAgentResult(final boolean success) {
         agentPhase = BubbleTaskPhasePolicy.Phase.NONE;
         agentNeedsAttention = false;
-        updateRotationSpeed();
 
         final int generation = ++agentResultFlashGeneration;
         agentResultFlash = success ? 1 : 2;
-        invalidate();
+        updateAnimationState();
 
-        postDelayed(new Runnable() {
-            @Override public void run() {
-                if (generation != agentResultFlashGeneration) return;
-                agentResultFlash = 0;
-                invalidate();
-            }
-        }, success ? 650L : 950L);
+        postDelayed(() -> {
+            if (generation != agentResultFlashGeneration) return;
+            agentResultFlash = 0;
+            updateAnimationState();
+        }, success ? 720L : 980L);
     }
 
-    public void setNativeVoiceState(int state) {
-        this.nativeVoiceState = state;
+    void setNativeVoiceState(int state) {
+        nativeVoiceState = state;
         if (state != 1) {
             microphoneActivity = 0f;
             microphoneSending = false;
         }
-        updateRotationSpeed();
-        invalidate();
+        updateAnimationState();
     }
 
     private BubbleLogoStatePolicy.Mode visualMode() {
@@ -367,124 +276,251 @@ final class FluidBubbleView extends View {
         return 0.5f + 0.5f * (float) Math.sin(radians);
     }
 
-    private void drawLogoWithState(
-            Canvas canvas,
-            RectF logoBounds,
-            float cx,
-            float cy,
-            float radius,
-            BubbleLogoStatePolicy.Mode mode) {
-        // Keep the Crew mark visually stable. State belongs to the outer ring
-        // and small badges; the logo itself should not wobble, tilt, scan, or
-        // change shape while the user is trying to read the screen.
-        bgPaint.setShader(null);
-        bgPaint.setAlpha(255);
-        if (logoBitmap != null && !logoBitmap.isRecycled()) {
-            canvas.drawBitmap(
-                    logoBitmap,
-                    null,
-                    logoBounds,
-                    bgPaint);
-        } else {
-            bgPaint.setColor(Color.parseColor("#071426"));
-            canvas.drawCircle(cx, cy, radius, bgPaint);
-        }
+    @Override
+    protected void onDraw(Canvas canvas) {
+        super.onDraw(canvas);
 
-        float pulse = wave(1f);
-        if (mode == BubbleLogoStatePolicy.Mode.WAITING) {
-            drawWaitingDot(canvas, cx, cy, radius, pulse);
-        } else if (mode
-                == BubbleLogoStatePolicy.Mode.CONVERSATION_WAITING) {
-            drawConversationWaitingDot(
-                    canvas,
-                    cx,
-                    cy,
-                    radius,
-                    pulse);
-        }
+        float cx = getWidth() / 2f;
+        float cy = getHeight() / 2f;
+        float radius =
+                Math.max(
+                        1f,
+                        Math.min(getWidth(), getHeight()) / 2f - 1.5f);
+        BubbleLogoStatePolicy.Mode mode = visualMode();
 
-        if (mode == BubbleLogoStatePolicy.Mode.WAITING_USER) {
-            drawAttentionBadge(canvas, radius);
-        }
+        drawCrewMark(canvas, cx, cy, radius);
+        drawState(canvas, cx, cy, radius, mode);
+        drawTransientResult(canvas, cx, cy, radius);
     }
 
-    private void drawThinkingOrbit(
+    private void drawCrewMark(
             Canvas canvas,
             float cx,
             float cy,
             float radius) {
-        double angle = Math.toRadians(rotationAngle);
-        float orbitRadius = radius * 0.70f;
-        for (int i = 0; i < 3; i++) {
-            double a = angle + (Math.PI * 2d * i / 3d);
-            float x = cx + (float) Math.cos(a) * orbitRadius;
-            float y = cy + (float) Math.sin(a) * orbitRadius;
-            accentPaint.setStyle(Paint.Style.FILL);
-            accentPaint.setColor(Color.parseColor("#A5B4FC"));
-            accentPaint.setAlpha(150 - i * 28);
-            canvas.drawCircle(
-                    x,
-                    y,
-                    Math.max(2.2f, radius * (0.045f + i * 0.008f)),
-                    accentPaint);
+        // Stable dark core.
+        bgPaint.setColor(Color.parseColor("#08111F"));
+        bgPaint.setAlpha(252);
+        canvas.drawCircle(cx, cy, radius * 0.82f, bgPaint);
+
+        // Minimal Crew "C" mark: readable even at notification/icon scale.
+        markPaint.setStyle(Paint.Style.STROKE);
+        markPaint.setStrokeWidth(Math.max(3f, radius * 0.17f));
+        markPaint.setColor(Color.parseColor("#F8FAFC"));
+        markPaint.setAlpha(238);
+        float markRadius = radius * 0.43f;
+        arcBounds.set(
+                cx - markRadius,
+                cy - markRadius,
+                cx + markRadius,
+                cy + markRadius);
+        canvas.drawArc(
+                arcBounds,
+                44f,
+                272f,
+                false,
+                markPaint);
+
+        // One quiet cyan point gives Crew a recognizable signature without
+        // turning the mark into another status indicator.
+        markPaint.setStyle(Paint.Style.FILL);
+        markPaint.setColor(Color.parseColor("#67E8F9"));
+        markPaint.setAlpha(245);
+        canvas.drawCircle(
+                cx + radius * 0.44f,
+                cy,
+                Math.max(2.1f, radius * 0.085f),
+                markPaint);
+    }
+
+    private void drawState(
+            Canvas canvas,
+            float cx,
+            float cy,
+            float radius,
+            BubbleLogoStatePolicy.Mode mode) {
+        float pulse = wave(1f);
+        float inset = Math.max(2f, radius * 0.06f);
+        RectF ring = new RectF(
+                inset,
+                inset,
+                getWidth() - inset,
+                getHeight() - inset);
+
+        ringPaint.setShader(null);
+        ringPaint.setStrokeWidth(Math.max(2f, radius * 0.075f));
+
+        switch (mode) {
+            case IDLE:
+                drawFullRing(canvas, ring, "#64748B", 105);
+                break;
+
+            case LISTENING:
+                drawFullRing(
+                        canvas,
+                        ring,
+                        "#38BDF8",
+                        175 + Math.round(40f * pulse));
+                haloPaint.setColor(Color.parseColor("#38BDF8"));
+                haloPaint.setStrokeWidth(Math.max(2f, radius * 0.055f));
+                haloPaint.setAlpha(
+                        20 + Math.round(
+                                70f * Math.max(
+                                        microphoneActivity,
+                                        0.10f) * pulse));
+                float haloInset = Math.max(4f, radius * 0.13f);
+                canvas.drawOval(
+                        new RectF(
+                                haloInset,
+                                haloInset,
+                                getWidth() - haloInset,
+                                getHeight() - haloInset),
+                        haloPaint);
+                break;
+
+            case THINKING:
+                drawFullRing(canvas, ring, "#7C3AED", 86);
+                drawMovingArc(
+                        canvas,
+                        ring,
+                        "#C084FC",
+                        215,
+                        74f);
+                break;
+
+            case ACTING:
+                drawFullRing(canvas, ring, "#0E7490", 72);
+                drawMovingArc(
+                        canvas,
+                        ring,
+                        "#22D3EE",
+                        255,
+                        100f);
+                break;
+
+            case WAITING:
+                drawFullRing(
+                        canvas,
+                        ring,
+                        "#64748B",
+                        80 + Math.round(50f * pulse));
+                drawDot(
+                        canvas,
+                        cx + radius * 0.52f,
+                        cy + radius * 0.50f,
+                        radius * (0.055f + 0.012f * pulse),
+                        "#FBBF24",
+                        190);
+                break;
+
+            case WAITING_USER:
+                drawFullRing(
+                        canvas,
+                        ring,
+                        "#F59E0B",
+                        180 + Math.round(55f * pulse));
+                drawAttentionBadge(canvas, radius);
+                break;
+
+            case CONVERSATION_WAITING:
+                drawFullRing(
+                        canvas,
+                        ring,
+                        "#14B8A6",
+                        120 + Math.round(70f * pulse));
+                drawDot(
+                        canvas,
+                        cx + radius * 0.50f,
+                        cy + radius * 0.50f,
+                        radius * (0.055f + 0.018f * pulse),
+                        "#5EEAD4",
+                        225);
+                break;
+
+            case SPEAKING:
+                drawFullRing(
+                        canvas,
+                        ring,
+                        "#A855F7",
+                        160 + Math.round(70f * pulse));
+                break;
+
+            case STUCK:
+                drawFullRing(
+                        canvas,
+                        ring,
+                        "#F59E0B",
+                        135 + Math.round(95f * pulse));
+                drawAttentionBadge(canvas, radius);
+                break;
+
+            case ERROR:
+                drawFullRing(
+                        canvas,
+                        ring,
+                        "#F43F5E",
+                        190 + Math.round(55f * pulse));
+                break;
+        }
+
+        if (contextReadyFlash) {
+            ringPaint.setStrokeWidth(Math.max(2.8f, radius * 0.095f));
+            drawFullRing(canvas, ring, "#2DD4BF", 250);
+        }
+
+        if (isFlowing
+                && mode == BubbleLogoStatePolicy.Mode.IDLE) {
+            drawMovingArc(
+                    canvas,
+                    ring,
+                    "#818CF8",
+                    210,
+                    82f);
         }
     }
 
-    private void drawWaitingDot(
+    private void drawFullRing(
             Canvas canvas,
-            float cx,
-            float cy,
-            float radius,
-            float pulse) {
-        accentPaint.setStyle(Paint.Style.FILL);
-        accentPaint.setColor(Color.parseColor("#94A3B8"));
-        accentPaint.setAlpha(120 + Math.round(70f * pulse));
-        canvas.drawCircle(
-                cx + radius * 0.48f,
-                cy + radius * 0.48f,
-                radius * (0.045f + 0.010f * pulse),
-                accentPaint);
+            RectF bounds,
+            String color,
+            int alpha) {
+        ringPaint.setColor(Color.parseColor(color));
+        ringPaint.setAlpha(Math.max(0, Math.min(255, alpha)));
+        canvas.drawOval(bounds, ringPaint);
     }
 
-    private void drawWorkingScanner(Canvas canvas, float radius) {
-        float fraction = rotationAngle / 360f;
-        float scanX = -radius
-                + fraction * (getWidth() + radius * 2f);
-
-        canvas.save();
-        canvas.clipPath(logoClipPath);
-        accentPaint.setStyle(Paint.Style.STROKE);
-        accentPaint.setStrokeCap(Paint.Cap.ROUND);
-        accentPaint.setStrokeWidth(Math.max(3f, radius * 0.16f));
-        accentPaint.setColor(Color.parseColor("#67E8F9"));
-        accentPaint.setAlpha(68);
-        canvas.drawLine(
-                scanX - radius * 0.72f,
-                getHeight(),
-                scanX + radius * 0.72f,
-                0f,
-                accentPaint);
-        canvas.restore();
-    }
-
-    private void drawConversationWaitingDot(
+    private void drawMovingArc(
             Canvas canvas,
-            float cx,
-            float cy,
-            float radius,
-            float pulse) {
-        accentPaint.setStyle(Paint.Style.FILL);
-        accentPaint.setColor(Color.parseColor("#5EEAD4"));
-        accentPaint.setAlpha(225);
-        canvas.drawCircle(
-                cx + radius * 0.43f,
-                cy + radius * 0.43f,
-                radius * (0.055f + 0.018f * pulse),
-                accentPaint);
+            RectF bounds,
+            String color,
+            int alpha,
+            float sweep) {
+        ringPaint.setColor(Color.parseColor(color));
+        ringPaint.setAlpha(alpha);
+        canvas.drawArc(
+                bounds,
+                rotationAngle - 90f,
+                sweep,
+                false,
+                ringPaint);
     }
 
-    private void drawAttentionBadge(Canvas canvas, float radius) {
-        float badgeRadius = Math.max(4f, radius * 0.18f);
+    private void drawDot(
+            Canvas canvas,
+            float x,
+            float y,
+            float radius,
+            String color,
+            int alpha) {
+        badgePaint.setColor(Color.parseColor(color));
+        badgePaint.setAlpha(alpha);
+        canvas.drawCircle(x, y, Math.max(2f, radius), badgePaint);
+    }
+
+    private void drawAttentionBadge(
+            Canvas canvas,
+            float radius) {
+        float badgeRadius = Math.max(4.2f, radius * 0.18f);
         float badgeCx = getWidth() - radius * 0.34f;
         float badgeCy = radius * 0.34f;
 
@@ -500,179 +536,61 @@ final class FluidBubbleView extends View {
         badgeTextPaint.setAlpha(255);
         badgeTextPaint.setTextSize(Math.max(8f, radius * 0.31f));
         Paint.FontMetrics metrics = badgeTextPaint.getFontMetrics();
-        float baseline = badgeCy
-                - (metrics.ascent + metrics.descent) / 2f;
-        canvas.drawText("!", badgeCx, baseline, badgeTextPaint);
+        float baseline =
+                badgeCy - (metrics.ascent + metrics.descent) / 2f;
+        canvas.drawText(
+                "!",
+                badgeCx,
+                baseline,
+                badgeTextPaint);
     }
 
-    @Override
-    protected void onDraw(Canvas canvas) {
-        super.onDraw(canvas);
-        final float cx = getWidth() / 2f;
-        final float cy = getHeight() / 2f;
-        final float radius = Math.max(1f, Math.min(getWidth(), getHeight()) / 2f - 1.5f);
+    private void drawTransientResult(
+            Canvas canvas,
+            float cx,
+            float cy,
+            float radius) {
+        if (agentResultFlash == 0 && !isSuccessFlash) return;
 
-        RectF logoBounds = new RectF(0f, 0f, getWidth(), getHeight());
-        BubbleLogoStatePolicy.Mode mode = visualMode();
-        drawLogoWithState(
-                canvas,
-                logoBounds,
-                cx,
-                cy,
-                radius,
-                mode);
+        boolean success =
+                agentResultFlash == 1
+                        || (agentResultFlash == 0 && isSuccessFlash);
+        int color = Color.parseColor(
+                success ? "#34D399" : "#FB7185");
 
-        // The state rim is now the primary persistent state signal. The Crew
-        // mark stays fixed so the floating control remains calm and readable.
-        matrix.setRotate(rotationAngle, cx, cy);
-        SweepGradient rimGradient =
-                mode == BubbleLogoStatePolicy.Mode.ERROR
-                        ? errorSweepGradient
-                        : mode == BubbleLogoStatePolicy.Mode.WAITING_USER
-                        || mode == BubbleLogoStatePolicy.Mode.STUCK
-                        ? attentionSweepGradient
-                        : mode == BubbleLogoStatePolicy.Mode.SPEAKING
-                        ? speakingSweepGradient
-                        : mode == BubbleLogoStatePolicy.Mode.CONVERSATION_WAITING
-                        || mode == BubbleLogoStatePolicy.Mode.WAITING
-                        ? conversationWaitingSweepGradient
-                        : mode == BubbleLogoStatePolicy.Mode.LISTENING
-                        || mode == BubbleLogoStatePolicy.Mode.THINKING
-                        || mode == BubbleLogoStatePolicy.Mode.ACTING
-                        ? activeSweepGradient
-                        : isFlowing
-                        ? rainbowSweepGradient
-                        : idleSweepGradient;
-        if (rimGradient != null) {
-            rimGradient.setLocalMatrix(matrix);
-            ringPaint.setShader(rimGradient);
-            ringPaint.setStyle(Paint.Style.STROKE);
-            ringPaint.setStrokeCap(Paint.Cap.ROUND);
-            float listeningBoost =
-                    mode == BubbleLogoStatePolicy.Mode.LISTENING
-                            && microphoneSending
-                    ? microphoneActivity : 0f;
-            ringPaint.setStrokeWidth(Math.max(
-                    2f,
-                    radius * (0.075f + 0.035f * listeningBoost)));
-            ringPaint.setAlpha(
-                    mode == BubbleLogoStatePolicy.Mode.ACTING
-                            ? 92
-                            : mode == BubbleLogoStatePolicy.Mode.WAITING
-                            ? 52
-                            : mode == BubbleLogoStatePolicy.Mode.STUCK
-                            ? 120
-                            : (mode == BubbleLogoStatePolicy.Mode.IDLE
-                                    && !isFlowing
-                                    ? 90
-                                    : Math.min(255,
-                                            205 + Math.round(50f * listeningBoost))));
-            RectF stateRing = new RectF(
-                    ringPaint.getStrokeWidth() / 2f,
-                    ringPaint.getStrokeWidth() / 2f,
-                    getWidth() - ringPaint.getStrokeWidth() / 2f,
-                    getHeight() - ringPaint.getStrokeWidth() / 2f);
-            canvas.drawOval(stateRing, ringPaint);
-            ringPaint.setShader(null);
-        }
+        ringPaint.setShader(null);
+        ringPaint.setStyle(Paint.Style.STROKE);
+        ringPaint.setStrokeWidth(Math.max(3f, radius * 0.10f));
+        ringPaint.setColor(color);
+        ringPaint.setAlpha(250);
+        float inset = ringPaint.getStrokeWidth();
+        canvas.drawOval(
+                new RectF(
+                        inset,
+                        inset,
+                        getWidth() - inset,
+                        getHeight() - inset),
+                ringPaint);
 
-        if (mode == BubbleLogoStatePolicy.Mode.LISTENING
-                && microphoneSending
-                && microphoneActivity > 0.06f) {
-            glowPaint.setShader(null);
-            glowPaint.setColor(Color.parseColor("#38BDF8"));
-            glowPaint.setAlpha(28 + Math.round(72f * microphoneActivity));
-            glowPaint.setStrokeWidth(Math.max(3f, radius * 0.055f));
-            float haloInset = Math.max(3f, radius * 0.11f);
-            RectF listeningHalo = new RectF(
-                    haloInset, haloInset,
-                    getWidth() - haloInset,
-                    getHeight() - haloInset);
-            canvas.drawOval(listeningHalo, glowPaint);
-        }
-
-        if (mode == BubbleLogoStatePolicy.Mode.ACTING) {
-            ringPaint.setStyle(Paint.Style.STROKE);
-            ringPaint.setShader(null);
-            ringPaint.setStrokeCap(Paint.Cap.ROUND);
-            ringPaint.setStrokeWidth(Math.max(2.5f, radius * 0.095f));
-            ringPaint.setColor(Color.parseColor("#22D3EE"));
-            ringPaint.setAlpha(255);
-
-            float inset = ringPaint.getStrokeWidth() / 2f;
-            RectF agentSpinnerRing = new RectF(
-                    inset,
-                    inset,
-                    getWidth() - inset,
-                    getHeight() - inset);
-            canvas.drawArc(
-                    agentSpinnerRing,
-                    rotationAngle - 90f,
-                    92f,
-                    false,
-                    ringPaint);
-        } else if (mode == BubbleLogoStatePolicy.Mode.STUCK) {
-            ringPaint.setStyle(Paint.Style.STROKE);
-            ringPaint.setShader(null);
-            ringPaint.setStrokeCap(Paint.Cap.ROUND);
-            ringPaint.setStrokeWidth(Math.max(2f, radius * 0.075f));
-            ringPaint.setColor(Color.parseColor("#F59E0B"));
-            ringPaint.setAlpha(150 + Math.round(65f * wave(0.5f)));
-            float inset = ringPaint.getStrokeWidth();
-            RectF stuckRing = new RectF(
-                    inset,
-                    inset,
-                    getWidth() - inset,
-                    getHeight() - inset);
-            canvas.drawOval(stuckRing, ringPaint);
-        }
-
-        if (agentResultFlash != 0) {
-            ringPaint.setStyle(Paint.Style.STROKE);
-            ringPaint.setShader(null);
-            ringPaint.setStrokeCap(Paint.Cap.ROUND);
-            ringPaint.setStrokeWidth(Math.max(2.5f, radius * 0.085f));
-            ringPaint.setColor(
-                    agentResultFlash == 1
-                            ? Color.parseColor("#34D399")
-                            : Color.parseColor("#FB7185"));
-            ringPaint.setAlpha(245);
-
-            float resultInset = ringPaint.getStrokeWidth();
-            RectF resultRing = new RectF(
-                    resultInset,
-                    resultInset,
-                    getWidth() - resultInset,
-                    getHeight() - resultInset);
-            canvas.drawOval(resultRing, ringPaint);
-        }
-
-        if (contextReadyFlash) {
-            ringPaint.setStyle(Paint.Style.STROKE);
-            ringPaint.setShader(null);
-            ringPaint.setStrokeCap(Paint.Cap.ROUND);
-            ringPaint.setStrokeWidth(Math.max(3f, radius * 0.095f));
-            ringPaint.setColor(Color.parseColor("#2DD4BF"));
-            ringPaint.setAlpha(250);
-            float contextInset = ringPaint.getStrokeWidth();
-            RectF contextRing = new RectF(
-                    contextInset, contextInset,
-                    getWidth() - contextInset,
-                    getHeight() - contextInset);
-            canvas.drawOval(contextRing, ringPaint);
-        }
-
-        if (isSuccessFlash) {
-            ringPaint.setStyle(Paint.Style.STROKE);
-            ringPaint.setShader(null);
-            ringPaint.setStrokeWidth(Math.max(2f, radius * 0.055f));
-            ringPaint.setColor(Color.WHITE);
-            ringPaint.setAlpha(210);
-            RectF successRing = new RectF(
-                    ringPaint.getStrokeWidth(), ringPaint.getStrokeWidth(),
-                    getWidth() - ringPaint.getStrokeWidth(),
-                    getHeight() - ringPaint.getStrokeWidth());
-            canvas.drawOval(successRing, ringPaint);
+        if (success) {
+            markPaint.setStyle(Paint.Style.STROKE);
+            markPaint.setStrokeCap(Paint.Cap.ROUND);
+            markPaint.setStrokeJoin(Paint.Join.ROUND);
+            markPaint.setStrokeWidth(Math.max(3f, radius * 0.14f));
+            markPaint.setColor(Color.parseColor("#ECFDF5"));
+            markPaint.setAlpha(250);
+            canvas.drawLine(
+                    cx - radius * 0.22f,
+                    cy,
+                    cx - radius * 0.04f,
+                    cy + radius * 0.18f,
+                    markPaint);
+            canvas.drawLine(
+                    cx - radius * 0.04f,
+                    cy + radius * 0.18f,
+                    cx + radius * 0.28f,
+                    cy - radius * 0.20f,
+                    markPaint);
         }
     }
 }

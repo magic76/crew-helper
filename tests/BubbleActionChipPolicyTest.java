@@ -4,6 +4,8 @@ public final class BubbleActionChipPolicyTest {
     private static int checks;
 
     public static void main(String[] args) {
+        check(BubbleActionChipPolicy.PHASE_DEBOUNCE_MS == 300L,
+                "phase debounce moved out of legacy Morph policy");
         check(BubbleActionChipPolicy.TRANSIENT_MS >= 1_200L
                         && BubbleActionChipPolicy.TRANSIENT_MS <= 2_000L,
                 "normal actions stay visible briefly");
@@ -28,6 +30,33 @@ public final class BubbleActionChipPolicyTest {
                                 null,
                                 BubbleTaskPhasePolicy.Phase.WAITING)),
                 "waiting fallback");
+
+        check(BubbleActionChipPolicy.kind(
+                        "正在搜尋林家花園",
+                        BubbleTaskPhasePolicy.Phase.ACTING)
+                        == BubbleActionChipPolicy.Kind.SEARCH,
+                "search action kind");
+        check(BubbleActionChipPolicy.kind(
+                        "正在往右滑",
+                        BubbleTaskPhasePolicy.Phase.ACTING)
+                        == BubbleActionChipPolicy.Kind.SWIPE,
+                "swipe action kind");
+        check(BubbleActionChipPolicy.kind(
+                        "正在開啟搜尋結果",
+                        BubbleTaskPhasePolicy.Phase.ACTING)
+                        == BubbleActionChipPolicy.Kind.OPEN,
+                "open verb wins over search target noun");
+        check(BubbleActionChipPolicy.kind(
+                        "等待頁面載入",
+                        BubbleTaskPhasePolicy.Phase.WAITING)
+                        == BubbleActionChipPolicy.Kind.WAIT,
+                "wait action kind");
+        check(BubbleActionChipPolicy.kind(
+                        "",
+                        BubbleTaskPhasePolicy.Phase.THINKING)
+                        == BubbleActionChipPolicy.Kind.THINK,
+                "thinking phase kind");
+
         check(BubbleActionChipPolicy.stillSameAction(
                         "正在操作",
                         "  正在操作  "),
