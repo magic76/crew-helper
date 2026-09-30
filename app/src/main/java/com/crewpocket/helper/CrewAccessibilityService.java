@@ -349,6 +349,7 @@ public class CrewAccessibilityService extends AccessibilityService {
             FloatingBubbleManager manager = FloatingBubbleManager.getInstance(this);
             manager.hideBubble();
         } catch (Exception ignored) {}
+        ActionVisualOverlay.dismiss();
         instance = null;
         super.onDestroy();
     }
@@ -607,6 +608,11 @@ public class CrewAccessibilityService extends AccessibilityService {
                 final Object lock = new Object();
                 final String[] result = new String[]{"{\"success\":false,\"error\":\"Screenshot failed\"}"};
                 final long captureStartedAt = System.currentTimeMillis();
+
+                // Visual feedback is user-facing only. Remove it before fresh
+                // vision capture so Crew never reasons about its own tap/swipe
+                // indicators as if they were app UI.
+                ActionVisualOverlay.dismiss();
 
                 if (requestSilentScreenshot(lock, result)) {
                     synchronized (lock) {
@@ -877,7 +883,13 @@ public class CrewAccessibilityService extends AccessibilityService {
                                 boolean clicked = false;
                                 try {
                                     if (!SensitiveDataGuard.isBlockedAction(match.node)) {
-                                        clicked = match.node.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                                        Rect actionBounds = new Rect();
+                                        match.node.getBoundsInScreen(actionBounds);
+                                        ActionVisualOverlay.showTapTarget(
+                                                CrewAccessibilityService.this,
+                                                actionBounds);
+                                        clicked = match.node.performAction(
+                                                AccessibilityNodeInfo.ACTION_CLICK);
                                     }
                                 } finally { match.recycle(); match = null; }
                                 out.put("success", clicked);
@@ -927,6 +939,9 @@ public class CrewAccessibilityService extends AccessibilityService {
                 mainHandler.post(new Runnable() {
                     @Override public void run() {
                         try {
+                            ActionVisualOverlay.showScroll(
+                                    CrewAccessibilityService.this,
+                                    fDir);
                             if ("up".equals(fDir) || "forward".equals(fDir)) {
                                 scrollSuccess[0] = performScrollAction(true, targetId);
                             } else if ("down".equals(fDir) || "backward".equals(fDir)) {
@@ -1421,7 +1436,13 @@ public class CrewAccessibilityService extends AccessibilityService {
                                     error[0] = "SENSITIVE_TARGET_BLOCKED";
                                     return;
                                 }
-                                ok[0] = clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                                Rect actionBounds = new Rect();
+                                clickable.getBoundsInScreen(actionBounds);
+                                ActionVisualOverlay.showTapTarget(
+                                        CrewAccessibilityService.this,
+                                        actionBounds);
+                                ok[0] = clickable.performAction(
+                                        AccessibilityNodeInfo.ACTION_CLICK);
                                 if (!ok[0]) error[0] = "SEMANTIC_CLICK_REJECTED";
                             } catch (Exception e) {
                                 error[0] = "SEMANTIC_CLICK_FAILED";
@@ -1443,6 +1464,7 @@ public class CrewAccessibilityService extends AccessibilityService {
                             + "}";
                 }
             } else if (path.startsWith("/nodes") || path.startsWith("/screen_info")) {
+                ActionVisualOverlay.showLooking(CrewAccessibilityService.this);
                 AccessibilityNodeInfo root = getRootInActiveWindow();
                 if (root != null) {
                     CharSequence pkg = root.getPackageName();
@@ -1536,6 +1558,7 @@ public class CrewAccessibilityService extends AccessibilityService {
 
     private void performTap(float x, float y) {
         if (evaluateTapPolicy(x, y).blocked()) return;
+        ActionVisualOverlay.showTap(this, x, y);
         Path path = new Path();
         path.moveTo(x, y);
         GestureDescription.Builder builder = new GestureDescription.Builder();
@@ -1565,7 +1588,9 @@ public class CrewAccessibilityService extends AccessibilityService {
                 if (SensitiveDataGuard.isBlockedAction(target)) return false;
                 Rect bounds = new Rect();
                 target.getBoundsInScreen(bounds);
-                boolean clicked = target.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                ActionVisualOverlay.showTapTarget(this, bounds);
+                boolean clicked = target.performAction(
+                        AccessibilityNodeInfo.ACTION_CLICK);
                 // Only fall back when semantic click was rejected.  Tapping
                 // unconditionally after ACTION_CLICK can double-send a message.
                 if (!clicked && bounds.width() > 0 && bounds.height() > 0) {
@@ -1949,6 +1974,10 @@ public class CrewAccessibilityService extends AccessibilityService {
                 return false;
             }
 
+            Rect inputBounds = new Rect();
+            target.getBoundsInScreen(inputBounds);
+            ActionVisualOverlay.showTyping(this, inputBounds);
+
             target.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
 
             // Suppress only the Accessibility text-change event caused by this
@@ -2099,6 +2128,7 @@ public class CrewAccessibilityService extends AccessibilityService {
     }
 
     private void performSwipe(float x1, float y1, float x2, float y2, long duration) {
+        ActionVisualOverlay.showSwipe(this, x1, y1, x2, y2, duration);
         Path path = new Path();
         path.moveTo(x1, y1);
         
