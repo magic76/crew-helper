@@ -63,9 +63,7 @@ final class BubbleActionChipPolicy {
                 ? ""
                 : label.toLowerCase(Locale.ROOT);
 
-        if (containsAny(value, "搜尋", "搜索", "search", "find")) {
-            return Kind.SEARCH;
-        }
+        // Prefer the concrete verb over nouns inside the target label.
         if (containsAny(value, "滑", "scroll", "swipe", "上一頁", "下一頁")) {
             return Kind.SWIPE;
         }
@@ -83,6 +81,9 @@ final class BubbleActionChipPolicy {
         }
         if (containsAny(value, "等待", "確認", "驗證", "載入", "wait")) {
             return Kind.WAIT;
+        }
+        if (containsAny(value, "搜尋", "搜索", "search", "find")) {
+            return Kind.SEARCH;
         }
 
         BubbleTaskPhasePolicy.Phase resolved =
