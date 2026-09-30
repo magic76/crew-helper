@@ -99,6 +99,7 @@ final class BubbleTaskTimelineView extends LinearLayout {
         TextView text = new TextView(getContext());
         text.setText(label == null ? "" : label);
         text.setTextSize(11.5f);
+        text.setGravity(Gravity.CENTER_VERTICAL);
         text.setTextColor(
                 current
                         ? Color.parseColor("#F8FAFC")
