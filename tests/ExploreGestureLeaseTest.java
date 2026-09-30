@@ -55,6 +55,13 @@ public final class ExploreGestureLeaseTest {
         check("right".equals(lease.lastSemanticDirection()),
                 "accepted interim preview updates continuation direction");
 
+        ExploreGestureLease.Command unrelatedPreview =
+                lease.previewActive("播放周杰倫", 5_700L);
+        check(unrelatedPreview.kind == ExploreGestureLease.Kind.NONE,
+                "non-explore interim preview does not become a gesture");
+        check(lease.isActive(5_701L),
+                "non-explore interim preview must not clear the lease before final intent");
+
         ExploreGestureLease.Command inspect =
                 lease.interpret("看一下", 6_000L);
         check(inspect.kind == ExploreGestureLease.Kind.PASS_TO_MODEL,
