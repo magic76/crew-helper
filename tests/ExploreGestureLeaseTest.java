@@ -27,6 +27,15 @@ public final class ExploreGestureLeaseTest {
         check("short".equals(little.distance),
                 "little-more uses short distance");
 
+        ExploreGestureLease.Command repeatLittle =
+                lease.interpret("再下一點", 4_500L);
+        check(repeatLittle.kind == ExploreGestureLease.Kind.SCROLL,
+                "repeat-prefix direction stays inside the lease");
+        check("forward".equals(repeatLittle.semanticDirection),
+                "repeat-prefix direction preserves semantic content direction");
+        check("short".equals(repeatLittle.distance),
+                "repeat-prefix little command uses short distance");
+
         ExploreGestureLease.Command page =
                 lease.interpret("上一頁", 5_000L);
         check("backward".equals(page.semanticDirection),
