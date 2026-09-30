@@ -95,6 +95,7 @@ public class FloatingBubbleManager {
     private WindowManager.LayoutParams compactStatusParams = null;
     private FloatingPanelController compactStatusController = null;
     private Runnable compactStatusAutoHideRunnable = null;
+    private boolean compactStatusIsTaskHistory = false;
     private Runnable bubbleActionChipLongRunnable = null;
     private int bubbleActionChipLongGeneration = 0;
     private String bubbleActionChipKey = "";
@@ -313,12 +314,19 @@ public class FloatingBubbleManager {
     }
 
     public void showRuntimeUiState(final RuntimeUiState state) {
-        showRuntimeUiState(state, -1L);
+        showRuntimeUiState(state, -1L, false);
     }
 
     private void showRuntimeUiState(
             final RuntimeUiState state,
             final long autoHideOverrideMs) {
+        showRuntimeUiState(state, autoHideOverrideMs, false);
+    }
+
+    private void showRuntimeUiState(
+            final RuntimeUiState state,
+            final long autoHideOverrideMs,
+            final boolean taskHistory) {
         mainHandler.post(new Runnable() {
             @Override
             public void run() {
@@ -488,6 +496,7 @@ public class FloatingBubbleManager {
                     compactStatusView = card;
                     compactStatusParams = lp;
                     compactStatusController = null;
+                    compactStatusIsTaskHistory = taskHistory;
                     card.animate()
                             .alpha(1f)
                             .scaleX(1f)
@@ -869,6 +878,7 @@ public class FloatingBubbleManager {
                 compactStatusView = null;
                 compactStatusParams = null;
                 compactStatusController = null;
+                compactStatusIsTaskHistory = false;
             }
         });
     }
@@ -1064,20 +1074,33 @@ public class FloatingBubbleManager {
     }
 
     private boolean showBubbleDetailIfRelevant() {
-        if (bubbleAgentActiveTask && !bubbleRecentActions.isEmpty()) {
+        if (!bubbleAgentActiveTask) {
+            return false;
+        }
+
+        if (bubbleAgentNeedsAttention && bubbleDetailState != null) {
+            showRuntimeUiState(bubbleDetailState, 0L);
+            return true;
+        }
+
+        if (!bubbleRecentActions.isEmpty()) {
+            // First tap shows the short task trail. A second tap while the
+            // trail is visible falls through to the existing action strip so
+            // history never blocks the bubble controls.
+            if (compactStatusIsTaskHistory) {
+                hideCompactStatus();
+                return false;
+            }
             showRuntimeUiState(
                     RuntimeUiState.info(
                             "Crew 正在執行",
                             buildBubbleActionHistorySummary()),
-                    4_500L);
+                    4_500L,
+                    true);
             return true;
         }
 
-        if (bubbleDetailState == null) {
-            return false;
-        }
-        showRuntimeUiState(bubbleDetailState);
-        return true;
+        return false;
     }
 
     private void recordBubbleAction(String action) {
