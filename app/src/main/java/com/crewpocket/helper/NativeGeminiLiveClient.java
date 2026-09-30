@@ -2488,6 +2488,7 @@ final class NativeGeminiLiveClient {
 
     private void scheduleExploreInterimGesture(
             String interimText) {
+        final long token = ++exploreInterimToken;
         final long now = System.currentTimeMillis();
         ExploreGestureLease.Command preview =
                 exploreGestureLease.previewActive(
@@ -2498,7 +2499,6 @@ final class NativeGeminiLiveClient {
             return;
         }
 
-        final long token = ++exploreInterimToken;
         final String capturedText =
                 interimText == null ? "" : interimText;
         exploreInterimHandler.postDelayed(
@@ -2523,6 +2523,8 @@ final class NativeGeminiLiveClient {
                             generation =
                                     userIntentGeneration;
                         }
+                        runtimeExploreHandledGeneration =
+                                generation;
                         exploreGestureLease.acceptPreviewed(
                                 command,
                                 executeAt);
