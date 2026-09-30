@@ -43,13 +43,14 @@ final class BubbleActionChipPolicy {
     }
 
     static boolean stillSameAction(
-            String expectedProgressKey,
-            String latestRawStatus) {
-        String expected = expectedProgressKey == null
+            String expectedAction,
+            String currentAction) {
+        String expected = expectedAction == null
                 ? ""
-                : expectedProgressKey;
-        return !expected.isEmpty()
-                && expected.equals(
-                        BubbleTaskPhasePolicy.progressKey(latestRawStatus));
+                : expectedAction.replaceAll("\\s+", " ").trim();
+        String current = currentAction == null
+                ? ""
+                : currentAction.replaceAll("\\s+", " ").trim();
+        return !expected.isEmpty() && expected.equals(current);
     }
 }
