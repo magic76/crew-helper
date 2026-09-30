@@ -139,6 +139,9 @@ final class NativeGeminiLiveClient {
     private final VoiceExecutionGuard voiceExecutionGuard =
             new VoiceExecutionGuard();
     private volatile long runtimeSendCurrentHandledGeneration = -1L;
+    private final ExploreGestureLease exploreGestureLease =
+            new ExploreGestureLease();
+    private volatile long runtimeExploreHandledGeneration = -1L;
     private AudioIncidentRecorder audioIncidentRecorder;
     private volatile PendingCondition pendingCondition = null;
     private final Object pendingChoiceLock = new Object();
@@ -1106,6 +1109,10 @@ final class NativeGeminiLiveClient {
                     input, System.currentTimeMillis());
             voiceExecutionGuard.onFinalizedTypedTurn(
                     userIntentGeneration, input);
+            if (tryHandleRuntimeExploreGesture(input)) {
+                listener.onTranscript("你", input);
+                return true;
+            }
             userActionScope.updateFromUserText(input);
             recordFinalizedSendAuthorization(input);
             if (tryHandleRuntimeAppTeaching(input)) {
@@ -1617,6 +1624,14 @@ final class NativeGeminiLiveClient {
                                 frame.inputConfidence);
             }
 
+            if (!continuedHumanTurn
+                    && voiceDisposition
+                            == VoiceExecutionGuard.TurnDisposition.NORMAL
+                    && tryHandleRuntimeExploreGesture(
+                            effectiveUserInput)) {
+                return;
+            }
+
             JevVoiceSemanticResolver.Result jevSpeechReview =
                     JevVoiceSemanticResolver.Result.skipped("NOT_REVIEWED");
             boolean jevConfigured =
@@ -1907,6 +1922,8 @@ final class NativeGeminiLiveClient {
 
         if (!frame.outputText.isEmpty()
                 && !runtimeSendCurrentExecuting
+                && !isRuntimeExploreHandledGeneration(
+                        userIntentGeneration)
                 && !shouldWithholdUnverifiedAgentReply()) {
             if (!responseHasToolCall) {
                 Log.d(
@@ -1926,7 +1943,9 @@ final class NativeGeminiLiveClient {
 
             boolean withholdForVerification =
                     shouldWithholdUnverifiedAgentReply()
-                            || runtimeSendCurrentExecuting;
+                            || runtimeSendCurrentExecuting
+                            || isRuntimeExploreHandledGeneration(
+                                    userIntentGeneration);
             if (!interruptedCurrentTurn
                     && !withholdForVerification) {
                 if (substantiveModelProgress
