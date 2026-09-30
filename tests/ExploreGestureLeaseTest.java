@@ -83,6 +83,19 @@ public final class ExploreGestureLeaseTest {
         check(lease.isActive(8_001L),
                 "explicit start has active lease");
 
+        check(lease.isActive(
+                        8_000L + ExploreGestureLease.TTL_MS + 1L),
+                "explicit explore mode outlives the short implicit lease");
+        check(lease.isExplicitMode(
+                        8_000L + ExploreGestureLease.TTL_MS + 1L),
+                "explicit mode stays identifiable for listening policy");
+        check(!lease.isActive(
+                        8_000L
+                                + ExploreGestureLease.EXPLICIT_IDLE_TTL_MS
+                                + 1L),
+                "explicit mode still expires after a long idle window");
+
+        lease.interpret("進入探索模式", 8_500L);
         ExploreGestureLease.Command right =
                 lease.interpret("右一點", 9_000L);
         check(right.kind == ExploreGestureLease.Kind.SCROLL,
