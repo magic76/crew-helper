@@ -142,6 +142,13 @@ final class NativeGeminiLiveClient {
     private final ExploreGestureLease exploreGestureLease =
             new ExploreGestureLease();
     private volatile long runtimeExploreHandledGeneration = -1L;
+    private static final long EXPLORE_INTERIM_DEBOUNCE_MS = 240L;
+    private static final long EXPLORE_INTERIM_FINAL_DEDUPE_MS = 1_800L;
+    private final Handler exploreInterimHandler =
+            new Handler(Looper.getMainLooper());
+    private volatile long exploreInterimToken = 0L;
+    private volatile String lastExploreInterimDirection = "";
+    private volatile long lastExploreInterimExecutedAtMs = 0L;
     private AudioIncidentRecorder audioIncidentRecorder;
     private volatile PendingCondition pendingCondition = null;
     private final Object pendingChoiceLock = new Object();
@@ -1446,6 +1453,11 @@ final class NativeGeminiLiveClient {
         voiceExecutionGuard.clear();
         liveTurnCoordinator.reset();
         liveHumanTurnBoundary.reset();
+        cancelPendingExploreInterim();
+        exploreGestureLease.clear();
+        runtimeExploreHandledGeneration = -1L;
+        lastExploreInterimDirection = "";
+        lastExploreInterimExecutedAtMs = 0L;
         clearPendingInternalDirectiveTurn();
         liveConnection.stop();
         if (wasRunning) listener.onStopped("已結束");
@@ -1464,6 +1476,8 @@ final class NativeGeminiLiveClient {
                 geminiLiveTurnHandler.parse(raw);
 
         if (!frame.interimInputText.isEmpty()) {
+            scheduleExploreInterimGesture(
+                    frame.interimInputText);
             liveHumanTurnBoundary.noteInterim(
                     frame.interimInputText,
                     System.currentTimeMillis());
@@ -1537,6 +1551,31 @@ final class NativeGeminiLiveClient {
 
             if (hasPendingUiChoice()) {
                 clearPendingUiChoiceSilently();
+            }
+
+            // Explore-mode directional commands are Runtime-owned. Handle them
+            // before general turn-boundary / Jev / Agent lifecycle so a short
+            // "上/下/左/右" cannot be swallowed by ordinary intent handling.
+            cancelPendingExploreInterim();
+            long exploreNow = System.currentTimeMillis();
+            ExploreGestureLease.Command explorePreview =
+                    exploreGestureLease.previewActive(
+                            completeUserInput,
+                            exploreNow);
+            if (explorePreview.kind
+                    == ExploreGestureLease.Kind.SCROLL) {
+                beginNewUserIntent(completeUserInput);
+                liveHumanTurnBoundary.forceNewTurn(
+                        completeUserInput,
+                        exploreNow);
+                voiceExecutionGuard.onFinalizedVoiceTurn(
+                        userIntentGeneration,
+                        completeUserInput,
+                        frame.inputConfidence);
+                if (tryHandleRuntimeExploreGesture(
+                        completeUserInput)) {
+                    return;
+                }
             }
 
             String effectiveUserInput = completeUserInput;
@@ -2418,6 +2457,7 @@ final class NativeGeminiLiveClient {
         }
 
         if (command.kind == ExploreGestureLease.Kind.STOP) {
+            cancelPendingExploreInterim();
             reportStage("探索模式已結束");
             try {
                 FloatingBubbleManager.getInstance(appContext)
@@ -2432,6 +2472,107 @@ final class NativeGeminiLiveClient {
             return false;
         }
 
+        if (wasRecentlyExecutedExploreInterim(
+                command.semanticDirection,
+                now)) {
+            PerformanceMetrics.recordExploreFinalDedupe();
+            return true;
+        }
+
+        executeExploreGestureCommand(
+                command,
+                generation,
+                false);
+        return true;
+    }
+
+    private void scheduleExploreInterimGesture(
+            String interimText) {
+        final long now = System.currentTimeMillis();
+        ExploreGestureLease.Command preview =
+                exploreGestureLease.previewActive(
+                        interimText,
+                        now);
+        if (preview.kind
+                != ExploreGestureLease.Kind.SCROLL) {
+            return;
+        }
+
+        final long token = ++exploreInterimToken;
+        final String capturedText =
+                interimText == null ? "" : interimText;
+        exploreInterimHandler.postDelayed(
+                new Runnable() {
+                    @Override public void run() {
+                        if (token != exploreInterimToken) {
+                            return;
+                        }
+                        long executeAt =
+                                System.currentTimeMillis();
+                        ExploreGestureLease.Command command =
+                                exploreGestureLease.previewActive(
+                                        capturedText,
+                                        executeAt);
+                        if (command.kind
+                                != ExploreGestureLease.Kind.SCROLL) {
+                            return;
+                        }
+
+                        final long generation;
+                        synchronized (agentLock) {
+                            generation =
+                                    userIntentGeneration;
+                        }
+                        exploreGestureLease.acceptPreviewed(
+                                command,
+                                executeAt);
+                        lastExploreInterimDirection =
+                                command.semanticDirection;
+                        lastExploreInterimExecutedAtMs =
+                                executeAt;
+                        PerformanceMetrics
+                                .recordExploreInterimFastPath();
+                        executeExploreGestureCommand(
+                                command,
+                                generation,
+                                true);
+                    }
+                },
+                EXPLORE_INTERIM_DEBOUNCE_MS);
+    }
+
+    private void cancelPendingExploreInterim() {
+        exploreInterimToken++;
+    }
+
+    private boolean wasRecentlyExecutedExploreInterim(
+            String semanticDirection,
+            long nowMs) {
+        if (semanticDirection == null
+                || semanticDirection.trim().isEmpty()
+                || lastExploreInterimDirection.isEmpty()
+                || !lastExploreInterimDirection.equals(
+                        semanticDirection.trim())) {
+            return false;
+        }
+        long elapsed = Math.max(
+                0L,
+                nowMs - lastExploreInterimExecutedAtMs);
+        return lastExploreInterimExecutedAtMs > 0L
+                && elapsed
+                        <= EXPLORE_INTERIM_FINAL_DEDUPE_MS;
+    }
+
+    private void executeExploreGestureCommand(
+            ExploreGestureLease.Command command,
+            long generation,
+            boolean interimSource) {
+        if (command == null
+                || command.kind
+                        != ExploreGestureLease.Kind.SCROLL) {
+            return;
+        }
+
         final String semanticDirection =
                 command.semanticDirection;
         final String physicalDirection =
@@ -2441,6 +2582,8 @@ final class NativeGeminiLiveClient {
                 command.distance.isEmpty()
                         ? "normal"
                         : command.distance;
+        final long executionGeneration =
+                generation;
 
         new Thread(new Runnable() {
             @Override public void run() {
@@ -2482,7 +2625,12 @@ final class NativeGeminiLiveClient {
                             distance);
                 }
 
-                if (!isCurrentUserIntent(generation)) {
+                // Interim execution deliberately does not require a generation
+                // increment. It is a short-lived Runtime remote-control action.
+                // Final transcript later records/owns the user turn and dedupes.
+                if (!interimSource
+                        && !isCurrentUserIntent(
+                                executionGeneration)) {
                     return;
                 }
 
@@ -2510,9 +2658,9 @@ final class NativeGeminiLiveClient {
                                                     "請換個方向或改用一般指令"));
                 } catch (Exception ignored) {}
             }
-        }, "CrewExploreGesture").start();
-
-        return true;
+        }, interimSource
+                ? "CrewExploreInterimGesture"
+                : "CrewExploreGesture").start();
     }
 
     private static String exploreDirectionLabel(
