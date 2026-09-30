@@ -160,7 +160,9 @@ final class LiveHumanTurnBoundary {
                         && lastInterimAtMs > 0L
                         && lastInterimAtMs <= lastTaskCompletedAtMs
                         && relatedText(lastInterimText, text)
-                        && relatedText(currentText, text);
+                        && (relatedText(currentText, text)
+                            || (relatedText(lastInterimText, currentText)
+                                && relatedText(lastInterimText, text)));
         if (lateFinalFromCompletedUtterance) {
             return commit(
                     Decision.MERGE_CURRENT_SEGMENT,
