@@ -778,8 +778,7 @@ public class FloatingBubbleManager {
                             BubbleActionChipPolicy.label(
                                     stage,
                                     phase);
-                    String progressKey =
-                            BubbleTaskPhasePolicy.progressKey(rawStatus);
+                    String actionKey = actionLabel;
 
                     if (stage != null && !stage.isEmpty()) {
                         bubbleDetailState =
@@ -789,10 +788,9 @@ public class FloatingBubbleManager {
                     }
 
                     if (!actionLabel.isEmpty()
-                            && (!progressKey.equals(bubbleActionChipKey)
-                                    || !actionLabel.equals(
-                                            bubbleActionChipLabel))) {
-                        bubbleActionChipKey = progressKey;
+                            && !actionLabel.equals(
+                                    bubbleActionChipLabel)) {
+                        bubbleActionChipKey = actionKey;
                         bubbleActionChipLabel = actionLabel;
                         lastShownAgentStage = stage == null ? "" : stage;
                         recordBubbleAction(actionLabel);
@@ -803,7 +801,7 @@ public class FloatingBubbleManager {
                                         ""),
                                 BubbleActionChipPolicy.TRANSIENT_MS);
                         scheduleBubbleActionChipLongWatch(
-                                progressKey,
+                                actionKey,
                                 actionLabel);
                     }
                     return;
@@ -1117,7 +1115,7 @@ public class FloatingBubbleManager {
     }
 
     private void scheduleBubbleActionChipLongWatch(
-            final String progressKey,
+            final String actionKey,
             final String actionLabel) {
         cancelBubbleActionChipLongWatch();
         final int generation = ++bubbleActionChipLongGeneration;
@@ -1126,10 +1124,26 @@ public class FloatingBubbleManager {
                 bubbleActionChipLongRunnable = null;
                 if (generation != bubbleActionChipLongGeneration) return;
                 if (!bubbleAgentActiveTask || bubbleAgentNeedsAttention) return;
-                if (!actionLabel.equals(bubbleActionChipLabel)) return;
+                if (!actionKey.equals(bubbleActionChipKey)
+                        || !actionLabel.equals(bubbleActionChipLabel)) {
+                    return;
+                }
+
+                String latestStage =
+                        AgentInspectorStore.friendlyStage(
+                                bubbleLatestRawStatus,
+                                true);
+                BubbleTaskPhasePolicy.Phase latestPhase =
+                        BubbleTaskPhasePolicy.classify(
+                                bubbleLatestRawStatus,
+                                true);
+                String latestAction =
+                        BubbleActionChipPolicy.label(
+                                latestStage,
+                                latestPhase);
                 if (!BubbleActionChipPolicy.stillSameAction(
-                        progressKey,
-                        bubbleLatestRawStatus)) {
+                        actionLabel,
+                        latestAction)) {
                     return;
                 }
 
