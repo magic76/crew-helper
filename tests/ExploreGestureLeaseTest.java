@@ -55,9 +55,6 @@ public final class ExploreGestureLeaseTest {
         check("right".equals(lease.lastSemanticDirection()),
                 "accepted interim preview updates continuation direction");
 
-        check(lease.isExplicitMode(5_601L),
-                "interim preview must preserve explicit explore mode");
-
         ExploreGestureLease.Command unrelatedPreview =
                 lease.previewActive("播放周杰倫", 5_700L);
         check(unrelatedPreview.kind == ExploreGestureLease.Kind.NONE,
@@ -99,6 +96,14 @@ public final class ExploreGestureLeaseTest {
                 "explicit mode still expires after a long idle window");
 
         lease.interpret("進入探索模式", 8_500L);
+        ExploreGestureLease.Command explicitPreview =
+                lease.previewActive("再右一點", 8_700L);
+        check(explicitPreview.kind == ExploreGestureLease.Kind.SCROLL,
+                "explicit mode previews interim directions");
+        lease.acceptPreviewed(explicitPreview, 8_701L);
+        check(lease.isExplicitMode(8_702L),
+                "interim preview must preserve explicit explore mode");
+
         ExploreGestureLease.Command right =
                 lease.interpret("右一點", 9_000L);
         check(right.kind == ExploreGestureLease.Kind.SCROLL,
