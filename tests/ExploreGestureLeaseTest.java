@@ -43,6 +43,18 @@ public final class ExploreGestureLeaseTest {
         check("page".equals(page.distance),
                 "page command requests page distance");
 
+        ExploreGestureLease.Command preview =
+                lease.previewActive("再右一點", 5_500L);
+        check(preview.kind == ExploreGestureLease.Kind.SCROLL,
+                "active lease can preview strict interim direction commands");
+        check("right".equals(preview.semanticDirection),
+                "preview keeps semantic direction");
+        check("short".equals(preview.distance),
+                "preview keeps distance without consuming");
+        lease.acceptPreviewed(preview, 5_600L);
+        check("right".equals(lease.lastSemanticDirection()),
+                "accepted interim preview updates continuation direction");
+
         ExploreGestureLease.Command inspect =
                 lease.interpret("看一下", 6_000L);
         check(inspect.kind == ExploreGestureLease.Kind.PASS_TO_MODEL,
