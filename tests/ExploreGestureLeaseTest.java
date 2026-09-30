@@ -55,6 +55,9 @@ public final class ExploreGestureLeaseTest {
         check("right".equals(lease.lastSemanticDirection()),
                 "accepted interim preview updates continuation direction");
 
+        check(lease.isExplicitMode(5_601L),
+                "interim preview must preserve explicit explore mode");
+
         ExploreGestureLease.Command unrelatedPreview =
                 lease.previewActive("播放周杰倫", 5_700L);
         check(unrelatedPreview.kind == ExploreGestureLease.Kind.NONE,
