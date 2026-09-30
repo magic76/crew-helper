@@ -40,6 +40,27 @@ final class ExploreGestureLease {
     private long activeUntilMs;
     private String lastSemanticDirection = "";
 
+    synchronized Command previewActive(String rawText, long nowMs) {
+        if (!isActive(nowMs)) return Command.none();
+        String text = normalize(rawText);
+        if (text.isEmpty()) return Command.none();
+        if (isInspectHandoff(text)) {
+            return new Command(Kind.PASS_TO_MODEL, "", "");
+        }
+        return parseScroll(text);
+    }
+
+    synchronized void acceptPreviewed(
+            Command command,
+            long nowMs) {
+        if (command == null || command.kind != Kind.SCROLL) return;
+        String direction = normalizeSemanticDirection(
+                command.semanticDirection);
+        if (!ScrollDirectionPolicy.isSupported(direction)) return;
+        lastSemanticDirection = direction;
+        touch(nowMs);
+    }
+
     synchronized Command interpret(String rawText, long nowMs) {
         String text = normalize(rawText);
         if (text.isEmpty()) return Command.none();
