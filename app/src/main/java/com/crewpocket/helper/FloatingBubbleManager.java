@@ -333,6 +333,9 @@ public class FloatingBubbleManager {
             public void run() {
                 if (!canDrawOverlays()) return;
 
+                hideBubbleTaskTimeline(false);
+                hideBubbleActionChip(true);
+
                 if (compactStatusAutoHideRunnable != null) {
                     mainHandler.removeCallbacks(compactStatusAutoHideRunnable);
                     compactStatusAutoHideRunnable = null;
@@ -857,6 +860,7 @@ public class FloatingBubbleManager {
                 compactStatusView = null;
                 compactStatusParams = null;
                 compactStatusController = null;
+                restoreBubbleActionChipIfNeeded();
             }
         });
     }
@@ -987,6 +991,7 @@ public class FloatingBubbleManager {
         cancelBubbleActionChipLongWatch();
         bubbleActionChipKey = "";
         bubbleActionChipLabel = "";
+        bubbleActionChipPinned = false;
         bubbleRecentActions.clear();
         bubbleAgentProgressKey = "";
         bubbleAgentPhase = BubbleTaskPhasePolicy.Phase.NONE;
@@ -1633,8 +1638,8 @@ public class FloatingBubbleManager {
                                     if (moveDist > dp(32) && !moved) {
                                         moved = true;
                                         collapseBubbleActions(false);
-                                        hideBubbleActionChip(false);
                                         hideBubbleTaskTimeline(false);
+                                        hideBubbleActionChip(false);
                                         showBubbleRemoveTarget();
                                         initialX = bubbleParams.x;
                                         initialY = bubbleParams.y;
@@ -1930,8 +1935,8 @@ public class FloatingBubbleManager {
             return;
         }
 
-        hideBubbleActionChip(true);
         hideBubbleTaskTimeline(false);
+        hideBubbleActionChip(false);
         bubbleActionStrip.show(bubbleActionStripActions());
         ensureShortcutRoomBelow(dp(BUBBLE_SIZE_DP));
         setBubbleContainerExpandedStyle(true);
