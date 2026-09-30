@@ -36,4 +36,15 @@ final class ScrollDirectionPolicy {
         if ("left".equals(semanticDirection)) return "right";
         return semanticDirection == null ? "" : semanticDirection;
     }
+
+    static String fromPhysical(String physicalDirection) {
+        String direction = physicalDirection == null
+                ? ""
+                : physicalDirection.trim().toLowerCase(Locale.ROOT);
+        if ("up".equals(direction)) return "forward";
+        if ("down".equals(direction)) return "backward";
+        if ("left".equals(direction)) return "right";
+        if ("right".equals(direction)) return "left";
+        return "";
+    }
 }
