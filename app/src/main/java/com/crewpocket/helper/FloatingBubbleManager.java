@@ -610,9 +610,8 @@ public class FloatingBubbleManager {
 
                 if (nextPhase == BubbleTaskPhasePolicy.Phase.WAITING) {
                     cancelBubbleStuckWatch();
-                    scheduleBubbleWaitingMorphWatch();
                 } else {
-                            scheduleBubbleStuckWatch(nextPhase);
+                    scheduleBubbleStuckWatch(nextPhase);
                 }
             }
         };
