@@ -42,6 +42,11 @@ public final class BubbleActionChipPolicyTest {
                         == BubbleActionChipPolicy.Kind.SWIPE,
                 "swipe action kind");
         check(BubbleActionChipPolicy.kind(
+                        "正在開啟搜尋結果",
+                        BubbleTaskPhasePolicy.Phase.ACTING)
+                        == BubbleActionChipPolicy.Kind.OPEN,
+                "open verb wins over search target noun");
+        check(BubbleActionChipPolicy.kind(
                         "等待頁面載入",
                         BubbleTaskPhasePolicy.Phase.WAITING)
                         == BubbleActionChipPolicy.Kind.WAIT,
