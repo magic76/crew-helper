@@ -59,7 +59,6 @@ final class ExploreGestureLease {
         String direction = normalizeSemanticDirection(
                 command.semanticDirection);
         if (!ScrollDirectionPolicy.isSupported(direction)) return;
-        explicitMode = false;
         lastSemanticDirection = direction;
         touch(nowMs);
     }
@@ -107,6 +106,7 @@ final class ExploreGestureLease {
             long nowMs) {
         String direction = normalizeSemanticDirection(rawSemanticDirection);
         if (!ScrollDirectionPolicy.isSupported(direction)) return;
+        explicitMode = false;
         lastSemanticDirection = direction;
         touch(nowMs);
     }
