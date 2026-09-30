@@ -5469,7 +5469,27 @@ final class NativeGeminiLiveClient {
                 "swipe:" + reply.optString("direction", "up"),
                 reply.optBoolean("success", false)
                         ? "submitted" : "failed");
-        return observationVerificationController.autoObserveAfterMutation(reply, "swipe_screen");
+
+        JSONObject observed =
+                observationVerificationController.autoObserveAfterMutation(
+                        reply,
+                        "swipe_screen");
+
+        String latestUserTurn =
+                workingContext.toJson().optString("latestUserTurn", "");
+        if (DirectGestureCompletionPolicy.shouldFinish(
+                latestUserTurn,
+                args,
+                observed)) {
+            observed.put("taskState", "DONE")
+                    .put("completionEvidence", "DIRECT_GESTURE_COMPLETED")
+                    .put("verified", true)
+                    .put("nextRequirement", "NONE")
+                    .put(
+                            "instruction",
+                            "使用者要求的是單一步驟滑動；Runtime 已完成一次。不要重複 swipe，直接結束本次任務。");
+        }
+        return observed;
     }
 
 
