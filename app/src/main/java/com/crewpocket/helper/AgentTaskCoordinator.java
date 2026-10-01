@@ -207,6 +207,10 @@ final class AgentTaskCoordinator {
             active.watchdogPrompted = false;
             active.userVisibleReplyProducedSinceLastAction = false;
             active.finalSpeechRetryCount = 0;
+            // The human boundary has been satisfied. Return to the ordinary
+            // silent execution state until Runtime reaches another visible
+            // boundary (WAITING_USER / DONE / BLOCKED).
+            active.lastTaskState = "IN_PROGRESS";
             active.status = status == null ? "使用者已完成選擇" : status;
             return active;
         }
