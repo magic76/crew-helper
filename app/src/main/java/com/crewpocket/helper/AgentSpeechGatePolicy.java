@@ -36,6 +36,13 @@ final class AgentSpeechGatePolicy {
         // Never suppress the one concise question needed to unblock the task.
         if (isUserInputBoundary(taskState)) return false;
 
+        // A real blocker is itself user-relevant evidence. Do not let a stale
+        // verification flag suppress the concise explanation Runtime requested.
+        if (hasBlockedReason
+                || "BLOCKED".equals(normalize(taskState))) {
+            return false;
+        }
+
         // Background waits are Runtime-owned. There is nothing useful to say
         // until the external condition wakes the task.
         if (isSilentWait(taskState)) return true;
