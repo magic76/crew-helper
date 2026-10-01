@@ -4,9 +4,12 @@ import android.animation.ValueAnimator;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.LinearGradient;
 import android.graphics.Paint;
+import android.graphics.Path;
+import android.graphics.RadialGradient;
 import android.graphics.RectF;
-import android.graphics.Typeface;
+import android.graphics.Shader;
 import android.view.View;
 import android.view.animation.LinearInterpolator;
 
@@ -22,9 +25,12 @@ final class FluidBubbleView extends View {
     private final Paint ringPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint haloPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint badgePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint badgeTextPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
-    private final RectF arcBounds = new RectF();
+    private final Path crewMarkPath = new Path();
+    private final RectF outerMarkBounds = new RectF();
+    private final RectF innerMarkBounds = new RectF();
+    private Shader coreGradient;
+    private Shader markGradient;
     private float rotationAngle = 0f;
 
     private boolean isFlowing = false;
@@ -65,10 +71,40 @@ final class FluidBubbleView extends View {
         haloPaint.setStrokeCap(Paint.Cap.ROUND);
 
         badgePaint.setStyle(Paint.Style.FILL);
+    }
 
-        badgeTextPaint.setStyle(Paint.Style.FILL);
-        badgeTextPaint.setTextAlign(Paint.Align.CENTER);
-        badgeTextPaint.setTypeface(Typeface.DEFAULT_BOLD);
+    @Override
+    protected void onSizeChanged(
+            int w,
+            int h,
+            int oldw,
+            int oldh) {
+        super.onSizeChanged(w, h, oldw, oldh);
+        float cx = w / 2f;
+        float cy = h / 2f;
+        float radius =
+                Math.max(1f, Math.min(w, h) / 2f - 1.5f);
+
+        coreGradient = new RadialGradient(
+                cx - radius * 0.18f,
+                cy - radius * 0.20f,
+                radius * 0.95f,
+                new int[]{
+                        Color.parseColor("#13233A"),
+                        Color.parseColor("#08111F"),
+                        Color.parseColor("#050B14")
+                },
+                new float[]{0f, 0.62f, 1f},
+                Shader.TileMode.CLAMP);
+
+        markGradient = new LinearGradient(
+                cx,
+                cy - radius * 0.55f,
+                cx,
+                cy + radius * 0.55f,
+                Color.parseColor("#F8FAFC"),
+                Color.parseColor("#CBD5E1"),
+                Shader.TileMode.CLAMP);
     }
 
     @Override
@@ -290,6 +326,7 @@ final class FluidBubbleView extends View {
 
         drawCrewMark(canvas, cx, cy, radius);
         drawState(canvas, cx, cy, radius, mode);
+        drawOrbitNode(canvas, cx, cy, radius, mode);
         drawTransientResult(canvas, cx, cy, radius);
     }
 
@@ -298,39 +335,127 @@ final class FluidBubbleView extends View {
             float cx,
             float cy,
             float radius) {
-        // Stable dark core.
-        bgPaint.setColor(Color.parseColor("#08111F"));
-        bgPaint.setAlpha(252);
+        // Subtle depth only. The core stays quiet so the mark reads first.
+        bgPaint.setShader(coreGradient);
+        bgPaint.setAlpha(255);
         canvas.drawCircle(cx, cy, radius * 0.82f, bgPaint);
+        bgPaint.setShader(null);
 
-        // Minimal Crew "C" mark: readable even at notification/icon scale.
-        markPaint.setStyle(Paint.Style.STROKE);
-        markPaint.setStrokeWidth(Math.max(3f, radius * 0.17f));
-        markPaint.setColor(Color.parseColor("#F8FAFC"));
-        markPaint.setAlpha(238);
-        float markRadius = radius * 0.43f;
-        arcBounds.set(
-                cx - markRadius,
-                cy - markRadius,
-                cx + markRadius,
-                cy + markRadius);
-        canvas.drawArc(
-                arcBounds,
-                44f,
-                272f,
-                false,
-                markPaint);
+        // Crew Orbit Mark:
+        // - filled geometric C instead of a font glyph
+        // - terminals are radial cuts, creating matching diagonal bevels
+        // - the cyan node parks just beyond the upper cut
+        float outerRadius = radius * 0.50f;
+        float innerRadius = radius * 0.29f;
+        float startAngle = 42f;
+        float sweepAngle = 276f;
+        float endAngle = startAngle + sweepAngle;
 
-        // One quiet cyan point gives Crew a recognizable signature without
-        // turning the mark into another status indicator.
+        outerMarkBounds.set(
+                cx - outerRadius,
+                cy - outerRadius,
+                cx + outerRadius,
+                cy + outerRadius);
+        innerMarkBounds.set(
+                cx - innerRadius,
+                cy - innerRadius,
+                cx + innerRadius,
+                cy + innerRadius);
+
+        crewMarkPath.reset();
+        crewMarkPath.arcTo(
+                outerMarkBounds,
+                startAngle,
+                sweepAngle,
+                true);
+        crewMarkPath.arcTo(
+                innerMarkBounds,
+                endAngle,
+                -sweepAngle,
+                false);
+        crewMarkPath.close();
+
         markPaint.setStyle(Paint.Style.FILL);
-        markPaint.setColor(Color.parseColor("#67E8F9"));
+        markPaint.setShader(markGradient);
         markPaint.setAlpha(245);
+        canvas.drawPath(crewMarkPath, markPaint);
+        markPaint.setShader(null);
+    }
+
+    private void drawOrbitNode(
+            Canvas canvas,
+            float cx,
+            float cy,
+            float radius,
+            BubbleLogoStatePolicy.Mode mode) {
+        float angle =
+                CrewOrbitMarkPolicy.nodeAngleDegrees(
+                        mode,
+                        rotationAngle);
+        double radians = Math.toRadians(angle);
+        float orbitRadius = radius * 0.55f;
+        float x =
+                cx + (float) Math.cos(radians) * orbitRadius;
+        float y =
+                cy + (float) Math.sin(radians) * orbitRadius;
+
+        float pulse = wave(1f);
+        float nodeRadius = Math.max(2.3f, radius * 0.105f);
+        int color = Color.parseColor("#67E8F9");
+        int alpha = 245;
+        float scale = 1f;
+
+        if (agentResultFlash == 1 || isSuccessFlash) {
+            color = Color.parseColor("#34D399");
+            scale = 1.10f;
+        } else if (agentResultFlash == 2
+                || mode == BubbleLogoStatePolicy.Mode.ERROR) {
+            color = Color.parseColor("#FB7185");
+            scale = 1.08f;
+        } else if (mode == BubbleLogoStatePolicy.Mode.WAITING_USER
+                || mode == BubbleLogoStatePolicy.Mode.STUCK) {
+            color = Color.parseColor("#FBBF24");
+            scale = 0.96f + 0.12f * pulse;
+        } else if (mode == BubbleLogoStatePolicy.Mode.WAITING) {
+            color = Color.parseColor("#FBBF24");
+            alpha = 175;
+            scale = 0.92f + 0.06f * pulse;
+        } else if (mode
+                == BubbleLogoStatePolicy.Mode.CONVERSATION_WAITING) {
+            color = Color.parseColor("#5EEAD4");
+            scale = 0.95f + 0.08f * pulse;
+        } else if (mode == BubbleLogoStatePolicy.Mode.SPEAKING) {
+            color = Color.parseColor("#C084FC");
+            scale = 0.96f + 0.10f * pulse;
+        } else if (mode == BubbleLogoStatePolicy.Mode.LISTENING) {
+            float activity =
+                    Math.max(
+                            microphoneActivity,
+                            microphoneSending ? 0.18f : 0.08f);
+            scale = 0.94f
+                    + 0.16f * Math.max(pulse, activity);
+        } else if (mode == BubbleLogoStatePolicy.Mode.THINKING) {
+            scale = 0.98f + 0.06f * pulse;
+        } else if (mode == BubbleLogoStatePolicy.Mode.ACTING) {
+            scale = 1.02f + 0.06f * pulse;
+        }
+
+        badgePaint.setColor(color);
+        badgePaint.setAlpha(
+                Math.max(18, Math.min(70, alpha / 5)));
         canvas.drawCircle(
-                cx + radius * 0.44f,
-                cy,
-                Math.max(2.1f, radius * 0.085f),
-                markPaint);
+                x,
+                y,
+                nodeRadius * 1.85f * scale,
+                badgePaint);
+
+        badgePaint.setColor(color);
+        badgePaint.setAlpha(alpha);
+        canvas.drawCircle(
+                x,
+                y,
+                nodeRadius * scale,
+                badgePaint);
     }
 
     private void drawState(
@@ -404,13 +529,6 @@ final class FluidBubbleView extends View {
                         ring,
                         "#64748B",
                         80 + Math.round(50f * pulse));
-                drawDot(
-                        canvas,
-                        cx + radius * 0.52f,
-                        cy + radius * 0.50f,
-                        radius * (0.055f + 0.012f * pulse),
-                        "#FBBF24",
-                        190);
                 break;
 
             case WAITING_USER:
@@ -419,7 +537,6 @@ final class FluidBubbleView extends View {
                         ring,
                         "#F59E0B",
                         180 + Math.round(55f * pulse));
-                drawAttentionBadge(canvas, radius);
                 break;
 
             case CONVERSATION_WAITING:
@@ -428,13 +545,6 @@ final class FluidBubbleView extends View {
                         ring,
                         "#14B8A6",
                         120 + Math.round(70f * pulse));
-                drawDot(
-                        canvas,
-                        cx + radius * 0.50f,
-                        cy + radius * 0.50f,
-                        radius * (0.055f + 0.018f * pulse),
-                        "#5EEAD4",
-                        225);
                 break;
 
             case SPEAKING:
@@ -451,7 +561,6 @@ final class FluidBubbleView extends View {
                         ring,
                         "#F59E0B",
                         135 + Math.round(95f * pulse));
-                drawAttentionBadge(canvas, radius);
                 break;
 
             case ERROR:
@@ -503,46 +612,6 @@ final class FluidBubbleView extends View {
                 sweep,
                 false,
                 ringPaint);
-    }
-
-    private void drawDot(
-            Canvas canvas,
-            float x,
-            float y,
-            float radius,
-            String color,
-            int alpha) {
-        badgePaint.setColor(Color.parseColor(color));
-        badgePaint.setAlpha(alpha);
-        canvas.drawCircle(x, y, Math.max(2f, radius), badgePaint);
-    }
-
-    private void drawAttentionBadge(
-            Canvas canvas,
-            float radius) {
-        float badgeRadius = Math.max(4.2f, radius * 0.18f);
-        float badgeCx = getWidth() - radius * 0.34f;
-        float badgeCy = radius * 0.34f;
-
-        badgePaint.setColor(Color.parseColor("#FBBF24"));
-        badgePaint.setAlpha(255);
-        canvas.drawCircle(
-                badgeCx,
-                badgeCy,
-                badgeRadius,
-                badgePaint);
-
-        badgeTextPaint.setColor(Color.parseColor("#0F172A"));
-        badgeTextPaint.setAlpha(255);
-        badgeTextPaint.setTextSize(Math.max(8f, radius * 0.31f));
-        Paint.FontMetrics metrics = badgeTextPaint.getFontMetrics();
-        float baseline =
-                badgeCy - (metrics.ascent + metrics.descent) / 2f;
-        canvas.drawText(
-                "!",
-                badgeCx,
-                baseline,
-                badgeTextPaint);
     }
 
     private void drawTransientResult(
