@@ -136,6 +136,23 @@ final class AgentResponseCoordinator {
             return;
         }
 
+        if (AgentSpeechGatePolicy.isUserInputBoundary(
+                task.lastTaskState)) {
+            synchronized (tasks.monitor()) {
+                if (!tasks.isActive(task)
+                        || task.finished
+                        || task.cancelled) {
+                    return;
+                }
+                task.awaitingModel = false;
+                task.watchdogPrompted = false;
+                task.status = "等待使用者回覆";
+                clearLocked();
+            }
+            host.reportStage(task.status);
+            return;
+        }
+
         boolean completionReady =
                 AgentTaskLifecyclePolicy.canFinishAfterModelReply(
                         task.lastTaskState,
