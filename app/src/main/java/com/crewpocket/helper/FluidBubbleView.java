@@ -26,11 +26,11 @@ final class FluidBubbleView extends View {
     private final Paint haloPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint badgePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
-    private final Path crewMarkPath = new Path();
-    private final RectF outerMarkBounds = new RectF();
-    private final RectF innerMarkBounds = new RectF();
+    private final Path softCorePath = new Path();
+    private final RectF logoOrbitBounds = new RectF();
     private Shader coreGradient;
-    private Shader markGradient;
+    private Shader softCoreGradient;
+    private Shader logoOrbitGradient;
     private float rotationAngle = 0f;
 
     private boolean isFlowing = false;
@@ -97,14 +97,30 @@ final class FluidBubbleView extends View {
                 new float[]{0f, 0.62f, 1f},
                 Shader.TileMode.CLAMP);
 
-        markGradient = new LinearGradient(
-                cx,
-                cy - radius * 0.55f,
-                cx,
-                cy + radius * 0.55f,
-                Color.parseColor("#F8FAFC"),
-                Color.parseColor("#CBD5E1"),
+        softCoreGradient = new LinearGradient(
+                cx - radius * 0.30f,
+                cy + radius * 0.30f,
+                cx + radius * 0.28f,
+                cy - radius * 0.28f,
+                new int[]{
+                        Color.parseColor("#2563EB"),
+                        Color.parseColor("#60A5FA"),
+                        Color.parseColor("#F8FAFC")
+                },
+                new float[]{0f, 0.58f, 1f},
                 Shader.TileMode.CLAMP);
+
+        logoOrbitGradient = new android.graphics.SweepGradient(
+                cx,
+                cy,
+                new int[]{
+                        Color.parseColor("#DCEBFF"),
+                        Color.parseColor("#F8FAFC"),
+                        Color.parseColor("#60A5FA"),
+                        Color.parseColor("#2563EB"),
+                        Color.parseColor("#DCEBFF")
+                },
+                new float[]{0f, 0.24f, 0.58f, 0.78f, 1f});
     }
 
     @Override
@@ -335,51 +351,89 @@ final class FluidBubbleView extends View {
             float cx,
             float cy,
             float radius) {
-        // Subtle depth only. The core stays quiet so the mark reads first.
+        // Dark navy depth from the selected Orbit Core app icon.
         bgPaint.setShader(coreGradient);
         bgPaint.setAlpha(255);
         canvas.drawCircle(cx, cy, radius * 0.82f, bgPaint);
         bgPaint.setShader(null);
 
-        // Crew Orbit Mark:
-        // - filled geometric C instead of a font glyph
-        // - terminals are radial cuts, creating matching diagonal bevels
-        // - the cyan node parks just beyond the upper cut
-        float outerRadius = radius * 0.50f;
-        float innerRadius = radius * 0.29f;
-        float startAngle = 42f;
-        float sweepAngle = 276f;
-        float endAngle = startAngle + sweepAngle;
+        // The identity orbit sits inside the state ring. Its right-upper gap
+        // leaves visual room for the cyan node and avoids looking like a
+        // generic loading spinner.
+        float orbitRadius = radius * 0.50f;
+        logoOrbitBounds.set(
+                cx - orbitRadius,
+                cy - orbitRadius,
+                cx + orbitRadius,
+                cy + orbitRadius);
 
-        outerMarkBounds.set(
-                cx - outerRadius,
-                cy - outerRadius,
-                cx + outerRadius,
-                cy + outerRadius);
-        innerMarkBounds.set(
-                cx - innerRadius,
-                cy - innerRadius,
-                cx + innerRadius,
-                cy + innerRadius);
+        markPaint.setStyle(Paint.Style.STROKE);
+        markPaint.setStrokeCap(Paint.Cap.ROUND);
+        markPaint.setStrokeJoin(Paint.Join.ROUND);
+        markPaint.setStrokeWidth(Math.max(3.2f, radius * 0.135f));
+        markPaint.setShader(logoOrbitGradient);
+        markPaint.setAlpha(242);
+        canvas.drawArc(
+                logoOrbitBounds,
+                345f,
+                300f,
+                false,
+                markPaint);
+        markPaint.setShader(null);
 
-        crewMarkPath.reset();
-        crewMarkPath.arcTo(
-                outerMarkBounds,
-                startAngle,
-                sweepAngle,
-                true);
-        crewMarkPath.arcTo(
-                innerMarkBounds,
-                endAngle,
-                -sweepAngle,
-                false);
-        crewMarkPath.close();
+        // Cyan energy accent from the reference artwork, intentionally short
+        // so the orbit still reads as a logo rather than a progress control.
+        markPaint.setColor(Color.parseColor("#22D3EE"));
+        markPaint.setAlpha(220);
+        markPaint.setStrokeWidth(Math.max(3.4f, radius * 0.145f));
+        canvas.drawArc(
+                logoOrbitBounds,
+                118f,
+                38f,
+                false,
+                markPaint);
+
+        // Directional soft core: rounded leaf/lens, heavier at lower-left and
+        // naturally pointing toward the node at upper-right.
+        softCorePath.reset();
+        softCorePath.moveTo(
+                cx + radius * 0.08f,
+                cy - radius * 0.30f);
+        softCorePath.cubicTo(
+                cx + radius * 0.28f,
+                cy - radius * 0.29f,
+                cx + radius * 0.31f,
+                cy - radius * 0.08f,
+                cx + radius * 0.20f,
+                cy + radius * 0.15f);
+        softCorePath.cubicTo(
+                cx + radius * 0.10f,
+                cy + radius * 0.31f,
+                cx - radius * 0.20f,
+                cy + radius * 0.31f,
+                cx - radius * 0.27f,
+                cy + radius * 0.13f);
+        softCorePath.cubicTo(
+                cx - radius * 0.32f,
+                cy - radius * 0.02f,
+                cx - radius * 0.14f,
+                cy - radius * 0.25f,
+                cx + radius * 0.08f,
+                cy - radius * 0.30f);
+        softCorePath.close();
 
         markPaint.setStyle(Paint.Style.FILL);
-        markPaint.setShader(markGradient);
-        markPaint.setAlpha(245);
-        canvas.drawPath(crewMarkPath, markPaint);
+        markPaint.setShader(softCoreGradient);
+        markPaint.setAlpha(250);
+        canvas.drawPath(softCorePath, markPaint);
         markPaint.setShader(null);
+
+        // Thin cool edge keeps the soft core legible at 32–48dp.
+        markPaint.setStyle(Paint.Style.STROKE);
+        markPaint.setStrokeWidth(Math.max(1.0f, radius * 0.035f));
+        markPaint.setColor(Color.parseColor("#BAE6FD"));
+        markPaint.setAlpha(165);
+        canvas.drawPath(softCorePath, markPaint);
     }
 
     private void drawOrbitNode(
@@ -393,7 +447,7 @@ final class FluidBubbleView extends View {
                         mode,
                         rotationAngle);
         double radians = Math.toRadians(angle);
-        float orbitRadius = radius * 0.55f;
+        float orbitRadius = radius * 0.56f;
         float x =
                 cx + (float) Math.cos(radians) * orbitRadius;
         float y =
