@@ -1488,6 +1488,7 @@ public class CrewAccessibilityService extends AccessibilityService {
             out.write("HTTP/1.1 200 OK\r\n".getBytes(StandardCharsets.UTF_8));
             out.write("Content-Type: application/json; charset=utf-8\r\n".getBytes(StandardCharsets.UTF_8));
             out.write("Cache-Control: no-store\r\n".getBytes(StandardCharsets.UTF_8));
+            out.write("Connection: close\r\n".getBytes(StandardCharsets.UTF_8));
             out.write(("Content-Length: " + responseBytes.length + "\r\n").getBytes(StandardCharsets.UTF_8));
             out.write("\r\n".getBytes(StandardCharsets.UTF_8));
             out.write(responseBytes);
@@ -2204,6 +2205,7 @@ public class CrewAccessibilityService extends AccessibilityService {
         OutputStream out = socket.getOutputStream();
         out.write("HTTP/1.1 200 OK\r\n".getBytes(StandardCharsets.UTF_8));
         out.write("Content-Type: application/json; charset=utf-8\r\n".getBytes(StandardCharsets.UTF_8));
+        out.write("Connection: close\r\n".getBytes(StandardCharsets.UTF_8));
         out.write(("Content-Length: " + responseBytes.length + "\r\n").getBytes(StandardCharsets.UTF_8));
         out.write("\r\n".getBytes(StandardCharsets.UTF_8));
         out.write(responseBytes);

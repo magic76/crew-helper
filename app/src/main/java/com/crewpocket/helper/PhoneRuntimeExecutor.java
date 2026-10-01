@@ -98,6 +98,7 @@ final class PhoneRuntimeExecutor {
                     "http://127.0.0.1:8766" + endpoint).openConnection();
             activeConnection = connection;
             connection.setRequestMethod("GET");
+            connection.setRequestProperty("Connection", "close");
             authenticate(connection);
             connection.setConnectTimeout(3000);
             connection.setReadTimeout(5000);
@@ -134,6 +135,7 @@ final class PhoneRuntimeExecutor {
                     "http://127.0.0.1:8766" + endpoint).openConnection();
             activeConnection = connection;
             connection.setRequestMethod("POST");
+            connection.setRequestProperty("Connection", "close");
             connection.setRequestProperty(
                     "Content-Type", "application/json; charset=utf-8");
             authenticate(connection);
