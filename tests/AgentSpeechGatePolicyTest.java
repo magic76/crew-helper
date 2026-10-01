@@ -36,8 +36,8 @@ public final class AgentSpeechGatePolicyTest {
 
         check(!AgentSpeechGatePolicy.shouldWithhold(
                         true, true, "BLOCKED", "tap_screen",
-                        false, true, 1),
-                "BLOCKED may explain the blocker");
+                        true, true, 1),
+                "BLOCKED may explain the blocker even if verification state is stale");
 
         check(AgentSpeechGatePolicy.shouldWithhold(
                         true, true, "WAITING_BACKGROUND", "wait",
