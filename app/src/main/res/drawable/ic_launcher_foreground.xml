@@ -5,55 +5,62 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- Main incomplete orbit -->
-    <path
-        android:pathData="M78,24 A33,33 0,1 0,88,46"
-        android:fillColor="#00000000"
-        android:strokeColor="#EAF3FF"
-        android:strokeWidth="6.8"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round" />
+    <!-- Keep all branded artwork inside the adaptive-icon safe zone. -->
+    <group
+        android:pivotX="54"
+        android:pivotY="54"
+        android:scaleX="0.82"
+        android:scaleY="0.82">
 
-    <!-- Lower-left cyan energy segment -->
-    <path
-        android:pathData="M24,69 A33,33 0,0 0,37,85"
-        android:fillColor="#00000000"
-        android:strokeColor="#22D3EE"
-        android:strokeWidth="7.2"
-        android:strokeLineCap="round" />
+        <!-- One true 33-unit circle with a deliberate upper-right gap. -->
+        <path
+            android:pathData="M86.50,48.27 A33,33 0,1 1,70.50,25.42"
+            android:fillColor="#00000000"
+            android:strokeColor="#DCEBFF"
+            android:strokeWidth="6.8"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
 
-    <!-- Lower-right blue depth segment -->
-    <path
-        android:pathData="M37,85 A33,33 0,0 0,73,83"
-        android:fillColor="#00000000"
-        android:strokeColor="#3B82F6"
-        android:strokeWidth="6.8"
-        android:strokeLineCap="round" />
+        <!-- Bottom blue depth, on the exact same circle. -->
+        <path
+            android:pathData="M77.33,77.33 A33,33 0,0 1,37.50,82.58"
+            android:fillColor="#00000000"
+            android:strokeColor="#3B82F6"
+            android:strokeWidth="7.0"
+            android:strokeLineCap="round" />
 
-    <!-- Directional soft core -->
-    <path
-        android:pathData="M56,39 C66,38 70,47 66,58 C62,69 49,76 39,70 C32,65 36,54 42,47 C47,42 52,40 56,39 Z"
-        android:fillColor="#60A5FA"
-        android:strokeColor="#BAE6FD"
-        android:strokeWidth="1.1"
-        android:strokeLineJoin="round" />
+        <!-- Lower-left cyan energy accent, also on the same circle. -->
+        <path
+            android:pathData="M37.50,82.58 A33,33 0,0 1,22.99,65.29"
+            android:fillColor="#00000000"
+            android:strokeColor="#22D3EE"
+            android:strokeWidth="7.2"
+            android:strokeLineCap="round" />
 
-    <!-- Core highlight -->
-    <path
-        android:pathData="M56,41 C63,41 66,47 63,53 C60,59 52,64 46,64 C50,56 54,49 56,41 Z"
-        android:fillColor="#F8FAFC"
-        android:fillAlpha="0.72" />
+        <!-- Directional soft core -->
+        <path
+            android:pathData="M56,39 C66,38 70,47 66,58 C62,69 49,76 39,70 C32,65 36,54 42,47 C47,42 52,40 56,39 Z"
+            android:fillColor="#60A5FA"
+            android:strokeColor="#BAE6FD"
+            android:strokeWidth="1.1"
+            android:strokeLineJoin="round" />
 
-    <!-- Cyan identity node -->
-    <path
-        android:pathData="M90,33 A7,7 0,1 1,76,33 A7,7 0,1 1,90,33 Z"
-        android:fillColor="#22D3EE"
-        android:strokeColor="#A5F3FC"
-        android:strokeWidth="0.9" />
+        <!-- Core highlight -->
+        <path
+            android:pathData="M56,41 C63,41 66,47 63,53 C60,59 52,64 46,64 C50,56 54,49 56,41 Z"
+            android:fillColor="#F8FAFC"
+            android:fillAlpha="0.72" />
 
-    <!-- Node highlight -->
-    <path
-        android:pathData="M86.5,29.8 A2.1,2.1 0,1 1,82.3,29.8 A2.1,2.1 0,1 1,86.5,29.8 Z"
-        android:fillColor="#ECFEFF"
-        android:fillAlpha="0.9" />
+        <!-- Identity node centered in the orbit gap -->
+        <path
+            android:pathData="M87,34 A6.5,6.5 0,1 1,74,34 A6.5,6.5 0,1 1,87,34 Z"
+            android:fillColor="#22D3EE"
+            android:strokeColor="#A5F3FC"
+            android:strokeWidth="0.9" />
+
+        <path
+            android:pathData="M84.6,30.8 A1.9,1.9 0,1 1,80.8,30.8 A1.9,1.9 0,1 1,84.6,30.8 Z"
+            android:fillColor="#ECFEFF"
+            android:fillAlpha="0.9" />
+    </group>
 </vector>
