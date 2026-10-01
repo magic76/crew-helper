@@ -2,9 +2,9 @@ package com.crewpocket.helper;
 
 /** Pure geometry policy for the Crew Orbit Mark node. */
 final class CrewOrbitMarkPolicy {
-    static final float BASE_NODE_ANGLE_DEG = -42f;
-    static final float THINKING_TRAVEL_DEG = 78f;
-    static final float ACTING_TRAVEL_DEG = 92f;
+    static final float BASE_NODE_ANGLE_DEG = -38f;
+    static final float THINKING_TRAVEL_DEG = 72f;
+    static final float ACTING_TRAVEL_DEG = 88f;
 
     private CrewOrbitMarkPolicy() {}
 
