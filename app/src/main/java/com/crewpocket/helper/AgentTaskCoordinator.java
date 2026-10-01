@@ -272,29 +272,20 @@ final class AgentTaskCoordinator {
 
     boolean shouldWithholdUnverifiedReply() {
         synchronized (monitor) {
-            if (active == null
-                    || active.finished
-                    || active.cancelled
-                    || !active.awaitingModel) {
-                return false;
-            }
-            if (active.requiresPostActionInspection) return true;
+            boolean taskActive =
+                    active != null
+                            && !active.finished
+                            && !active.cancelled;
+            if (!taskActive) return false;
 
-            boolean completionReady =
-                    AgentTaskLifecyclePolicy.canFinishAfterModelReply(
-                            active.lastTaskState,
-                            active.lastToolName,
-                            active.requiresPostActionInspection,
-                            active.blockedReason != null,
-                            active.mutationActions);
-
-            // Never expose a completion-style narration while Runtime still
-            // considers a mutation goal incomplete. The response coordinator is
-            // already bounded: it nudges Gemini once, then stops the task on a
-            // second premature reply. Keeping this gate closed prevents users
-            // from hearing "done" twice while still avoiding an internal loop.
-            return active.mutationActions > 0
-                    && !completionReady;
+            return AgentSpeechGatePolicy.shouldWithhold(
+                    true,
+                    active.awaitingModel,
+                    active.lastTaskState,
+                    active.lastToolName,
+                    active.requiresPostActionInspection,
+                    active.blockedReason != null,
+                    active.mutationActions);
         }
     }
 }
