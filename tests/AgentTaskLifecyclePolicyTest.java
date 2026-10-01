@@ -123,6 +123,16 @@ public final class AgentTaskLifecyclePolicyTest {
                 "two mutation failures do not stop loop");
 
         check(!AgentTaskLifecyclePolicy.canFinishAfterModelReply(
+                        "WAITING_USER", "tap_screen", false, false, 1),
+                "waiting for user remains a non-terminal task state");
+        check(!AgentTaskLifecyclePolicy.canFinishAfterModelReply(
+                        "NEED_USER", "tap_screen", false, false, 1),
+                "need-user remains a non-terminal task state");
+        check(!AgentTaskLifecyclePolicy.canFinishAfterModelReply(
+                        "WAITING_BACKGROUND", "wait", false, false, 0),
+                "background wait remains non-terminal");
+
+        check(!AgentTaskLifecyclePolicy.canFinishAfterModelReply(
                         "IN_PROGRESS", "tap_screen", false, false, 1),
                 "mutation in progress cannot finish from model speech");
         check(!AgentTaskLifecyclePolicy.canFinishAfterModelReply(
