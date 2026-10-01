@@ -27,7 +27,9 @@ public final class LivePromptTest {
         check(LivePrompt.CORE.contains("fresh screenshot plus semantic fallback"),
                 "inspect_ui should explain its complete visual evidence");
 
-        System.out.println(
+                check(LivePrompt.CORE.contains("ASK_USER=ask only for the needed choice, say that one concise question aloud"),
+                "ASK_USER must be an explicit audible boundary");
+System.out.println(
                 "LivePromptTest passed " + checks + " checks");
     }
 

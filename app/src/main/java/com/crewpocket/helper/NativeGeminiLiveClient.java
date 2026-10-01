@@ -3811,9 +3811,8 @@ final class NativeGeminiLiveClient {
     private boolean shouldSuspendAgentForUser(JSONObject result) {
         if (result != null) {
             String state = result.optString("taskState", "");
-            if ("WAITING_USER".equals(state)
-                    || "NEED_USER".equals(state)
-                    || "WAITING_BACKGROUND".equals(state)) {
+            if (AgentSpeechGatePolicy.isUserInputBoundary(state)
+                    || AgentSpeechGatePolicy.isSilentWait(state)) {
                 return true;
             }
         }
