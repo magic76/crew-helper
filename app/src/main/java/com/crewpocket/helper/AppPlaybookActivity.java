@@ -1420,6 +1420,256 @@ public class AppPlaybookActivity extends Activity {
         dialog.show();
     }
 
+    private void showDocumentCapabilityCandidates(
+            final String packageName,
+            final String appLabel,
+            final JSONObject importResult) {
+        final JSONArray candidates =
+                importResult == null
+                        ? null
+                        : importResult.optJSONArray("capabilities");
+        if (candidates == null
+                || candidates.length() == 0) {
+            return;
+        }
+
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(18), dp(8), dp(18), dp(8));
+        scroll.addView(root);
+
+        TextView source = bodyText(
+                importResult.optString(
+                        "documentTitle",
+                        importResult.optString(
+                                "documentUrl",
+                                "")));
+        source.setTextColor(CrewTheme.TEXT_MUTED);
+        source.setPadding(0, 0, 0, dp(10));
+        root.addView(source);
+
+        for (int i = 0; i < candidates.length(); i++) {
+            final JSONObject candidate =
+                    candidates.optJSONObject(i);
+            if (candidate == null) continue;
+
+            LinearLayout card = new LinearLayout(this);
+            card.setOrientation(LinearLayout.VERTICAL);
+            card.setPadding(dp(12), dp(10), dp(12), dp(10));
+            card.setBackground(CrewTheme.createCard(
+                    this,
+                    CrewTheme.BG_SURFACE,
+                    CrewTheme.BORDER_SUBTLE,
+                    12));
+
+            TextView name = new TextView(this);
+            name.setText(
+                    candidate.optString(
+                            "label",
+                            candidate.optString("id", "")));
+            name.setTextSize(12.5f);
+            name.setTypeface(Typeface.DEFAULT_BOLD);
+            name.setTextColor(CrewTheme.TEXT_PRIMARY);
+            card.addView(name);
+
+            String evidenceText =
+                    candidate.optString("evidence", "");
+            if (!evidenceText.isEmpty()) {
+                TextView evidence =
+                        bodyText(evidenceText);
+                evidence.setTextColor(
+                        CrewTheme.TEXT_SECONDARY);
+                evidence.setPadding(
+                        0, dp(5), 0, 0);
+                card.addView(evidence);
+            }
+
+            TextView example = new TextView(this);
+            example.setText(
+                    I18n.get(
+                            this,
+                            "文件範例：",
+                            "Example: ")
+                            + candidate.optString(
+                                    "exampleUri",
+                                    ""));
+            example.setTextSize(9.5f);
+            example.setTextColor(CrewTheme.TEXT_MUTED);
+            example.setPadding(0, dp(5), 0, 0);
+            example.setSingleLine(false);
+            card.addView(example);
+
+            final TextView state = new TextView(this);
+            state.setTextSize(9.5f);
+            state.setTextColor(CrewTheme.TEXT_MUTED);
+            state.setPadding(0, dp(5), 0, 0);
+
+            JSONObject inspected =
+                    AppCapabilityLinkTester.inspect(
+                            this,
+                            packageName,
+                            candidate.optString(
+                                    "exampleUri",
+                                    ""));
+            final boolean resolvable =
+                    inspected.optBoolean(
+                            "success",
+                            false);
+            state.setText(
+                    resolvable
+                            ? I18n.get(
+                                    this,
+                                    "✓ 目前安裝版本可處理這個範例",
+                                    "✓ Installed App can handle this example")
+                            : I18n.get(
+                                    this,
+                                    "目前安裝版本無法處理這個文件範例",
+                                    "Installed App cannot handle this documented example"));
+            state.setTextColor(
+                    resolvable
+                            ? CrewTheme.TEAL_300
+                            : CrewTheme.ROSE_400);
+            card.addView(state);
+
+            Button add = new Button(this);
+            add.setAllCaps(false);
+            add.setText(I18n.get(
+                    this,
+                    "測試並加入",
+                    "Test & Add"));
+            add.setTextSize(10.5f);
+            add.setTypeface(Typeface.DEFAULT_BOLD);
+            add.setTextColor(
+                    resolvable
+                            ? CrewTheme.TEAL_300
+                            : CrewTheme.TEXT_MUTED);
+            add.setEnabled(resolvable);
+            add.setBackground(CrewTheme.createCard(
+                    this,
+                    CrewTheme.BG_ELEVATED,
+                    resolvable
+                            ? CrewTheme.BORDER_TEAL
+                            : CrewTheme.BORDER_SUBTLE,
+                    10));
+            add.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) {
+                    String exampleUri =
+                            candidate.optString(
+                                    "exampleUri",
+                                    "");
+                    JSONObject test =
+                            AppCapabilityLinkTester.launch(
+                                    AppPlaybookActivity.this,
+                                    packageName,
+                                    exampleUri);
+                    if (!test.optBoolean(
+                            "success",
+                            false)) {
+                        state.setTextColor(
+                                CrewTheme.ROSE_400);
+                        state.setText(I18n.get(
+                                AppPlaybookActivity.this,
+                                "測試啟動失敗，未加入",
+                                "Test launch failed; not added"));
+                        return;
+                    }
+
+                    String action =
+                            candidate.optString(
+                                    "intentAction",
+                                    Intent.ACTION_VIEW);
+                    String kind =
+                            Intent.ACTION_VIEW.equals(action)
+                                    ? "URI"
+                                    : "INTENT";
+                    JSONObject saved =
+                            capabilityStore.saveLocal(
+                                    packageName,
+                                    appLabel,
+                                    candidate.optString(
+                                            "id",
+                                            ""),
+                                    candidate.optString(
+                                            "label",
+                                            ""),
+                                    kind,
+                                    candidate.optString(
+                                            "uriTemplate",
+                                            ""),
+                                    action,
+                                    "");
+                    if (!saved.optBoolean(
+                            "success",
+                            false)) {
+                        state.setTextColor(
+                                CrewTheme.ROSE_400);
+                        state.setText(
+                                saved.optString(
+                                        "error",
+                                        "SAVE_FAILED"));
+                        return;
+                    }
+
+                    state.setTextColor(
+                            CrewTheme.TEAL_300);
+                    state.setText(I18n.get(
+                            AppPlaybookActivity.this,
+                            "✓ 已加入快速能力",
+                            "✓ Fast capability added"));
+                    v.setEnabled(false);
+                    render();
+                }
+            });
+            LinearLayout.LayoutParams addLp =
+                    new LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            dp(40));
+            addLp.setMargins(0, dp(8), 0, 0);
+            card.addView(add, addLp);
+
+            LinearLayout.LayoutParams cardLp =
+                    new LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT);
+            cardLp.setMargins(0, 0, 0, dp(8));
+            root.addView(card, cardLp);
+        }
+
+        new AlertDialog.Builder(this)
+                .setTitle(I18n.get(
+                        this,
+                        "文件找到的快速能力",
+                        "Capabilities found in docs"))
+                .setView(scroll)
+                .setNegativeButton(
+                        I18n.get(this, "關閉", "Close"),
+                        null)
+                .show();
+    }
+
+    private String documentImportErrorMessage(
+            String error) {
+        String code =
+                error == null ? "" : error.trim();
+        if ("GEMINI_API_KEY_MISSING".equals(code)) {
+            return I18n.get(
+                    this,
+                    "需要先在 Crew Helper 設定 Gemini API Key，才能分析官方文件。",
+                    "Set a Gemini API Key in Crew Helper before analyzing documentation.");
+        }
+        if (code.startsWith("WEB_")) {
+            return I18n.get(
+                    this,
+                    "無法讀取這個文件網址。請確認它是公開的 HTTP/HTTPS 頁面。",
+                    "Crew could not read this documentation URL. Make sure it is a public HTTP/HTTPS page.");
+        }
+        return I18n.get(
+                this,
+                "文件分析失敗，可以改貼 App 分享出來的實際連結。",
+                "Documentation analysis failed. Try a real link shared from the App instead.");
+    }
+
     private void refreshKnownCapabilities(
             String packageName,
             TextView status) {
