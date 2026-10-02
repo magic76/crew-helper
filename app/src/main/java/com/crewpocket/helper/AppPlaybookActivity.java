@@ -501,8 +501,8 @@ public class AppPlaybookActivity extends Activity {
 
         TextView capabilityTitle = sectionLabel(I18n.get(
                 this,
-                "快速能力 · Deep Link / Intent",
-                "FAST CAPABILITIES · DEEP LINK / INTENT"));
+                "快速能力",
+                "FAST CAPABILITIES"));
         capabilityTitle.setPadding(0, dp(12), 0, dp(6));
         root.addView(capabilityTitle);
 
@@ -532,9 +532,9 @@ public class AppPlaybookActivity extends Activity {
 
                 TextView capName = new TextView(this);
                 capName.setText(
-                        capability.optString("id", "")
-                                + " · "
-                                + capability.optString("label", ""));
+                        capability.optString(
+                                "label",
+                                capability.optString("id", "")));
                 capName.setTextSize(11.5f);
                 capName.setTypeface(Typeface.DEFAULT_BOLD);
                 capName.setTextColor(CrewTheme.TEXT_PRIMARY);
@@ -586,8 +586,8 @@ public class AppPlaybookActivity extends Activity {
         addCapabilityRule.setAllCaps(false);
         addCapabilityRule.setText(I18n.get(
                 this,
-                "＋ 新增 Deep Link / Intent",
-                "+ Add Deep Link / Intent"));
+                "＋ 新增快速能力",
+                "+ Add Fast Capability"));
         addCapabilityRule.setTextSize(11);
         addCapabilityRule.setTextColor(CrewTheme.TEAL_300);
         addCapabilityRule.setBackground(CrewTheme.createCard(
