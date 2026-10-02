@@ -131,6 +131,40 @@ final class LiveToolCatalog {
         tools.put(new JSONObject().put("name", "list_app_guidance").put("description",
                 "Read operational guidance already known for the CURRENT foreground App when the user asks what Crew has learned. Do not call this as a required pre-step for ordinary phone actions; use remember_app_guidance for explicit teaching."));
 
+        tools.put(new JSONObject()
+                .put("name", "list_app_capabilities")
+                .put("description",
+                        "List deterministic Deep Link / Android Intent capabilities currently known for an installed app. Use this when a suitable capability id was not already provided in appCapabilities context. Never invent capability ids.")
+                .put("parameters", new JSONObject()
+                        .put("type", "OBJECT")
+                        .put("properties", new JSONObject()
+                                .put("app", new JSONObject()
+                                        .put("type", "STRING")
+                                        .put("description", "Optional human App name. Omit to use the current foreground App."))
+                                .put("package", new JSONObject()
+                                        .put("type", "STRING")
+                                        .put("description", "Optional exact Android package when already known.")))));
+        tools.put(new JSONObject()
+                .put("name", "run_app_capability")
+                .put("description",
+                        "Execute one LOW-RISK deterministic app capability previously returned by appCapabilities/list_app_capabilities. Runtime owns the URI/Intent template and verification. Never invent capability ids or URI schemes. If unavailable or rejected, fall back to normal phone_action UI execution.")
+                .put("parameters", new JSONObject()
+                        .put("type", "OBJECT")
+                        .put("properties", new JSONObject()
+                                .put("app", new JSONObject()
+                                        .put("type", "STRING")
+                                        .put("description", "Optional human App name."))
+                                .put("package", new JSONObject()
+                                        .put("type", "STRING")
+                                        .put("description", "Optional exact Android package when known."))
+                                .put("capability", new JSONObject()
+                                        .put("type", "STRING")
+                                        .put("description", "Exact capability id returned by Runtime."))
+                                .put("params", new JSONObject()
+                                        .put("type", "OBJECT")
+                                        .put("description", "Named parameters required by that capability, using exactly the keys Runtime listed.")))
+                        .put("required", new JSONArray().put("capability"))));
+
         tools.put(new JSONObject().put("name", "inspect_ui").put("description",
                 "Get one fresh full-screen visual observation when current evidence is insufficient. Use for rendered text, charts, WebView/custom UI or post-action verification. If a user-selected crop already answers the question, answer from that crop instead. Do not repeatedly inspect an unchanged screen."));
         tools.put(new JSONObject().put("name", "wait").put("description",
