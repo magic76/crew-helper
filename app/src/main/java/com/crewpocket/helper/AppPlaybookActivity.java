@@ -3,6 +3,7 @@ package com.crewpocket.helper;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.DialogInterface;
+import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.os.Build;
@@ -34,6 +35,8 @@ public class AppPlaybookActivity extends Activity {
     private AppAutonomyStore autonomyStore;
     private AppCatalog appCatalog;
     private LinearLayout content;
+    private String incomingSharedLink = "";
+    private boolean incomingShareHandled = false;
 
     private int dp(float value) { return CrewTheme.dp(this, value); }
 
@@ -46,6 +49,9 @@ public class AppPlaybookActivity extends Activity {
         autonomyStore = new AppAutonomyStore(this);
         appCatalog = new AppCatalog(this);
         appCatalog.prewarm();
+        AppCapabilitySync.maybeSync(this, capabilityStore);
+        incomingSharedLink =
+                extractSharedLinkFromIntent(getIntent());
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             getWindow().setStatusBarColor(CrewTheme.BG_PRIMARY);
@@ -62,6 +68,17 @@ public class AppPlaybookActivity extends Activity {
         scroll.addView(content);
         setContentView(scroll);
         render();
+
+        if (!incomingSharedLink.isEmpty()
+                && !incomingShareHandled) {
+            incomingShareHandled = true;
+            content.post(new Runnable() {
+                @Override public void run() {
+                    showCapabilityAppPicker(
+                            incomingSharedLink);
+                }
+            });
+        }
     }
 
     @Override protected void onResume() {
@@ -539,10 +556,10 @@ public class AppPlaybookActivity extends Activity {
                 10));
         addCapabilityRule.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
-                showCapabilityEditor(
+                showCapabilityWizard(
                         packageName,
                         label,
-                        null);
+                        "");
             }
         });
         LinearLayout.LayoutParams addCapabilityRuleLp =
@@ -710,6 +727,11 @@ public class AppPlaybookActivity extends Activity {
     }
 
     private void showCapabilityAppPicker() {
+        showCapabilityAppPicker("");
+    }
+
+    private void showCapabilityAppPicker(
+            final String prefillLink) {
         final ArrayList<AppCatalog.Entry> apps =
                 appCatalog.listLaunchable();
         Collections.sort(apps, new Comparator<AppCatalog.Entry>() {
@@ -735,11 +757,19 @@ public class AppPlaybookActivity extends Activity {
             AppCatalog.Entry app = apps.get(i);
             labels[i] = app.label + "\n" + app.packageName;
         }
+
         new AlertDialog.Builder(this)
-                .setTitle(I18n.get(
-                        this,
-                        "選擇要設定快速能力的 App",
-                        "Choose App for capability"))
+                .setTitle(
+                        prefillLink == null
+                                || prefillLink.trim().isEmpty()
+                                ? I18n.get(
+                                        this,
+                                        "要讓哪個 App 更快？",
+                                        "Which App should Crew speed up?")
+                                : I18n.get(
+                                        this,
+                                        "這個連結要交給哪個 App？",
+                                        "Which App should open this link?"))
                 .setItems(
                         labels,
                         new DialogInterface.OnClickListener() {
@@ -748,10 +778,12 @@ public class AppPlaybookActivity extends Activity {
                                     int which) {
                                 AppCatalog.Entry app =
                                         apps.get(which);
-                                showCapabilityEditor(
+                                showCapabilityWizard(
                                         app.packageName,
                                         app.label,
-                                        null);
+                                        prefillLink == null
+                                                ? ""
+                                                : prefillLink.trim());
                             }
                         })
                 .setNegativeButton(
