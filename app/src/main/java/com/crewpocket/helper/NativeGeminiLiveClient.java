@@ -5494,10 +5494,23 @@ final class NativeGeminiLiveClient {
         // giving the human a clear ~1 second confirmation without contaminating
         // model perception or delaying the actual gesture.
         if (reply.optBoolean("success", false)) {
-            ActionVisualOverlay.showSwipeFeedback(
-                    appContext,
-                    reply.optString("direction", "up"),
-                    reply.optString("distance", "normal"));
+            if (reply.has("x1")
+                    && reply.has("y1")
+                    && reply.has("x2")
+                    && reply.has("y2")) {
+                ActionVisualOverlay.showSwipeFeedback(
+                        appContext,
+                        (float) reply.optDouble("x1"),
+                        (float) reply.optDouble("y1"),
+                        (float) reply.optDouble("x2"),
+                        (float) reply.optDouble("y2"),
+                        320L);
+            } else {
+                ActionVisualOverlay.showSwipeFeedback(
+                        appContext,
+                        reply.optString("direction", "up"),
+                        reply.optString("distance", "normal"));
+            }
         }
 
         boolean changed = reply.optBoolean("screenChanged", false);
