@@ -709,6 +709,448 @@ public class AppPlaybookActivity extends Activity {
                 .show();
     }
 
+    private void showCapabilityAppPicker() {
+        final ArrayList<AppCatalog.Entry> apps =
+                appCatalog.listLaunchable();
+        Collections.sort(apps, new Comparator<AppCatalog.Entry>() {
+            @Override public int compare(
+                    AppCatalog.Entry a,
+                    AppCatalog.Entry b) {
+                return a.label.compareToIgnoreCase(b.label);
+            }
+        });
+        if (apps.isEmpty()) {
+            Toast.makeText(
+                    this,
+                    I18n.get(
+                            this,
+                            "找不到可啟動的 App",
+                            "No launchable apps found"),
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        String[] labels = new String[apps.size()];
+        for (int i = 0; i < apps.size(); i++) {
+            AppCatalog.Entry app = apps.get(i);
+            labels[i] = app.label + "\n" + app.packageName;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(I18n.get(
+                        this,
+                        "選擇要設定快速能力的 App",
+                        "Choose App for capability"))
+                .setItems(
+                        labels,
+                        new DialogInterface.OnClickListener() {
+                            @Override public void onClick(
+                                    DialogInterface dialog,
+                                    int which) {
+                                AppCatalog.Entry app =
+                                        apps.get(which);
+                                showCapabilityEditor(
+                                        app.packageName,
+                                        app.label,
+                                        null);
+                            }
+                        })
+                .setNegativeButton(
+                        I18n.get(this, "取消", "Cancel"),
+                        null)
+                .show();
+    }
+
+    private void showRemoteRegistryDialog() {
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(18), dp(8), dp(18), dp(4));
+
+        TextView help = bodyText(I18n.get(
+                this,
+                "填入 HTTPS JSON manifest。Crew 最多每 24 小時自動同步一次；本機自訂 capability 永遠優先於遠端同名項目。Registry 只載入宣告資料，不下載或執行程式碼。",
+                "Enter an HTTPS JSON manifest. Crew auto-syncs at most once every 24 hours; local capabilities always override remote entries with the same id. Registry data is declarative only and never downloads executable code."));
+        help.setPadding(0, 0, 0, dp(8));
+        root.addView(help);
+
+        final EditText url = new EditText(this);
+        url.setHint("https://…/crew-app-capabilities.json");
+        url.setText(capabilityStore.remoteUrl());
+        url.setTextSize(11.5f);
+        url.setSingleLine(true);
+        url.setInputType(
+                InputType.TYPE_CLASS_TEXT
+                        | InputType.TYPE_TEXT_VARIATION_URI);
+        url.setTextColor(CrewTheme.TEXT_PRIMARY);
+        url.setHintTextColor(CrewTheme.TEXT_MUTED);
+        url.setBackground(CrewTheme.createCard(
+                this,
+                CrewTheme.BG_SURFACE,
+                CrewTheme.BORDER_SUBTLE,
+                10));
+        url.setPadding(dp(11), dp(9), dp(11), dp(9));
+        root.addView(url);
+
+        String revision = capabilityStore.remoteRevision();
+        if (!revision.isEmpty()) {
+            TextView current = bodyText(
+                    I18n.get(this, "目前 revision: ", "Current revision: ")
+                            + revision);
+            current.setTextColor(CrewTheme.TEXT_MUTED);
+            current.setPadding(0, dp(7), 0, 0);
+            root.addView(current);
+        }
+
+        final AlertDialog dialog =
+                new AlertDialog.Builder(this)
+                        .setTitle(I18n.get(
+                                this,
+                                "Capability Registry",
+                                "Capability Registry"))
+                        .setView(root)
+                        .setPositiveButton(
+                                I18n.get(
+                                        this,
+                                        "儲存並同步",
+                                        "Save & Sync"),
+                                null)
+                        .setNeutralButton(
+                                I18n.get(
+                                        this,
+                                        "清除",
+                                        "Clear"),
+                                null)
+                        .setNegativeButton(
+                                I18n.get(this, "取消", "Cancel"),
+                                null)
+                        .create();
+
+        dialog.setOnShowListener(
+                new DialogInterface.OnShowListener() {
+                    @Override public void onShow(
+                            DialogInterface unused) {
+                        dialog.getButton(
+                                AlertDialog.BUTTON_POSITIVE)
+                                .setOnClickListener(
+                                        new View.OnClickListener() {
+                                            @Override public void onClick(
+                                                    View v) {
+                                                String value =
+                                                        url.getText()
+                                                                .toString()
+                                                                .trim();
+                                                capabilityStore
+                                                        .setRemoteUrl(
+                                                                value);
+                                                if (value.isEmpty()) {
+                                                    dialog.dismiss();
+                                                    render();
+                                                    return;
+                                                }
+
+                                                Toast.makeText(
+                                                        AppPlaybookActivity.this,
+                                                        I18n.get(
+                                                                AppPlaybookActivity.this,
+                                                                "正在同步 Registry",
+                                                                "Syncing Registry"),
+                                                        Toast.LENGTH_SHORT)
+                                                        .show();
+                                                AppCapabilitySync.sync(
+                                                        AppPlaybookActivity.this,
+                                                        capabilityStore,
+                                                        new AppCapabilitySync.Callback() {
+                                                            @Override
+                                                            public void onComplete(
+                                                                    JSONObject result) {
+                                                                boolean ok =
+                                                                        result.optBoolean(
+                                                                                "success",
+                                                                                false);
+                                                                Toast.makeText(
+                                                                        AppPlaybookActivity.this,
+                                                                        ok
+                                                                                ? I18n.get(
+                                                                                        AppPlaybookActivity.this,
+                                                                                        "同步完成："
+                                                                                                + result.optInt("apps", 0)
+                                                                                                + " Apps · "
+                                                                                                + result.optInt("capabilities", 0)
+                                                                                                + " abilities",
+                                                                                        "Synced "
+                                                                                                + result.optInt("apps", 0)
+                                                                                                + " apps · "
+                                                                                                + result.optInt("capabilities", 0)
+                                                                                                + " capabilities")
+                                                                                : result.optString(
+                                                                                        "error",
+                                                                                        "SYNC_FAILED"),
+                                                                        Toast.LENGTH_LONG)
+                                                                        .show();
+                                                                render();
+                                                            }
+                                                        });
+                                                dialog.dismiss();
+                                            }
+                                        });
+
+                        dialog.getButton(
+                                AlertDialog.BUTTON_NEUTRAL)
+                                .setOnClickListener(
+                                        new View.OnClickListener() {
+                                            @Override public void onClick(
+                                                    View v) {
+                                                capabilityStore
+                                                        .setRemoteUrl("");
+                                                dialog.dismiss();
+                                                render();
+                                            }
+                                        });
+                    }
+                });
+        dialog.show();
+    }
+
+    private void showCapabilityEditor(
+            final String packageName,
+            final String appLabel,
+            final JSONObject existing) {
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(18), dp(8), dp(18), dp(4));
+
+        TextView packageView = bodyText(packageName);
+        packageView.setTextColor(CrewTheme.TEXT_MUTED);
+        packageView.setPadding(0, 0, 0, dp(8));
+        root.addView(packageView);
+
+        final EditText id = new EditText(this);
+        id.setHint("OPEN_PRODUCT");
+        id.setText(
+                existing == null
+                        ? ""
+                        : existing.optString("id", ""));
+        id.setEnabled(existing == null);
+        id.setSingleLine(true);
+        id.setTextSize(12);
+        id.setTextColor(CrewTheme.TEXT_PRIMARY);
+        id.setHintTextColor(CrewTheme.TEXT_MUTED);
+        id.setBackground(CrewTheme.createCard(
+                this,
+                CrewTheme.BG_SURFACE,
+                CrewTheme.BORDER_SUBTLE,
+                10));
+        id.setPadding(dp(11), dp(9), dp(11), dp(9));
+        root.addView(id);
+
+        final EditText label = new EditText(this);
+        label.setHint(I18n.get(
+                this,
+                "顯示名稱，例如：開啟商品",
+                "Label, e.g. Open product"));
+        label.setText(
+                existing == null
+                        ? ""
+                        : existing.optString("label", ""));
+        label.setSingleLine(true);
+        label.setTextSize(12);
+        label.setTextColor(CrewTheme.TEXT_PRIMARY);
+        label.setHintTextColor(CrewTheme.TEXT_MUTED);
+        label.setBackground(CrewTheme.createCard(
+                this,
+                CrewTheme.BG_SURFACE,
+                CrewTheme.BORDER_SUBTLE,
+                10));
+        label.setPadding(dp(11), dp(9), dp(11), dp(9));
+        LinearLayout.LayoutParams fieldLp =
+                new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT);
+        fieldLp.setMargins(0, dp(8), 0, 0);
+        root.addView(label, fieldLp);
+
+        final EditText uri = new EditText(this);
+        uri.setHint("myapp://product/{id}");
+        uri.setText(
+                existing == null
+                        ? ""
+                        : existing.optString(
+                                "uriTemplate", ""));
+        uri.setTextSize(11.5f);
+        uri.setTextColor(CrewTheme.TEXT_PRIMARY);
+        uri.setHintTextColor(CrewTheme.TEXT_MUTED);
+        uri.setSingleLine(false);
+        uri.setMinLines(2);
+        uri.setMaxLines(4);
+        uri.setInputType(
+                InputType.TYPE_CLASS_TEXT
+                        | InputType.TYPE_TEXT_VARIATION_URI
+                        | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        uri.setBackground(CrewTheme.createCard(
+                this,
+                CrewTheme.BG_SURFACE,
+                CrewTheme.BORDER_SUBTLE,
+                10));
+        uri.setPadding(dp(11), dp(9), dp(11), dp(9));
+        LinearLayout.LayoutParams uriLp =
+                new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT);
+        uriLp.setMargins(0, dp(8), 0, 0);
+        root.addView(uri, uriLp);
+
+        final EditText action = new EditText(this);
+        action.setHint(I18n.get(
+                this,
+                "Intent action（選填；預設 ACTION_VIEW）",
+                "Intent action (optional; defaults to ACTION_VIEW)"));
+        action.setText(
+                existing == null
+                        ? ""
+                        : existing.optString("action", ""));
+        action.setSingleLine(true);
+        action.setTextSize(10.5f);
+        action.setTextColor(CrewTheme.TEXT_SECONDARY);
+        action.setHintTextColor(CrewTheme.TEXT_MUTED);
+        action.setBackground(CrewTheme.createCard(
+                this,
+                CrewTheme.BG_SURFACE,
+                CrewTheme.BORDER_SUBTLE,
+                10));
+        action.setPadding(dp(11), dp(9), dp(11), dp(9));
+        LinearLayout.LayoutParams actionLp =
+                new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT);
+        actionLp.setMargins(0, dp(8), 0, 0);
+        root.addView(action, actionLp);
+
+        TextView note = bodyText(I18n.get(
+                this,
+                "參數用 {name} 宣告，例如 spotify:album:{albumId}。Capability 只允許低風險 VIEW / SENDTO / DIAL；Runtime 執行前仍會 resolveActivity，執行後仍會驗證 App/畫面。",
+                "Declare parameters as {name}, e.g. spotify:album:{albumId}. Capabilities are limited to low-risk VIEW / SENDTO / DIAL; Runtime still resolves before launch and verifies the App/screen afterward."));
+        note.setTextColor(CrewTheme.TEXT_MUTED);
+        note.setPadding(0, dp(8), 0, 0);
+        root.addView(note);
+
+        AlertDialog.Builder builder =
+                new AlertDialog.Builder(this)
+                        .setTitle(
+                                (existing == null
+                                        ? I18n.get(
+                                                this,
+                                                "新增快速能力 · ",
+                                                "Add capability · ")
+                                        : I18n.get(
+                                                this,
+                                                "編輯快速能力 · ",
+                                                "Edit capability · "))
+                                        + appLabel)
+                        .setView(root)
+                        .setPositiveButton(
+                                I18n.get(this, "儲存", "Save"),
+                                null)
+                        .setNegativeButton(
+                                I18n.get(this, "取消", "Cancel"),
+                                null);
+        if (existing != null) {
+            builder.setNeutralButton(
+                    I18n.get(this, "刪除", "Delete"),
+                    null);
+        }
+
+        final AlertDialog dialog = builder.create();
+        dialog.setOnShowListener(
+                new DialogInterface.OnShowListener() {
+                    @Override public void onShow(
+                            DialogInterface unused) {
+                        dialog.getButton(
+                                AlertDialog.BUTTON_POSITIVE)
+                                .setOnClickListener(
+                                        new View.OnClickListener() {
+                                            @Override public void onClick(
+                                                    View v) {
+                                                String actionValue =
+                                                        action.getText()
+                                                                .toString()
+                                                                .trim();
+                                                String kind =
+                                                        actionValue.isEmpty()
+                                                                || android.content.Intent.ACTION_VIEW.equals(
+                                                                        actionValue)
+                                                                ? "URI"
+                                                                : "INTENT";
+                                                JSONObject saved =
+                                                        capabilityStore.saveLocal(
+                                                                packageName,
+                                                                appLabel,
+                                                                id.getText()
+                                                                        .toString(),
+                                                                label.getText()
+                                                                        .toString(),
+                                                                kind,
+                                                                uri.getText()
+                                                                        .toString(),
+                                                                actionValue,
+                                                                "");
+                                                if (!saved.optBoolean(
+                                                        "success",
+                                                        false)) {
+                                                    Toast.makeText(
+                                                            AppPlaybookActivity.this,
+                                                            saved.optString(
+                                                                    "error",
+                                                                    "SAVE_FAILED"),
+                                                            Toast.LENGTH_SHORT)
+                                                            .show();
+                                                    return;
+                                                }
+                                                dialog.dismiss();
+                                                render();
+                                                Toast.makeText(
+                                                        AppPlaybookActivity.this,
+                                                        I18n.get(
+                                                                AppPlaybookActivity.this,
+                                                                "已儲存快速能力",
+                                                                "Capability saved"),
+                                                        Toast.LENGTH_SHORT)
+                                                        .show();
+                                            }
+                                        });
+
+                        if (existing != null) {
+                            Button delete =
+                                    dialog.getButton(
+                                            AlertDialog.BUTTON_NEUTRAL);
+                            delete.setTextColor(
+                                    CrewTheme.ROSE_400);
+                            delete.setOnClickListener(
+                                    new View.OnClickListener() {
+                                        @Override public void onClick(
+                                                View v) {
+                                            boolean removed =
+                                                    capabilityStore.deleteLocal(
+                                                            packageName,
+                                                            existing.optString(
+                                                                    "id",
+                                                                    ""));
+                                            if (!removed) {
+                                                Toast.makeText(
+                                                        AppPlaybookActivity.this,
+                                                        "CAPABILITY_NOT_FOUND",
+                                                        Toast.LENGTH_SHORT)
+                                                        .show();
+                                                return;
+                                            }
+                                            dialog.dismiss();
+                                            render();
+                                        }
+                                    });
+                        }
+                    }
+                });
+        dialog.show();
+    }
+
     private void updateAutonomyStateView(
             TextView view,
             boolean enabled) {
