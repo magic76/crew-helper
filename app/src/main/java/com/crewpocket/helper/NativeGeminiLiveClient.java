@@ -52,6 +52,9 @@ final class NativeGeminiLiveClient {
     private final Context appContext;
     private final NotebookToolHandler notebookToolHandler;
     private final AppPlaybookStore appPlaybookStore;
+    private final AppCapabilityStore appCapabilityStore;
+    private final AppCapabilityRegistry appCapabilityRegistry;
+    private final AppCapabilityExecutor appCapabilityExecutor;
     private final AppAutonomyStore appAutonomyStore;
     private final TaskRecipeStore taskRecipeStore;
     private final RefinedMemoryStore refinedMemoryStore;
@@ -255,6 +258,18 @@ final class NativeGeminiLiveClient {
 
         this.notebookToolHandler = new NotebookToolHandler(this.appContext);
         this.appPlaybookStore = new AppPlaybookStore(this.appContext);
+        this.appCapabilityStore = new AppCapabilityStore(this.appContext);
+        this.appCapabilityRegistry =
+                new AppCapabilityRegistry(
+                        this.appContext,
+                        this.appCapabilityStore);
+        this.appCapabilityExecutor =
+                new AppCapabilityExecutor(
+                        this.appContext,
+                        this.appCapabilityRegistry);
+        AppCapabilitySync.maybeSync(
+                this.appContext,
+                this.appCapabilityStore);
         this.appAutonomyStore = new AppAutonomyStore(this.appContext);
         this.taskRecipeStore = new TaskRecipeStore(this.appContext);
         this.refinedMemoryStore =
@@ -586,6 +601,18 @@ final class NativeGeminiLiveClient {
                             throws Exception {
                         return NativeGeminiLiveClient.this
                                 .listCurrentAppGuidance();
+                    }
+
+                    @Override public JSONObject listAppCapabilities(
+                            JSONObject args) throws Exception {
+                        return NativeGeminiLiveClient.this
+                                .listAppCapabilities(args);
+                    }
+
+                    @Override public JSONObject runAppCapability(
+                            JSONObject args) throws Exception {
+                        return NativeGeminiLiveClient.this
+                                .runAppCapability(args);
                     }
 
                     @Override public JSONObject inspectUiForTool(
@@ -6504,6 +6531,59 @@ final class NativeGeminiLiveClient {
         } catch (Exception ignored) {}
         return out;
     }
+    private JSONObject listAppCapabilities(JSONObject args) {
+        JSONObject safe = args == null ? new JSONObject() : args;
+        return appCapabilityExecutor.list(
+                safe.optString("package", ""),
+                safe.optString("app", ""),
+                currentForegroundPackageName());
+    }
+
+    private JSONObject runAppCapability(JSONObject args) {
+        JSONObject result =
+                appCapabilityExecutor.execute(
+                        args,
+                        currentForegroundPackageName());
+        if (!result.optBoolean("success", false)) {
+            return result;
+        }
+
+        String capability =
+                result.optString("capability", "");
+        workingContext.recordAction(
+                "app_capability:" + capability,
+                "submitted");
+
+        JSONObject observed =
+                observationVerificationController
+                        .autoObserveAfterMutation(
+                                result,
+                                "run_app_capability");
+        JSONObject after = observed.optJSONObject("after");
+        String expectedPackage =
+                observed.optString("package", "");
+        String actualPackage = after == null
+                ? ""
+                : after.optString("package", "");
+
+        if (!expectedPackage.isEmpty()
+                && expectedPackage.equals(actualPackage)) {
+            try {
+                observed.put("verified", true)
+                        .put(
+                                "verification",
+                                "TARGET_APP_FOREGROUND")
+                        .put(
+                                "completionEvidence",
+                                "APP_CAPABILITY_TARGET_APP_VERIFIED")
+                        .put(
+                                "nextRequirement",
+                                "CONTINUE_GOAL");
+            } catch (Exception ignored) {}
+        }
+        return observed;
+    }
+
     private String currentForegroundPackageName() {
         // App learning must bind to the app that is actually foreground NOW.
         // Prefer a fresh local semantic read; only fall back to the last action
@@ -6527,7 +6607,20 @@ final class NativeGeminiLiveClient {
         try {
             String packageName = currentForegroundPackageName();
             if (packageName.isEmpty()) return "";
-            String instruction = appPlaybookStore.systemInstructionForStartup(packageName);
+            String playbook =
+                    appPlaybookStore
+                            .systemInstructionForStartup(
+                                    packageName);
+            String capabilities =
+                    appCapabilityRegistry
+                            .systemInstruction(
+                                    packageName);
+            String instruction =
+                    playbook.isEmpty()
+                            ? capabilities
+                            : (capabilities.isEmpty()
+                                    ? playbook
+                                    : playbook + "\n" + capabilities);
             if (!instruction.isEmpty()) {
                 synchronized (injectedAppPlaybooks) {
                     injectedAppPlaybooks.add(packageName + "|builtin");
@@ -6544,6 +6637,7 @@ final class NativeGeminiLiveClient {
                 || "get_selected_region".equals(name)
                 || "wait".equals(name)
                 || "launch_app".equals(name)
+                || "run_app_capability".equals(name)
                 || "swipe_screen".equals(name)
                 || "tap_element".equals(name)
                 || "tap_screen".equals(name)
@@ -6573,9 +6667,16 @@ final class NativeGeminiLiveClient {
                 packageName,
                 workingContext.toProgressJson(),
                 result);
-        if (context.length() == 0) return;
+        JSONObject capabilityContext =
+                appCapabilityRegistry.modelContext(
+                        packageName);
+        if (context.length() == 0
+                && capabilityContext.length() == 0) return;
 
-        String retrievalKey = context.optString("retrievalKey", "builtin");
+        String retrievalKey =
+                context.length() == 0
+                        ? "capabilities"
+                        : context.optString("retrievalKey", "builtin");
         String injectedKey = packageName + "|" + retrievalKey;
         synchronized (injectedAppPlaybooks) {
             if (injectedAppPlaybooks.contains(injectedKey)) return;
@@ -6584,6 +6685,11 @@ final class NativeGeminiLiveClient {
         try {
             context.remove("retrievalKey");
             result.put("appPlaybook", context);
+            if (capabilityContext.length() > 0) {
+                result.put(
+                        "appCapabilities",
+                        capabilityContext);
+            }
             synchronized (injectedAppPlaybooks) {
                 injectedAppPlaybooks.add(injectedKey);
             }
