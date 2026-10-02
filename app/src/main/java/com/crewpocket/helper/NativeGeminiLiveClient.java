@@ -5495,16 +5495,20 @@ final class NativeGeminiLiveClient {
                     ScrollDirectionPolicy.fromPhysical(
                             args.optString("direction", ""));
         }
+        boolean gestureEffectVerified =
+                observed.optBoolean(
+                        "effectVerified",
+                        false);
         if (DirectGestureCompletionPolicy.shouldFinish(
                 latestUserTurn,
                 semanticDirection,
-                observed.optBoolean("success", false))) {
+                gestureEffectVerified)) {
             observed.put("taskState", "DONE")
                     .put("completionEvidence", "DIRECT_GESTURE_EFFECT_VERIFIED")
                     .put("nextRequirement", "NONE")
                     .put(
                             "instruction",
-                            "使用者要求的是單一步驟滑動；Runtime 已完成一次。不要重複 swipe，直接結束本次任務。");
+                            "使用者要求的是單一步驟滑動，而且 Runtime 已確認畫面效果。不要重複 swipe，直接結束本次任務。");
         }
         return observed;
     }
