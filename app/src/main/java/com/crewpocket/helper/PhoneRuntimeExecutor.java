@@ -269,19 +269,30 @@ final class PhoneRuntimeExecutor {
     }
 
     JSONObject swipe(JSONObject args) throws Exception {
-        JSONObject safeArgs = args == null ? new JSONObject() : args;
-        String direction = safeArgs.optString("direction", "up").toLowerCase();
-        String distance = safeArgs.optString("distance", "normal").toLowerCase();
+        JSONObject safeArgs =
+                args == null ? new JSONObject() : args;
+        String direction =
+                safeArgs.optString(
+                        "direction",
+                        "up").toLowerCase(Locale.ROOT);
+        String distance =
+                safeArgs.optString(
+                        "distance",
+                        "normal").toLowerCase(Locale.ROOT);
 
         JSONObject metrics = get("/status");
         int width = metrics.optInt(
-                "screenWidth", visionController.lastScreenWidth());
+                "screenWidth",
+                visionController.lastScreenWidth());
         int height = metrics.optInt(
-                "screenHeight", visionController.lastScreenHeight());
+                "screenHeight",
+                visionController.lastScreenHeight());
         if (width <= 1 || height <= 1) {
             return new JSONObject()
                     .put("success", false)
-                    .put("error", "無法取得目前裝置螢幕尺寸");
+                    .put(
+                            "error",
+                            "無法取得目前裝置螢幕尺寸");
         }
 
         int x1 = Math.round(width * 0.50f);
@@ -341,50 +352,149 @@ final class PhoneRuntimeExecutor {
         }
 
         JSONObject before = new JSONObject();
-        try { before = get("/nodes"); } catch (Exception ignored) {}
+        try {
+            before = get("/nodes");
+        } catch (Exception ignored) {}
+
+        // Horizontal carousels often occupy only part of the screen (for
+        // example Apple Music rows). Prefer the actual scrollable bounds over
+        // a blind mid-screen swipe whenever Accessibility exposes one.
+        if ("left".equals(direction)
+                || "right".equals(direction)) {
+            int[] horizontal =
+                    bestScrollableBounds(
+                            before,
+                            true,
+                            width,
+                            height);
+            if (horizontal != null) {
+                int left = horizontal[0];
+                int top = horizontal[1];
+                int right = horizontal[2];
+                int bottom = horizontal[3];
+                int regionWidth =
+                        Math.max(1, right - left);
+                float startFraction =
+                        ("short".equals(distance)
+                                || "little".equals(distance))
+                                ? 0.68f
+                                : (("long".equals(distance)
+                                        || "page".equals(distance)
+                                        || "fast".equals(distance))
+                                        ? 0.92f
+                                        : 0.84f);
+                float endFraction = 1f - startFraction;
+                int centerY =
+                        top + Math.max(
+                                1,
+                                (bottom - top) / 2);
+                if ("left".equals(direction)) {
+                    x1 = left
+                            + Math.round(
+                                    regionWidth
+                                            * startFraction);
+                    x2 = left
+                            + Math.round(
+                                    regionWidth
+                                            * endFraction);
+                } else {
+                    x1 = left
+                            + Math.round(
+                                    regionWidth
+                                            * endFraction);
+                    x2 = left
+                            + Math.round(
+                                    regionWidth
+                                            * startFraction);
+                }
+                y1 = centerY;
+                y2 = centerY;
+            }
+        }
 
         JSONObject reply = new JSONObject();
         String execution = "gesture";
         String currentPkg =
-                before.optString("package", "").toLowerCase(Locale.ROOT);
-        boolean isMapsOrCanvas = currentPkg.contains("maps")
-                || currentPkg.contains("game")
-                || currentPkg.contains("camera");
+                before.optString(
+                        "package",
+                        "").toLowerCase(Locale.ROOT);
+        boolean isMapsOrCanvas =
+                currentPkg.contains("maps")
+                        || currentPkg.contains("game")
+                        || currentPkg.contains("camera");
 
-        if (!isMapsOrCanvas
-                && ("up".equals(direction) || "down".equals(direction))) {
-            reply = post(
-                    "/scroll",
-                    new JSONObject().put(
-                            "direction",
-                            "up".equals(direction) ? "forward" : "backward"));
-            execution = "ui_node";
-            Thread.sleep(250);
+        // Prefer semantic Accessibility scrolling for ordinary app content.
+        // Horizontal containers use the same forward/back semantics but are
+        // selected by the service from wide scrollable nodes.
+        if (!isMapsOrCanvas) {
+            String semanticScrollDirection = "";
+            if ("up".equals(direction)) {
+                semanticScrollDirection = "forward";
+            } else if ("down".equals(direction)) {
+                semanticScrollDirection = "backward";
+            } else if ("left".equals(direction)
+                    || "right".equals(direction)) {
+                semanticScrollDirection = direction;
+            }
+
+            if (!semanticScrollDirection.isEmpty()) {
+                reply = post(
+                        "/scroll",
+                        new JSONObject().put(
+                                "direction",
+                                semanticScrollDirection));
+                execution = "ui_node";
+                Thread.sleep(250);
+            }
         }
 
         JSONObject after = new JSONObject();
-        try { after = get("/nodes"); } catch (Exception ignored) {}
-        boolean changed = !nodeSignature(before).equals(nodeSignature(after));
+        try {
+            after = get("/nodes");
+        } catch (Exception ignored) {}
+        boolean changed =
+                !nodeSignature(before)
+                        .equals(nodeSignature(after));
 
-        if (!reply.optBoolean("success") || !changed) {
+        // If semantic scroll was rejected or had no observable effect, execute
+        // exactly one gesture fallback. /swipe now reports Android's actual
+        // onCompleted/onCancelled callback instead of optimistic dispatch.
+        if (!reply.optBoolean("success", false)
+                || !changed) {
             reply = post(
                     "/swipe",
                     new JSONObject()
-                            .put("x1", x1).put("y1", y1)
-                            .put("x2", x2).put("y2", y2)
+                            .put("x1", x1)
+                            .put("y1", y1)
+                            .put("x2", x2)
+                            .put("y2", y2)
                             .put("duration", duration));
             execution = "gesture";
-            Thread.sleep(350);
-            try { after = get("/nodes"); } catch (Exception ignored) {}
-            changed = !nodeSignature(before).equals(nodeSignature(after));
+            Thread.sleep(380);
+            try {
+                after = get("/nodes");
+            } catch (Exception ignored) {}
+            changed =
+                    !nodeSignature(before)
+                            .equals(nodeSignature(after));
         }
+
+        boolean executionCompleted =
+                reply.optBoolean("success", false);
+        boolean effectVerified =
+                executionCompleted && changed;
 
         return reply
                 .put("direction", direction)
                 .put("distance", distance)
                 .put("screenSize", width + "x" + height)
                 .put("execution", execution)
-                .put("screenChanged", changed);
+                .put(
+                        "gestureCompleted",
+                        "gesture".equals(execution)
+                                && executionCompleted)
+                .put("screenChanged", changed)
+                .put("effectVerified", effectVerified);
     }
 
     private JSONObject executeArbitratedCandidate(
@@ -1158,6 +1268,69 @@ final class PhoneRuntimeExecutor {
                     : lastCandidateApps.size() - 1;
         }
         return -1;
+    }
+
+    private int[] bestScrollableBounds(
+            JSONObject response,
+            boolean horizontal,
+            int screenWidth,
+            int screenHeight) {
+        if (response == null
+                || !response.optBoolean("success", false)) {
+            return null;
+        }
+        JSONArray nodes = response.optJSONArray("nodes");
+        if (nodes == null) return null;
+
+        int[] best = null;
+        long bestScore = -1L;
+        for (int i = 0; i < nodes.length(); i++) {
+            JSONObject node = nodes.optJSONObject(i);
+            if (node == null
+                    || !node.optBoolean("scrollable", false)) {
+                continue;
+            }
+            JSONObject bounds = node.optJSONObject("bounds");
+            if (bounds == null) continue;
+
+            int left = Math.max(
+                    0,
+                    bounds.optInt("left", 0));
+            int top = Math.max(
+                    0,
+                    bounds.optInt("top", 0));
+            int right = Math.min(
+                    screenWidth,
+                    bounds.optInt("right", 0));
+            int bottom = Math.min(
+                    screenHeight,
+                    bounds.optInt("bottom", 0));
+            int width = right - left;
+            int height = bottom - top;
+            if (width <= 1 || height <= 1) continue;
+
+            if (horizontal
+                    && width
+                            < Math.round(
+                                    height * 1.15f)) {
+                continue;
+            }
+
+            long area = (long) width * (long) height;
+            // Prefer a substantial content row, but avoid tiny chips.
+            if (horizontal
+                    && (width < screenWidth * 0.45f
+                        || height < screenHeight * 0.06f)) {
+                continue;
+            }
+            if (area > bestScore) {
+                bestScore = area;
+                best = new int[]{
+                        left, top, right, bottom
+                };
+            }
+        }
+        return best;
     }
 
     private String nodeSignature(JSONObject response) {
