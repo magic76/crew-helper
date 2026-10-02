@@ -509,21 +509,6 @@ final class PerformanceMetrics {
             out.append(" last=").append(liveHumanTurnLastReason);
         }
         out.append("\n");
-        out.append("Explore gesture lease: armed=")
-                .append(exploreLeaseArmed)
-                .append(" explicit=")
-                .append(exploreLeaseExplicitStarts)
-                .append(" fast-path=")
-                .append(exploreFastPathRuns)
-                .append(" failed=")
-                .append(exploreFastPathFailures)
-                .append(" interim=")
-                .append(exploreInterimFastPathRuns)
-                .append(" final-dedup=")
-                .append(exploreFinalDedupes)
-                .append(" audio-bypass=")
-                .append(exploreAudioBypassFrames)
-                .append("\n");
         out.append("Jev speech review: calls=")
                 .append(jevSpeechReviewCalls)
                 .append(" applied=")
