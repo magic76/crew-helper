@@ -139,16 +139,6 @@ final class NativeGeminiLiveClient {
     private final VoiceExecutionGuard voiceExecutionGuard =
             new VoiceExecutionGuard();
     private volatile long runtimeSendCurrentHandledGeneration = -1L;
-    private final ExploreGestureLease exploreGestureLease =
-            new ExploreGestureLease();
-    private volatile long runtimeExploreHandledGeneration = -1L;
-    private static final long EXPLORE_INTERIM_DEBOUNCE_MS = 240L;
-    private static final long EXPLORE_INTERIM_FINAL_DEDUPE_MS = 1_800L;
-    private final Handler exploreInterimHandler =
-            new Handler(Looper.getMainLooper());
-    private volatile long exploreInterimToken = 0L;
-    private volatile String lastExploreInterimDirection = "";
-    private volatile long lastExploreInterimExecutedAtMs = 0L;
     private AudioIncidentRecorder audioIncidentRecorder;
     private volatile PendingCondition pendingCondition = null;
     private final Object pendingChoiceLock = new Object();
@@ -439,12 +429,6 @@ final class NativeGeminiLiveClient {
 
                     @Override public boolean isVoiceInterruptionAllowed() {
                         return NativeGeminiLiveClient.this.allowVoiceInterruption;
-                    }
-
-                    @Override public boolean isExploreGestureListeningMode() {
-                        return NativeGeminiLiveClient.this
-                                .exploreGestureLease
-                                .isActive(System.currentTimeMillis());
                     }
 
                     @Override public String getNoiseMode() {
@@ -1122,10 +1106,6 @@ final class NativeGeminiLiveClient {
                     input, System.currentTimeMillis());
             voiceExecutionGuard.onFinalizedTypedTurn(
                     userIntentGeneration, input);
-            if (tryHandleRuntimeExploreGesture(input)) {
-                listener.onTranscript("你", input);
-                return true;
-            }
             userActionScope.updateFromUserText(input);
             recordFinalizedSendAuthorization(input);
             if (tryHandleRuntimeAppTeaching(input)) {
@@ -1372,10 +1352,6 @@ final class NativeGeminiLiveClient {
         return generation >= 0L && generation == runtimeAppTeachHandledGeneration;
     }
 
-    private boolean isRuntimeExploreHandledGeneration(long generation) {
-        return generation >= 0L && generation == runtimeExploreHandledGeneration;
-    }
-
     boolean isAiSpeaking() { return aiSpeaking; }
     boolean isVoiceInterruptionAllowed() { return allowVoiceInterruption; }
     boolean isSetupReady() { return setupReady; }
@@ -1459,11 +1435,6 @@ final class NativeGeminiLiveClient {
         voiceExecutionGuard.clear();
         liveTurnCoordinator.reset();
         liveHumanTurnBoundary.reset();
-        cancelPendingExploreInterim();
-        exploreGestureLease.clear();
-        runtimeExploreHandledGeneration = -1L;
-        lastExploreInterimDirection = "";
-        lastExploreInterimExecutedAtMs = 0L;
         clearPendingInternalDirectiveTurn();
         liveConnection.stop();
         if (wasRunning) listener.onStopped("已結束");
@@ -1482,8 +1453,6 @@ final class NativeGeminiLiveClient {
                 geminiLiveTurnHandler.parse(raw);
 
         if (!frame.interimInputText.isEmpty()) {
-            scheduleExploreInterimGesture(
-                    frame.interimInputText);
             liveHumanTurnBoundary.noteInterim(
                     frame.interimInputText,
                     System.currentTimeMillis());
@@ -1557,31 +1526,6 @@ final class NativeGeminiLiveClient {
 
             if (hasPendingUiChoice()) {
                 clearPendingUiChoiceSilently();
-            }
-
-            // Explore-mode directional commands are Runtime-owned. Handle them
-            // before general turn-boundary / Jev / Agent lifecycle so a short
-            // "上/下/左/右" cannot be swallowed by ordinary intent handling.
-            cancelPendingExploreInterim();
-            long exploreNow = System.currentTimeMillis();
-            ExploreGestureLease.Command explorePreview =
-                    exploreGestureLease.previewActive(
-                            completeUserInput,
-                            exploreNow);
-            if (explorePreview.kind
-                    == ExploreGestureLease.Kind.SCROLL) {
-                beginNewUserIntent(completeUserInput);
-                liveHumanTurnBoundary.forceNewTurn(
-                        completeUserInput,
-                        exploreNow);
-                voiceExecutionGuard.onFinalizedVoiceTurn(
-                        userIntentGeneration,
-                        completeUserInput,
-                        frame.inputConfidence);
-                if (tryHandleRuntimeExploreGesture(
-                        completeUserInput)) {
-                    return;
-                }
             }
 
             String effectiveUserInput = completeUserInput;
@@ -1671,14 +1615,6 @@ final class NativeGeminiLiveClient {
                                 userIntentGeneration,
                                 effectiveUserInput,
                                 frame.inputConfidence);
-            }
-
-            if (!continuedHumanTurn
-                    && voiceDisposition
-                            == VoiceExecutionGuard.TurnDisposition.NORMAL
-                    && tryHandleRuntimeExploreGesture(
-                            effectiveUserInput)) {
-                return;
             }
 
             JevVoiceSemanticResolver.Result jevSpeechReview =
@@ -1971,8 +1907,6 @@ final class NativeGeminiLiveClient {
 
         if (!frame.outputText.isEmpty()
                 && !runtimeSendCurrentExecuting
-                && !isRuntimeExploreHandledGeneration(
-                        userIntentGeneration)
                 && !shouldWithholdUnverifiedAgentReply()) {
             if (!responseHasToolCall) {
                 Log.d(
@@ -1992,9 +1926,7 @@ final class NativeGeminiLiveClient {
 
             boolean withholdForVerification =
                     shouldWithholdUnverifiedAgentReply()
-                            || runtimeSendCurrentExecuting
-                            || isRuntimeExploreHandledGeneration(
-                                    userIntentGeneration);
+                            || runtimeSendCurrentExecuting;
             if (!interruptedCurrentTurn
                     && !withholdForVerification) {
                 if (substantiveModelProgress
@@ -2430,256 +2362,6 @@ final class NativeGeminiLiveClient {
         reportStage("自動聊天已讓出控制");
     }
 
-    private boolean tryHandleRuntimeExploreGesture(String inputText) {
-        final long now = System.currentTimeMillis();
-        ExploreGestureLease.Command command =
-                exploreGestureLease.interpret(inputText, now);
-
-        if (command.kind == ExploreGestureLease.Kind.NONE
-                || command.kind
-                        == ExploreGestureLease.Kind.PASS_TO_MODEL) {
-            return false;
-        }
-
-        final long generation;
-        synchronized (agentLock) {
-            generation = userIntentGeneration;
-        }
-        runtimeExploreHandledGeneration = generation;
-        liveTurnCoordinator.onFinalizedUserTurn(
-                generation,
-                inputText == null ? "" : inputText);
-
-        if (command.kind == ExploreGestureLease.Kind.START) {
-            PerformanceMetrics.recordExploreLeaseArmed(true);
-            reportStage("探索模式已開啟");
-            try {
-                FloatingBubbleManager.getInstance(appContext)
-                        .showCompactStatus(
-                                "↕ 探索中",
-                                "說上／下／左／右／繼續；90 秒無操作自動退出");
-            } catch (Exception ignored) {}
-            return true;
-        }
-
-        if (command.kind == ExploreGestureLease.Kind.STOP) {
-            cancelPendingExploreInterim();
-            reportStage("探索模式已結束");
-            try {
-                FloatingBubbleManager.getInstance(appContext)
-                        .showCompactStatus(
-                                "探索模式已結束",
-                                "已恢復一般語音操作");
-            } catch (Exception ignored) {}
-            return true;
-        }
-
-        if (command.kind != ExploreGestureLease.Kind.SCROLL) {
-            return false;
-        }
-
-        if (wasRecentlyExecutedExploreInterim(
-                command.semanticDirection,
-                now)) {
-            PerformanceMetrics.recordExploreFinalDedupe();
-            return true;
-        }
-
-        executeExploreGestureCommand(
-                command,
-                generation,
-                false);
-        return true;
-    }
-
-    private void scheduleExploreInterimGesture(
-            String interimText) {
-        final long token = ++exploreInterimToken;
-        final long now = System.currentTimeMillis();
-        ExploreGestureLease.Command preview =
-                exploreGestureLease.previewActive(
-                        interimText,
-                        now);
-        if (preview.kind
-                != ExploreGestureLease.Kind.SCROLL) {
-            return;
-        }
-
-        final String capturedText =
-                interimText == null ? "" : interimText;
-        exploreInterimHandler.postDelayed(
-                new Runnable() {
-                    @Override public void run() {
-                        if (token != exploreInterimToken) {
-                            return;
-                        }
-                        long executeAt =
-                                System.currentTimeMillis();
-                        ExploreGestureLease.Command command =
-                                exploreGestureLease.previewActive(
-                                        capturedText,
-                                        executeAt);
-                        if (command.kind
-                                != ExploreGestureLease.Kind.SCROLL) {
-                            return;
-                        }
-
-                        final long generation;
-                        synchronized (agentLock) {
-                            generation =
-                                    userIntentGeneration;
-                        }
-                        runtimeExploreHandledGeneration =
-                                generation;
-                        exploreGestureLease.acceptPreviewed(
-                                command,
-                                executeAt);
-                        lastExploreInterimDirection =
-                                command.semanticDirection;
-                        lastExploreInterimExecutedAtMs =
-                                executeAt;
-                        PerformanceMetrics
-                                .recordExploreInterimFastPath();
-                        executeExploreGestureCommand(
-                                command,
-                                generation,
-                                true);
-                    }
-                },
-                EXPLORE_INTERIM_DEBOUNCE_MS);
-    }
-
-    private void cancelPendingExploreInterim() {
-        exploreInterimToken++;
-    }
-
-    private boolean wasRecentlyExecutedExploreInterim(
-            String semanticDirection,
-            long nowMs) {
-        if (semanticDirection == null
-                || semanticDirection.trim().isEmpty()
-                || lastExploreInterimDirection.isEmpty()
-                || !lastExploreInterimDirection.equals(
-                        semanticDirection.trim())) {
-            return false;
-        }
-        long elapsed = Math.max(
-                0L,
-                nowMs - lastExploreInterimExecutedAtMs);
-        return lastExploreInterimExecutedAtMs > 0L
-                && elapsed
-                        <= EXPLORE_INTERIM_FINAL_DEDUPE_MS;
-    }
-
-    private void executeExploreGestureCommand(
-            ExploreGestureLease.Command command,
-            long generation,
-            boolean interimSource) {
-        if (command == null
-                || command.kind
-                        != ExploreGestureLease.Kind.SCROLL) {
-            return;
-        }
-
-        final String semanticDirection =
-                command.semanticDirection;
-        final String physicalDirection =
-                ScrollDirectionPolicy.toPhysical(
-                        semanticDirection);
-        final String distance =
-                command.distance.isEmpty()
-                        ? "normal"
-                        : command.distance;
-        final long executionGeneration =
-                generation;
-
-        new Thread(new Runnable() {
-            @Override public void run() {
-                JSONObject result = new JSONObject();
-                try {
-                    result = phoneRuntimeExecutor.swipe(
-                            new JSONObject()
-                                    .put(
-                                            "direction",
-                                            physicalDirection)
-                                    .put(
-                                            "distance",
-                                            distance));
-                } catch (Exception error) {
-                    try {
-                        result.put("success", false)
-                                .put(
-                                        "error",
-                                        error.getMessage() == null
-                                                ? "EXPLORE_SWIPE_FAILED"
-                                                : error.getMessage());
-                    } catch (Exception ignored) {}
-                }
-
-                boolean success =
-                        result.optBoolean("success", false);
-                PerformanceMetrics.recordExploreFastPath(success);
-                workingContext.recordAction(
-                        "explore_scroll:"
-                                + semanticDirection,
-                        success ? "submitted" : "failed");
-                workingContext.updateLastResult(
-                        success ? "STEP_OK" : "STEP_FAILED");
-
-                if (success) {
-                    ActionVisualOverlay.showSwipeFeedback(
-                            appContext,
-                            physicalDirection,
-                            distance);
-                }
-
-                // Interim execution deliberately does not require a generation
-                // increment. It is a short-lived Runtime remote-control action.
-                // Final transcript later records/owns the user turn and dedupes.
-                if (!interimSource
-                        && !isCurrentUserIntent(
-                                executionGeneration)) {
-                    return;
-                }
-
-                String directionLabel =
-                        exploreDirectionLabel(
-                                semanticDirection);
-                reportStage(
-                        success
-                                ? "探索模式：已往"
-                                        + directionLabel
-                                        + "移動"
-                                : "探索模式：滑動未生效");
-                try {
-                    FloatingBubbleManager.getInstance(appContext)
-                            .showCompactStatus(
-                                    success
-                                            ? "↕ 探索中"
-                                            : "探索滑動未完成",
-                                    success
-                                            ? "已往"
-                                                    + directionLabel
-                                                    + " · 可直接說繼續／再一點"
-                                            : result.optString(
-                                                    "error",
-                                                    "請換個方向或改用一般指令"));
-                } catch (Exception ignored) {}
-            }
-        }, interimSource
-                ? "CrewExploreInterimGesture"
-                : "CrewExploreGesture").start();
-    }
-
-    private static String exploreDirectionLabel(
-            String semanticDirection) {
-        if ("forward".equals(semanticDirection)) return "下";
-        if ("backward".equals(semanticDirection)) return "上";
-        if ("right".equals(semanticDirection)) return "右";
-        if ("left".equals(semanticDirection)) return "左";
-        return "";
-    }
-
     private boolean tryHandleRuntimeSendCurrent(String inputText) {
         if (!UserActionScope.isStandaloneCurrentScreenSendCommand(inputText)) {
             return false;
@@ -3022,19 +2704,6 @@ final class NativeGeminiLiveClient {
                 handled.put("message", runtimeAppTeachHandledMessage.isEmpty()
                         ? "Runtime 已處理這次 App 教學；不要再呼叫工具，只要簡短回覆使用者。"
                         : runtimeAppTeachHandledMessage);
-                sendToolResponse(id, requestedName, handled);
-            } catch (Exception ignored) {}
-            return;
-        }
-        if (isRuntimeExploreHandledGeneration(callIntentGeneration)) {
-            JSONObject handled = new JSONObject();
-            try {
-                handled.put("success", true)
-                        .put("taskState", "DONE")
-                        .put("runtimeHandled", "EXPLORE_GESTURE")
-                        .put(
-                                "message",
-                                "Runtime 已直接處理這次探索手勢；不要再呼叫工具或重複滑動。");
                 sendToolResponse(id, requestedName, handled);
             } catch (Exception ignored) {}
             return;
@@ -5830,18 +5499,8 @@ final class NativeGeminiLiveClient {
                 latestUserTurn,
                 semanticDirection,
                 observed.optBoolean("success", false))) {
-            exploreGestureLease.armFromSuccessfulGesture(
-                    semanticDirection,
-                    System.currentTimeMillis());
-            PerformanceMetrics.recordExploreLeaseArmed(false);
-            try {
-                FloatingBubbleManager.getInstance(appContext)
-                        .showCompactStatus(
-                                "↕ 探索中",
-                                "15 秒內可說上／下／左／右／繼續");
-            } catch (Exception ignored) {}
             observed.put("taskState", "DONE")
-                    .put("completionEvidence", "DIRECT_GESTURE_DISPATCHED")
+                    .put("completionEvidence", "DIRECT_GESTURE_EFFECT_VERIFIED")
                     .put("nextRequirement", "NONE")
                     .put(
                             "instruction",
