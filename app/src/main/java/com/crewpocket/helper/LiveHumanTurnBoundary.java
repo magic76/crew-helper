@@ -180,6 +180,25 @@ final class LiveHumanTurnBoundary {
                     "TOOL_PRECEDED_FINAL_TRANSCRIPT");
         }
 
+        // A short standalone swipe spoken after an already-finalized
+        // command is a fresh foreground instruction, not a continuation of an
+        // active music/search/navigation goal. This check deliberately requires
+        // a finalized turn in the current generation so tool-first transcription
+        // for the original command still binds normally.
+        boolean standaloneGestureNewIntent =
+                sameGenerationTask
+                        && latestFinalizedGeneration == currentGeneration
+                        && !relatedText(currentText, text)
+                        && DirectGestureCompletionPolicy
+                                .looksLikeStandaloneGestureIntent(text);
+        if (standaloneGestureNewIntent) {
+            return commit(
+                    Decision.NEW_INTENT,
+                    text,
+                    nowMs,
+                    "STANDALONE_GESTURE_NEW_INTENT");
+        }
+
         boolean related = relatedText(currentText, text);
         if (related
                 && ((sameGenerationTask
