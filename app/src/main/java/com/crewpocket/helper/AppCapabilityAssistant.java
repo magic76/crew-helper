@@ -243,9 +243,16 @@ final class AppCapabilityAssistant {
 
     private static String inferParamName(String before) {
         String lower = before.toLowerCase(Locale.ROOT);
+        int lastEquals = lower.lastIndexOf('=');
+        int lastColon = lower.lastIndexOf(':');
+        int lastSlash = lower.lastIndexOf('/');
+        int semanticColon =
+                lastColon > lastSlash
+                        ? lastColon
+                        : -1;
         int eq = Math.max(
-                lower.lastIndexOf('='),
-                lower.lastIndexOf(':'));
+                lastEquals,
+                semanticColon);
         if (eq >= 0) {
             int start = eq - 1;
             while (start >= 0) {
