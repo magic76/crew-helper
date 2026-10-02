@@ -275,6 +275,27 @@ public final class LiveHumanTurnBoundaryTest {
                         == LiveHumanTurnBoundary.Decision.NEW_INTENT,
                 "Agent thinking grace expires after four seconds");
 
+        boundary.forceNewTurn("播放鄧紫棋", 82_200L);
+        LiveHumanTurnBoundary.Resolution standaloneSwipeAfterMusic =
+                boundary.resolve(
+                        "往右滑動",
+                        83_000L,
+                        true,
+                        11L,
+                        11L,
+                        11L,
+                        "IN_PROGRESS",
+                        false,
+                        false,
+                        false,
+                        true);
+        check(standaloneSwipeAfterMusic.decision
+                        == LiveHumanTurnBoundary.Decision.NEW_INTENT,
+                "standalone swipe supersedes an active prior music goal");
+        check("STANDALONE_GESTURE_NEW_INTENT".equals(
+                        standaloneSwipeAfterMusic.reason),
+                "standalone swipe exposes deterministic new-intent reason");
+
         boundary.forceNewTurn("搜尋大皇宮", 83_000L);
         LiveHumanTurnBoundary.Resolution interrupted =
                 boundary.resolve(
