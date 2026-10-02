@@ -14,6 +14,8 @@ final class ToolExecutionCoordinator {
         JSONObject getSelectedRegionForTool() throws Exception;
         JSONObject rememberAppGuidance(JSONObject args) throws Exception;
         JSONObject listAppGuidance() throws Exception;
+        JSONObject listAppCapabilities(JSONObject args) throws Exception;
+        JSONObject runAppCapability(JSONObject args) throws Exception;
         JSONObject inspectUiForTool(JSONObject args) throws Exception;
         JSONObject tapElement(JSONObject args) throws Exception;
         JSONObject waitForCondition(JSONObject args) throws Exception;
@@ -71,6 +73,12 @@ final class ToolExecutionCoordinator {
         }
         if ("list_app_guidance".equals(name)) {
             return host.listAppGuidance();
+        }
+        if ("list_app_capabilities".equals(name)) {
+            return host.listAppCapabilities(safeArgs);
+        }
+        if ("run_app_capability".equals(name)) {
+            return host.runAppCapability(safeArgs);
         }
         if (runtimeToolExecutor.handles(name)) {
             if ("create_note".equals(name)
