@@ -16,6 +16,21 @@ public final class ScrollDirectionPolicyTest {
         assertEquals("right", ScrollDirectionPolicy.fromPhysical("left"));
         assertEquals("left", ScrollDirectionPolicy.fromPhysical("right"));
 
+        assertEquals("right",
+                ScrollDirectionPolicy.explicitSemanticFromUserText("往右滑"));
+        assertEquals("left",
+                ScrollDirectionPolicy.explicitSemanticFromUserText("幫我往左滑一下"));
+        assertEquals("forward",
+                ScrollDirectionPolicy.explicitSemanticFromUserText("往下滑"));
+        assertEquals("backward",
+                ScrollDirectionPolicy.explicitSemanticFromUserText("請往上滑一下"));
+        assertEquals("right",
+                ScrollDirectionPolicy.explicitSemanticFromUserText("swipe right"));
+        assertEquals("",
+                ScrollDirectionPolicy.explicitSemanticFromUserText("滑動螢幕"));
+        assertEquals("",
+                ScrollDirectionPolicy.explicitSemanticFromUserText("往右滑然後播放音樂"));
+
         assertTrue(ScrollDirectionPolicy.isSupported("right"));
         assertTrue(ScrollDirectionPolicy.isSupported("left"));
         assertFalse(ScrollDirectionPolicy.isSupported("diagonal"));

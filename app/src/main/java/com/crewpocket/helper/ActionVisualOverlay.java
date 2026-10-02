@@ -80,67 +80,36 @@ final class ActionVisualOverlay {
         int width = Math.max(1, metrics.widthPixels);
         int height = Math.max(1, metrics.heightPixels);
 
-        String direction = rawDirection == null
-                ? "up"
-                : rawDirection.trim().toLowerCase();
-        String distance = rawDistance == null
-                ? "normal"
-                : rawDistance.trim().toLowerCase();
+        SwipeGeometryPolicy.Fractions geometry =
+                SwipeGeometryPolicy.forPhysicalDirection(
+                        rawDirection,
+                        rawDistance);
+        showSwipeFeedback(
+                context,
+                width * geometry.x1,
+                height * geometry.y1,
+                width * geometry.x2,
+                height * geometry.y2,
+                geometry.durationMs);
+    }
 
-        float x1 = width * 0.50f;
-        float y1 = height * 0.74f;
-        float x2 = width * 0.50f;
-        float y2 = height * 0.22f;
-
-        if ("down".equals(direction)) {
-            y1 = height * 0.22f;
-            y2 = height * 0.74f;
-        } else if ("left".equals(direction)) {
-            x1 = width * 0.87f;
-            y1 = height * 0.50f;
-            x2 = width * 0.13f;
-            y2 = height * 0.50f;
-        } else if ("right".equals(direction)) {
-            x1 = width * 0.13f;
-            y1 = height * 0.50f;
-            x2 = width * 0.87f;
-            y2 = height * 0.50f;
-        }
-
-        if ("long".equals(distance)
-                || "page".equals(distance)
-                || "fast".equals(distance)) {
-            if ("up".equals(direction)) {
-                y1 = height * 0.87f;
-                y2 = height * 0.13f;
-            } else if ("down".equals(direction)) {
-                y1 = height * 0.13f;
-                y2 = height * 0.87f;
-            } else if ("left".equals(direction)) {
-                x1 = width * 0.94f;
-                x2 = width * 0.06f;
-            } else if ("right".equals(direction)) {
-                x1 = width * 0.06f;
-                x2 = width * 0.94f;
-            }
-        } else if ("short".equals(distance)
-                || "little".equals(distance)) {
-            if ("up".equals(direction)) {
-                y1 = height * 0.58f;
-                y2 = height * 0.38f;
-            } else if ("down".equals(direction)) {
-                y1 = height * 0.38f;
-                y2 = height * 0.58f;
-            } else if ("left".equals(direction)) {
-                x1 = width * 0.66f;
-                x2 = width * 0.34f;
-            } else if ("right".equals(direction)) {
-                x1 = width * 0.34f;
-                x2 = width * 0.66f;
-            }
-        }
-
-        show(context, Event.swipe(x1, y1, x2, y2, 320L), false);
+    static void showSwipeFeedback(
+            Context context,
+            float x1,
+            float y1,
+            float x2,
+            float y2,
+            long durationMs) {
+        if (context == null) return;
+        show(
+                context,
+                Event.swipe(
+                        x1,
+                        y1,
+                        x2,
+                        y2,
+                        durationMs),
+                false);
     }
 
     static void showScroll(Context context, String direction) {
@@ -149,7 +118,9 @@ final class ActionVisualOverlay {
 
     static void showTyping(Context context, Rect bounds) {
         RectF target = null;
-        if (bounds != null && bounds.width() > 0 && bounds.height() > 0) {
+        if (bounds != null
+                && bounds.width() > 0
+                && bounds.height() > 0) {
             target = new RectF(bounds);
         }
         show(context, Event.typing(target), false);

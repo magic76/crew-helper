@@ -5444,7 +5444,41 @@ final class NativeGeminiLiveClient {
 
 
     private JSONObject swipe(JSONObject args) throws Exception {
-        JSONObject reply = phoneRuntimeExecutor.swipe(args);
+        String latestUserTurn =
+                workingContext.toJson()
+                        .optString("latestUserTurn", "");
+        JSONObject effectiveArgs =
+                args == null
+                        ? new JSONObject()
+                        : new JSONObject(args.toString());
+
+        String explicitSemanticDirection =
+                ScrollDirectionPolicy
+                        .explicitSemanticFromUserText(
+                                latestUserTurn);
+        if (!explicitSemanticDirection.isEmpty()) {
+            effectiveArgs.put(
+                    "semantic_direction",
+                    explicitSemanticDirection);
+            effectiveArgs.put(
+                    "direction",
+                    ScrollDirectionPolicy.toPhysical(
+                            explicitSemanticDirection));
+            effectiveArgs.put(
+                    "direction_source",
+                    "USER_EXPLICIT");
+        }
+
+        JSONObject reply =
+                phoneRuntimeExecutor.swipe(effectiveArgs);
+        if (!explicitSemanticDirection.isEmpty()) {
+            reply.put(
+                    "semanticDirection",
+                    explicitSemanticDirection)
+                    .put(
+                            "directionSource",
+                            "USER_EXPLICIT");
+        }
         if (!reply.has("direction")) return reply;
 
         JSONObject visual = new JSONObject();
@@ -5460,10 +5494,23 @@ final class NativeGeminiLiveClient {
         // giving the human a clear ~1 second confirmation without contaminating
         // model perception or delaying the actual gesture.
         if (reply.optBoolean("success", false)) {
-            ActionVisualOverlay.showSwipeFeedback(
-                    appContext,
-                    reply.optString("direction", "up"),
-                    reply.optString("distance", "normal"));
+            if (reply.has("x1")
+                    && reply.has("y1")
+                    && reply.has("x2")
+                    && reply.has("y2")) {
+                ActionVisualOverlay.showSwipeFeedback(
+                        appContext,
+                        (float) reply.optDouble("x1"),
+                        (float) reply.optDouble("y1"),
+                        (float) reply.optDouble("x2"),
+                        (float) reply.optDouble("y2"),
+                        320L);
+            } else {
+                ActionVisualOverlay.showSwipeFeedback(
+                        appContext,
+                        reply.optString("direction", "up"),
+                        reply.optString("distance", "normal"));
+            }
         }
 
         boolean changed = reply.optBoolean("screenChanged", false);
@@ -5485,15 +5532,16 @@ final class NativeGeminiLiveClient {
                         reply,
                         "swipe_screen");
 
-        String latestUserTurn =
-                workingContext.toJson().optString("latestUserTurn", "");
-        String semanticDirection = args == null
-                ? ""
-                : args.optString("semantic_direction", "").trim();
-        if (semanticDirection.isEmpty() && args != null) {
+        String semanticDirection =
+                effectiveArgs.optString(
+                        "semantic_direction",
+                        "").trim();
+        if (semanticDirection.isEmpty()) {
             semanticDirection =
                     ScrollDirectionPolicy.fromPhysical(
-                            args.optString("direction", ""));
+                            effectiveArgs.optString(
+                                    "direction",
+                                    ""));
         }
         boolean gestureEffectVerified =
                 observed.optBoolean(
