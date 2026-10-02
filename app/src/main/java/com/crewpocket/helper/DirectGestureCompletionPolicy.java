@@ -28,7 +28,21 @@ final class DirectGestureCompletionPolicy {
         if (containsCompoundIntent(command)) return false;
         if (containsRepeatCount(command)) return false;
 
+        if (isGenericScreenSwipe(command)) return true;
         return matchesDirection(command, direction);
+    }
+
+    private static boolean isGenericScreenSwipe(String command) {
+        return command.equals("滑動螢幕")
+                || command.equals("滑动屏幕")
+                || command.equals("滑螢幕")
+                || command.equals("滑屏幕")
+                || command.equals("滑一下螢幕")
+                || command.equals("滑一下屏幕")
+                || command.equals("swipescreen")
+                || command.equals("swipethescreen")
+                || command.equals("scrollscreen")
+                || command.equals("scrollthescreen");
     }
 
     static boolean looksLikeStandaloneGestureIntent(String rawText) {
@@ -52,18 +66,7 @@ final class DirectGestureCompletionPolicy {
             return false;
         }
 
-        if (command.equals("滑動螢幕")
-                || command.equals("滑动屏幕")
-                || command.equals("滑螢幕")
-                || command.equals("滑屏幕")
-                || command.equals("滑一下螢幕")
-                || command.equals("滑一下屏幕")
-                || command.equals("swipescreen")
-                || command.equals("swipethescreen")
-                || command.equals("scrollscreen")
-                || command.equals("scrollthescreen")) {
-            return true;
-        }
+        if (isGenericScreenSwipe(command)) return true;
 
         return matchesDirection(command, "right")
                 || matchesDirection(command, "left")
