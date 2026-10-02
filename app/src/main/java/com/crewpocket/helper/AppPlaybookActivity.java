@@ -29,6 +29,8 @@ import java.util.HashSet;
 /** User-facing management page for per-app Crew operational playbooks. */
 public class AppPlaybookActivity extends Activity {
     private AppPlaybookStore store;
+    private AppCapabilityStore capabilityStore;
+    private AppCapabilityRegistry capabilityRegistry;
     private AppAutonomyStore autonomyStore;
     private AppCatalog appCatalog;
     private LinearLayout content;
@@ -38,6 +40,9 @@ public class AppPlaybookActivity extends Activity {
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         store = new AppPlaybookStore(this);
+        capabilityStore = new AppCapabilityStore(this);
+        capabilityRegistry =
+                new AppCapabilityRegistry(this, capabilityStore);
         autonomyStore = new AppAutonomyStore(this);
         appCatalog = new AppCatalog(this);
         appCatalog.prewarm();
@@ -96,8 +101,8 @@ public class AppPlaybookActivity extends Activity {
         text.addView(title);
         TextView subtitle = new TextView(this);
         subtitle.setText(I18n.get(this,
-                "Crew 對不同 App 的局部操作手冊",
-                "Crew's app-local operating guidance"));
+                "Crew 對不同 App 的操作經驗與快速能力",
+                "Crew's app-local guidance and fast capabilities"));
         subtitle.setTextSize(11);
         subtitle.setTextColor(CrewTheme.TEXT_SECONDARY);
         text.addView(subtitle);
@@ -107,8 +112,8 @@ public class AppPlaybookActivity extends Activity {
 
         TextView explanation = new TextView(this);
         explanation.setText(I18n.get(this,
-                "除了操作經驗，你也可以把信任的 App 加入「自主操作」白名單。白名單讓 Crew 對低風險點擊、搜尋與導航更果斷，不會因定位稍有歧義就停下問你；付款、購買、轉帳、帳號/密碼、刪除、取消訂單/預約/行程與訊息送出授權仍不會被繞過。",
-                "You can also add trusted apps to the Autonomy whitelist. Trusted apps let Crew resolve low-risk taps, search and navigation more decisively instead of stopping on minor ambiguity. Payment, purchase, transfer, account/credential, deletion, trip/order/booking cancellation and message-send authorization are never bypassed."));
+                "Crew 會優先使用你設定或遠端同步的 Deep Link / Android Intent；沒有能力時才回到 UI Agent。Capability 只描述低風險開啟/導向方式，不會增加付款、送出、帳號、刪除等敏感操作權限。",
+                "Crew prefers configured or synced Deep Link / Android Intent capabilities, then falls back to the UI Agent. Capabilities only describe low-risk navigation/opening and never grant payment, send, account, deletion, or other sensitive authorization."));
         explanation.setTextSize(11);
         explanation.setTextColor(CrewTheme.TEXT_SECONDARY);
         explanation.setLineSpacing(dp(2), 1.08f);
@@ -117,11 +122,11 @@ public class AppPlaybookActivity extends Activity {
 
         TextView stats = new TextView(this);
         stats.setText(I18n.get(this,
-                "自訂：" + store.learnedAppCount() + " 個 App · "
-                        + store.learnedRuleCount() + " 條經驗 · 自主 "
+                "經驗 " + store.learnedRuleCount() + " · 快速能力 "
+                        + capabilityStore.capabilityCount() + " · 自主 "
                         + autonomyStore.trustedCount() + " 個",
-                "Learned: " + store.learnedAppCount() + " apps · "
-                        + store.learnedRuleCount() + " rules · "
+                "Guidance " + store.learnedRuleCount() + " · capabilities "
+                        + capabilityStore.capabilityCount() + " · "
                         + autonomyStore.trustedCount() + " trusted"));
         stats.setTextSize(11);
         stats.setTextColor(CrewTheme.TEAL_300);
@@ -145,6 +150,52 @@ public class AppPlaybookActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(48));
         addLp.setMargins(0, dp(12), 0, dp(7));
         content.addView(add, addLp);
+
+        Button addCapability = new Button(this);
+        addCapability.setAllCaps(false);
+        addCapability.setText(I18n.get(
+                this,
+                "＋ 新增 App 快速能力",
+                "+ Add App Capability"));
+        addCapability.setTextSize(12);
+        addCapability.setTypeface(Typeface.DEFAULT_BOLD);
+        addCapability.setTextColor(CrewTheme.TEAL_300);
+        addCapability.setBackground(CrewTheme.createCard(
+                this, CrewTheme.BG_ELEVATED, CrewTheme.BORDER_TEAL, 14));
+        addCapability.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                showCapabilityAppPicker();
+            }
+        });
+        LinearLayout.LayoutParams capabilityLp =
+                new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        dp(46));
+        capabilityLp.setMargins(0, 0, 0, dp(7));
+        content.addView(addCapability, capabilityLp);
+
+        Button registry = new Button(this);
+        registry.setAllCaps(false);
+        registry.setText(I18n.get(
+                this,
+                "同步 Capability Registry",
+                "Sync Capability Registry"));
+        registry.setTextSize(11.5f);
+        registry.setTextColor(CrewTheme.INDIGO_400);
+        registry.setBackground(CrewTheme.createCard(
+                this, CrewTheme.BG_SURFACE,
+                CrewTheme.BORDER_SUBTLE, 14));
+        registry.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                showRemoteRegistryDialog();
+            }
+        });
+        LinearLayout.LayoutParams registryLp =
+                new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        dp(44));
+        registryLp.setMargins(0, 0, 0, dp(7));
+        content.addView(registry, registryLp);
 
         Button addTrusted = new Button(this);
         addTrusted.setAllCaps(false);
@@ -176,6 +227,9 @@ public class AppPlaybookActivity extends Activity {
         ArrayList<String> packages = store.profilePackages();
         HashSet<String> packageSet = new HashSet<String>(packages);
         for (String pkg : autonomyStore.trustedPackages()) {
+            if (packageSet.add(pkg)) packages.add(pkg);
+        }
+        for (String pkg : capabilityStore.profilePackages()) {
             if (packageSet.add(pkg)) packages.add(pkg);
         }
         Collections.sort(packages, new Comparator<String>() {
@@ -233,6 +287,10 @@ public class AppPlaybookActivity extends Activity {
 
         boolean trustedAutonomy =
                 autonomyStore.isTrusted(packageName);
+        int capabilityCount =
+                capabilityRegistry
+                        .capabilitiesFor(packageName)
+                        .length();
         String summary;
         if (adapter != null && rules.length() > 0) {
             summary = I18n.get(this,
@@ -242,6 +300,11 @@ public class AppPlaybookActivity extends Activity {
             summary = I18n.get(this, "內建 Runtime 規則", "Built-in Runtime guidance");
         } else {
             summary = rules.length() + " " + I18n.get(this, "條自訂經驗", "learned rules");
+        }
+        if (capabilityCount > 0) {
+            summary = capabilityCount
+                    + I18n.get(this, " 個快速能力 · ", " capabilities · ")
+                    + summary;
         }
         if (trustedAutonomy) {
             summary = I18n.get(this, "自主操作 ON · ", "Autonomy ON · ")
@@ -377,6 +440,117 @@ public class AppPlaybookActivity extends Activity {
                     this, Color.argb(32, 20, 184, 166), CrewTheme.BORDER_TEAL, 10));
             root.addView(builtIn);
         }
+
+        TextView capabilityTitle = sectionLabel(I18n.get(
+                this,
+                "快速能力 · Deep Link / Intent",
+                "FAST CAPABILITIES · DEEP LINK / INTENT"));
+        capabilityTitle.setPadding(0, dp(12), 0, dp(6));
+        root.addView(capabilityTitle);
+
+        JSONArray capabilities =
+                capabilityRegistry.capabilitiesFor(packageName);
+        if (capabilities.length() == 0) {
+            TextView none = bodyText(I18n.get(
+                    this,
+                    "目前沒有已知快速能力；Crew 會使用一般 UI Agent。",
+                    "No deterministic capability is known; Crew will use the UI Agent."));
+            none.setTextColor(CrewTheme.TEXT_MUTED);
+            root.addView(none);
+        } else {
+            for (int i = 0; i < capabilities.length(); i++) {
+                final JSONObject capability =
+                        capabilities.optJSONObject(i);
+                if (capability == null) continue;
+
+                LinearLayout row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.VERTICAL);
+                row.setPadding(dp(11), dp(9), dp(11), dp(9));
+                row.setBackground(CrewTheme.createCard(
+                        this,
+                        CrewTheme.BG_SURFACE,
+                        CrewTheme.BORDER_SUBTLE,
+                        10));
+
+                TextView capName = new TextView(this);
+                capName.setText(
+                        capability.optString("id", "")
+                                + " · "
+                                + capability.optString("label", ""));
+                capName.setTextSize(11.5f);
+                capName.setTypeface(Typeface.DEFAULT_BOLD);
+                capName.setTextColor(CrewTheme.TEXT_PRIMARY);
+                row.addView(capName);
+
+                JSONArray params =
+                        capability.optJSONArray("params");
+                String source =
+                        capability.optString("source", "");
+                StringBuilder meta = new StringBuilder();
+                meta.append(source.isEmpty() ? "runtime" : source);
+                if (params != null && params.length() > 0) {
+                    meta.append(" · params: ");
+                    for (int j = 0; j < params.length(); j++) {
+                        if (j > 0) meta.append(", ");
+                        meta.append(params.optString(j, ""));
+                    }
+                }
+                TextView capMeta = new TextView(this);
+                capMeta.setText(meta.toString());
+                capMeta.setTextSize(9.5f);
+                capMeta.setTextColor(CrewTheme.TEXT_MUTED);
+                capMeta.setPadding(0, dp(3), 0, 0);
+                row.addView(capMeta);
+
+                if (AppCapabilityStore.SOURCE_LOCAL.equals(source)) {
+                    row.setClickable(true);
+                    row.setFocusable(true);
+                    row.setOnClickListener(new View.OnClickListener() {
+                        @Override public void onClick(View v) {
+                            showCapabilityEditor(
+                                    packageName,
+                                    label,
+                                    capability);
+                        }
+                    });
+                }
+
+                LinearLayout.LayoutParams rowLp =
+                        new LinearLayout.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.WRAP_CONTENT);
+                rowLp.setMargins(0, 0, 0, dp(6));
+                root.addView(row, rowLp);
+            }
+        }
+
+        Button addCapabilityRule = new Button(this);
+        addCapabilityRule.setAllCaps(false);
+        addCapabilityRule.setText(I18n.get(
+                this,
+                "＋ 新增 Deep Link / Intent",
+                "+ Add Deep Link / Intent"));
+        addCapabilityRule.setTextSize(11);
+        addCapabilityRule.setTextColor(CrewTheme.TEAL_300);
+        addCapabilityRule.setBackground(CrewTheme.createCard(
+                this,
+                CrewTheme.BG_ELEVATED,
+                CrewTheme.BORDER_TEAL,
+                10));
+        addCapabilityRule.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                showCapabilityEditor(
+                        packageName,
+                        label,
+                        null);
+            }
+        });
+        LinearLayout.LayoutParams addCapabilityRuleLp =
+                new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        dp(44));
+        addCapabilityRuleLp.setMargins(0, dp(6), 0, 0);
+        root.addView(addCapabilityRule, addCapabilityRuleLp);
 
         TextView learnedTitle = sectionLabel(I18n.get(
                 this, "自訂經驗", "LEARNED GUIDANCE"));
