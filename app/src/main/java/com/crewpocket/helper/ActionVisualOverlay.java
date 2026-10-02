@@ -112,6 +112,35 @@ final class ActionVisualOverlay {
                 false);
     }
 
+    static void showScroll(Context context, String direction) {
+        show(context, Event.scroll(direction), false);
+    }
+
+    static void showTyping(Context context, Rect bounds) {
+        RectF target = null;
+        if (bounds != null
+                && bounds.width() > 0
+                && bounds.height() > 0) {
+            target = new RectF(bounds);
+        }
+        show(context, Event.typing(target), false);
+    }
+
+    static void showLooking(Context context) {
+        show(context, Event.looking(), true);
+    }
+
+    static void dismiss() {
+        MAIN.post(new Runnable() {
+            @Override public void run() {
+                synchronized (LOCK) {
+                    hideToken++;
+                    dismissLocked();
+                }
+            }
+        });
+    }
+
     private static void show(
             Context context,
             final Event event,
