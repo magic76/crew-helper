@@ -35,6 +35,19 @@ public final class DirectGestureCompletionPolicyTest {
         check(!DirectGestureCompletionPolicy.shouldFinish(
                         "往下滑", "backward", true),
                 "semantic content direction mismatch must not complete");
+        check(DirectGestureCompletionPolicy
+                        .looksLikeStandaloneGestureIntent("往右滑動"),
+                "plain directional swipe is a standalone gesture intent");
+        check(DirectGestureCompletionPolicy
+                        .looksLikeStandaloneGestureIntent("滑動螢幕"),
+                "generic screen swipe is a standalone gesture intent");
+        check(!DirectGestureCompletionPolicy
+                        .looksLikeStandaloneGestureIntent("然後往右滑"),
+                "explicit continuation stays attached to current goal");
+        check(!DirectGestureCompletionPolicy
+                        .looksLikeStandaloneGestureIntent("往右滑然後播放音樂"),
+                "compound gesture plus semantic action is not standalone");
+
         check(!DirectGestureCompletionPolicy.shouldFinish(
                         "往右滑動", "right", false),
                 "failed swipe must not complete");
