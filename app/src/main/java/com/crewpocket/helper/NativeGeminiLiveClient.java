@@ -5444,7 +5444,41 @@ final class NativeGeminiLiveClient {
 
 
     private JSONObject swipe(JSONObject args) throws Exception {
-        JSONObject reply = phoneRuntimeExecutor.swipe(args);
+        String latestUserTurn =
+                workingContext.toJson()
+                        .optString("latestUserTurn", "");
+        JSONObject effectiveArgs =
+                args == null
+                        ? new JSONObject()
+                        : new JSONObject(args.toString());
+
+        String explicitSemanticDirection =
+                ScrollDirectionPolicy
+                        .explicitSemanticFromUserText(
+                                latestUserTurn);
+        if (!explicitSemanticDirection.isEmpty()) {
+            effectiveArgs.put(
+                    "semantic_direction",
+                    explicitSemanticDirection);
+            effectiveArgs.put(
+                    "direction",
+                    ScrollDirectionPolicy.toPhysical(
+                            explicitSemanticDirection));
+            effectiveArgs.put(
+                    "direction_source",
+                    "USER_EXPLICIT");
+        }
+
+        JSONObject reply =
+                phoneRuntimeExecutor.swipe(effectiveArgs);
+        if (!explicitSemanticDirection.isEmpty()) {
+            reply.put(
+                    "semanticDirection",
+                    explicitSemanticDirection)
+                    .put(
+                            "directionSource",
+                            "USER_EXPLICIT");
+        }
         if (!reply.has("direction")) return reply;
 
         JSONObject visual = new JSONObject();
@@ -5485,15 +5519,16 @@ final class NativeGeminiLiveClient {
                         reply,
                         "swipe_screen");
 
-        String latestUserTurn =
-                workingContext.toJson().optString("latestUserTurn", "");
-        String semanticDirection = args == null
-                ? ""
-                : args.optString("semantic_direction", "").trim();
-        if (semanticDirection.isEmpty() && args != null) {
+        String semanticDirection =
+                effectiveArgs.optString(
+                        "semantic_direction",
+                        "").trim();
+        if (semanticDirection.isEmpty()) {
             semanticDirection =
                     ScrollDirectionPolicy.fromPhysical(
-                            args.optString("direction", ""));
+                            effectiveArgs.optString(
+                                    "direction",
+                                    ""));
         }
         boolean gestureEffectVerified =
                 observed.optBoolean(
