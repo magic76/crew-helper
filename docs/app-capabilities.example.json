@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "revision": "example-1",
+  "apps": [
+    {
+      "package": "com.example.app",
+      "label": "Example App",
+      "capabilities": [
+        {
+          "id": "OPEN_ITEM",
+          "label": "Open item",
+          "kind": "URI",
+          "uriTemplate": "exampleapp://item/{id}"
+        },
+        {
+          "id": "SEARCH",
+          "label": "Search",
+          "kind": "URI",
+          "uriTemplate": "exampleapp://search?q={query}"
+        }
+      ]
+    }
+  ]
+}
