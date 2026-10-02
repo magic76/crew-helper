@@ -83,6 +83,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/PlaybackTailMicPolicy.java" \
   "$SRC/AppSemanticConcept.java" \
   "$SRC/AppCapabilityTemplate.java" \
+  "$SRC/AppCapabilityAssistant.java" \
   "$SRC/GoogleMapsSemanticContract.java" \
   "$SRC/AgentTapDiagnostic.java" \
   "$SRC/ModelStepGuidance.java" \
@@ -175,6 +176,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/PlaybackTailMicPolicyTest.java" \
   "$ROOT/tests/TextEntryGoalGuardTest.java" \
   "$ROOT/tests/AppCapabilityTemplateTest.java" \
+  "$ROOT/tests/AppCapabilityAssistantTest.java" \
   "$ROOT/tests/GoogleMapsSemanticContractTest.java" \
   "$ROOT/tests/AgentTapDiagnosticTest.java" \
   "$ROOT/tests/ModelStepGuidanceTest.java" \
@@ -267,6 +269,7 @@ java -cp "$OUT" com.crewpocket.helper.ActiveNoiseAdmissionGateTest
 java -cp "$OUT" com.crewpocket.helper.PlaybackTailMicPolicyTest
 java -cp "$OUT" com.crewpocket.helper.TextEntryGoalGuardTest
 java -cp "$OUT" com.crewpocket.helper.AppCapabilityTemplateTest
+java -cp "$OUT" com.crewpocket.helper.AppCapabilityAssistantTest
 java -cp "$OUT" com.crewpocket.helper.GoogleMapsSemanticContractTest
 java -cp "$OUT" com.crewpocket.helper.AgentTapDiagnosticTest
 java -cp "$OUT" com.crewpocket.helper.ModelStepGuidanceTest

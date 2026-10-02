@@ -3,6 +3,7 @@ package com.crewpocket.helper;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.DialogInterface;
+import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.os.Build;
@@ -34,6 +35,49 @@ public class AppPlaybookActivity extends Activity {
     private AppAutonomyStore autonomyStore;
     private AppCatalog appCatalog;
     private LinearLayout content;
+    private String incomingSharedLink = "";
+    private boolean incomingShareHandled = false;
+
+    private String extractSharedLinkFromIntent(
+            Intent intent) {
+        if (intent == null
+                || !Intent.ACTION_SEND.equals(
+                        intent.getAction())) {
+            return "";
+        }
+        CharSequence extra =
+                intent.getCharSequenceExtra(
+                        Intent.EXTRA_TEXT);
+        String text = extra == null
+                ? ""
+                : extra.toString().trim();
+        if (text.isEmpty()) return "";
+
+        java.util.regex.Matcher matcher =
+                java.util.regex.Pattern
+                        .compile(
+                                "([A-Za-z][A-Za-z0-9+.-]{1,31}:[^\\s]+)")
+                        .matcher(text);
+        if (!matcher.find()) return "";
+
+        String candidate = matcher.group(1);
+        while (candidate.endsWith(".")
+                || candidate.endsWith(",")
+                || candidate.endsWith(")")
+                || candidate.endsWith("]")) {
+            candidate =
+                    candidate.substring(
+                            0,
+                            candidate.length() - 1);
+        }
+        try {
+            AppCapabilityTemplate.validateUri(
+                    candidate);
+            return candidate;
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
 
     private int dp(float value) { return CrewTheme.dp(this, value); }
 
@@ -46,6 +90,9 @@ public class AppPlaybookActivity extends Activity {
         autonomyStore = new AppAutonomyStore(this);
         appCatalog = new AppCatalog(this);
         appCatalog.prewarm();
+        AppCapabilitySync.maybeSync(this, capabilityStore);
+        incomingSharedLink =
+                extractSharedLinkFromIntent(getIntent());
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             getWindow().setStatusBarColor(CrewTheme.BG_PRIMARY);
@@ -62,6 +109,17 @@ public class AppPlaybookActivity extends Activity {
         scroll.addView(content);
         setContentView(scroll);
         render();
+
+        if (!incomingSharedLink.isEmpty()
+                && !incomingShareHandled) {
+            incomingShareHandled = true;
+            content.post(new Runnable() {
+                @Override public void run() {
+                    showCapabilityAppPicker(
+                            incomingSharedLink);
+                }
+            });
+        }
     }
 
     @Override protected void onResume() {
@@ -443,8 +501,8 @@ public class AppPlaybookActivity extends Activity {
 
         TextView capabilityTitle = sectionLabel(I18n.get(
                 this,
-                "快速能力 · Deep Link / Intent",
-                "FAST CAPABILITIES · DEEP LINK / INTENT"));
+                "快速能力",
+                "FAST CAPABILITIES"));
         capabilityTitle.setPadding(0, dp(12), 0, dp(6));
         root.addView(capabilityTitle);
 
@@ -474,9 +532,9 @@ public class AppPlaybookActivity extends Activity {
 
                 TextView capName = new TextView(this);
                 capName.setText(
-                        capability.optString("id", "")
-                                + " · "
-                                + capability.optString("label", ""));
+                        capability.optString(
+                                "label",
+                                capability.optString("id", "")));
                 capName.setTextSize(11.5f);
                 capName.setTypeface(Typeface.DEFAULT_BOLD);
                 capName.setTextColor(CrewTheme.TEXT_PRIMARY);
@@ -528,8 +586,8 @@ public class AppPlaybookActivity extends Activity {
         addCapabilityRule.setAllCaps(false);
         addCapabilityRule.setText(I18n.get(
                 this,
-                "＋ 新增 Deep Link / Intent",
-                "+ Add Deep Link / Intent"));
+                "＋ 新增快速能力",
+                "+ Add Fast Capability"));
         addCapabilityRule.setTextSize(11);
         addCapabilityRule.setTextColor(CrewTheme.TEAL_300);
         addCapabilityRule.setBackground(CrewTheme.createCard(
@@ -539,10 +597,10 @@ public class AppPlaybookActivity extends Activity {
                 10));
         addCapabilityRule.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
-                showCapabilityEditor(
+                showCapabilityWizard(
                         packageName,
                         label,
-                        null);
+                        "");
             }
         });
         LinearLayout.LayoutParams addCapabilityRuleLp =
@@ -710,6 +768,11 @@ public class AppPlaybookActivity extends Activity {
     }
 
     private void showCapabilityAppPicker() {
+        showCapabilityAppPicker("");
+    }
+
+    private void showCapabilityAppPicker(
+            final String prefillLink) {
         final ArrayList<AppCatalog.Entry> apps =
                 appCatalog.listLaunchable();
         Collections.sort(apps, new Comparator<AppCatalog.Entry>() {
@@ -735,11 +798,19 @@ public class AppPlaybookActivity extends Activity {
             AppCatalog.Entry app = apps.get(i);
             labels[i] = app.label + "\n" + app.packageName;
         }
+
         new AlertDialog.Builder(this)
-                .setTitle(I18n.get(
-                        this,
-                        "選擇要設定快速能力的 App",
-                        "Choose App for capability"))
+                .setTitle(
+                        prefillLink == null
+                                || prefillLink.trim().isEmpty()
+                                ? I18n.get(
+                                        this,
+                                        "要讓哪個 App 更快？",
+                                        "Which App should Crew speed up?")
+                                : I18n.get(
+                                        this,
+                                        "這個連結要交給哪個 App？",
+                                        "Which App should open this link?"))
                 .setItems(
                         labels,
                         new DialogInterface.OnClickListener() {
@@ -748,16 +819,513 @@ public class AppPlaybookActivity extends Activity {
                                     int which) {
                                 AppCatalog.Entry app =
                                         apps.get(which);
-                                showCapabilityEditor(
+                                showCapabilityWizard(
                                         app.packageName,
                                         app.label,
-                                        null);
+                                        prefillLink == null
+                                                ? ""
+                                                : prefillLink.trim());
                             }
                         })
                 .setNegativeButton(
                         I18n.get(this, "取消", "Cancel"),
                         null)
                 .show();
+    }
+
+    private void showCapabilityWizard(
+            final String packageName,
+            final String appLabel,
+            final String prefillLink) {
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(18), dp(8), dp(18), dp(6));
+        scroll.addView(root);
+
+        TextView intro = bodyText(I18n.get(
+                this,
+                "你不需要知道 Deep Link 格式。Crew 先找已知能力；如果沒有，就貼一個能開啟這個 App 的連結。",
+                "You do not need to know Deep Link syntax. Crew first checks known capabilities; otherwise paste a link that should open this App."));
+        intro.setPadding(0, 0, 0, dp(10));
+        root.addView(intro);
+
+        final TextView knownStatus = bodyText("");
+        knownStatus.setTextColor(CrewTheme.TEAL_300);
+        knownStatus.setBackground(CrewTheme.createCard(
+                this,
+                CrewTheme.BG_SURFACE,
+                CrewTheme.BORDER_SUBTLE,
+                10));
+        knownStatus.setPadding(dp(11), dp(9), dp(11), dp(9));
+        root.addView(knownStatus);
+        refreshKnownCapabilities(packageName, knownStatus);
+
+        Button findKnown = new Button(this);
+        findKnown.setAllCaps(false);
+        findKnown.setText(I18n.get(
+                this,
+                "重新尋找可用能力",
+                "Find available capabilities"));
+        findKnown.setTextSize(11);
+        findKnown.setTextColor(CrewTheme.INDIGO_400);
+        findKnown.setBackground(CrewTheme.createCard(
+                this,
+                CrewTheme.BG_ELEVATED,
+                CrewTheme.BORDER_SUBTLE,
+                10));
+        LinearLayout.LayoutParams findLp =
+                new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        dp(42));
+        findLp.setMargins(0, dp(7), 0, dp(12));
+        root.addView(findKnown, findLp);
+
+        TextView linkTitle = sectionLabel(I18n.get(
+                this,
+                "我有一個連結",
+                "I HAVE A LINK"));
+        root.addView(linkTitle);
+
+        final EditText firstLink = new EditText(this);
+        firstLink.setHint(I18n.get(
+                this,
+                "貼上 App Link / Deep Link",
+                "Paste an App Link / Deep Link"));
+        firstLink.setText(prefillLink == null ? "" : prefillLink);
+        firstLink.setTextSize(11.5f);
+        firstLink.setTextColor(CrewTheme.TEXT_PRIMARY);
+        firstLink.setHintTextColor(CrewTheme.TEXT_MUTED);
+        firstLink.setSingleLine(false);
+        firstLink.setMinLines(2);
+        firstLink.setMaxLines(4);
+        firstLink.setInputType(
+                InputType.TYPE_CLASS_TEXT
+                        | InputType.TYPE_TEXT_VARIATION_URI
+                        | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        firstLink.setBackground(CrewTheme.createCard(
+                this,
+                CrewTheme.BG_SURFACE,
+                CrewTheme.BORDER_SUBTLE,
+                10));
+        firstLink.setPadding(dp(11), dp(9), dp(11), dp(9));
+        root.addView(firstLink);
+
+        final TextView testStatus = bodyText(I18n.get(
+                this,
+                "Crew 會先確認目前安裝的 App 是否真的能接這個連結。",
+                "Crew first checks whether the installed App can really handle this link."));
+        testStatus.setTextColor(CrewTheme.TEXT_MUTED);
+        testStatus.setPadding(0, dp(6), 0, 0);
+        root.addView(testStatus);
+
+        Button testLink = new Button(this);
+        testLink.setAllCaps(false);
+        testLink.setText(I18n.get(
+                this,
+                "測試開啟",
+                "Test opening"));
+        testLink.setTextSize(11);
+        testLink.setTextColor(CrewTheme.TEAL_300);
+        testLink.setBackground(CrewTheme.createCard(
+                this,
+                CrewTheme.BG_ELEVATED,
+                CrewTheme.BORDER_TEAL,
+                10));
+        LinearLayout.LayoutParams testLp =
+                new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        dp(42));
+        testLp.setMargins(0, dp(7), 0, dp(7));
+        root.addView(testLink, testLp);
+
+        Button addExample = new Button(this);
+        addExample.setAllCaps(false);
+        addExample.setText(I18n.get(
+                this,
+                "＋ 加第二個範例，讓 Crew 自動找變數",
+                "+ Add a second example so Crew can infer the variable"));
+        addExample.setTextSize(10.5f);
+        addExample.setTextColor(CrewTheme.INDIGO_400);
+        addExample.setBackground(CrewTheme.createCard(
+                this,
+                CrewTheme.BG_SURFACE,
+                CrewTheme.BORDER_SUBTLE,
+                10));
+        root.addView(addExample, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(42)));
+
+        final LinearLayout exampleArea = new LinearLayout(this);
+        exampleArea.setOrientation(LinearLayout.VERTICAL);
+        exampleArea.setVisibility(View.GONE);
+        exampleArea.setPadding(0, dp(8), 0, 0);
+
+        final EditText secondLink = new EditText(this);
+        secondLink.setHint(I18n.get(
+                this,
+                "貼另一個同類型連結",
+                "Paste another link of the same type"));
+        secondLink.setTextSize(11.5f);
+        secondLink.setTextColor(CrewTheme.TEXT_PRIMARY);
+        secondLink.setHintTextColor(CrewTheme.TEXT_MUTED);
+        secondLink.setSingleLine(false);
+        secondLink.setMinLines(2);
+        secondLink.setMaxLines(4);
+        secondLink.setInputType(
+                InputType.TYPE_CLASS_TEXT
+                        | InputType.TYPE_TEXT_VARIATION_URI
+                        | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        secondLink.setBackground(CrewTheme.createCard(
+                this,
+                CrewTheme.BG_SURFACE,
+                CrewTheme.BORDER_SUBTLE,
+                10));
+        secondLink.setPadding(dp(11), dp(9), dp(11), dp(9));
+        exampleArea.addView(secondLink);
+
+        final TextView inference = bodyText("");
+        inference.setTextColor(CrewTheme.TEAL_300);
+        inference.setPadding(0, dp(7), 0, 0);
+        exampleArea.addView(inference);
+
+        Button analyze = new Button(this);
+        analyze.setAllCaps(false);
+        analyze.setText(I18n.get(
+                this,
+                "分析兩個範例",
+                "Analyze examples"));
+        analyze.setTextSize(10.5f);
+        analyze.setTextColor(CrewTheme.TEAL_300);
+        analyze.setBackground(CrewTheme.createCard(
+                this,
+                CrewTheme.BG_ELEVATED,
+                CrewTheme.BORDER_TEAL,
+                10));
+        LinearLayout.LayoutParams analyzeLp =
+                new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        dp(40));
+        analyzeLp.setMargins(0, dp(7), 0, 0);
+        exampleArea.addView(analyze, analyzeLp);
+        root.addView(exampleArea);
+
+        final AlertDialog dialog =
+                new AlertDialog.Builder(this)
+                        .setTitle(I18n.get(
+                                this,
+                                "新增快速能力 · ",
+                                "Add Fast Capability · ")
+                                + appLabel)
+                        .setView(scroll)
+                        .setPositiveButton(
+                                I18n.get(
+                                        this,
+                                        "儲存",
+                                        "Save"),
+                                null)
+                        .setNeutralButton(
+                                I18n.get(
+                                        this,
+                                        "進階設定",
+                                        "Advanced"),
+                                null)
+                        .setNegativeButton(
+                                I18n.get(
+                                        this,
+                                        "取消",
+                                        "Cancel"),
+                                null)
+                        .create();
+
+        findKnown.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                knownStatus.setText(I18n.get(
+                        AppPlaybookActivity.this,
+                        "正在重新尋找…",
+                        "Checking again…"));
+                if (!capabilityStore.remoteUrl().isEmpty()) {
+                    AppCapabilitySync.sync(
+                            AppPlaybookActivity.this,
+                            capabilityStore,
+                            new AppCapabilitySync.Callback() {
+                                @Override public void onComplete(
+                                        JSONObject result) {
+                                    refreshKnownCapabilities(
+                                            packageName,
+                                            knownStatus);
+                                }
+                            });
+                } else {
+                    refreshKnownCapabilities(
+                            packageName,
+                            knownStatus);
+                }
+            }
+        });
+
+        addExample.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                exampleArea.setVisibility(
+                        exampleArea.getVisibility() == View.VISIBLE
+                                ? View.GONE
+                                : View.VISIBLE);
+            }
+        });
+
+        analyze.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                try {
+                    AppCapabilityAssistant.Suggestion suggestion =
+                            AppCapabilityAssistant.fromExamples(
+                                    firstLink.getText()
+                                            .toString(),
+                                    secondLink.getText()
+                                            .toString());
+                    inference.setText(
+                            I18n.get(
+                                    AppPlaybookActivity.this,
+                                    "Crew 找到可替換部分：\n",
+                                    "Crew found a reusable variable:\n")
+                                    + suggestion.label
+                                    + "\n"
+                                    + suggestion.template);
+                } catch (Exception error) {
+                    inference.setTextColor(CrewTheme.ROSE_400);
+                    inference.setText(I18n.get(
+                            AppPlaybookActivity.this,
+                            "這兩個範例差異太大，暫時無法安全推導模板。",
+                            "These examples differ too much to infer a safe template."));
+                }
+            }
+        });
+
+        testLink.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                String link =
+                        firstLink.getText()
+                                .toString()
+                                .trim();
+                if (link.isEmpty()) {
+                    firstLink.setError(I18n.get(
+                            AppPlaybookActivity.this,
+                            "先貼一個連結",
+                            "Paste a link first"));
+                    return;
+                }
+
+                JSONObject inspected =
+                        AppCapabilityLinkTester.inspect(
+                                AppPlaybookActivity.this,
+                                packageName,
+                                link);
+                if (!inspected.optBoolean(
+                        "success",
+                        false)) {
+                    testStatus.setTextColor(
+                            CrewTheme.ROSE_400);
+                    testStatus.setText(I18n.get(
+                            AppPlaybookActivity.this,
+                            "目前安裝版本無法用這個連結開啟 "
+                                    + appLabel,
+                            "The installed version cannot open this link in "
+                                    + appLabel));
+                    return;
+                }
+
+                testStatus.setTextColor(
+                        CrewTheme.TEAL_300);
+                testStatus.setText(I18n.get(
+                        AppPlaybookActivity.this,
+                        "✓ 可以交給 "
+                                + appLabel
+                                + "。現在會實際開啟一次測試；返回 Crew 後可直接儲存。",
+                        "✓ "
+                                + appLabel
+                                + " can handle it. Crew will open it once for testing; return here to save."));
+                AppCapabilityLinkTester.launch(
+                        AppPlaybookActivity.this,
+                        packageName,
+                        link);
+            }
+        });
+
+        dialog.setOnShowListener(
+                new DialogInterface.OnShowListener() {
+                    @Override public void onShow(
+                            DialogInterface unused) {
+                        dialog.getButton(
+                                AlertDialog.BUTTON_POSITIVE)
+                                .setOnClickListener(
+                                        new View.OnClickListener() {
+                                            @Override public void onClick(
+                                                    View v) {
+                                                String first =
+                                                        firstLink.getText()
+                                                                .toString()
+                                                                .trim();
+                                                if (first.isEmpty()) {
+                                                    firstLink.setError(
+                                                            I18n.get(
+                                                                    AppPlaybookActivity.this,
+                                                                    "先貼一個連結",
+                                                                    "Paste a link first"));
+                                                    return;
+                                                }
+
+                                                JSONObject inspected =
+                                                        AppCapabilityLinkTester.inspect(
+                                                                AppPlaybookActivity.this,
+                                                                packageName,
+                                                                first);
+                                                if (!inspected.optBoolean(
+                                                        "success",
+                                                        false)) {
+                                                    testStatus.setTextColor(
+                                                            CrewTheme.ROSE_400);
+                                                    testStatus.setText(
+                                                            I18n.get(
+                                                                    AppPlaybookActivity.this,
+                                                                    "這個連結目前無法由目標 App 處理，先不要儲存。",
+                                                                    "The target App cannot currently handle this link, so Crew will not save it."));
+                                                    return;
+                                                }
+
+                                                try {
+                                                    String second =
+                                                            secondLink.getText()
+                                                                    .toString()
+                                                                    .trim();
+                                                    AppCapabilityAssistant.Suggestion suggestion =
+                                                            second.isEmpty()
+                                                                    ? AppCapabilityAssistant
+                                                                            .fromSingle(
+                                                                                    first)
+                                                                    : AppCapabilityAssistant
+                                                                            .fromExamples(
+                                                                                    first,
+                                                                                    second);
+
+                                                    JSONObject saved =
+                                                            capabilityStore
+                                                                    .saveLocal(
+                                                                            packageName,
+                                                                            appLabel,
+                                                                            suggestion.capabilityId,
+                                                                            suggestion.label,
+                                                                            "URI",
+                                                                            suggestion.template,
+                                                                            "",
+                                                                            "");
+                                                    if (!saved.optBoolean(
+                                                            "success",
+                                                            false)) {
+                                                        Toast.makeText(
+                                                                AppPlaybookActivity.this,
+                                                                saved.optString(
+                                                                        "error",
+                                                                        "SAVE_FAILED"),
+                                                                Toast.LENGTH_SHORT)
+                                                                .show();
+                                                        return;
+                                                    }
+
+                                                    dialog.dismiss();
+                                                    render();
+                                                    Toast.makeText(
+                                                            AppPlaybookActivity.this,
+                                                            suggestion.reusable
+                                                                    ? I18n.get(
+                                                                            AppPlaybookActivity.this,
+                                                                            "已建立可重用快速能力："
+                                                                                    + suggestion.label,
+                                                                            "Reusable capability saved: "
+                                                                                    + suggestion.label)
+                                                                    : I18n.get(
+                                                                            AppPlaybookActivity.this,
+                                                                            "已記住這個快速連結",
+                                                                            "Fast link saved"),
+                                                            Toast.LENGTH_LONG)
+                                                            .show();
+                                                } catch (Exception error) {
+                                                    inference.setTextColor(
+                                                            CrewTheme.ROSE_400);
+                                                    inference.setText(
+                                                            I18n.get(
+                                                                    AppPlaybookActivity.this,
+                                                                    "範例無法安全推導。可以移除第二個範例直接儲存固定連結，或使用進階設定。",
+                                                                    "Crew could not safely infer a template. Remove the second example to save the exact link, or use Advanced settings."));
+                                                }
+                                            }
+                                        });
+
+                        dialog.getButton(
+                                AlertDialog.BUTTON_NEUTRAL)
+                                .setOnClickListener(
+                                        new View.OnClickListener() {
+                                            @Override public void onClick(
+                                                    View v) {
+                                                String link =
+                                                        firstLink.getText()
+                                                                .toString()
+                                                                .trim();
+                                                dialog.dismiss();
+                                                showCapabilityEditor(
+                                                        packageName,
+                                                        appLabel,
+                                                        null,
+                                                        link);
+                                            }
+                                        });
+                    }
+                });
+
+        dialog.show();
+    }
+
+    private void refreshKnownCapabilities(
+            String packageName,
+            TextView status) {
+        if (status == null) return;
+        JSONArray capabilities =
+                capabilityRegistry
+                        .capabilitiesFor(packageName);
+        if (capabilities.length() == 0) {
+            status.setTextColor(CrewTheme.TEXT_MUTED);
+            status.setText(I18n.get(
+                    this,
+                    "沒有找到已知快速能力。可以貼一個連結讓 Crew 測試。",
+                    "No known fast capability found. Paste a link for Crew to test."));
+            return;
+        }
+
+        StringBuilder out = new StringBuilder();
+        out.append(I18n.get(
+                this,
+                "✓ 已找到 ",
+                "✓ Found "))
+                .append(capabilities.length())
+                .append(I18n.get(
+                        this,
+                        " 個可直接使用的能力",
+                        " capabilities ready to use"));
+        int max = Math.min(5, capabilities.length());
+        for (int i = 0; i < max; i++) {
+            JSONObject item =
+                    capabilities.optJSONObject(i);
+            if (item == null) continue;
+            out.append("\n• ")
+                    .append(
+                            item.optString(
+                                    "label",
+                                    item.optString("id", "")));
+        }
+        if (capabilities.length() > max) {
+            out.append("\n… +")
+                    .append(capabilities.length() - max);
+        }
+        status.setTextColor(CrewTheme.TEAL_300);
+        status.setText(out.toString());
     }
 
     private void showRemoteRegistryDialog() {
@@ -914,6 +1482,18 @@ public class AppPlaybookActivity extends Activity {
             final String packageName,
             final String appLabel,
             final JSONObject existing) {
+        showCapabilityEditor(
+                packageName,
+                appLabel,
+                existing,
+                "");
+    }
+
+    private void showCapabilityEditor(
+            final String packageName,
+            final String appLabel,
+            final JSONObject existing,
+            final String prefillLink) {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(18), dp(8), dp(18), dp(4));
@@ -923,11 +1503,26 @@ public class AppPlaybookActivity extends Activity {
         packageView.setPadding(0, 0, 0, dp(8));
         root.addView(packageView);
 
+        AppCapabilityAssistant.Suggestion advancedSuggestion = null;
+        if (existing == null
+                && prefillLink != null
+                && !prefillLink.trim().isEmpty()) {
+            try {
+                advancedSuggestion =
+                        AppCapabilityAssistant.fromSingle(
+                                prefillLink);
+            } catch (Exception ignored) {}
+        }
+        final AppCapabilityAssistant.Suggestion inferredAdvanced =
+                advancedSuggestion;
+
         final EditText id = new EditText(this);
         id.setHint("OPEN_PRODUCT");
         id.setText(
                 existing == null
-                        ? ""
+                        ? (inferredAdvanced == null
+                                ? ""
+                                : inferredAdvanced.capabilityId)
                         : existing.optString("id", ""));
         id.setEnabled(existing == null);
         id.setSingleLine(true);
@@ -949,7 +1544,9 @@ public class AppPlaybookActivity extends Activity {
                 "Label, e.g. Open product"));
         label.setText(
                 existing == null
-                        ? ""
+                        ? (inferredAdvanced == null
+                                ? ""
+                                : inferredAdvanced.label)
                         : existing.optString("label", ""));
         label.setSingleLine(true);
         label.setTextSize(12);
@@ -972,7 +1569,9 @@ public class AppPlaybookActivity extends Activity {
         uri.setHint("myapp://product/{id}");
         uri.setText(
                 existing == null
-                        ? ""
+                        ? (inferredAdvanced == null
+                                ? ""
+                                : inferredAdvanced.template)
                         : existing.optString(
                                 "uriTemplate", ""));
         uri.setTextSize(11.5f);
