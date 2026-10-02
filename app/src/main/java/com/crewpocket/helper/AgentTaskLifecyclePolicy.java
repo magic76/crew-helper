@@ -181,6 +181,7 @@ final class AgentTaskLifecyclePolicy {
                 || "get_selected_region".equals(name)
                 || "read_web_page".equals(name)
                 || "list_app_guidance".equals(name)
+                || "list_app_capabilities".equals(name)
                 || "get_note".equals(name)
                 || "search_notes".equals(name)
                 || "list_notes".equals(name)
@@ -195,6 +196,7 @@ final class AgentTaskLifecyclePolicy {
 
     static boolean isMutationTool(String name) {
         return "launch_app".equals(name)
+                || "run_app_capability".equals(name)
                 || "swipe_screen".equals(name)
                 || "tap_element".equals(name)
                 || "tap_screen".equals(name)

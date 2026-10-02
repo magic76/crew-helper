@@ -19,6 +19,8 @@ public final class RuntimeToolRoutingTest {
 
         checkNotHandled("remember_app_guidance");
         checkNotHandled("list_app_guidance");
+        checkNotHandled("list_app_capabilities");
+        checkNotHandled("run_app_capability");
         checkNotHandled("send_text");
         checkNotHandled("type_text");
         checkNotHandled("search_current_app");
