@@ -45,7 +45,7 @@ final class LiveToolCatalog {
                         .put("description", "For TYPE: exact text to put into the current visible editable field (settings, system prompt, form, note field, search box, or chat composer). TYPE never submits. For SEARCH: the query."))
                 .put("direction", new JSONObject().put("type", "STRING")
                         .put("enum", new JSONArray().put("forward").put("backward").put("left").put("right"))
-                        .put("description", "Only for SCROLL. This is CONTENT/NAVIGATION direction, never finger gesture direction. forward = reveal later/below content or next page; backward = reveal earlier/above content or previous page. Use left/right only for explicitly horizontal content. Runtime converts this semantic direction into Android scrolling/swiping."))
+                        .put("description", "Only for SCROLL. This is CONTENT/NAVIGATION direction, never finger gesture direction. right = reveal content on the right (Runtime drags finger left); left = reveal content on the left (finger right); forward = reveal later/below content (finger up); backward = reveal earlier/above content (finger down). Runtime owns the physical gesture."))
                 .put("distance", new JSONObject().put("type", "STRING")
                         .put("enum", new JSONArray().put("short").put("normal").put("long").put("page"))
                         .put("description", "Optional SCROLL distance."))
