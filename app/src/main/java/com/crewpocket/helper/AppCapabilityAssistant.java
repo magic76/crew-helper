@@ -59,6 +59,7 @@ final class AppCapabilityAssistant {
 
         int prefix = commonPrefix(first, second);
         int suffix = commonSuffix(first, second, prefix);
+        suffix = structuralSuffixLength(first, suffix);
         if (prefix <= 0
                 || prefix + suffix >= first.length()
                 || prefix + suffix >= second.length()) {
@@ -186,6 +187,42 @@ final class AppCapabilityAssistant {
         int i = 0;
         while (i < max && a.charAt(i) == b.charAt(i)) i++;
         return i;
+    }
+
+    private static int structuralSuffixLength(
+            String source,
+            int suffixLength) {
+        if (suffixLength <= 0
+                || source == null
+                || source.isEmpty()) {
+            return 0;
+        }
+        int start = source.length() - suffixLength;
+        if (start < 0 || start >= source.length()) return 0;
+
+        // Preserve only a suffix that begins at a real URI/template boundary.
+        // Incidental shared trailing characters inside an id (12345/98765)
+        // are not structural and must stay part of the variable.
+        char first = source.charAt(start);
+        if (first == '/'
+                || first == '?'
+                || first == '&'
+                || first == '#'
+                || first == '.') {
+            return suffixLength;
+        }
+
+        for (int i = start + 1; i < source.length(); i++) {
+            char c = source.charAt(i);
+            if (c == '/'
+                    || c == '?'
+                    || c == '&'
+                    || c == '#'
+                    || c == '.') {
+                return source.length() - i;
+            }
+        }
+        return 0;
     }
 
     private static int commonSuffix(
