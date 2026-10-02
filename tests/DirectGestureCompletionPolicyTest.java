@@ -22,6 +22,9 @@ public final class DirectGestureCompletionPolicyTest {
         check(DirectGestureCompletionPolicy.shouldFinish(
                         "下一頁", "forward", true),
                 "page-down semantic request is one-shot");
+        check(DirectGestureCompletionPolicy.shouldFinish(
+                        "滑動螢幕", "forward", true),
+                "generic screen swipe is one-shot after verified effect");
 
         check(!DirectGestureCompletionPolicy.shouldFinish(
                         "往右滑動然後打開設定", "right", true),
