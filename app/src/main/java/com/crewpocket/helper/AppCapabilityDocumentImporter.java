@@ -115,7 +115,7 @@ final class AppCapabilityDocumentImporter {
                                 page.optString("title", ""),
                                 text);
                 JSONArray candidates =
-                        validateCandidates(
+                        AppCapabilityDocumentPolicy.validateCandidates(
                                 extracted.optJSONArray("capabilities"),
                                 text);
 
@@ -143,95 +143,6 @@ final class AppCapabilityDocumentImporter {
                 lastError == null
                         ? "DOCUMENT_ANALYSIS_FAILED"
                         : safeFailure(lastError));
-    }
-
-    static JSONArray validateCandidates(
-            JSONArray source,
-            String documentText) {
-        JSONArray out = new JSONArray();
-        if (source == null) return out;
-
-        String doc =
-                documentText == null
-                        ? ""
-                        : documentText.toLowerCase(Locale.ROOT);
-        java.util.HashSet<String> ids =
-                new java.util.HashSet<String>();
-
-        for (int i = 0;
-                i < source.length()
-                        && out.length() < MAX_CANDIDATES;
-                i++) {
-            JSONObject item = source.optJSONObject(i);
-            if (item == null) continue;
-
-            String id = cleanId(
-                    item.optString("id", ""));
-            String label = cleanLabel(
-                    item.optString("label", ""));
-            String template =
-                    item.optString("uriTemplate", "").trim();
-            String example =
-                    item.optString("exampleUri", "").trim();
-            String action =
-                    item.optString(
-                            "intentAction",
-                            "android.intent.action.VIEW").trim();
-            String evidence =
-                    cleanEvidence(
-                            item.optString("evidence", ""));
-            double confidence =
-                    item.optDouble("confidence", 0.0);
-
-            if (!AppCapabilityTemplate.validCapabilityId(id)
-                    || !ids.add(id)
-                    || label.isEmpty()
-                    || template.isEmpty()
-                    || example.isEmpty()
-                    || confidence < 0.55
-                    || !isAllowedAction(action)) {
-                continue;
-            }
-
-            try {
-                AppCapabilityTemplate.validateUri(example);
-                HashMap<String, String> params =
-                        sampleParams(template, example);
-                String expanded =
-                        AppCapabilityTemplate.expand(
-                                template,
-                                params);
-                AppCapabilityTemplate.validateUri(expanded);
-            } catch (Exception ignored) {
-                continue;
-            }
-
-            if (!documentSupportsCandidate(
-                    doc,
-                    template,
-                    example)) {
-                continue;
-            }
-
-            try {
-                JSONObject clean = new JSONObject()
-                        .put("id", id)
-                        .put("label", label)
-                        .put("kind", "URI")
-                        .put("uriTemplate", template)
-                        .put("exampleUri", example)
-                        .put("intentAction", action)
-                        .put("confidence",
-                                Math.max(
-                                        0.0,
-                                        Math.min(
-                                                1.0,
-                                                confidence)))
-                        .put("evidence", evidence);
-                out.put(clean);
-            } catch (Exception ignored) {}
-        }
-        return out;
     }
 
     private JSONObject analyzeWithModel(
