@@ -295,61 +295,15 @@ final class PhoneRuntimeExecutor {
                             "無法取得目前裝置螢幕尺寸");
         }
 
-        int x1 = Math.round(width * 0.50f);
-        int y1 = Math.round(height * 0.74f);
-        int x2 = Math.round(width * 0.50f);
-        int y2 = Math.round(height * 0.22f);
-        int duration = 320;
-
-        if ("down".equals(direction)) {
-            y1 = Math.round(height * 0.22f);
-            y2 = Math.round(height * 0.74f);
-        } else if ("left".equals(direction)) {
-            x1 = Math.round(width * 0.87f);
-            y1 = Math.round(height * 0.50f);
-            x2 = Math.round(width * 0.13f);
-            y2 = Math.round(height * 0.50f);
-        } else if ("right".equals(direction)) {
-            x1 = Math.round(width * 0.13f);
-            y1 = Math.round(height * 0.50f);
-            x2 = Math.round(width * 0.87f);
-            y2 = Math.round(height * 0.50f);
-        }
-
-        if ("long".equals(distance)
-                || "page".equals(distance)
-                || "fast".equals(distance)) {
-            duration = 280;
-            if ("up".equals(direction)) {
-                y1 = Math.round(height * 0.87f);
-                y2 = Math.round(height * 0.13f);
-            } else if ("down".equals(direction)) {
-                y1 = Math.round(height * 0.13f);
-                y2 = Math.round(height * 0.87f);
-            } else if ("left".equals(direction)) {
-                x1 = Math.round(width * 0.94f);
-                x2 = Math.round(width * 0.06f);
-            } else if ("right".equals(direction)) {
-                x1 = Math.round(width * 0.06f);
-                x2 = Math.round(width * 0.94f);
-            }
-        } else if ("short".equals(distance)
-                || "little".equals(distance)) {
-            duration = 260;
-            if ("up".equals(direction)) {
-                y1 = Math.round(height * 0.58f);
-                y2 = Math.round(height * 0.38f);
-            } else if ("down".equals(direction)) {
-                y1 = Math.round(height * 0.38f);
-                y2 = Math.round(height * 0.58f);
-            } else if ("left".equals(direction)) {
-                x1 = Math.round(width * 0.66f);
-                x2 = Math.round(width * 0.34f);
-            } else if ("right".equals(direction)) {
-                x1 = Math.round(width * 0.34f);
-                x2 = Math.round(width * 0.66f);
-            }
-        }
+        SwipeGeometryPolicy.Fractions geometry =
+                SwipeGeometryPolicy.forPhysicalDirection(
+                        direction,
+                        distance);
+        int x1 = Math.round(width * geometry.x1);
+        int y1 = Math.round(height * geometry.y1);
+        int x2 = Math.round(width * geometry.x2);
+        int y2 = Math.round(height * geometry.y2);
+        int duration = geometry.durationMs;
 
         JSONObject before = new JSONObject();
         try {
@@ -374,38 +328,50 @@ final class PhoneRuntimeExecutor {
                 int bottom = horizontal[3];
                 int regionWidth =
                         Math.max(1, right - left);
-                float startFraction =
-                        ("short".equals(distance)
-                                || "little".equals(distance))
-                                ? 0.68f
-                                : (("long".equals(distance)
-                                        || "page".equals(distance)
-                                        || "fast".equals(distance))
-                                        ? 0.92f
-                                        : 0.84f);
-                float endFraction = 1f - startFraction;
+                float highFraction =
+                        SwipeGeometryPolicy
+                                .horizontalHigh(distance);
+                float lowFraction =
+                        SwipeGeometryPolicy
+                                .horizontalLow(distance);
                 int centerY =
                         top + Math.max(
                                 1,
                                 (bottom - top) / 2);
+
+                int regionHigh =
+                        left + Math.round(
+                                regionWidth * highFraction);
+                int regionLow =
+                        left + Math.round(
+                                regionWidth * lowFraction);
+
+                // Even if Accessibility reports a container that reaches the
+                // screen edge, never start a physical swipe inside Android's
+                // back-gesture edge band.
+                int globalSafeMin =
+                        Math.round(width * 0.16f);
+                int globalSafeMax =
+                        Math.round(width * 0.84f);
+                regionHigh =
+                        Math.max(
+                                globalSafeMin,
+                                Math.min(
+                                        globalSafeMax,
+                                        regionHigh));
+                regionLow =
+                        Math.max(
+                                globalSafeMin,
+                                Math.min(
+                                        globalSafeMax,
+                                        regionLow));
+
                 if ("left".equals(direction)) {
-                    x1 = left
-                            + Math.round(
-                                    regionWidth
-                                            * startFraction);
-                    x2 = left
-                            + Math.round(
-                                    regionWidth
-                                            * endFraction);
+                    x1 = regionHigh;
+                    x2 = regionLow;
                 } else {
-                    x1 = left
-                            + Math.round(
-                                    regionWidth
-                                            * endFraction);
-                    x2 = left
-                            + Math.round(
-                                    regionWidth
-                                            * startFraction);
+                    x1 = regionLow;
+                    x2 = regionHigh;
                 }
                 y1 = centerY;
                 y2 = centerY;
@@ -485,6 +451,10 @@ final class PhoneRuntimeExecutor {
         return reply
                 .put("direction", direction)
                 .put("distance", distance)
+                .put("x1", x1)
+                .put("y1", y1)
+                .put("x2", x2)
+                .put("y2", y2)
                 .put("screenSize", width + "x" + height)
                 .put("execution", execution)
                 .put(
