@@ -453,8 +453,7 @@ final class PhoneRuntimeExecutor {
             after = get("/nodes");
         } catch (Exception ignored) {}
         boolean changed =
-                !nodeSignature(before)
-                        .equals(nodeSignature(after));
+                nodeScreenChanged(before, after);
 
         // If semantic scroll was rejected or had no observable effect, execute
         // exactly one gesture fallback. /swipe now reports Android's actual
@@ -475,8 +474,7 @@ final class PhoneRuntimeExecutor {
                 after = get("/nodes");
             } catch (Exception ignored) {}
             changed =
-                    !nodeSignature(before)
-                            .equals(nodeSignature(after));
+                    nodeScreenChanged(before, after);
         }
 
         boolean executionCompleted =
@@ -1268,6 +1266,19 @@ final class PhoneRuntimeExecutor {
                     : lastCandidateApps.size() - 1;
         }
         return -1;
+    }
+
+    private boolean nodeScreenChanged(
+            JSONObject before,
+            JSONObject after) {
+        if (before == null
+                || after == null
+                || !before.optBoolean("success", false)
+                || !after.optBoolean("success", false)) {
+            return false;
+        }
+        return !nodeSignature(before)
+                .equals(nodeSignature(after));
     }
 
     private int[] bestScrollableBounds(
