@@ -31,6 +31,46 @@ final class DirectGestureCompletionPolicy {
         return matchesDirection(command, direction);
     }
 
+    static boolean looksLikeStandaloneGestureIntent(String rawText) {
+        String command = normalizeCommand(rawText);
+        if (command.isEmpty()) return false;
+
+        // Explicit continuation wording belongs to the current compound goal.
+        if (startsWithAny(
+                command,
+                "然後", "然后", "接著", "接着", "再",
+                "then", "andthen", "also")) {
+            return false;
+        }
+
+        // A gesture plus another semantic action is not a standalone gesture.
+        if (containsAny(
+                command,
+                "播放", "搜尋", "搜索", "打開", "打开",
+                "點", "点", "選", "选", "導航", "导航",
+                "play", "search", "open", "tap", "select", "navigate")) {
+            return false;
+        }
+
+        if (command.equals("滑動螢幕")
+                || command.equals("滑动屏幕")
+                || command.equals("滑螢幕")
+                || command.equals("滑屏幕")
+                || command.equals("滑一下螢幕")
+                || command.equals("滑一下屏幕")
+                || command.equals("swipescreen")
+                || command.equals("swipethescreen")
+                || command.equals("scrollscreen")
+                || command.equals("scrollthescreen")) {
+            return true;
+        }
+
+        return matchesDirection(command, "right")
+                || matchesDirection(command, "left")
+                || matchesDirection(command, "forward")
+                || matchesDirection(command, "backward");
+    }
+
     private static boolean matchesDirection(String command, String direction) {
         if ("right".equals(direction)) {
             return matchesChinese(command, "右")
@@ -150,6 +190,13 @@ final class DirectGestureCompletionPolicy {
         if ("up".equals(text) || "上".equals(text)) return "forward";
         if ("down".equals(text) || "下".equals(text)) return "backward";
         return "";
+    }
+
+    private static boolean startsWithAny(String value, String... terms) {
+        for (String term : terms) {
+            if (value.startsWith(term)) return true;
+        }
+        return false;
     }
 
     private static boolean containsAny(String value, String... terms) {
