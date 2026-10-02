@@ -64,6 +64,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/SearchTransactionPolicy.java" \
   "$SRC/SearchResultAutonomyPolicy.java" \
   "$SRC/ScrollDirectionPolicy.java" \
+  "$SRC/SwipeGeometryPolicy.java" \
   "$SRC/VisionCoordinateMapper.java" \
   "$SRC/VisualTapLease.java" \
   "$SRC/ElementReferenceCommand.java" \
@@ -141,6 +142,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/SearchTransactionPolicyTest.java" \
   "$ROOT/tests/SearchResultAutonomyPolicyTest.java" \
   "$ROOT/tests/ScrollDirectionPolicyTest.java" \
+  "$ROOT/tests/SwipeGeometryPolicyTest.java" \
   "$ROOT/tests/ActionVerifierV2Test.java" \
   "$ROOT/tests/ActionRecoveryPolicyTest.java" \
   "$ROOT/tests/LocatorConfidencePolicyTest.java" \
@@ -231,6 +233,7 @@ java -cp "$OUT" com.crewpocket.helper.SessionContextPromptTest
 java -cp "$OUT" com.crewpocket.helper.SearchTransactionPolicyTest
 java -cp "$OUT" com.crewpocket.helper.SearchResultAutonomyPolicyTest
 java -cp "$OUT" com.crewpocket.helper.ScrollDirectionPolicyTest
+java -cp "$OUT" com.crewpocket.helper.SwipeGeometryPolicyTest
 java -cp "$OUT" com.crewpocket.helper.ActionVerifierV2Test
 java -cp "$OUT" com.crewpocket.helper.ActionRecoveryPolicyTest
 java -cp "$OUT" com.crewpocket.helper.LocatorConfidencePolicyTest
