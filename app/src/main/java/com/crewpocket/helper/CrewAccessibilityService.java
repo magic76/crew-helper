@@ -932,7 +932,7 @@ public class CrewAccessibilityService extends AccessibilityService {
             } else if (path.startsWith("/scroll")) {
                 String direction = getJsonString(body, "direction");
                 final String targetId = getJsonString(body, "id");
-                if (direction == null || direction.isEmpty()) direction = "up";
+                if (direction == null || direction.isEmpty()) direction = "forward";
                 final String fDir = direction.toLowerCase(Locale.ROOT);
                 final boolean[] scrollSuccess = new boolean[]{false};
                 final Object scrollLock = new Object();
@@ -943,30 +943,43 @@ public class CrewAccessibilityService extends AccessibilityService {
                                     CrewAccessibilityService.this,
                                     fDir);
                             if ("up".equals(fDir) || "forward".equals(fDir)) {
-                                scrollSuccess[0] = performScrollAction(true, targetId);
-                            } else if ("down".equals(fDir) || "backward".equals(fDir)) {
-                                scrollSuccess[0] = performScrollAction(false, targetId);
+                                scrollSuccess[0] =
+                                        performScrollAction(true, targetId);
+                            } else if ("down".equals(fDir)
+                                    || "backward".equals(fDir)) {
+                                scrollSuccess[0] =
+                                        performScrollAction(false, targetId);
+                            } else if ("left".equals(fDir)) {
+                                // Physical finger-left reveals content on the right.
+                                scrollSuccess[0] =
+                                        performHorizontalScrollAction(
+                                                true,
+                                                targetId);
+                            } else if ("right".equals(fDir)) {
+                                // Physical finger-right reveals content on the left.
+                                scrollSuccess[0] =
+                                        performHorizontalScrollAction(
+                                                false,
+                                                targetId);
                             }
-                            if (!scrollSuccess[0]) {
-                                // Fallback to proportional gesture swipe
-                                android.util.DisplayMetrics metrics = getResources().getDisplayMetrics();
-                                int w = metrics.widthPixels, h = metrics.heightPixels;
-                                float x1 = w * 0.5f, y1 = h * 0.72f, x2 = w * 0.5f, y2 = h * 0.28f;
-                                if ("down".equals(fDir) || "backward".equals(fDir)) {
-                                    y1 = h * 0.28f; y2 = h * 0.72f;
-                                } else if ("left".equals(fDir)) {
-                                    x1 = w * 0.85f; y1 = h * 0.5f; x2 = w * 0.15f; y2 = h * 0.5f;
-                                } else if ("right".equals(fDir)) {
-                                    x1 = w * 0.15f; y1 = h * 0.5f; x2 = w * 0.85f; y2 = h * 0.5f;
-                                }
-                                performSwipe(x1, y1, x2, y2, 320);
-                                scrollSuccess[0] = true;
+                        } finally {
+                            synchronized (scrollLock) {
+                                scrollLock.notify();
                             }
-                        } finally { synchronized (scrollLock) { scrollLock.notify(); } }
+                        }
                     }
                 });
-                synchronized (scrollLock) { try { scrollLock.wait(1500); } catch (Exception ignored) {} }
-                responseJson = "{\"success\":" + scrollSuccess[0] + ",\"action\":\"SCROLL\",\"direction\":\"" + fDir + (targetId != null ? "\",\"id\":\"" + jsonEscape(targetId) : "") + "\"}";
+                synchronized (scrollLock) {
+                    try { scrollLock.wait(1500); }
+                    catch (Exception ignored) {}
+                }
+                responseJson = "{\"success\":" + scrollSuccess[0]
+                        + ",\"action\":\"SCROLL\",\"direction\":\""
+                        + jsonEscape(fDir) + "\""
+                        + (targetId != null
+                                ? ",\"id\":\"" + jsonEscape(targetId) + "\""
+                                : "")
+                        + "}";
             } else if (path.startsWith("/swipe")) {
                 float x1 = 0, y1 = 0, x2 = 0, y2 = 0;
                 long duration = 300;
@@ -976,17 +989,15 @@ public class CrewAccessibilityService extends AccessibilityService {
                     if (body.contains("\"x2\":")) x2 = Float.parseFloat(body.substring(body.indexOf("\"x2\":") + 5).split("[,}]")[0].trim());
                     if (body.contains("\"y2\":")) y2 = Float.parseFloat(body.substring(body.indexOf("\"y2\":") + 5).split("[,}]")[0].trim());
                     if (body.contains("\"duration\":")) duration = Long.parseLong(body.substring(body.indexOf("\"duration\":") + 11).split("[,}]")[0].trim());
-                } catch (Exception e) {}
+                } catch (Exception ignored) {}
 
-                final float fx1 = x1, fy1 = y1, fx2 = x2, fy2 = y2;
-                final long fDur = duration;
-                mainHandler.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        performSwipe(fx1, fy1, fx2, fy2, fDur);
-                    }
-                });
-                responseJson = "{\"success\":true,\"action\":\"SWIPE\"}";
+                boolean swipeSuccess =
+                        performSwipeAndWait(
+                                x1, y1, x2, y2, duration);
+                responseJson = "{\"success\":" + swipeSuccess
+                        + ",\"action\":\"SWIPE\",\"gestureStatus\":\""
+                        + (swipeSuccess ? "COMPLETED" : "CANCELLED")
+                        + "\"}";
             } else if (path.startsWith("/type")) {
                 String textToType = getJsonString(body, "text");
                 if (textToType == null && body.contains("\"text\":")) {
@@ -2128,29 +2139,184 @@ public class CrewAccessibilityService extends AccessibilityService {
         return false;
     }
 
-    private void performSwipe(float x1, float y1, float x2, float y2, long duration) {
-        ActionVisualOverlay.showSwipe(this, x1, y1, x2, y2, duration);
-        Path path = new Path();
-        path.moveTo(x1, y1);
-        
-        // Construct smooth, continuous multi-point natural finger curve (easing out)
-        int steps = 12;
-        float dx = x2 - x1;
-        float dy = y2 - y1;
-        
-        for (int i = 1; i <= steps; i++) {
-            float t = (float) i / steps;
-            // Quintic / Sine Ease-Out curve for silky smooth inertia
-            float progress = (float) Math.sin(t * (Math.PI / 2.0));
-            float currX = x1 + dx * progress;
-            float currY = y1 + dy * progress;
-            path.lineTo(currX, currY);
+    private boolean performHorizontalScrollAction(
+            boolean forward,
+            String id) {
+        AccessibilityNodeInfo root = getRootInActiveWindow();
+        if (root == null) return false;
+        AccessibilityNodeInfo scrollable = null;
+        try {
+            if (id != null && !id.trim().isEmpty()) {
+                AccessibilityNodeInfo target =
+                        AccessibilityNodeRepository
+                                .findMatchingNodeById(
+                                        root,
+                                        id.trim());
+                if (target != null) {
+                    try {
+                        scrollable =
+                                findHorizontalScrollableNode(
+                                        target);
+                    } finally {
+                        target.recycle();
+                    }
+                }
+            }
+            if (scrollable == null) {
+                scrollable =
+                        findHorizontalScrollableNode(root);
+            }
+            if (scrollable == null) return false;
+
+            int action = forward
+                    ? AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+                    : AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD;
+            return scrollable.performAction(action);
+        } catch (Exception ignored) {
+            return false;
+        } finally {
+            if (scrollable != null) {
+                try { scrollable.recycle(); }
+                catch (Exception ignored) {}
+            }
+            try { root.recycle(); }
+            catch (Exception ignored) {}
+        }
+    }
+
+    private AccessibilityNodeInfo findHorizontalScrollableNode(
+            AccessibilityNodeInfo node) {
+        if (node == null) return null;
+
+        if (node.isScrollable() && node.isVisibleToUser()) {
+            Rect bounds = new Rect();
+            node.getBoundsInScreen(bounds);
+            if (bounds.width() > 0
+                    && bounds.height() > 0
+                    && bounds.width()
+                            >= Math.round(
+                                    bounds.height() * 1.15f)) {
+                return AccessibilityNodeInfo.obtain(node);
+            }
         }
 
-        GestureDescription.Builder builder = new GestureDescription.Builder();
-        long dur = Math.max(300, Math.min(650, duration));
-        builder.addStroke(new GestureDescription.StrokeDescription(path, 0, dur));
-        dispatchGesture(builder.build(), null, null);
+        int count = node.getChildCount();
+        for (int i = 0; i < count; i++) {
+            AccessibilityNodeInfo child = node.getChild(i);
+            if (child == null) continue;
+            try {
+                AccessibilityNodeInfo result =
+                        findHorizontalScrollableNode(child);
+                if (result != null) return result;
+            } finally {
+                child.recycle();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Dispatch a gesture and report Android's real completion callback.
+     * Queuing a gesture is not success: onCancelled and dispatch rejection are
+     * explicit failures.
+     */
+    private boolean performSwipeAndWait(
+            final float x1,
+            final float y1,
+            final float x2,
+            final float y2,
+            final long duration) {
+        final Object gestureLock = new Object();
+        final boolean[] finished = new boolean[]{false};
+        final boolean[] completed = new boolean[]{false};
+
+        mainHandler.post(new Runnable() {
+            @Override public void run() {
+                ActionVisualOverlay.showSwipe(
+                        CrewAccessibilityService.this,
+                        x1, y1, x2, y2, duration);
+
+                Path path = new Path();
+                path.moveTo(x1, y1);
+
+                int steps = 12;
+                float dx = x2 - x1;
+                float dy = y2 - y1;
+                for (int i = 1; i <= steps; i++) {
+                    float t = (float) i / steps;
+                    float progress =
+                            (float) Math.sin(
+                                    t * (Math.PI / 2.0));
+                    path.lineTo(
+                            x1 + dx * progress,
+                            y1 + dy * progress);
+                }
+
+                GestureDescription.Builder builder =
+                        new GestureDescription.Builder();
+                long dur =
+                        Math.max(
+                                300,
+                                Math.min(650, duration));
+                builder.addStroke(
+                        new GestureDescription.StrokeDescription(
+                                path,
+                                0,
+                                dur));
+
+                boolean accepted = dispatchGesture(
+                        builder.build(),
+                        new AccessibilityService
+                                .GestureResultCallback() {
+                            @Override
+                            public void onCompleted(
+                                    GestureDescription gestureDescription) {
+                                synchronized (gestureLock) {
+                                    completed[0] = true;
+                                    finished[0] = true;
+                                    gestureLock.notify();
+                                }
+                            }
+
+                            @Override
+                            public void onCancelled(
+                                    GestureDescription gestureDescription) {
+                                synchronized (gestureLock) {
+                                    completed[0] = false;
+                                    finished[0] = true;
+                                    gestureLock.notify();
+                                }
+                            }
+                        },
+                        null);
+
+                if (!accepted) {
+                    synchronized (gestureLock) {
+                        completed[0] = false;
+                        finished[0] = true;
+                        gestureLock.notify();
+                    }
+                }
+            }
+        });
+
+        long deadline =
+                System.currentTimeMillis()
+                        + Math.max(1800L, duration + 1200L);
+        synchronized (gestureLock) {
+            while (!finished[0]) {
+                long remaining =
+                        deadline - System.currentTimeMillis();
+                if (remaining <= 0L) break;
+                try {
+                    gestureLock.wait(remaining);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+        return finished[0] && completed[0];
     }
 
     private boolean isActiveInputHardBlocked() {

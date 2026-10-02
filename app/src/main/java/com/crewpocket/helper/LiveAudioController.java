@@ -27,7 +27,6 @@ final class LiveAudioController {
         boolean isInterruptedCurrentTurn();
         boolean isAiSpeaking();
         boolean isVoiceInterruptionAllowed();
-        boolean isExploreGestureListeningMode();
         String getNoiseMode();
         int getNoiseSuppression();
         int getInterruptionSensitivity();
@@ -429,27 +428,6 @@ final class LiveAudioController {
                 }
 
                 double zcr = calculateZeroCrossingRate(pcm, count);
-
-                // Explore mode intentionally optimizes for one/two-syllable
-                // commands such as 上/下/左/右. The normal local admission gate
-                // can require 120-240 ms of speech in noisy environments and
-                // swallow those commands before Gemini Server VAD ever sees
-                // them. During this short-lived lease, let Server VAD own
-                // admission. Playback-tail/barge-in protection above remains
-                // authoritative, so assistant echo still cannot bypass here.
-                if (host.isExploreGestureListeningMode()) {
-                    activeNoiseGate.reset();
-                    PerformanceMetrics.recordExploreAudioBypassFrame();
-                    reportMicrophoneLevel(rms, gateThreshold, true);
-                    if (!sendMicChunk(
-                            pcm,
-                            count,
-                            rms,
-                            gateThreshold)) {
-                        break;
-                    }
-                    continue;
-                }
 
                 ActiveNoiseAdmissionGate.Action noiseAction = activeNoiseGate.accept(
                         pcm, count, rms, zcr, noiseFloor, mode, suppression,
