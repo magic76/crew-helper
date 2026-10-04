@@ -241,16 +241,26 @@ final class TaskRecipeRuntime {
             String error,
             int failedStep,
             String recipeId) throws Exception {
+        int resumeStep = Math.max(0, failedStep);
+        int completedSteps = Math.max(0, failedStep);
         return new JSONObject()
                 .put("success", false)
                 .put("fastPath", true)
                 .put("fastPathState", "FALLBACK")
                 .put("recipeId", safe(recipeId))
                 .put("failedStep", failedStep)
+                .put("resumeStep", resumeStep)
+                .put("completedSteps", completedSteps)
+                .put("continuationPolicy", "CONTINUE_FROM_CURRENT_STATE")
+                .put("taskState", "IN_PROGRESS")
+                .put("nextRequirement", "INSPECT_UI")
                 .put("error", safe(error))
                 .put("semanticAction", "TASK_RECIPE")
                 .put("resolvedByRuntime", "task_recipe")
-                .put("message", "熟悉流程與目前畫面不完全一致；改回一般方式繼續，不要重跑 Recipe。");
+                .put(
+                        "instruction",
+                        "Inspect the current screen and continue from the failed step. Do not relaunch the app or replay completed recipe steps.")
+                .put("message", "熟悉流程與目前畫面不完全一致；從目前畫面接手，不要把已完成步驟重跑一次。");
     }
 
     private static String safe(String value) {
