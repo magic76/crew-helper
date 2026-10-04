@@ -4705,13 +4705,9 @@ final class NativeGeminiLiveClient {
         String goalIntent =
                 workingContext.toProgressJson()
                         .optString("goalIntent", "");
-        boolean explicitMediaPlayGoal =
-                MediaGoalUiPolicy.isMediaPlayGoal(goalIntent);
         boolean musicActiveAfter =
-                explicitMediaPlayGoal
-                        ? isMusicActive()
-                        : waitForMusicActiveAfterTap(
-                                musicActiveBefore);
+                waitForMusicActiveAfterTap(
+                        musicActiveBefore);
         boolean uiPlaying =
                 MediaPlaybackCompletionPolicy
                         .uiIndicatesPlaying(
