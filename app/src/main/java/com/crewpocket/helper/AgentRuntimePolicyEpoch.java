@@ -8,7 +8,7 @@ package com.crewpocket.helper;
  * window. The rolling 50-task history remains available separately.
  */
 final class AgentRuntimePolicyEpoch {
-    static final int CURRENT_REVISION = 4;
+    static final int CURRENT_REVISION = 5;
 
     private AgentRuntimePolicyEpoch() {}
 }
