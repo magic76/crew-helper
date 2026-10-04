@@ -107,8 +107,19 @@ final class MediaPlaybackCompletionPolicy {
             String targetMetadata,
             boolean committed,
             boolean observableEffect) {
-        return isMediaTransportGoal(goalIntent)
-                && isMatchingTransportControl(goalIntent, targetMetadata)
+        String goal = clean(goalIntent);
+
+        // MEDIA:PLAY is special: a changed screen only proves that the tap did
+        // something, not that audio is actually playing. Play completion must
+        // come from AudioManager activation or a UI state that exposes Pause /
+        // Now Playing. Other transport controls can still complete from a
+        // verified observable effect.
+        if ("MEDIA:PLAY".equals(goal)) {
+            return false;
+        }
+
+        return isMediaTransportGoal(goal)
+                && isMatchingTransportControl(goal, targetMetadata)
                 && committed
                 && observableEffect;
     }
@@ -152,23 +163,15 @@ final class MediaPlaybackCompletionPolicy {
             boolean screenChanged) {
         boolean playbackBecameActive =
                 !musicActiveBefore && musicActiveAfter;
-        boolean explicitPlayGoalEffect =
-                "MEDIA:PLAY".equals(clean(goalIntent))
-                        && screenChanged;
 
         if (!isPlayControl(targetMetadata) || !tapSuccess) {
             return false;
         }
 
-        // Strong playback evidence stays available for the default trusted
-        // package. But when the user's terminal goal is explicitly MEDIA:PLAY,
-        // a verified Play-control tap that produced an observable screen effect
-        // is already sufficient proof that the app accepted the requested
-        // low-risk action. Do not wait on AudioManager/UI state and then time out.
-        if (explicitPlayGoalEffect) {
-            return true;
-        }
-
+        // Never equate "Play was tapped" or "the screen changed" with actual
+        // playback. Completion needs strong post-action evidence from the
+        // trusted player: audio became active, or the UI now exposes a playing
+        // state such as Pause / Now Playing.
         return isDefaultTrustedPackage(packageName)
                 && (playbackBecameActive || uiIndicatesPlaying);
     }

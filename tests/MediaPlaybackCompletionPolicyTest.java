@@ -49,7 +49,7 @@ public final class MediaPlaybackCompletionPolicyTest {
                         true,
                         false),
                 "pre-existing audio alone does not prove this tap worked");
-        check(MediaPlaybackCompletionPolicy.shouldComplete(
+        check(!MediaPlaybackCompletionPolicy.shouldComplete(
                         "com.apple.android.music",
                         "播放",
                         true,
@@ -58,8 +58,8 @@ public final class MediaPlaybackCompletionPolicyTest {
                         false,
                         "MEDIA:PLAY",
                         true),
-                "explicit play goal plus verified screen effect completes without waiting for AudioManager");
-        check(MediaPlaybackCompletionPolicy.shouldComplete(
+                "screen effect alone cannot prove actual playback");
+        check(!MediaPlaybackCompletionPolicy.shouldComplete(
                         "com.example.music",
                         "播放",
                         true,
@@ -68,13 +68,13 @@ public final class MediaPlaybackCompletionPolicyTest {
                         false,
                         "MEDIA:PLAY",
                         true),
-                "generic explicit media play goal may complete from verified low-risk play-control effect");
-        check(MediaPlaybackCompletionPolicy.shouldCompleteFromVerifiedEffect(
+                "unknown media app cannot complete play from a screen effect alone");
+        check(!MediaPlaybackCompletionPolicy.shouldCompleteFromVerifiedEffect(
                         "MEDIA:PLAY",
                         "播放",
                         true,
                         true),
-                "RuntimeV2 verified observable play effect completes media goal");
+                "RuntimeV2 tap effect alone cannot complete a play goal");
         check(!MediaPlaybackCompletionPolicy.shouldCompleteFromVerifiedEffect(
                         "MEDIA:PLAY",
                         "播放",

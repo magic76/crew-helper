@@ -65,7 +65,19 @@ final class TaskRecipeStore {
             }
 
             long now = System.currentTimeMillis();
-            if (existing == null) {
+            boolean newRecipe = existing == null;
+            JSONArray previousSteps =
+                    newRecipe ? null : existing.optJSONArray("steps");
+            boolean sameStepSequence =
+                    !newRecipe && sameSteps(previousSteps, safeSteps);
+            int previousConfirmations =
+                    newRecipe
+                            ? 0
+                            : existing.optInt(
+                                    "confirmationCount",
+                                    existing.optInt("learnCount", 0));
+
+            if (newRecipe) {
                 existing = new JSONObject();
                 put(existing, "id", UUID.randomUUID().toString());
                 put(existing, "createdAt", now);
@@ -74,15 +86,28 @@ final class TaskRecipeStore {
                 put(existing, "runUnverifiedCount", 0);
                 put(existing, "enabled", true);
                 recipes.put(existing);
+            } else if (!sameStepSequence) {
+                // A changed path is a new reliability candidate. Do not let
+                // success from the old sequence promote the replacement.
+                put(existing, "runSuccessCount", 0);
+                put(existing, "runFailureCount", 0);
+                put(existing, "runUnverifiedCount", 0);
             }
+
+            int confirmations =
+                    GoldenPathPolicy.nextConfirmationCount(
+                            sameStepSequence,
+                            previousConfirmations);
 
             put(existing, "goal", clip(goal, 240));
             put(existing, "goalKey", goalKey);
             put(existing, "startPackage", safe(startPackage));
             put(existing, "steps", copyArray(safeSteps));
             put(existing, "updatedAt", now);
+            put(existing, "confirmationCount", confirmations);
             put(existing, "learnCount",
                     existing.optInt("learnCount", 0) + 1);
+            updatePathState(existing);
 
             recipes = trimOldest(recipes);
             saveLocked(recipes);
@@ -108,6 +133,15 @@ final class TaskRecipeStore {
                 JSONObject item = recipes.optJSONObject(i);
                 if (item == null || !item.optBoolean("enabled", true)) continue;
                 if (!goalKey.equals(item.optString("goalKey", ""))) continue;
+                if (!GoldenPathPolicy.isEligibleForFastPath(
+                        item.optInt(
+                                "confirmationCount",
+                                item.optInt("learnCount", 0)),
+                        item.optInt("runSuccessCount", 0),
+                        item.optInt("runFailureCount", 0),
+                        item.optInt("runUnverifiedCount", 0))) {
+                    continue;
+                }
 
                 JSONArray steps = item.optJSONArray("steps");
                 if (steps == null || steps.length() < 2) continue;
@@ -176,6 +210,7 @@ final class TaskRecipeStore {
                 }
                 put(item, key, item.optInt(key, 0) + 1);
                 put(item, "lastRunAt", System.currentTimeMillis());
+                updatePathState(item);
                 saveLocked(recipes);
                 return;
             }
@@ -221,6 +256,29 @@ final class TaskRecipeStore {
         if (prefs != null) {
             prefs.edit().putString(KEY_DATA, data.toString()).apply();
         }
+    }
+
+    private static boolean sameSteps(
+            JSONArray left,
+            JSONArray right) {
+        if (left == null || right == null) return false;
+        return left.toString().equals(right.toString());
+    }
+
+    private static void updatePathState(JSONObject item) {
+        if (item == null) return;
+        int confirmations =
+                item.optInt(
+                        "confirmationCount",
+                        item.optInt("learnCount", 0));
+        put(
+                item,
+                "pathState",
+                GoldenPathPolicy.state(
+                        confirmations,
+                        item.optInt("runSuccessCount", 0),
+                        item.optInt("runFailureCount", 0),
+                        item.optInt("runUnverifiedCount", 0)));
     }
 
     private static String firstTool(JSONArray steps) {

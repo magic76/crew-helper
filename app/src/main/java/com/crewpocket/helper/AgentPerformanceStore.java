@@ -220,6 +220,24 @@ final class AgentPerformanceStore {
                     .append(excludedFromSuccessRate);
         }
         out.append("\n");
+        int trustScore =
+                TrustScorePolicy.score(
+                        success,
+                        recovered,
+                        partial,
+                        evaluatedTotal);
+        out.append("Trust score: ");
+        if (trustScore < 0) {
+            out.append("n/a");
+        } else {
+            out.append(trustScore)
+                    .append("/100 · ")
+                    .append(
+                            TrustScorePolicy.band(
+                                    trustScore,
+                                    evaluatedTotal));
+        }
+        out.append("\n");
         if (taskSamples > 0) out.append("Avg task time: ").append(taskTotal / taskSamples).append(" ms\n");
         if (toolSamples > 0) out.append("Avg Runtime tool time: ").append(toolTotal / toolSamples).append(" ms\n");
         if (geminiSamples > 0) out.append("Avg Gemini wait between tools: ").append(geminiTotal / geminiSamples).append(" ms\n");
@@ -337,6 +355,23 @@ final class AgentPerformanceStore {
         if (excluded > 0) {
             out.append(" · user-controlled exclusions=")
                     .append(excluded);
+        }
+        int trustScore =
+                TrustScorePolicy.score(
+                        success,
+                        recovered,
+                        partial,
+                        evaluated);
+        out.append("\nTrust score: ");
+        if (trustScore < 0) {
+            out.append("n/a");
+        } else {
+            out.append(trustScore)
+                    .append("/100 · ")
+                    .append(
+                            TrustScorePolicy.band(
+                                    trustScore,
+                                    evaluated));
         }
         return out.toString();
     }

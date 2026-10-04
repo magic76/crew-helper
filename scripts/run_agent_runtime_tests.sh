@@ -93,6 +93,8 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/InformationAnswerFastPathPolicy.java" \
   "$SRC/AppPlaybookRelevance.java" \
   "$SRC/TaskRecipePolicy.java" \
+  "$SRC/GoldenPathPolicy.java" \
+  "$SRC/TrustScorePolicy.java" \
   "$SRC/VoiceCommandQualityPolicy.java" \
   "$SRC/JevSpeechReviewPolicy.java" \
   "$SRC/JevSpeechExperimentPolicy.java" \
@@ -186,6 +188,8 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/InformationAnswerFastPathPolicyTest.java" \
   "$ROOT/tests/AppPlaybookRelevanceTest.java" \
   "$ROOT/tests/TaskRecipePolicyTest.java" \
+  "$ROOT/tests/GoldenPathPolicyTest.java" \
+  "$ROOT/tests/TrustScorePolicyTest.java" \
   "$ROOT/tests/VoiceCommandQualityPolicyTest.java" \
   "$ROOT/tests/JevSpeechReviewPolicyTest.java" \
   "$ROOT/tests/JevSpeechExperimentPolicyTest.java" \
@@ -279,6 +283,8 @@ java -cp "$OUT" com.crewpocket.helper.ModelScreenPriorityPolicyTest
 java -cp "$OUT" com.crewpocket.helper.InformationAnswerFastPathPolicyTest
 java -cp "$OUT" com.crewpocket.helper.AppPlaybookRelevanceTest
 java -cp "$OUT" com.crewpocket.helper.TaskRecipePolicyTest
+java -cp "$OUT" com.crewpocket.helper.GoldenPathPolicyTest
+java -cp "$OUT" com.crewpocket.helper.TrustScorePolicyTest
 java -cp "$OUT" com.crewpocket.helper.VoiceCommandQualityPolicyTest
 java -cp "$OUT" com.crewpocket.helper.JevSpeechReviewPolicyTest
 java -cp "$OUT" com.crewpocket.helper.JevSpeechExperimentPolicyTest
