@@ -20,6 +20,13 @@ public final class ElementReferenceWaitPolicyTest {
                         true, ""),
                 "empty tool name is ignored");
 
+        check(ElementReferenceWaitPolicy.isCancelUtterance("取消"),
+                "Chinese cancel closes element choice");
+        check(ElementReferenceWaitPolicy.isCancelUtterance("cancel"),
+                "English cancel closes element choice");
+        check(!ElementReferenceWaitPolicy.isCancelUtterance("3"),
+                "numbered choice is not treated as cancel");
+
         System.out.println(
                 "PASS ElementReferenceWaitPolicyTest: "
                         + checks + " checks");
