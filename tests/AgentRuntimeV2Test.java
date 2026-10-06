@@ -11,6 +11,12 @@ public final class AgentRuntimeV2Test {
         return ActionObservation.of("pkg", fp, stable, "", "", 10);
     }
 
+    private static ActionObservation searchObs(
+            String fp, String stable, String searchSurface) {
+        return ActionObservation.of(
+                "pkg", fp, stable, "", "", 10, searchSurface);
+    }
+
     public static void main(String[] args) {
         AgentRuntimeV2 runtime = new AgentRuntimeV2();
         runtime.onUserIntent(7L, "goal", "task", true);
@@ -119,6 +125,52 @@ public final class AgentRuntimeV2Test {
                 "pending transaction commits after later observation");
         check(committedSummary.failed == 0,
                 "successful later observation is not reported as failed");
+
+        // Search is intentionally delayed: the initial query/editor transition
+        // is not enough, but a later query-excluding result surface must commit
+        // the same transaction without resubmitting Search/Enter.
+        AgentRuntimeV2 searchRuntime = new AgentRuntimeV2();
+        searchRuntime.onUserIntent(8L, "search-goal", "search-task", true);
+        ActionObservation searchBefore =
+                searchObs("search-fp-a", "search-stable", "surface-a");
+        searchRuntime.onScreenObserved(searchBefore);
+        AgentRuntimeV2.PreflightResult searchAllow =
+                searchRuntime.preflight(
+                        8L, 8L, "search1", "commit_search",
+                        "commit:search", searchBefore);
+        check(searchAllow.allowed(), "search commit preflight allowed");
+        searchRuntime.onActionStarted(
+                "search1", 8L, "search-goal", "search-task",
+                "commit_search", "commit_search",
+                searchAllow.actionHash,
+                ActionTransaction.ExpectedEffect.SCREEN_CHANGE,
+                searchBefore);
+        searchRuntime.onActionExecuted(
+                "search1",
+                new ExecutionEvidence(
+                        true, false, false, false, true, ""));
+        ActionObservation queryOnly =
+                searchObs("search-fp-b", "search-stable", "surface-a");
+        ActionVerificationResult searchPending =
+                searchRuntime.verifyAndRecord(
+                        "search1", null, queryOnly);
+        check(searchPending != null && searchPending.pending(),
+                "query-only search transition stays pending");
+
+        AgentRuntimeV2.ReverificationSummary searchStillPending =
+                searchRuntime.reverifyPendingDetailed(queryOnly);
+        check(searchStillPending.pending == 1
+                        && searchStillPending.failed == 0,
+                "delayed search remains pending during legal wait");
+
+        ActionObservation searchResults =
+                searchObs("search-fp-c", "results-stable", "surface-b");
+        AgentRuntimeV2.ReverificationSummary searchCommitted =
+                searchRuntime.reverifyPendingDetailed(searchResults);
+        check(searchCommitted.committed == 1,
+                "late search result surface commits pending transaction");
+        check(searchCommitted.searchResultsCommitted,
+                "late search commit is identified for user-action scope");
 
         // Repeat-safe scrolls are intentionally not deduped.
         AgentRuntimeV2.PreflightResult scroll1 = runtime.preflight(
