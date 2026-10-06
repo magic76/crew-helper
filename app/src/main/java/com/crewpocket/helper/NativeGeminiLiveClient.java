@@ -6325,17 +6325,32 @@ final class NativeGeminiLiveClient {
                 : utterance.trim();
         if (input.isEmpty()) return false;
 
-        if (ElementReferenceRuntime.isActive()
-                && ElementReferenceChoice.looksLikeChoice(input)) {
-            ElementReferenceRuntime.Decision choice =
-                    ElementReferenceRuntime.resolveChoice(input);
-            if (choice.selected) {
-                executeRuntimeElementReferenceChoice(
-                        choice.elementId);
-            } else {
-                reportStage(
-                        "元素編號無效，請說畫面上的有效編號");
+        if (ElementReferenceRuntime.isActive()) {
+            if (ElementReferenceWaitPolicy
+                    .isCancelUtterance(input)) {
+                ElementReferenceRuntime.cancel();
+                workingContext.setPendingTask("");
+                resumeAgentAfterUserChoice(
+                        "使用者取消元素選擇");
+                reportStage("已取消元素選擇");
+                return true;
             }
+
+            if (ElementReferenceChoice.looksLikeChoice(input)) {
+                ElementReferenceRuntime.Decision choice =
+                        ElementReferenceRuntime.resolveChoice(input);
+                if (choice.selected) {
+                    executeRuntimeElementReferenceChoice(
+                            choice.elementId);
+                } else {
+                    reportStage(
+                            "元素編號無效，請說畫面上的有效編號");
+                }
+                return true;
+            }
+
+            reportStage(
+                    "正在等待元素編號；請說編號或取消");
             return true;
         }
 
