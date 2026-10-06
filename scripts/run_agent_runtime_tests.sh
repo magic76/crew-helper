@@ -70,6 +70,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/VisualTapLease.java" \
   "$SRC/ElementReferenceCommand.java" \
   "$SRC/ElementReferenceFallbackPolicy.java" \
+  "$SRC/ElementReferenceWaitPolicy.java" \
   "$SRC/ElementReferenceChoice.java" \
   "$SRC/ElementReferenceLayout.java" \
   "$SRC/GoalTaskContinuityPolicy.java" \
@@ -167,6 +168,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/VisualTapLeaseTest.java" \
   "$ROOT/tests/ElementReferenceCommandTest.java" \
   "$ROOT/tests/ElementReferenceFallbackPolicyTest.java" \
+  "$ROOT/tests/ElementReferenceWaitPolicyTest.java" \
   "$ROOT/tests/ElementReferenceChoiceTest.java" \
   "$ROOT/tests/ElementReferenceLayoutTest.java" \
   "$ROOT/tests/GoalTaskContinuityPolicyTest.java" \
@@ -264,6 +266,7 @@ java -cp "$OUT" com.crewpocket.helper.VisionCoordinateMapperTest
 java -cp "$OUT" com.crewpocket.helper.VisualTapLeaseTest
 java -cp "$OUT" com.crewpocket.helper.ElementReferenceCommandTest
 java -cp "$OUT" com.crewpocket.helper.ElementReferenceFallbackPolicyTest
+java -cp "$OUT" com.crewpocket.helper.ElementReferenceWaitPolicyTest
 java -cp "$OUT" com.crewpocket.helper.ElementReferenceChoiceTest
 java -cp "$OUT" com.crewpocket.helper.ElementReferenceLayoutTest
 java -cp "$OUT" com.crewpocket.helper.GoalTaskContinuityPolicyTest
