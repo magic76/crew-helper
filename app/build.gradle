@@ -19,8 +19,8 @@ android {
             abiFilters 'arm64-v8a'
         }
 
-        versionCode 144
-        versionName "1.8.107"
+        versionCode 145
+        versionName "1.8.108"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
