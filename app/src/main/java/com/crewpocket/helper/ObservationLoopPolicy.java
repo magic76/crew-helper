@@ -30,6 +30,18 @@ final class ObservationLoopPolicy {
 
     private ObservationLoopPolicy() {}
 
+    /**
+     * A still-pending transaction is unresolved work, not semantic progress.
+     * Counting pending as progress masks same-screen loops until the global
+     * observation budget is exhausted.
+     */
+    static boolean hasSemanticProgress(
+            int committed,
+            int failed,
+            int pending) {
+        return committed > 0 || failed > 0;
+    }
+
     static Decision evaluate(
             String previousFingerprint,
             int previousSameScreenCount,
