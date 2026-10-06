@@ -6749,6 +6749,19 @@ final class NativeGeminiLiveClient {
                 observationVerificationController
                         .consumeReverificationSummary();
 
+        final boolean pendingSearch =
+                reverification != null
+                        && reverification.optInt("pending", 0) > 0
+                        && "COMMIT_DISPATCHED".equals(
+                                userActionScope.modelSearchPhase());
+        final JSONObject inspectProgress =
+                workingContext.toProgressJson();
+        final boolean pendingMediaSearch =
+                pendingSearch
+                        && MediaGoalUiPolicy.isMediaPlayGoal(
+                                inspectProgress.optString(
+                                        "goalIntent", ""));
+
         ObservationLoopPolicy.Decision observationLoopDecision = null;
         AgentTaskRecord observationTask =
                 agentTaskCoordinator.activeRunning();
@@ -6756,9 +6769,10 @@ final class NativeGeminiLiveClient {
                 && semantic.optBoolean("success", false)) {
             boolean semanticProgress =
                     reverification != null
-                            && (reverification.optInt("committed", 0) > 0
-                                || reverification.optInt("failed", 0) > 0
-                                || reverification.optInt("pending", 0) > 0);
+                            && ObservationLoopPolicy.hasSemanticProgress(
+                                    reverification.optInt("committed", 0),
+                                    reverification.optInt("failed", 0),
+                                    reverification.optInt("pending", 0));
             synchronized (agentTaskCoordinator.monitor()) {
                 if (agentTaskCoordinator.isActive(observationTask)
                         && !observationTask.finished
@@ -6823,24 +6837,36 @@ final class NativeGeminiLiveClient {
                         .put(
                                 "message",
                                 "上一個操作已由最新畫面確認沒有生效；不要把它當成功，也不要原樣重試。請改用不同 locator 或不同語意方法。");
-            } else if (reverification.optInt("pending", 0) > 0
-                    && "COMMIT_DISPATCHED".equals(
-                            userActionScope.modelSearchPhase())) {
+            } else if (pendingSearch) {
                 out.put("searchTransaction", "PENDING_RESULTS")
                         .put("taskState", "IN_PROGRESS")
                         .put(
                                 "completionEvidence",
                                 "SEARCH_RESULTS_STILL_PENDING")
-                        .put("nextRequirement", "WAIT_FOR_UI")
                         .put(
                                 "instruction",
-                                "搜尋仍在合法的非同步等待期。不要重送 SEARCH/COMMIT_SEARCH，也不要把相同畫面視為 no-progress；等待畫面變化後再確認結果。");
+                                pendingMediaSearch
+                                        ? "搜尋提交仍待驗證。這次 inspect 只允許一次視覺接管：不要重送 SEARCH/COMMIT_SEARCH；請依 fresh screenshot 的結果直接繼續播放目標。"
+                                        : "搜尋仍在短暫等待驗證；不要重送 SEARCH/COMMIT_SEARCH。");
             }
         }
 
         if (observationLoopDecision != null
                 && observationLoopDecision.blocked) {
             visualTapLease.clear();
+
+            // MEDIA:PLAY gets exactly one autonomous visual recovery attempt.
+            // If Gemini asks to inspect the same unresolved search screen again,
+            // stop burning observation budget and restore the numbered
+            // Accessibility element overlay as a bounded human assist.
+            if (pendingMediaSearch) {
+                JSONObject reference =
+                        openPendingMediaElementReferenceFallback(out);
+                if (reference != null) {
+                    return reference;
+                }
+            }
+
             out.put("success", false)
                     .put("stepResult", "STEP_FAILED")
                     .put("blockedByRuntime", true)
@@ -6886,6 +6912,19 @@ final class NativeGeminiLiveClient {
             out.put("success", true)
                     .put("visualSent", true)
                     .put("visualSource", "FRESH_SCREENSHOT");
+
+            if (pendingMediaSearch) {
+                out.put("taskState", "IN_PROGRESS")
+                        .put(
+                                "completionEvidence",
+                                "SEARCH_VISUAL_RECOVERY_AVAILABLE")
+                        .put("nextRequirement", "CONTINUE_GOAL")
+                        .put(
+                                "instruction",
+                                "搜尋的語意驗證仍 pending，但 fresh screenshot 已可用。禁止再次 inspect_ui。"
+                                        + "若畫面已看到目標歌手/歌曲或 Play，立即用 phone_action(TAP) 繼續；"
+                                        + "優先使用 screen.items 的 target/element_id，只有節點不足時才使用本次 visualTapLease。");
+            }
 
             JSONObject afterVisual =
                     observationVerificationController
@@ -6933,6 +6972,20 @@ final class NativeGeminiLiveClient {
             }
         } else {
             visualTapLease.clear();
+
+            if (pendingMediaSearch) {
+                JSONObject reference =
+                        openPendingMediaElementReferenceFallback(out);
+                if (reference != null) {
+                    reference.put(
+                            "visualError",
+                            visual.optString(
+                                    "error",
+                                    "VISUAL_CAPTURE_FAILED"));
+                    return reference;
+                }
+            }
+
             out.put("visualSent", false)
                     .put("visualError",
                             visual.optString("error", "VISUAL_CAPTURE_FAILED"))
@@ -6941,6 +6994,54 @@ final class NativeGeminiLiveClient {
         }
 
         return out;
+    }
+
+    private JSONObject openPendingMediaElementReferenceFallback(
+            JSONObject base) {
+        JSONObject reference =
+                ElementReferenceRuntime.startExplicit();
+        if (!"ELEMENT_REFERENCE_WAITING".equals(
+                reference.optString("error", ""))) {
+            return null;
+        }
+
+        try {
+            reference.put(
+                            "automaticFallback",
+                            "PENDING_MEDIA_SEARCH")
+                    .put(
+                            "completionEvidence",
+                            "SEARCH_PENDING_ELEMENT_REFERENCE_FALLBACK")
+                    .put(
+                            "message",
+                            "搜尋後仍無法自動辨識下一個播放目標。已把目前可點元素標上編號；直接說編號即可繼續，不會再重複 inspect。");
+
+            if (base != null) {
+                if (base.has("semanticFallback")) {
+                    reference.put(
+                            "semanticFallback",
+                            base.optJSONObject(
+                                    "semanticFallback"));
+                }
+                if (base.has("package")) {
+                    reference.put(
+                            "package",
+                            base.optString(
+                                    "package", ""));
+                }
+                if (base.has("fingerprint")) {
+                    reference.put(
+                            "fingerprint",
+                            base.optString(
+                                    "fingerprint", ""));
+                }
+                reference.put(
+                        "searchTransaction",
+                        "PENDING_RESULTS");
+            }
+        } catch (Exception ignored) {}
+
+        return reference;
     }
 
     private boolean semanticScreenContainsSensitiveElement(JSONObject semantic) {
