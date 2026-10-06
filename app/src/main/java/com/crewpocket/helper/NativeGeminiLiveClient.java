@@ -3254,6 +3254,11 @@ final class NativeGeminiLiveClient {
             if (isPhoneContextTool(name)) attachCurrentAppPlaybook(result);
             updateTaskCompletionContract(
                     task, name, result, runtimeV2Enforced);
+            resolveRuntimeOwnedSearchVerification(
+                    task,
+                    name,
+                    result,
+                    callIntentGeneration);
             resolveRuntimeOwnedNavigationVerification(
                     task,
                     result,
@@ -3812,6 +3817,206 @@ final class NativeGeminiLiveClient {
                 }
             } catch (Exception ignored) {}
         }
+    }
+
+    /**
+     * Search submission is an immediate UI-settlement problem, not a
+     * background wait. Once SEARCH/COMMIT_SEARCH is pending, Runtime performs
+     * the bounded fresh reads itself so the task cannot deadlock merely because
+     * Gemini failed to emit the expected inspect_ui tool call.
+     */
+    private void resolveRuntimeOwnedSearchVerification(
+            AgentTaskRecord task,
+            String toolName,
+            JSONObject result,
+            long intentGeneration) {
+        if (task == null || result == null) return;
+
+        if (!RuntimeOwnedSearchVerificationPolicy.shouldVerify(
+                toolName,
+                result.optString("taskState", ""),
+                result.optString("nextRequirement", ""),
+                result.optString("verificationStatus", ""),
+                result.optString("searchTransaction", ""))) {
+            return;
+        }
+
+        reportStage("正在確認搜尋結果");
+
+        final long[] delaysMs =
+                new long[] {300L, 650L, 1050L};
+        JSONObject latest = null;
+        boolean resultsObserved = false;
+
+        for (long delayMs : delaysMs) {
+            if (task.finished
+                    || task.cancelled
+                    || !isCurrentUserIntent(intentGeneration)) {
+                return;
+            }
+
+            try {
+                Thread.sleep(delayMs);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+
+            latest =
+                    observationVerificationController
+                            .readSemanticScreenQuietly();
+            if (latest == null
+                    || !latest.optBoolean("success", false)) {
+                continue;
+            }
+
+            observationVerificationController
+                    .recordSemanticObservation(latest);
+            JSONObject reverification =
+                    observationVerificationController
+                            .consumeReverificationSummary();
+
+            if (reverification != null
+                    && reverification.optBoolean(
+                            "searchResultsCommitted",
+                            false)) {
+                resultsObserved = true;
+                break;
+            }
+        }
+
+        synchronized (agentTaskCoordinator.monitor()) {
+            if (task.finished
+                    || task.cancelled
+                    || !agentTaskCoordinator.isActive(task)) {
+                return;
+            }
+
+            task.requiresPostActionInspection = false;
+            task.postActionInspectionPrompted = false;
+
+            try {
+                if (latest != null
+                        && latest.optBoolean("success", false)) {
+                    result.put(
+                            "after",
+                            ModelScreenView.compact(
+                                    latest,
+                                    "RUNTIME_SEARCH_VERIFY"));
+                }
+
+                if (resultsObserved) {
+                    userActionScope.markSearchResultsObserved();
+                    result.put("success", true)
+                            .put("stepResult", "STEP_OK")
+                            .put("verified", true)
+                            .put(
+                                    "verificationStatus",
+                                    "VERIFIED")
+                            .put(
+                                    "searchTransaction",
+                                    "RESULTS_OBSERVED")
+                            .put(
+                                    "taskState",
+                                    "EVIDENCE_AVAILABLE")
+                            .put(
+                                    "completionEvidence",
+                                    "SEARCH_RESULT_SURFACE_OBSERVED_RUNTIME_OWNED")
+                            .put(
+                                    "nextRequirement",
+                                    "CONTINUE_GOAL")
+                            .put(
+                                    "instruction",
+                                    "Runtime 已自行完成搜尋後畫面驗證。不要再次 SEARCH/COMMIT_SEARCH/inspect_ui；直接依目前結果繼續原始目標。");
+                    reportStage("搜尋結果已確認");
+                    return;
+                }
+
+                String packageName =
+                        latest == null
+                                ? currentForegroundPackageName()
+                                : latest.optString(
+                                        "package",
+                                        currentForegroundPackageName());
+                String goalIntent =
+                        workingContext.toProgressJson()
+                                .optString("goalIntent", "");
+
+                if (RuntimeOwnedSearchVerificationPolicy
+                        .shouldOpenElementFallback(
+                                packageName,
+                                goalIntent,
+                                false)) {
+                    JSONObject reference =
+                            ElementReferenceRuntime.startExplicit();
+                    if ("ELEMENT_REFERENCE_WAITING".equals(
+                            reference.optString("error", ""))) {
+                        result.put("success", true)
+                                .put(
+                                        "stepResult",
+                                        "STEP_PENDING")
+                                .put(
+                                        "verificationStatus",
+                                        "PENDING")
+                                .put(
+                                        "searchTransaction",
+                                        "PENDING_RESULTS")
+                                .put(
+                                        "taskState",
+                                        "WAITING_USER")
+                                .put(
+                                        "nextRequirement",
+                                        "ASK_USER")
+                                .put(
+                                        "completionEvidence",
+                                        "SEARCH_PENDING_ELEMENT_REFERENCE_FALLBACK")
+                                .put(
+                                        "visualReference",
+                                        "ELEMENTS")
+                                .put(
+                                        "choices",
+                                        reference.optJSONArray(
+                                                "choices"))
+                                .put(
+                                        "error",
+                                        "ELEMENT_REFERENCE_WAITING")
+                                .put(
+                                        "instruction",
+                                        "Runtime 已自行等待並確認搜尋仍無法取得可靠結果結構，現在已標示真實可點元素。只請使用者說元素編號；收到編號後 Runtime 會直接點擊並續接原本播放目標。");
+                        result.remove("blockedByRuntime");
+                        reportStage(
+                                "搜尋結果需要選擇，已顯示可點元素");
+                        return;
+                    }
+
+                    result.put(
+                            "elementFallbackError",
+                            reference.optString(
+                                    "error",
+                                    "ELEMENT_REFERENCE_UNAVAILABLE"));
+                }
+
+                result.put("success", true)
+                        .put("stepResult", "STEP_OK")
+                        .put(
+                                "verificationStatus",
+                                "UNCONFIRMED")
+                        .put(
+                                "taskState",
+                                "IN_PROGRESS")
+                        .put(
+                                "completionEvidence",
+                                "SEARCH_RUNTIME_VERIFY_EXHAUSTED")
+                        .put(
+                                "nextRequirement",
+                                "CONTINUE_GOAL")
+                        .put(
+                                "instruction",
+                                "Runtime 已完成 bounded 搜尋後驗證，仍未取得可證明的結果 surface。不要再等待或重複搜尋；依最新畫面採取一個不同的低風險 recovery。");
+            } catch (Exception ignored) {}
+        }
+
+        reportStage("搜尋結果尚未確認，繼續處理");
     }
 
     /**

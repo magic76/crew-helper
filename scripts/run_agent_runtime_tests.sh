@@ -52,6 +52,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/TaskRecipeCompletionPolicy.java" \
   "$SRC/ToolCallDispatchLedger.java" \
   "$SRC/RuntimeToolRouting.java" \
+  "$SRC/RuntimeOwnedSearchVerificationPolicy.java" \
   "$SRC/ToolIntentRoutingPolicy.java" \
   "$SRC/DeckTurnAdvancePolicy.java" \
   "$SRC/UiChangeSignal.java" \
@@ -134,6 +135,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/TaskRecipeCompletionPolicyTest.java" \
   "$ROOT/tests/ToolCallDispatchLedgerTest.java" \
   "$ROOT/tests/RuntimeToolRoutingTest.java" \
+  "$ROOT/tests/RuntimeOwnedSearchVerificationPolicyTest.java" \
   "$ROOT/tests/ToolIntentRoutingPolicyTest.java" \
   "$ROOT/tests/DeckTurnAdvancePolicyTest.java" \
   "$ROOT/tests/UiChangeSignalTest.java" \
@@ -230,6 +232,7 @@ java -cp "$OUT" com.crewpocket.helper.GoogleMapsNavigationStatePolicyTest
 java -cp "$OUT" com.crewpocket.helper.TaskRecipeCompletionPolicyTest
 java -cp "$OUT" com.crewpocket.helper.ToolCallDispatchLedgerTest
 java -cp "$OUT" com.crewpocket.helper.RuntimeToolRoutingTest
+java -cp "$OUT" com.crewpocket.helper.RuntimeOwnedSearchVerificationPolicyTest
 java -cp "$OUT" com.crewpocket.helper.ToolIntentRoutingPolicyTest
 java -cp "$OUT" com.crewpocket.helper.DeckTurnAdvancePolicyTest
 java -cp "$OUT" com.crewpocket.helper.UiChangeSignalTest
