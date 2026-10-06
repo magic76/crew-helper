@@ -12,6 +12,16 @@ public final class ActionVerifierV2Test {
         return ActionObservation.of(pkg, fp, stable, focus, "button", 20);
     }
 
+    private static ActionObservation searchObs(
+            String pkg,
+            String fp,
+            String stable,
+            String focus,
+            String searchSurface) {
+        return ActionObservation.of(
+                pkg, fp, stable, focus, "button", 20, searchSurface);
+    }
+
     public static void main(String[] args) {
         ActionObservation a = obs("app", "fp1", "s1", "field");
         ActionObservation changed = obs("app", "fp2", "s2", "field");
@@ -70,6 +80,33 @@ public final class ActionVerifierV2Test {
         check(searchFocusOnly.status == ActionVerificationResult.Status.PENDING,
                 "search focus-only remains pending");
 
+        ActionObservation searchBefore =
+                searchObs("app", "fp-search-a", "s-search", "field", "surface-a");
+        ActionObservation queryOnlyChanged =
+                searchObs("app", "fp-search-b", "s-search", "field", "surface-a");
+        ActionObservation lateResults =
+                searchObs("app", "fp-search-c", "s-results", "", "surface-b");
+
+        ActionVerificationResult queryOnlySearch = ActionVerifierV2.verify(
+                "search_current_app",
+                ActionExpectation.forRuntimeAction("search_current_app"),
+                ExecutionEvidence.accepted(false),
+                searchBefore,
+                queryOnlyChanged);
+        check(queryOnlySearch.status == ActionVerificationResult.Status.PENDING,
+                "query/editor change alone cannot verify search");
+
+        ActionVerificationResult lateSearch = ActionVerifierV2.verify(
+                "search_current_app",
+                ActionExpectation.forRuntimeAction("search_current_app"),
+                ExecutionEvidence.accepted(false),
+                searchBefore,
+                lateResults);
+        check(lateSearch.status == ActionVerificationResult.Status.VERIFIED,
+                "late query-excluding result surface verifies search");
+        check("SEARCH_RESULTS_OBSERVED".equals(lateSearch.code),
+                "late search uses result evidence code");
+
         ActionVerificationResult commitStructuralOnly = ActionVerifierV2.verify(
                 "commit_search",
                 ActionExpectation.forRuntimeAction("commit_search"),
@@ -85,6 +122,15 @@ public final class ActionVerifierV2Test {
                 ExecutionEvidence.accepted(true), a, changed);
         check(commitRuntime.status == ActionVerificationResult.Status.VERIFIED,
                 "search commit result-surface proof verified");
+
+        ActionVerificationResult lateCommit = ActionVerifierV2.verify(
+                "commit_search",
+                ActionExpectation.forRuntimeAction("commit_search"),
+                ExecutionEvidence.accepted(false),
+                searchBefore,
+                lateResults);
+        check(lateCommit.status == ActionVerificationResult.Status.VERIFIED,
+                "late query-excluding result surface verifies search commit");
 
         ActionVerificationResult scroll = ActionVerifierV2.verify("swipe_screen",
                 ActionExpectation.forRuntimeAction("swipe_screen"),

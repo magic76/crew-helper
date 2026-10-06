@@ -139,7 +139,9 @@ final class ObservationVerificationController {
         try {
             out.put("committed", summary.committed)
                     .put("failed", summary.failed)
-                    .put("pending", summary.pending);
+                    .put("pending", summary.pending)
+                    .put("searchResultsCommitted",
+                            summary.searchResultsCommitted);
             if (!summary.failedRuntimeName.isEmpty()) {
                 out.put("failedRuntime", summary.failedRuntimeName);
             }
@@ -501,6 +503,7 @@ final class ObservationVerificationController {
                 focusedKey,
                 focusedRole,
                 elements == null ? 0 : elements.length(),
+                screen.optString("searchSurfaceFingerprint", ""),
                 System.currentTimeMillis());
     }
 

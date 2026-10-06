@@ -14,6 +14,7 @@ final class ActionObservation {
     final String focusedElementKey;
     final String focusedRole;
     final int elementCount;
+    final String searchSurfaceFingerprint;
     final long capturedAtMs;
 
     ActionObservation(boolean available,
@@ -24,6 +25,20 @@ final class ActionObservation {
                       String focusedRole,
                       int elementCount,
                       long capturedAtMs) {
+        this(available, packageName, fingerprint, stableScreenKey,
+                focusedElementKey, focusedRole, elementCount, "",
+                capturedAtMs);
+    }
+
+    ActionObservation(boolean available,
+                      String packageName,
+                      String fingerprint,
+                      String stableScreenKey,
+                      String focusedElementKey,
+                      String focusedRole,
+                      int elementCount,
+                      String searchSurfaceFingerprint,
+                      long capturedAtMs) {
         this.available = available;
         this.packageName = safe(packageName);
         this.fingerprint = safe(fingerprint);
@@ -31,6 +46,7 @@ final class ActionObservation {
         this.focusedElementKey = safe(focusedElementKey);
         this.focusedRole = safe(focusedRole);
         this.elementCount = Math.max(0, elementCount);
+        this.searchSurfaceFingerprint = safe(searchSurfaceFingerprint);
         this.capturedAtMs = capturedAtMs <= 0L ? System.currentTimeMillis() : capturedAtMs;
     }
 
@@ -45,11 +61,24 @@ final class ActionObservation {
                                 String focusedElementKey,
                                 String focusedRole,
                                 int elementCount) {
+        return of(packageName, fingerprint, stableScreenKey,
+                focusedElementKey, focusedRole, elementCount, "");
+    }
+
+    static ActionObservation of(String packageName,
+                                String fingerprint,
+                                String stableScreenKey,
+                                String focusedElementKey,
+                                String focusedRole,
+                                int elementCount,
+                                String searchSurfaceFingerprint) {
         boolean available = !safe(packageName).isEmpty()
                 || !safe(fingerprint).isEmpty()
-                || !safe(stableScreenKey).isEmpty();
+                || !safe(stableScreenKey).isEmpty()
+                || !safe(searchSurfaceFingerprint).isEmpty();
         return new ActionObservation(available, packageName, fingerprint, stableScreenKey,
-                focusedElementKey, focusedRole, elementCount, System.currentTimeMillis());
+                focusedElementKey, focusedRole, elementCount,
+                searchSurfaceFingerprint, System.currentTimeMillis());
     }
 
     boolean fingerprintChangedFrom(ActionObservation before) {
@@ -68,6 +97,15 @@ final class ActionObservation {
                 && !before.stableScreenKey.isEmpty()
                 && !stableScreenKey.isEmpty()
                 && !before.stableScreenKey.equals(stableScreenKey);
+    }
+
+    boolean searchSurfaceChangedFrom(ActionObservation before) {
+        return before != null
+                && before.available
+                && available
+                && !before.searchSurfaceFingerprint.isEmpty()
+                && !searchSurfaceFingerprint.isEmpty()
+                && !before.searchSurfaceFingerprint.equals(searchSurfaceFingerprint);
     }
 
     boolean packageChangedFrom(ActionObservation before) {

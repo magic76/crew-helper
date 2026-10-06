@@ -4211,6 +4211,8 @@ final class NativeGeminiLiveClient {
             runtimeVerified = runtimeVerified || "VERIFIED".equals(state) || "LIKELY".equals(state);
         }
         boolean delayed = "launch_app".equals(name)
+                || "search_current_app".equals(name)
+                || "commit_search".equals(name)
                 || (("tap_screen".equals(name) || "tap_element".equals(name))
                     && GoogleMapsRuntimeAdapter.PACKAGE_NAME.equals(observationVerificationController.latestObservation().packageName));
         return new ExecutionEvidence(
@@ -6755,7 +6757,8 @@ final class NativeGeminiLiveClient {
             boolean semanticProgress =
                     reverification != null
                             && (reverification.optInt("committed", 0) > 0
-                                || reverification.optInt("failed", 0) > 0);
+                                || reverification.optInt("failed", 0) > 0
+                                || reverification.optInt("pending", 0) > 0);
             synchronized (agentTaskCoordinator.monitor()) {
                 if (agentTaskCoordinator.isActive(observationTask)
                         && !observationTask.finished
@@ -6797,7 +6800,21 @@ final class NativeGeminiLiveClient {
 
         if (reverification != null) {
             out.put("previousActionReverification", reverification);
-            if (reverification.optInt("failed", 0) > 0) {
+            boolean lateSearchResults =
+                    reverification.optBoolean(
+                            "searchResultsCommitted", false);
+            if (lateSearchResults) {
+                userActionScope.markSearchResultsObserved();
+                out.put("searchTransaction", "RESULTS_OBSERVED")
+                        .put("taskState", "EVIDENCE_AVAILABLE")
+                        .put(
+                                "completionEvidence",
+                                "SEARCH_RESULT_SURFACE_OBSERVED_LATE")
+                        .put("nextRequirement", "CONTINUE_GOAL")
+                        .put(
+                                "instruction",
+                                "搜尋結果已在稍後畫面被 Runtime 驗證。不要重新搜尋或再次提交 Search；直接依目前結果繼續原始目標，例如點選歌手/歌曲後播放。");
+            } else if (reverification.optInt("failed", 0) > 0) {
                 out.put("taskState", "IN_PROGRESS")
                         .put(
                                 "completionEvidence",
@@ -6806,6 +6823,18 @@ final class NativeGeminiLiveClient {
                         .put(
                                 "message",
                                 "上一個操作已由最新畫面確認沒有生效；不要把它當成功，也不要原樣重試。請改用不同 locator 或不同語意方法。");
+            } else if (reverification.optInt("pending", 0) > 0
+                    && "COMMIT_DISPATCHED".equals(
+                            userActionScope.modelSearchPhase())) {
+                out.put("searchTransaction", "PENDING_RESULTS")
+                        .put("taskState", "IN_PROGRESS")
+                        .put(
+                                "completionEvidence",
+                                "SEARCH_RESULTS_STILL_PENDING")
+                        .put("nextRequirement", "WAIT_FOR_UI")
+                        .put(
+                                "instruction",
+                                "搜尋仍在合法的非同步等待期。不要重送 SEARCH/COMMIT_SEARCH，也不要把相同畫面視為 no-progress；等待畫面變化後再確認結果。");
             }
         }
 

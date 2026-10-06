@@ -1321,7 +1321,12 @@ public class CrewAccessibilityService extends AccessibilityService {
             } else if (path.startsWith("/semantic_screen")) {
                 AccessibilityNodeInfo root = getRootInActiveWindow();
                 try {
-                    responseJson = SemanticScreenState.capture(root).toString();
+                    JSONObject semanticScreen =
+                            SemanticScreenState.capture(root);
+                    semanticScreen.put(
+                            "searchSurfaceFingerprint",
+                            SearchSurfaceFingerprint.capture(this));
+                    responseJson = semanticScreen.toString();
                 } finally {
                     if (root != null) root.recycle();
                 }

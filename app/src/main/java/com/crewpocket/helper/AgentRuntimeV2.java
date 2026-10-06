@@ -37,6 +37,7 @@ final class AgentRuntimeV2 {
         final int committed;
         final int failed;
         final int pending;
+        final boolean searchResultsCommitted;
         final String failedRuntimeName;
         final String failedCode;
 
@@ -44,17 +45,19 @@ final class AgentRuntimeV2 {
                 int committed,
                 int failed,
                 int pending,
+                boolean searchResultsCommitted,
                 String failedRuntimeName,
                 String failedCode) {
             this.committed = Math.max(0, committed);
             this.failed = Math.max(0, failed);
             this.pending = Math.max(0, pending);
+            this.searchResultsCommitted = searchResultsCommitted;
             this.failedRuntimeName = safeName(failedRuntimeName);
             this.failedCode = safeCode(failedCode);
         }
 
         static ReverificationSummary empty() {
-            return new ReverificationSummary(0, 0, 0, "", "");
+            return new ReverificationSummary(0, 0, 0, false, "", "");
         }
 
         boolean hasFailure() { return failed > 0; }
@@ -317,6 +320,7 @@ final class AgentRuntimeV2 {
         int committed = 0;
         int failed = 0;
         int pending = 0;
+        boolean searchResultsCommitted = false;
         String failedRuntimeName = "";
         String failedCode = "";
 
@@ -356,6 +360,10 @@ final class AgentRuntimeV2 {
             applyVerification(tx, verification, observation, true);
             if (verification.committed()) {
                 committed++;
+                if ("search_current_app".equals(tx.runtimeName)
+                        || "commit_search".equals(tx.runtimeName)) {
+                    searchResultsCommitted = true;
+                }
             } else if (verification.failed()) {
                 failed++;
                 if (failedRuntimeName.isEmpty()) {
@@ -368,6 +376,7 @@ final class AgentRuntimeV2 {
                 committed,
                 failed,
                 pending,
+                searchResultsCommitted,
                 failedRuntimeName,
                 failedCode);
     }

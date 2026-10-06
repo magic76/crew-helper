@@ -66,15 +66,17 @@ final class ActionVerifierV2 {
             noEffectCode = "TYPE_EFFECT_NOT_OBSERVED";
         } else if ("search_current_app".equals(name)) {
             // Generic ScreenFingerprint includes query text, so screenChanged
-            // can be caused by typing alone. It must never verify SEARCH.
-            expectationMet = false;
+            // can be caused by typing alone. SearchSurfaceFingerprint excludes
+            // the query/editor and survives across later inspect_ui frames.
+            expectationMet = after.searchSurfaceChangedFrom(before);
             observedCode = "SEARCH_RESULTS_OBSERVED";
             pendingCode = "SEARCH_AWAITING_RESULTS_EVIDENCE";
             noEffectCode = "SEARCH_RESULTS_NOT_OBSERVED";
         } else if ("commit_search".equals(name)) {
-            // IME Search/Enter accepted != results. SearchCommitRuntime provides
-            // runtimeVerified only after result-surface evidence.
-            expectationMet = false;
+            // IME Search/Enter accepted != results. A later explicit observe may
+            // verify the transaction only when the query-excluding result surface
+            // has actually changed.
+            expectationMet = after.searchSurfaceChangedFrom(before);
             observedCode = "SEARCH_COMMIT_RESULTS_OBSERVED";
             pendingCode = "SEARCH_COMMIT_AWAITING_RESULTS";
             noEffectCode = "SEARCH_COMMIT_RESULTS_NOT_OBSERVED";
