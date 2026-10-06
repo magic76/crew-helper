@@ -2744,6 +2744,30 @@ final class NativeGeminiLiveClient {
             } catch (Exception ignored) {}
             return;
         }
+
+        // Element-reference mode is a hard human boundary. The user's numbered
+        // answer/cancel is consumed directly by Runtime before model routing.
+        // Any model tool arriving while the overlay is active is therefore
+        // stale/queued work and must not change or re-observe the screen.
+        if (ElementReferenceWaitPolicy.shouldBlockModelTool(
+                ElementReferenceRuntime.isActive(),
+                requestedName)) {
+            JSONObject waiting = new JSONObject();
+            try {
+                waiting.put("success", true)
+                        .put("stepResult", "STEP_PENDING")
+                        .put("taskState", "WAITING_USER")
+                        .put("nextRequirement", "ASK_USER")
+                        .put("error", "ELEMENT_REFERENCE_WAITING")
+                        .put("visualReference", "ELEMENTS")
+                        .put("completionEvidence",
+                                "ELEMENT_REFERENCE_USER_CHOICE_PENDING")
+                        .put("instruction",
+                                "目前正在等待使用者選擇畫面上的元素編號。禁止 swipe/search/inspect/tap 或其他工具；只請使用者說編號或取消。");
+                sendToolResponse(id, requestedName, waiting);
+            } catch (Exception ignored) {}
+            return;
+        }
         // A matching learned recipe may replace the model's first semantic
         // phone mutation with one deterministic Runtime run. The user turn
         // itself selected the recipe; the model never grants extra authority.
@@ -6301,17 +6325,32 @@ final class NativeGeminiLiveClient {
                 : utterance.trim();
         if (input.isEmpty()) return false;
 
-        if (ElementReferenceRuntime.isActive()
-                && ElementReferenceChoice.looksLikeChoice(input)) {
-            ElementReferenceRuntime.Decision choice =
-                    ElementReferenceRuntime.resolveChoice(input);
-            if (choice.selected) {
-                executeRuntimeElementReferenceChoice(
-                        choice.elementId);
-            } else {
-                reportStage(
-                        "元素編號無效，請說畫面上的有效編號");
+        if (ElementReferenceRuntime.isActive()) {
+            if (ElementReferenceWaitPolicy
+                    .isCancelUtterance(input)) {
+                ElementReferenceRuntime.cancel();
+                workingContext.setPendingTask("");
+                resumeAgentAfterUserChoice(
+                        "使用者取消元素選擇");
+                reportStage("已取消元素選擇");
+                return true;
             }
+
+            if (ElementReferenceChoice.looksLikeChoice(input)) {
+                ElementReferenceRuntime.Decision choice =
+                        ElementReferenceRuntime.resolveChoice(input);
+                if (choice.selected) {
+                    executeRuntimeElementReferenceChoice(
+                            choice.elementId);
+                } else {
+                    reportStage(
+                            "元素編號無效，請說畫面上的有效編號");
+                }
+                return true;
+            }
+
+            reportStage(
+                    "正在等待元素編號；請說編號或取消");
             return true;
         }
 
