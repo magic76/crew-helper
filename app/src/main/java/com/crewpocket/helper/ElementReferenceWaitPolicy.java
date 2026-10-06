@@ -22,4 +22,18 @@ final class ElementReferenceWaitPolicy {
         // Blocking every queued tool also kills stale multi-call batches.
         return !tool.isEmpty();
     }
+
+    static boolean isCancelUtterance(String raw) {
+        String value = raw == null
+                ? ""
+                : raw.trim().toLowerCase();
+        if (value.isEmpty()) return false;
+        return value.equals("取消")
+                || value.equals("不要")
+                || value.equals("算了")
+                || value.equals("關閉")
+                || value.equals("关闭")
+                || value.equals("cancel")
+                || value.equals("stop");
+    }
 }
