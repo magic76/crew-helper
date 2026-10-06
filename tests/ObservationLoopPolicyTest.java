@@ -4,6 +4,27 @@ public final class ObservationLoopPolicyTest {
     private static int checks;
 
     public static void main(String[] args) {
+        check(!ObservationLoopPolicy.hasSemanticProgress(0, 0, 1),
+                "pending verification alone is not semantic progress");
+        check(ObservationLoopPolicy.hasSemanticProgress(1, 0, 0),
+                "committed reverification is semantic progress");
+        check(ObservationLoopPolicy.hasSemanticProgress(0, 1, 0),
+                "failed reverification is semantic progress");
+
+        boolean pendingOnlyProgress =
+                ObservationLoopPolicy.hasSemanticProgress(0, 0, 1);
+        ObservationLoopPolicy.Decision pendingFirst =
+                ObservationLoopPolicy.evaluate(
+                        "", 0, "pending-screen", pendingOnlyProgress);
+        ObservationLoopPolicy.Decision pendingSecond =
+                ObservationLoopPolicy.evaluate(
+                        pendingFirst.fingerprint,
+                        pendingFirst.nextSameScreenCount,
+                        "pending-screen",
+                        pendingOnlyProgress);
+        check(!pendingFirst.blocked && pendingSecond.blocked,
+                "pending-only same-screen flow is bounded after one visual recovery");
+
         ObservationLoopPolicy.Decision first =
                 ObservationLoopPolicy.evaluate(
                         "", 0, "screen-a", false);
