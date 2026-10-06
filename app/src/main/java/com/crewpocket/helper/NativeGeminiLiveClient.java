@@ -6160,6 +6160,17 @@ final class NativeGeminiLiveClient {
         new Thread(new Runnable() {
             @Override public void run() {
                 try {
+                    JSONObject current =
+                            observationVerificationController
+                                    .readSemanticScreenQuietly();
+                    if (current != null
+                            && current.optBoolean(
+                                    "success", false)) {
+                        observationVerificationController
+                                .recordSemanticObservation(
+                                        current);
+                    }
+
                     JSONObject result =
                             tapSemanticElement(
                                     new JSONObject()
