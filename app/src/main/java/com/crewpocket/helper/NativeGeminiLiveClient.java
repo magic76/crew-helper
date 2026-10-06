@@ -1124,6 +1124,10 @@ final class NativeGeminiLiveClient {
             String input = text.trim();
             if (audioIncidentRecorder != null) audioIncidentRecorder.markTypedInput(input);
 
+            if (tryHandleRuntimeElementReferenceTurn(input)) {
+                listener.onTranscript("你", input);
+                return true;
+            }
             if (consumePendingUiChoiceInput(input)) return true;
             if (hasPendingUiChoice()) clearPendingUiChoiceSilently();
 
@@ -1543,6 +1547,11 @@ final class NativeGeminiLiveClient {
                     completeUserInput)) {
                 reportStage("已收到結束指令");
                 stop();
+                return;
+            }
+
+            if (tryHandleRuntimeElementReferenceTurn(
+                    completeUserInput)) {
                 return;
             }
 
@@ -2750,6 +2759,9 @@ final class NativeGeminiLiveClient {
         // strategy. The finalized user turn must have explicitly requested it.
         if (isElementReferenceOpenToolRequest(
                 requestedName, requestedArgs)
+                && !isTrustedMediaElementReferenceFallback(
+                        requestedName,
+                        requestedArgs)
                 && !userActionScope
                         .consumeElementReferenceAuthorization()) {
             try {
@@ -4476,6 +4488,40 @@ final class NativeGeminiLiveClient {
                 task.mutationActions);
     }
 
+    private boolean isTrustedMediaElementReferenceFallback(
+            String requestedName,
+            JSONObject requestedArgs) {
+        if (!isElementReferenceOpenToolRequest(
+                requestedName, requestedArgs)) {
+            return false;
+        }
+
+        JSONObject args = requestedArgs == null
+                ? new JSONObject()
+                : requestedArgs;
+        String target = args.optString("target", "");
+        if (!ElementReferenceCommand.isModelMarker(target)) {
+            return false;
+        }
+
+        JSONObject progress = workingContext.toProgressJson();
+        String packageName = currentForegroundPackageName();
+        if (packageName.isEmpty()) {
+            ActionObservation latest =
+                    observationVerificationController
+                            .latestObservation();
+            packageName = latest == null
+                    ? ""
+                    : latest.packageName;
+        }
+
+        return ElementReferenceFallbackPolicy.allowModelRecovery(
+                packageName,
+                progress.optString("goalIntent", ""),
+                target,
+                agentTaskCoordinator.activeRunning() != null);
+    }
+
     private boolean isElementReferenceOpenToolRequest(
             String requestedName,
             JSONObject requestedArgs) {
@@ -6034,6 +6080,132 @@ final class NativeGeminiLiveClient {
             pendingUiChoice = null;
         }
         workingContext.setPendingTask("");
+    }
+
+    /**
+     * Runtime-owned element reference command.
+     *
+     * The explicit phrase and the numbered answer never need a Gemini tool
+     * round-trip. This prevents Live turn supersede/stale-tool races from
+     * making the overlay appear unresponsive.
+     */
+    private boolean tryHandleRuntimeElementReferenceTurn(
+            String utterance) {
+        String input = utterance == null
+                ? ""
+                : utterance.trim();
+        if (input.isEmpty()) return false;
+
+        if (ElementReferenceRuntime.isActive()
+                && ElementReferenceChoice.looksLikeChoice(input)) {
+            ElementReferenceRuntime.Decision choice =
+                    ElementReferenceRuntime.resolveChoice(input);
+            if (choice.selected) {
+                executeRuntimeElementReferenceChoice(
+                        choice.elementId);
+            } else {
+                reportStage(
+                        "元素編號無效，請說畫面上的有效編號");
+            }
+            return true;
+        }
+
+        if (!ElementReferenceCommand.isUserOpenRequest(input)) {
+            return false;
+        }
+
+        JSONObject opened =
+                ElementReferenceRuntime.startExplicit();
+        if ("ELEMENT_REFERENCE_WAITING".equals(
+                opened.optString("error", ""))) {
+            workingContext.setPendingTask(
+                    "WAITING_ELEMENT_REFERENCE");
+            AgentTaskRecord task =
+                    agentTaskCoordinator.activeRunning();
+            if (task != null) {
+                synchronized (agentTaskCoordinator.monitor()) {
+                    if (agentTaskCoordinator.isActive(task)
+                            && !task.finished
+                            && !task.cancelled) {
+                        task.lastTaskState = "WAITING_USER";
+                        task.awaitingModel = false;
+                        task.status =
+                                "等待使用者選擇畫面元素";
+                    }
+                }
+            }
+            reportStage(
+                    "已顯示可點元素，請直接說編號");
+        } else {
+            reportStage(
+                    "顯示元素失敗："
+                            + opened.optString(
+                                    "instruction",
+                                    opened.optString(
+                                            "error",
+                                            "ELEMENT_REFERENCE_UNAVAILABLE")));
+        }
+        return true;
+    }
+
+    private void executeRuntimeElementReferenceChoice(
+            final String elementId) {
+        if (elementId == null
+                || elementId.trim().isEmpty()) {
+            return;
+        }
+
+        workingContext.setPendingTask(
+                "SELECTING_ELEMENT_REFERENCE");
+        new Thread(new Runnable() {
+            @Override public void run() {
+                try {
+                    JSONObject result =
+                            tapSemanticElement(
+                                    new JSONObject()
+                                            .put(
+                                                    "element_id",
+                                                    elementId));
+
+                    String taskState =
+                            result.optString(
+                                    "taskState",
+                                    "IN_PROGRESS");
+                    String evidence =
+                            result.optString(
+                                    "completionEvidence",
+                                    "");
+                    workingContext.setPendingTask("");
+
+                    if (agentTaskCoordinator
+                            .activeRunning() != null) {
+                        resumeAgentAfterUserChoice(
+                                "已依元素編號完成點擊");
+                        sendInternalAgentDirective(
+                                "【Runtime 元素編號已執行】"
+                                        + "taskState="
+                                        + taskState
+                                        + "；evidence="
+                                        + evidence
+                                        + "。依目前畫面繼續原始目標；"
+                                        + "不要重新搜尋，也不要再次要求同一個元素編號。");
+                    } else {
+                        reportStage(
+                                result.optBoolean(
+                                        "success", false)
+                                        ? "已點擊指定元素"
+                                        : "元素點擊未成功");
+                    }
+                } catch (Exception error) {
+                    workingContext.setPendingTask("");
+                    resumeAgentAfterUserChoice(
+                            "元素編號點擊失敗");
+                    sendInternalAgentDirective(
+                            "【Runtime 元素編號點擊失敗】"
+                                    + "不要重複點擊；依目前畫面回報卡點。");
+                }
+            }
+        }, "CrewElementReferenceChoice").start();
     }
 
     private boolean consumePendingUiChoiceInput(String utterance) {
