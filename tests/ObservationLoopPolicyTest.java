@@ -4,6 +4,13 @@ public final class ObservationLoopPolicyTest {
     private static int checks;
 
     public static void main(String[] args) {
+        check(!ObservationLoopPolicy.hasSemanticProgress(0, 0, 1),
+                "pending verification alone is not semantic progress");
+        check(ObservationLoopPolicy.hasSemanticProgress(1, 0, 0),
+                "committed reverification is semantic progress");
+        check(ObservationLoopPolicy.hasSemanticProgress(0, 1, 0),
+                "failed reverification is semantic progress");
+
         ObservationLoopPolicy.Decision first =
                 ObservationLoopPolicy.evaluate(
                         "", 0, "screen-a", false);
