@@ -31,17 +31,41 @@ public final class ReflectionRuleEvidenceTest {
         directRetry.add(step("tap_screen", "SUCCESS", "", "navigation:START", "TAP"));
         List<ReflectionRuleEvidence.Candidate> directRules =
                 ReflectionRuleEvidence.derive(null, directRetry);
-        check(hasRule(directRules, ReflectionRuleEvidence.KIND_FRICTION,
+        check(!hasRule(directRules, ReflectionRuleEvidence.KIND_FRICTION,
                         "navigation:START", "UI_TARGET_NOT_FOUND", "TAP"),
-                "direct successful retry should be recovery evidence");
+                "target-not-found must not become a direct retry TAP lesson");
+
+        List<ReflectionRuleEvidence.Step> locatorAmbiguous =
+                new ArrayList<ReflectionRuleEvidence.Step>();
+        locatorAmbiguous.add(step(
+                "tap_screen", "FAILED", "LOCATOR_MARGIN_TOO_SMALL",
+                "media:PLAY", "TAP"));
+        locatorAmbiguous.add(step(
+                "tap_screen", "SUCCESS", "",
+                "media:PLAY", "TAP"));
+        check(ReflectionRuleEvidence.derive(null, locatorAmbiguous).isEmpty(),
+                "locator ambiguity must not become retry TAP evidence");
 
         List<ReflectionRuleEvidence.Step> genericRetry = new ArrayList<ReflectionRuleEvidence.Step>();
         genericRetry.add(step("tap_screen", "FAILED", "", "", "TAP"));
         genericRetry.add(step("tap_screen", "SUCCESS", "", "navigation:START", "TAP"));
-        check(hasRule(ReflectionRuleEvidence.derive(null, genericRetry),
+        check(!hasRule(ReflectionRuleEvidence.derive(null, genericRetry),
                         ReflectionRuleEvidence.KIND_FRICTION,
                         "navigation:START", "PREVIOUS_ATTEMPT_FAILED", "TAP"),
-                "retry without a failure code should still have bounded recovery evidence");
+                "same tool without stable semantic identity is too weak for generic retry learning");
+
+        List<ReflectionRuleEvidence.Step> semanticRetry =
+                new ArrayList<ReflectionRuleEvidence.Step>();
+        semanticRetry.add(step(
+                "tap_screen", "FAILED", "",
+                "navigation:START", "TAP"));
+        semanticRetry.add(step(
+                "tap_screen", "SUCCESS", "",
+                "navigation:START", "TAP"));
+        check(hasRule(ReflectionRuleEvidence.derive(null, semanticRetry),
+                        ReflectionRuleEvidence.KIND_FRICTION,
+                        "navigation:START", "PREVIOUS_ATTEMPT_FAILED", "TAP"),
+                "generic retry remains learnable when both attempts share a stable semantic target");
 
         List<ReflectionRuleEvidence.Step> previousFailure = new ArrayList<ReflectionRuleEvidence.Step>();
         previousFailure.add(step("launch_app", "FAILED", "APP_NOT_FOUND", "", "OPEN_APP"));
@@ -116,6 +140,19 @@ public final class ReflectionRuleEvidenceTest {
                         "UI_TARGET_NOT_FOUND"),
                 "real UI target failure must remain learnable friction");
 
+        check(ReflectionRuleEvidence.isLocatorResolutionFailure(
+                        "UI_TARGET_NOT_FOUND"),
+                "target-not-found is locator recovery, not direct retry evidence");
+        check(ReflectionRuleEvidence.isLocatorResolutionFailure(
+                        "LOCATOR_MARGIN_TOO_SMALL"),
+                "small locator margin is ambiguity, not transient tap failure");
+        check(ReflectionRuleEvidence.isLocatorResolutionFailure(
+                        "AMBIGUOUS"),
+                "ambiguous locator decisions must not become retry lessons");
+        check(!ReflectionRuleEvidence.isLocatorResolutionFailure(
+                        "APP_NOT_FOUND"),
+                "non-locator failure remains eligible for other recovery learning");
+
         check(ReflectionRuleEvidence.isRuntimeInternalFailure(
                         ObservationLoopPolicy.BLOCK_CODE),
                 "no-progress loop is Runtime-internal, not Experience friction");
@@ -136,7 +173,7 @@ public final class ReflectionRuleEvidenceTest {
                 "inspect-based recovery should carry strong friction score");
 
         List<ReflectionRuleEvidence.Candidate> mediumFriction =
-                ReflectionRuleEvidence.derive(null, directRetry);
+                ReflectionRuleEvidence.derive(null, semanticRetry);
         check(!mediumFriction.isEmpty()
                         && mediumFriction.get(0).frictionScore == 4,
                 "direct retry should carry medium friction score");

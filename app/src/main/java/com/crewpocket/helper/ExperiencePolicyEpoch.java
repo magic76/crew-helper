@@ -8,7 +8,7 @@ package com.crewpocket.helper;
  * behavior.
  */
 final class ExperiencePolicyEpoch {
-    static final int CURRENT_REVISION = 2;
+    static final int CURRENT_REVISION = 3;
     static final String STALE_REASON = "RUNTIME_POLICY_REVISION_CHANGED";
 
     private ExperiencePolicyEpoch() {}
