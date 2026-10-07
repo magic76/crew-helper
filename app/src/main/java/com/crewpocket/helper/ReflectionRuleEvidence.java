@@ -221,7 +221,8 @@ final class ReflectionRuleEvidence {
             if (sawVisualObservation
                     || recovered == null
                     || !recovered.succeeded()
-                    || !compatibleRetry(failed, recovered)) {
+                    || !compatibleRetry(failed, recovered)
+                    || !eligibleDirectRetryLearning(failed, recovered)) {
                 continue;
             }
 
@@ -248,6 +249,49 @@ final class ReflectionRuleEvidence {
             }
         }
         return !failed.tool.isEmpty() && failed.tool.equals(recovered.tool);
+    }
+
+    /**
+     * A direct retry lesson is safe only when Runtime has evidence that the
+     * failed action itself was retryable.
+     *
+     * Locator ambiguity/not-found is not a transient tap failure: repeating the
+     * same TAP can select the wrong control. Those cases may still learn an
+     * INSPECT_UI recovery through deriveFailureRecovery(), but never "retry TAP".
+     *
+     * When the sanitized task lost the concrete failure code, same-tool alone is
+     * too weak. Require a stable semantic target on both attempts so generic
+     * PREVIOUS_ATTEMPT_FAILED cannot degrade into "tap again anywhere".
+     */
+    private static boolean eligibleDirectRetryLearning(
+            Step failed,
+            Step recovered) {
+        if (failed == null || recovered == null) return false;
+        if (isLocatorResolutionFailure(failed.failureCode)) return false;
+
+        if (!failed.failureCode.isEmpty()) {
+            return true;
+        }
+
+        return !failed.semanticTarget.isEmpty()
+                && !recovered.semanticTarget.isEmpty()
+                && semanticFamily(failed.semanticTarget)
+                        .equals(semanticFamily(recovered.semanticTarget));
+    }
+
+    static boolean isLocatorResolutionFailure(String failureCode) {
+        String code = safeToken(failureCode, 80);
+        if (code.isEmpty()) return false;
+
+        return "UI_TARGET_NOT_FOUND".equals(code)
+                || "TARGET_NOT_FOUND".equals(code)
+                || "INSUFFICIENT_SIGNAL".equals(code)
+                || "NO_UI_CANDIDATES".equals(code)
+                || "MEDIUM_CONFIDENCE".equals(code)
+                || "LOW_CONFIDENCE".equals(code)
+                || "AUTO_MATCH_HAS_NO_ACTION_NODE".equals(code)
+                || code.startsWith("LOCATOR_")
+                || code.contains("AMBIGUOUS");
     }
 
     static boolean isRuntimeInternalFailure(String failureCode) {
