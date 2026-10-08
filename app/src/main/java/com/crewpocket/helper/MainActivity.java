@@ -1641,58 +1641,10 @@ public class MainActivity extends Activity
         keyLp.setMargins(0, dp(4), 0, dp(8));
         layout.addView(keyInput, keyLp);
 
-        TextView jevLabel = new TextView(this);
-        jevLabel.setText(I18n.get(this,
-                "TypeSafe Jev Key（選填）",
-                "TypeSafe Jev Key (optional)"));
-        jevLabel.setTextSize(12);
-        jevLabel.setTypeface(Typeface.DEFAULT_BOLD);
-        jevLabel.setTextColor(CrewTheme.CYAN_400);
-        jevLabel.setPadding(0, dp(8), 0, 0);
-        layout.addView(jevLabel);
-
-        TextView jevHintLink = new TextView(this);
-        jevHintLink.setText(I18n.get(this,
-                "設定後啟用語音語意仲裁 · console.typesafe.ai ↗",
-                "Enables voice semantic arbitration · console.typesafe.ai ↗"));
-        jevHintLink.setTextSize(11);
-        jevHintLink.setTextColor(CrewTheme.CYAN_400);
-        jevHintLink.setPadding(0, dp(2), 0, dp(4));
-        jevHintLink.setClickable(true);
-        jevHintLink.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) {
-                try {
-                    startActivity(new Intent(Intent.ACTION_VIEW,
-                            Uri.parse("https://console.typesafe.ai/keys")));
-                } catch (Exception ignored) {}
-            }
-        });
-        layout.addView(jevHintLink);
-
-        final android.widget.EditText jevInput =
-                new android.widget.EditText(this);
-        jevInput.setHint(I18n.get(this,
-                "輸入 TypeSafe API Key；留空即停用",
-                "Enter TypeSafe API Key; leave empty to disable"));
-        jevInput.setHintTextColor(CrewTheme.TEXT_MUTED);
-        jevInput.setText(AppConfig.getJevApiKey(this));
-        jevInput.setTextSize(12);
-        jevInput.setTextColor(CrewTheme.TEXT_PRIMARY);
-        jevInput.setInputType(android.text.InputType.TYPE_CLASS_TEXT
-                | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        jevInput.setBackground(CrewTheme.createCard(
-                this, CrewTheme.BG_SURFACE, CrewTheme.BORDER_SUBTLE, 8));
-        jevInput.setPadding(dp(10), dp(10), dp(10), dp(10));
-        LinearLayout.LayoutParams jevLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT);
-        jevLp.setMargins(0, dp(4), 0, dp(8));
-        layout.addView(jevInput, jevLp);
-
         TextView directHint = new TextView(this);
         directHint.setText(I18n.get(this,
-            "Gemini / Jev Key 都使用 Android Keystore 加密保存。Jev 為選填：有設定時只在語音指令需要仲裁時呼叫；未設定則完全沿用原流程。",
-            "Gemini / Jev keys are encrypted with Android Keystore. Jev is optional and is called only when a voice command needs arbitration; without a key the existing flow is unchanged."));
+            "Gemini API Key 使用 Android Keystore 加密保存。",
+            "Your Gemini API key is encrypted using Android Keystore."));
         directHint.setTextSize(10);
         directHint.setTextColor(CrewTheme.TEXT_MUTED);
         directHint.setPadding(0, dp(4), 0, 0);
@@ -1702,31 +1654,18 @@ public class MainActivity extends Activity
         builder.setPositiveButton(I18n.get(this, "儲存設定", "Save Settings"),
             new android.content.DialogInterface.OnClickListener() {
                 @Override public void onClick(android.content.DialogInterface dialog, int which) {
-                    boolean geminiSecured = AppConfig.setGeminiApiKey(
+                    boolean secured = AppConfig.setGeminiApiKey(
                             MainActivity.this,
                             keyInput.getText().toString().trim());
-                    boolean jevSecured = AppConfig.setJevApiKey(
-                            MainActivity.this,
-                            jevInput.getText().toString().trim());
-                    boolean secured = geminiSecured && jevSecured;
-                    Toast.makeText(
-                            MainActivity.this,
+                    Toast.makeText(MainActivity.this,
                             secured
-                                    ? I18n.get(
-                                            MainActivity.this,
-                                            AppConfig.hasJevApiKey(MainActivity.this)
-                                                    ? "Gemini / Jev Key 已安全儲存；語音仲裁已啟用"
-                                                    : "Gemini Key 已安全儲存；Jev 語音仲裁未啟用",
-                                            AppConfig.hasJevApiKey(MainActivity.this)
-                                                    ? "Gemini / Jev keys saved securely; voice arbitration enabled"
-                                                    : "Gemini key saved securely; Jev voice arbitration disabled")
-                                    : I18n.get(
-                                            MainActivity.this,
-                                            "無法安全儲存其中一組 API Key，請重試",
-                                            "Could not securely save one of the API keys; please retry."),
-                            secured
-                                    ? Toast.LENGTH_SHORT
-                                    : Toast.LENGTH_LONG).show();
+                                    ? I18n.get(MainActivity.this,
+                                            "Gemini Key 已安全儲存",
+                                            "Gemini API key saved securely")
+                                    : I18n.get(MainActivity.this,
+                                            "無法安全儲存 Gemini API Key，請重試",
+                                            "Could not securely save Gemini API key; please retry."),
+                            secured ? Toast.LENGTH_SHORT : Toast.LENGTH_LONG).show();
                     if (activeTab == 2) {
                         renderSettingsPage();
                         refreshNavigation();
