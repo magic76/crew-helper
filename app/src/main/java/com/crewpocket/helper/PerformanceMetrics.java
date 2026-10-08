@@ -90,13 +90,6 @@ final class PerformanceMetrics {
     private static long exploreFinalDedupes;
     private static long exploreAudioBypassFrames;
 
-    private static long jevSpeechReviewCalls;
-    private static long jevSpeechReviewApplied;
-    private static long jevSpeechReviewFallbacks;
-    private static long jevSpeechReviewLastLatencyMs;
-    private static String jevSpeechReviewLastStrategy = "";
-    private static String jevSpeechReviewLastReason = "";
-
     private PerformanceMetrics() {}
 
     static synchronized void markLiveRequested() {
@@ -365,45 +358,6 @@ final class PerformanceMetrics {
         exploreAudioBypassFrames++;
     }
 
-    static synchronized void markJevExperiment(
-            long generation,
-            String eventId,
-            String bucket) {
-        AgentTrace trace = traceForGeneration(generation);
-        if (trace == null) return;
-        trace.jevEventId = safeEventId(eventId);
-        trace.jevBucket = safeReason(bucket);
-    }
-
-    static synchronized void recordJevSpeechReview(
-            long generation,
-            boolean applied,
-            String strategy,
-            String reason,
-            long latencyMs) {
-        jevSpeechReviewCalls++;
-        if (applied) {
-            jevSpeechReviewApplied++;
-        } else {
-            jevSpeechReviewFallbacks++;
-        }
-        long safeLatency = Math.max(0L, latencyMs);
-        String safeStrategy = safeReason(strategy);
-        String safeReviewReason = safeReason(reason);
-        jevSpeechReviewLastLatencyMs = safeLatency;
-        jevSpeechReviewLastStrategy = safeStrategy;
-        jevSpeechReviewLastReason = safeReviewReason;
-
-        AgentTrace trace = traceForGeneration(generation);
-        if (trace != null) {
-            trace.jevReviewed = true;
-            trace.jevApplied = applied;
-            trace.jevLatencyMs = safeLatency;
-            trace.jevStrategy = safeStrategy;
-            trace.jevReason = safeReviewReason;
-        }
-    }
-
     static synchronized String buildReport() {
         return buildReportForTask("");
     }
@@ -420,16 +374,6 @@ final class PerformanceMetrics {
             out.put("intentToFirstToolMs", duration(trace.intentAt, trace.firstToolAt));
             out.put("toolRuntimeMs", trace.toolRuntimeTotalMs);
             out.put("geminiWaitMs", trace.geminiBetweenToolsMs);
-            out.put("jevEventId", trace.jevEventId);
-            out.put("jevBucket", trace.jevBucket);
-            out.put("jevReviewed", trace.jevReviewed);
-            out.put("jevPostSearchReviewed", trace.jevPostSearchReviewed);
-            out.put("jevPostSearchMatched", trace.jevPostSearchMatched);
-            out.put("jevPostSearchLatencyMs", trace.jevPostSearchLatencyMs);
-            out.put("jevApplied", trace.jevApplied);
-            out.put("jevLatencyMs", trace.jevLatencyMs);
-            out.put("jevStrategy", trace.jevStrategy);
-            out.put("jevReason", trace.jevReason);
             out.put("resultToSpeechMs", duration(trace.lastToolResultAt, trace.finalSpeechAt));
             out.put("answerReadyToSpeechMs",
                     duration(trace.answerReadyAt, trace.finalSpeechAt));
@@ -509,27 +453,6 @@ final class PerformanceMetrics {
             out.append(" last=").append(liveHumanTurnLastReason);
         }
         out.append("\n");
-        out.append("Jev speech review: calls=")
-                .append(jevSpeechReviewCalls)
-                .append(" applied=")
-                .append(jevSpeechReviewApplied)
-                .append(" fallback=")
-                .append(jevSpeechReviewFallbacks);
-        if (jevSpeechReviewLastLatencyMs > 0L) {
-            out.append(" last-latency=")
-                    .append(jevSpeechReviewLastLatencyMs)
-                    .append("ms");
-        }
-        if (!jevSpeechReviewLastStrategy.isEmpty()) {
-            out.append(" strategy=")
-                    .append(jevSpeechReviewLastStrategy);
-        }
-        if (!jevSpeechReviewLastReason.isEmpty()) {
-            out.append(" reason=")
-                    .append(jevSpeechReviewLastReason);
-        }
-        out.append("\n");
-
         appendAgentTrace(out, lastFinishedTrace, inspectorTaskId);
         out.append("Post-finish stale tools: blocked=").append(stalePostFinishToolsBlocked)
                 .append(" completion-suppressed=").append(staleCompletionsSuppressed);
@@ -554,37 +477,6 @@ final class PerformanceMetrics {
         long speechTail = duration(trace.finalSpeechAt, trace.finishedAt);
 
         out.append("Outcome: ").append(trace.outcome).append("\n");
-        if (!trace.jevBucket.isEmpty()) {
-            out.append("Jev bucket: ").append(trace.jevBucket).append("\n");
-        }
-        if (trace.jevReviewed) {
-            out.append("Jev: ")
-                    .append("CONTROL".equals(trace.jevBucket)
-                            ? "SHADOW"
-                            : (trace.jevApplied ? "APPLIED" : "FALLBACK"))
-                    .append(" · ")
-                    .append(trace.jevStrategy.isEmpty()
-                            ? "NO_OVERRIDE"
-                            : trace.jevStrategy)
-                    .append(" · ")
-                    .append(trace.jevLatencyMs)
-                    .append(" ms");
-            if (!trace.jevReason.isEmpty()) {
-                out.append(" · ").append(trace.jevReason);
-            }
-            out.append("\n");
-        } else {
-            out.append("Jev: NOT_USED\n");
-        }
-        if (trace.jevPostSearchReviewed) {
-            out.append("Jev UI evidence: ")
-                    .append(trace.jevPostSearchMatched
-                            ? "MATCHED"
-                            : "AMBIGUOUS")
-                    .append(" · ")
-                    .append(trace.jevPostSearchLatencyMs)
-                    .append(" ms\n");
-        }
         out.append("User intent -> first tool: ")
                 .append(intentToFirstTool).append(" ms\n");
         out.append("Runtime tool execution total: ")
@@ -711,23 +603,6 @@ final class PerformanceMetrics {
         exploreInterimFastPathRuns = 0L;
         exploreFinalDedupes = 0L;
         exploreAudioBypassFrames = 0L;
-        jevSpeechReviewCalls = 0L;
-        jevSpeechReviewApplied = 0L;
-        jevSpeechReviewFallbacks = 0L;
-        jevSpeechReviewLastLatencyMs = 0L;
-        jevSpeechReviewLastStrategy = "";
-        jevSpeechReviewLastReason = "";
-    }
-
-    static synchronized void recordJevPostSearch(
-            long generation,
-            boolean matched,
-            long latencyMs) {
-        AgentTrace trace = traceForGeneration(generation);
-        if (trace == null) return;
-        trace.jevPostSearchReviewed = true;
-        trace.jevPostSearchMatched = matched;
-        trace.jevPostSearchLatencyMs = Math.max(0L, latencyMs);
     }
 
     private static AgentTrace traceForGeneration(long generation) {
@@ -848,16 +723,6 @@ final class PerformanceMetrics {
         long finishedAt;
         long toolRuntimeTotalMs;
         long geminiBetweenToolsMs;
-        String jevEventId = "";
-        String jevBucket = "";
-        boolean jevReviewed;
-        boolean jevApplied;
-        long jevLatencyMs;
-        boolean jevPostSearchReviewed;
-        boolean jevPostSearchMatched;
-        long jevPostSearchLatencyMs;
-        String jevStrategy = "";
-        String jevReason = "";
         String outcome = "FINISHED";
         final ArrayList<ToolTrace> steps = new ArrayList<ToolTrace>();
         ToolTrace currentStep;
@@ -877,16 +742,6 @@ final class PerformanceMetrics {
             out.finishedAt = finishedAt;
             out.toolRuntimeTotalMs = toolRuntimeTotalMs;
             out.geminiBetweenToolsMs = geminiBetweenToolsMs;
-            out.jevEventId = jevEventId;
-            out.jevBucket = jevBucket;
-            out.jevReviewed = jevReviewed;
-            out.jevApplied = jevApplied;
-            out.jevLatencyMs = jevLatencyMs;
-            out.jevPostSearchReviewed = jevPostSearchReviewed;
-            out.jevPostSearchMatched = jevPostSearchMatched;
-            out.jevPostSearchLatencyMs = jevPostSearchLatencyMs;
-            out.jevStrategy = jevStrategy;
-            out.jevReason = jevReason;
             out.outcome = outcome;
             for (ToolTrace step : steps) out.steps.add(step.copy());
             if (!out.steps.isEmpty()) out.currentStep = out.steps.get(out.steps.size() - 1);

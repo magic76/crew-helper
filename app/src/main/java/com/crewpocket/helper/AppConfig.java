@@ -47,13 +47,31 @@ public class AppConfig {
     private static final String LEGACY_WAKE_PHRASE = "小歪小歪";
     private static final String PREVIOUS_WAKE_PHRASE = "嘿 小歪";
 
+    private static final String KEY_RETIRED_VOICE_REVIEW_CLEANED =
+            "retired_jev_cleaned_v1";
+
     public static SharedPreferences getPrefs(Context context) {
-        return context.getApplicationContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        Context app = context.getApplicationContext();
+        SharedPreferences prefs = app.getSharedPreferences(
+                PREFS_NAME, Context.MODE_PRIVATE);
+        // One-time cleanup on upgrade: remove retired key and A/B samples.
+        if (!prefs.getBoolean(KEY_RETIRED_VOICE_REVIEW_CLEANED, false)) {
+            boolean secretRemoved =
+                    SecureSecretStore.delete(app, "typesafe_jev_api_key");
+            boolean tracesRemoved = app.getSharedPreferences(
+                            "crew_jev_speech_experiment", Context.MODE_PRIVATE)
+                    .edit().clear().commit();
+            if (secretRemoved && tracesRemoved) {
+                prefs.edit()
+                        .putBoolean(KEY_RETIRED_VOICE_REVIEW_CLEANED, true)
+                        .apply();
+            }
+        }
+        return prefs;
     }
 
     // ── 1. Gemini API Key (BYOK) ──
     private static final String SECURE_GEMINI_SECRET = "gemini_api_key";
-    private static final String SECURE_JEV_SECRET = "typesafe_jev_api_key";
     private static final String LEGACY_LIVE_PREFS = "crew_native_live";
     private static final String LEGACY_ACTIVITY_PREFS =
             "com.crewpocket.helper.NativeLiveActivity";
@@ -210,43 +228,6 @@ public class AppConfig {
                 .remove(LEGACY_LIVE_KEY)
                 .commit();
         return primary && live && activity;
-    }
-
-    // ── Optional TypeSafe Jev API Key ──
-
-    /** Optional BYOK key for fast typed voice-semantic arbitration. */
-    public static synchronized String getJevApiKey(Context context) {
-        if (context == null) return "";
-        return SecureSecretStore.read(
-                context.getApplicationContext(),
-                SECURE_JEV_SECRET);
-    }
-
-    /**
-     * Jev is optional. Empty input disables the integration. The key never
-     * enters SharedPreferences, logs, model context, or Runtime diagnostics.
-     */
-    public static synchronized boolean setJevApiKey(
-            Context context,
-            String key) {
-        if (context == null) return false;
-        Context app = context.getApplicationContext();
-        String clean = key == null ? "" : key.trim();
-        if (clean.isEmpty()) {
-            return SecureSecretStore.delete(app, SECURE_JEV_SECRET);
-        }
-        if (clean.indexOf('\n') >= 0 || clean.indexOf('\r') >= 0) {
-            return false;
-        }
-        boolean written =
-                SecureSecretStore.write(app, SECURE_JEV_SECRET, clean);
-        if (!written) return false;
-        return clean.equals(
-                SecureSecretStore.read(app, SECURE_JEV_SECRET));
-    }
-
-    public static synchronized boolean hasJevApiKey(Context context) {
-        return !getJevApiKey(context).isEmpty();
     }
 
         // ── 2. Gemini Live Voice Persona ──

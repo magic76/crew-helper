@@ -83,25 +83,8 @@ final class AgentPerformanceStore {
                         .put("toolRuntimeMs", perf.optLong("toolRuntimeMs", -1L))
                         .put("geminiWaitMs", perf.optLong("geminiWaitMs", -1L))
                         .put("answerReadyToSpeechMs",
-                                perf.optLong("answerReadyToSpeechMs", -1L))
-                        .put("jevEventId", perf.optString("jevEventId", ""))
-                        .put("jevBucket", perf.optString("jevBucket", ""))
-                        .put("jevReviewed", perf.optBoolean("jevReviewed", false))
-                        .put("jevApplied", perf.optBoolean("jevApplied", false))
-                        .put("jevPostSearchReviewed",
-                                perf.optBoolean("jevPostSearchReviewed", false))
-                        .put("jevPostSearchMatched",
-                                perf.optBoolean("jevPostSearchMatched", false));
+                                perf.optLong("answerReadyToSpeechMs", -1L));
                 tasks.put(item);
-
-                String jevEventId = perf.optString("jevEventId", "");
-                if (!jevEventId.isEmpty()) {
-                    JevSpeechExperimentTelemetryStore.recordOutcome(
-                            context,
-                            jevEventId,
-                            outcome,
-                            task.optString("cancelCategory", ""));
-                }
 
                 JSONArray trimmed = new JSONArray();
                 for (int i = Math.max(0, tasks.length() - MAX_TASKS);
@@ -250,11 +233,6 @@ final class AgentPerformanceStore {
                 CandidateArbitrationTelemetryStore.buildReport(context);
         if (!arbitration.isEmpty()) {
             out.append("\n\n").append(arbitration);
-        }
-        String jevExperiment =
-                JevSpeechExperimentTelemetryStore.buildReport(context);
-        if (!jevExperiment.isEmpty()) {
-            out.append("\n\n").append(jevExperiment);
         }
         return out.toString();
     }
