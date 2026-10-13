@@ -134,7 +134,8 @@ final class DirectGestureCompletionPolicy {
                 || command.equals("往" + dir + "邊一點")
                 || command.equals("往" + dir + "边一点")
                 || command.equals(dir + "邊一點")
-                || command.equals(dir + "边一点");
+                || command.equals(dir + "边一点")
+                || command.matches("^(?:往|向)?"+ dir + "(?:邊|边)?(?:滑|滑動|滑动|移動|移动)(?:一下|一點|一点)?$");
     }
 
     private static boolean containsCompoundIntent(String command) {
