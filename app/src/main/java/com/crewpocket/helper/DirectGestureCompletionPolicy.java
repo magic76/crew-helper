@@ -138,8 +138,10 @@ final class DirectGestureCompletionPolicy {
     }
 
     private static boolean containsCompoundIntent(String command) {
+        String action = command.replace("一點點", "").replace("一点点", "")
+                .replace("一點", "").replace("一点", "");
         return containsAny(
-                command,
+                action,
                 "然後", "然后", "接著", "接着", "並且", "并且",
                 "之後", "之后", "找到", "尋找", "寻找", "打開", "打开",
                 "點", "点", "選", "选", "播放", "導航", "导航", "搜尋", "搜索",
