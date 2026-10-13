@@ -6,6 +6,9 @@ public final class LivePromptTest {
     public static void main(String[] args) {
         check(LivePrompt.CORE.length() <= 5000,
                 "core prompt should stay compact");
+        check(LivePrompt.NATURAL_VOICE.contains("NATURAL VOICE")
+                        && LivePrompt.NATURAL_VOICE.contains("再一下"),
+                "voice follow-up rules are included without bloating core prompt");
         check(LivePrompt.CORE.contains("MODEL RUNTIME CONTRACT"),
                 "core prompt must explain the canonical contract");
         check(LivePrompt.CORE.contains("action.state")

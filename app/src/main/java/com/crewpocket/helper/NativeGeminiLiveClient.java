@@ -2440,7 +2440,8 @@ final class NativeGeminiLiveClient {
         }
         String personality =
                 "Speaking personality: " + personalityInstruction();
-        String baseInstruction = LivePrompt.CORE + "\n" + personality
+        String baseInstruction = LivePrompt.CORE + "\n" + LivePrompt.NATURAL_VOICE
+                + "\n" + personality
                 + (deckInstruction.isEmpty() ? "" : "\n" + deckInstruction);
 
         String sessionContext = SessionContextSnapshot.systemInstruction(
