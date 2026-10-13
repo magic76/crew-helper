@@ -424,6 +424,29 @@ public final class LiveHumanTurnBoundaryTest {
                         == LiveHumanTurnBoundary.Decision.NEW_INTENT,
                 "fresh interim after DONE preserves a genuine immediate repeat command");
 
+        boundary.forceNewTurn("搜尋台北車站", 125_000L);
+        LiveHumanTurnBoundary.Resolution followUpChoice = boundary.resolve(
+                "第二個", 126_000L, true, 25L, 25L, 25L,
+                "IN_PROGRESS", false, false, false, true);
+        check(followUpChoice.decision == LiveHumanTurnBoundary.Decision.NEW_INTENT,
+                "ordinal choice starts fresh instruction while old task is thinking");
+        check("NATURAL_FOLLOWUP_NEW_INTENT".equals(followUpChoice.reason),
+                "natural follow-up has a diagnostic reason");
+
+        boundary.forceNewTurn("搜尋台北車站", 128_000L);
+        LiveHumanTurnBoundary.Resolution followUpSwipe = boundary.resolve(
+                "再往右滑一下", 129_000L, true, 26L, 26L, 26L,
+                "IN_PROGRESS", false, false, true, false);
+        check(followUpSwipe.decision == LiveHumanTurnBoundary.Decision.NEW_INTENT,
+                "repeat swipe does not get merged into old navigation task");
+
+        boundary.forceNewTurn("往右滑", 132_000L);
+        LiveHumanTurnBoundary.Resolution followUpRepeat = boundary.resolve(
+                "再一下", 133_000L, true, 27L, 27L, 27L,
+                "IN_PROGRESS", false, false, true, false);
+        check(followUpRepeat.decision == LiveHumanTurnBoundary.Decision.NEW_INTENT,
+                "deictic repeat is a new human turn");
+
         System.out.println(
                 "PASS LiveHumanTurnBoundaryTest: "
                         + checks + " checks");
