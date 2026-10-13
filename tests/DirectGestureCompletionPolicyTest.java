@@ -26,6 +26,19 @@ public final class DirectGestureCompletionPolicyTest {
                         "滑動螢幕", "forward", true),
                 "generic screen swipe is one-shot after verified effect");
 
+        check(DirectGestureCompletionPolicy.shouldFinish(
+                        "再往右滑一下", "right", true),
+                "one repeated swipe finishes after verified effect");
+        check(DirectGestureCompletionPolicy.shouldFinish(
+                        "往右邊一點", "right", true),
+                "natural spatial wording finishes one verified gesture");
+        check(!DirectGestureCompletionPolicy.shouldFinish(
+                        "再往右滑一下", "left", true),
+                "repeated swipe with wrong Runtime direction is not verified");
+        check(!DirectGestureCompletionPolicy.shouldFinish(
+                        "再往右滑兩次", "right", true),
+                "two-repeat gesture remains a compound task");
+
         check(!DirectGestureCompletionPolicy.shouldFinish(
                         "往右滑動然後打開設定", "right", true),
                 "compound gesture goal must remain active");
