@@ -1539,6 +1539,9 @@ final class NativeGeminiLiveClient {
                 clearPendingUiChoiceSilently();
             }
 
+            long voiceRoutingStartedAt = System.nanoTime();
+            String voiceBoundaryDecision = "";
+            String voiceBoundaryReason = "";
             String effectiveUserInput = completeUserInput;
             boolean continuedHumanTurn = false;
             VoiceExecutionGuard.TurnDisposition voiceDisposition;
@@ -1561,6 +1564,9 @@ final class NativeGeminiLiveClient {
                 } else {
                     beginNewUserIntent(completeUserInput);
                 }
+                voiceBoundaryDecision = "VOICE_CONFIRMATION";
+                voiceBoundaryReason = confirmationContinuation
+                        ? "CONFIRMATION_RESPONSE" : "CONFIRMATION_REPLACED";
                 liveHumanTurnBoundary.forceNewTurn(
                         completeUserInput,
                         System.currentTimeMillis());
@@ -1597,6 +1603,8 @@ final class NativeGeminiLiveClient {
                                 activeAgentThinking);
 
                 effectiveUserInput = boundary.effectiveText;
+                voiceBoundaryDecision = boundary.decision.name();
+                voiceBoundaryReason = boundary.reason;
                 if (boundary.decision
                         == LiveHumanTurnBoundary.Decision.NEW_INTENT) {
                     handleRefinedMemoryUserTurn(
@@ -1627,6 +1635,14 @@ final class NativeGeminiLiveClient {
                                 effectiveUserInput,
                                 frame.inputConfidence);
             }
+
+            VoiceDebugTrace.record(
+                    appContext,
+                    completeUserInput,
+                    voiceBoundaryDecision,
+                    voiceBoundaryReason,
+                    frame.inputConfidence,
+                    (System.nanoTime() - voiceRoutingStartedAt) / 1_000_000L);
 
             authorizationTranscript =
                     effectiveUserInput;
