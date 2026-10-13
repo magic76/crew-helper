@@ -32,6 +32,16 @@ public final class DirectGestureCompletionPolicyTest {
         check(DirectGestureCompletionPolicy.shouldFinish(
                         "往右邊一點", "right", true),
                 "natural spatial wording finishes one verified gesture");
+        check(DirectGestureCompletionPolicy.shouldFinish(
+                        "往右滑一點", "right", true),
+                "a little right remains a single gesture");
+        check(DirectGestureCompletionPolicy.shouldFinish(
+                        "往右邊移動一點", "right", true),
+                "natural move-a-little remains a single gesture");
+        check(DirectGestureCompletionPolicy.shouldFinish(
+                        "向左滑一點", "left", true),
+                "natural left remains a single gesture");
+
         check(!DirectGestureCompletionPolicy.shouldFinish(
                         "再往右滑一下", "left", true),
                 "repeated swipe with wrong Runtime direction is not verified");
