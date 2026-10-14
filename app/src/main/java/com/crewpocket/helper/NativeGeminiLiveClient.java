@@ -4673,9 +4673,18 @@ final class NativeGeminiLiveClient {
                         ? new JSONObject()
                         : requestedArgs;
         if (!SemanticPhoneAction.TOOL_NAME.equals(requestedName)
-                || !MediaGoalUiPolicy.isMediaPlayGoal(goalIntent)
-                || !"TAP".equalsIgnoreCase(
-                        original.optString("action", ""))) {
+                || !MediaGoalUiPolicy.isMediaPlayGoal(goalIntent)) {
+            return original;
+        }
+        String requestedAction =
+                original.optString("action", "").trim();
+        boolean unsupportedPlayAction =
+                MediaPlayFlowRecoveryPolicy.isUnsupportedPlayAction(
+                        requestedAction,
+                        goalIntent,
+                        currentForegroundPackageName());
+        if (!"TAP".equalsIgnoreCase(requestedAction)
+                && !unsupportedPlayAction) {
             return original;
         }
 
@@ -4698,15 +4707,24 @@ final class NativeGeminiLiveClient {
 
         boolean elementReferenceActive =
                 ElementReferenceRuntime.isActive();
-        if (numericTarget && elementReferenceActive) {
+        if (elementReferenceActive) {
+            // An explicit numbered overlay is owned by the human, not by
+            // the model's media recovery or an unsupported PLAY alias.
             return original;
         }
 
         JSONObject current =
                 observationVerificationController
                         .readSemanticScreenQuietly();
+        if (unsupportedPlayAction
+                && (current == null
+                    || !current.optBoolean("success", false)
+                    || !MediaPlaybackCompletionPolicy.isDefaultTrustedPackage(
+                            current.optString("package", "")))) {
+            return original;
+        }
         String recovered =
-                MediaTapRecoveryPolicy.recoverTarget(
+                MediaPlayFlowRecoveryPolicy.safeNextTarget(
                         goalText,
                         latestActivatedTargetForMediaRecovery(),
                         mediaRecoveryCandidates(current));
@@ -4715,6 +4733,16 @@ final class NativeGeminiLiveClient {
             JSONObject out =
                     new JSONObject(original.toString());
             if (!recovered.isEmpty()) {
+                if (unsupportedPlayAction) {
+                    // Preserve only the canonical semantic TAP. All mutations
+                    // still pass existing Runtime authorization and verification.
+                    out.put("action", "TAP");
+                    out.remove("element_id");
+                    out.remove("visual_lease_id");
+                    out.remove("visual_x");
+                    out.remove("visual_y");
+                    out.put("runtime_media_action_repaired", true);
+                }
                 out.put("target", recovered)
                         .put("runtime_media_target_recovered", true);
                 return out;
