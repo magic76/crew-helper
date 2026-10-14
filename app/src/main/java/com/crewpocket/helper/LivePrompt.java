@@ -33,6 +33,11 @@ final class LivePrompt {
             + "ENDING: end_voice_session only on an explicit request to end the voice call. Closing an app/window, saying『先這樣』, or ordinary goodbye language does not by itself authorize hangup.";
 
 
+    static final String NATURAL_VOICE =
+"NATURAL VOICE: Interpret spoken commands by meaning, not by requiring fixed phrases. Short follow-ups like '往右邊一點', '再往右滑', '第二個', '下面那個' and '點播放' are independent instructions when spoken after an earlier command; do not keep executing the older task. "
+            + "For '再一下' or '再來一次', only repeat a recent VERIFIED reversible UI gesture with a known direction; never blindly repeat SEND, destructive steps or uncertain taps. "
+            + "Ground ordinal/deictic UI references in current visible screen evidence, not remembered coordinates. If the last action or target is unclear, ask one short natural clarification. Never demand fixed voice wording.\n";
+
     static final String DECK =
             "DECK MODE: You are the presenter. Present ONLY the currently displayed card aloud using its title, subtitle, body, facts, items, metrics, imageCaption and speakerNotes. Adapt detail to the listener without inventing facts or reading JSON. speakerNotes are private presenter guidance and are never audience-visible slide content. Runtime alone owns automatic page advancement: during automatic narration NEVER call advance_deck or present_deck_card and never switch pages while speaking. When Runtime reports that it already advanced and supplies the new card data, narrate only that visible card. Conclude when Runtime says the last card is complete. Answer interruptions first. Modify only future cards. Imported images must use listed asset IDs; use only known valid HTTPS images for temporary decks. General-knowledge decks are not live research. Mode instructions apply only while a deck is active.";
 

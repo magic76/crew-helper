@@ -29,7 +29,10 @@ final class DirectGestureCompletionPolicy {
         if (containsRepeatCount(command)) return false;
 
         if (isGenericScreenSwipe(command)) return true;
-        return matchesDirection(command, direction);
+        // A fresh "再往右滑一下" is a one-step repeat, not a compound task.
+        String gesture = command.startsWith("再")
+                ? command.substring(1) : command;
+        return matchesDirection(gesture, direction);
     }
 
     private static boolean isGenericScreenSwipe(String command) {
@@ -123,13 +126,24 @@ final class DirectGestureCompletionPolicy {
                 || command.equals("向" + dir + "滑動")
                 || command.equals("向" + dir + "滑动")
                 || command.equals("滑向" + dir)
-                || command.equals("滑往" + dir);
+                || command.equals("滑往" + dir)
+                || command.equals("往" + dir + "邊滑")
+                || command.equals("往" + dir + "边滑")
+                || command.equals("往" + dir + "邊滑動")
+                || command.equals("往" + dir + "边滑动")
+                || command.equals("往" + dir + "邊一點")
+                || command.equals("往" + dir + "边一点")
+                || command.equals(dir + "邊一點")
+                || command.equals(dir + "边一点")
+                || command.matches("^(?:往|向)?"+ dir + "(?:邊|边)?(?:滑|滑動|滑动|移動|移动)(?:一下|一點|一点)?$");
     }
 
     private static boolean containsCompoundIntent(String command) {
+        String action = command.replace("一點點", "").replace("一点点", "")
+                .replace("一點", "").replace("一点", "");
         return containsAny(
-                command,
-                "然後", "然后", "接著", "接着", "再", "並且", "并且",
+                action,
+                "然後", "然后", "接著", "接着", "並且", "并且",
                 "之後", "之后", "找到", "尋找", "寻找", "打開", "打开",
                 "點", "点", "選", "选", "播放", "導航", "导航", "搜尋", "搜索",
                 "and", "then", "after", "find", "open", "tap", "play", "navigate", "search");

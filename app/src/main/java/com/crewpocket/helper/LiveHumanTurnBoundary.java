@@ -191,12 +191,19 @@ final class LiveHumanTurnBoundary {
                         && !relatedText(currentText, text)
                         && DirectGestureCompletionPolicy
                                 .looksLikeStandaloneGestureIntent(text);
-        if (standaloneGestureNewIntent) {
+        boolean naturalFollowUpNewIntent =
+                sameGenerationTask
+                        && latestFinalizedGeneration == currentGeneration
+                        && !relatedText(currentText, text)
+                        && NaturalVoiceFollowUpPolicy.isIndependentAction(text);
+        if (standaloneGestureNewIntent || naturalFollowUpNewIntent) {
             return commit(
                     Decision.NEW_INTENT,
                     text,
                     nowMs,
-                    "STANDALONE_GESTURE_NEW_INTENT");
+                    standaloneGestureNewIntent
+                            ? "STANDALONE_GESTURE_NEW_INTENT"
+                            : "NATURAL_FOLLOWUP_NEW_INTENT");
         }
 
         boolean related = relatedText(currentText, text);

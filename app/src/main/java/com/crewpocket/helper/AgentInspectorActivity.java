@@ -78,11 +78,13 @@ public class AgentInspectorActivity extends Activity {
                 "Crew 只會在 Runtime 有足夠證據時學習：失敗後修正成功會立即進入 Experience Review；一般成功路徑需重複出現才會進入模型。"
                         + "Rule identity 由 Runtime evidence 決定，模型只負責把已驗證的 evidence 壓成 Lesson。"
                         + "App Action Memory 則保存使用者明確教過的 UI 結構映射，與 Experience 分開。"
-                        + "不保存或顯示對話內容、訊息文字、搜尋值、密碼、OTP、付款資料、任意工具參數、API Key 或模型原始回答。",
+                        + "一般診斷不保存對話、訊息、搜尋值、密碼、OTP、付款資料、工具參數、API Key 或模型原始回答。"
+                        + "手動開啟語音診斷後，只在記憶體顯示最新一句辨識文字（可能包含隱私）；關閉就清除，不寫入磁碟。",
                 "Crew learns only when Runtime has sufficient evidence: proven recovery is reviewed immediately, while normal successful paths must repeat before model review. "
                         + "Rule identity comes from Runtime evidence; the model only compresses qualified evidence into a lesson. "
                         + "App Action Memory separately stores structural UI mappings explicitly taught by the user. "
-                        + "No conversations, message text, search values, passwords, OTPs, payment data, arbitrary tool arguments, API keys, or raw model replies are stored here."));
+                        + "Normal diagnostics never store conversations, message text, search values, passwords, OTPs, payment data, tool arguments, API keys, or raw model replies. "
+                        + "Opt-in Voice Debug shows the latest raw transcription in RAM (possibly private); turning it off clears it without persisting speech."));
         privacy.setTextSize(11);
         privacy.setTextColor(CrewTheme.TEXT_SECONDARY);
         privacy.setPadding(0, dp(14), 0, dp(10));
@@ -110,6 +112,20 @@ public class AgentInspectorActivity extends Activity {
                 ViewGroup.LayoutParams.WRAP_CONTENT));
         root.addView(scroll, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        Button voiceDebug = smallButton("");
+        updateVoiceDebugLabel(voiceDebug);
+        LinearLayout.LayoutParams voiceDebugLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(44));
+        voiceDebugLp.setMargins(dp(3), dp(10), dp(3), 0);
+        voiceDebug.setOnClickListener(v -> {
+            VoiceDebugTrace.setEnabled(
+                    AgentInspectorActivity.this,
+                    !VoiceDebugTrace.enabled(AgentInspectorActivity.this));
+            updateVoiceDebugLabel(voiceDebug);
+            refreshReport();
+        });
+        root.addView(voiceDebug, voiceDebugLp);
 
         Button memoryDashboard = smallButton(I18n.get(
                 this,
@@ -152,6 +168,7 @@ public class AgentInspectorActivity extends Activity {
         clear.setOnClickListener(v -> {
             AgentInspectorStore.clear(AgentInspectorActivity.this);
             ReflectionHistoryStore.clear(AgentInspectorActivity.this);
+            VoiceDebugTrace.clear();
             refreshReport();
             Toast.makeText(
                     AgentInspectorActivity.this,
@@ -177,8 +194,19 @@ public class AgentInspectorActivity extends Activity {
         refreshReport();
     }
 
+    private void updateVoiceDebugLabel(Button button) {
+        boolean on = VoiceDebugTrace.enabled(this);
+        button.setText(on
+                ? I18n.get(this, "語音診斷：開啟（點擊關閉並清除）",
+                        "Voice Debug: ON (tap to disable and clear)")
+                : I18n.get(this, "語音診斷：關閉（點擊暫時開啟）",
+                        "Voice Debug: OFF (tap to enable)"));
+    }
+
     private String buildFullReport() {
-        return ReflectionLessonStore.buildReport(this)
+        return VoiceDebugTrace.report(this)
+                + "\n\n────────────────────\n\n"
+                + ReflectionLessonStore.buildReport(this)
                 + "\n\n────────────────────\n\n"
                 + ExperienceEvidenceStore.buildReport(this)
                 + "\n\n────────────────────\n\n"
