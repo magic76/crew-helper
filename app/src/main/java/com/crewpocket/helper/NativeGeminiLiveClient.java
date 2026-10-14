@@ -4701,7 +4701,12 @@ final class NativeGeminiLiveClient {
         boolean numericTarget =
                 MediaGoalUiPolicy
                         .looksLikeNumericOrdinalTarget(target);
-        if (!target.isEmpty() && !numericTarget) {
+        // A correctly formed TAP target needs no recovery. Unsupported
+        // PLAY verbs must still be normalized even if Gemini supplied a
+        // human-readable target such as the artist name.
+        if (!unsupportedPlayAction
+                && !target.isEmpty()
+                && !numericTarget) {
             return original;
         }
 
