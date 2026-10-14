@@ -103,6 +103,22 @@ final class SemanticPhoneAction {
                 }
             }
 
+            // Plain model-provided numbers are not stable Accessibility
+            // selectors. Overlay numbering starts at 1, and only a live
+            // user-owned element-reference session can authorize a number.
+            // Never degrade target="0" or another bare ordinal into a
+            // fuzzy label lookup and accidentally tap an unrelated control.
+            if (MediaGoalUiPolicy.shouldRejectNumericTarget(
+                    target, ElementReferenceRuntime.isActive())) {
+                return error(
+                        action,
+                        "NUMERIC_TAP_NEEDS_ELEMENT_REFERENCE",
+                        "數字不是可直接點擊的 UI 標籤。先用最新 screen.items[].id"
+                                + " 或目前畫面上可辨識的語意名稱定位。若要人工選編號，"
+                                + " 使用者須先明確說「顯示元素」，並選 1 起算的有效編號；"
+                                + " 不要對數字重複 TAP 或猜座標。");
+            }
+
             // Manual visual assist: label real Accessibility clickables.
             if (ElementReferenceCommand.isOpenRequest(target)) {
                 JSONObject start = ElementReferenceRuntime.startExplicit();

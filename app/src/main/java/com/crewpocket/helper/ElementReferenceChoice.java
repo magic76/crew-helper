@@ -43,9 +43,30 @@ final class ElementReferenceChoice {
 
     private static String compact(String raw) {
         if (raw == null) return "";
-        return raw.toLowerCase(Locale.ROOT)
+        String text = raw.toLowerCase(Locale.ROOT)
                 .trim()
-                .replaceAll("[，,。.!！?？：:；;（）()\\s]", "")
+                .replaceAll("[，,。.!！?？：:；;（）()\\s]", "");
+        // Interpret spoken choice requests, but only as an exact numbered
+        // phrase. Unrelated commands must not become overlay clicks.
+        String[] prefixes = {
+                "麻煩幫我", "麻烦帮我", "可以幫我", "可以帮我",
+                "請幫我", "请帮我", "幫我", "帮我",
+                "我要", "請", "请",
+                "點擊", "点击", "選擇", "选择", "點", "点",
+                "按下", "按", "選", "选"
+        };
+        boolean changed;
+        do {
+            changed = false;
+            for (String prefix : prefixes) {
+                if (text.startsWith(prefix)) {
+                    text = text.substring(prefix.length());
+                    changed = true;
+                    break;
+                }
+            }
+        } while (changed);
+        return text
                 .replace("第", "")
                 .replace("個", "")
                 .replace("个", "")
@@ -53,6 +74,7 @@ final class ElementReferenceChoice {
                 .replace("号", "")
                 .replace("項", "")
                 .replace("项", "")
+                .replace("首", "")
                 .trim();
     }
 

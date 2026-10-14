@@ -6235,24 +6235,51 @@ final class NativeGeminiLiveClient {
                                     "");
                     workingContext.setPendingTask("");
 
+                    boolean submitted =
+                            result.optBoolean("success", false);
+                    String clickError =
+                            result.optString("error", "");
+                    ElementReferenceRuntime.noteTapOutcome(
+                            submitted, clickError);
+                    if (!submitted
+                            && ("ELEMENT_STALE_OR_NOT_FOUND".equals(clickError)
+                                || "ELEMENT_NOT_CLICKABLE".equals(clickError))) {
+                        // Screen may have re-rendered since we numbered it.
+                        // Do not retry a stale id or guess coordinates.
+                        JSONObject refreshed =
+                                ElementReferenceRuntime.startExplicit();
+                        if ("ELEMENT_REFERENCE_WAITING".equals(
+                                refreshed.optString("error", ""))) {
+                            workingContext.setPendingTask(
+                                    "WAITING_ELEMENT_REFERENCE");
+                            reportStage(
+                                    "畫面元素已變動，已重新編號，請再選一次");
+                            return;
+                        }
+                    }
+
                     if (agentTaskCoordinator
                             .activeRunning() != null) {
                         resumeAgentAfterUserChoice(
-                                "已依元素編號完成點擊");
+                                submitted
+                                        ? "元素編號點擊已送出，仍需驗證"
+                                        : "元素編號點擊未成功");
                         sendInternalAgentDirective(
-                                "【Runtime 元素編號已執行】"
-                                        + "taskState="
-                                        + taskState
-                                        + "；evidence="
-                                        + evidence
-                                        + "。依目前畫面繼續原始目標；"
-                                        + "不要重新搜尋，也不要再次要求同一個元素編號。");
+                                submitted
+                                        ? "【Runtime 元素編號點擊已送出】"
+                                            + "taskState=" + taskState
+                                            + "；evidence=" + evidence
+                                            + "。這不代表播放成功；只可依新的畫面／播放狀態繼續原始目標，"
+                                            + "不要重複盲點同一元素。"
+                                        : "【Runtime 元素編號點擊失敗】error="
+                                            + clickError
+                                            + "。未點擊成功。不要宣告播放完成，"
+                                            + "也不要盲目重試；請求新的 UI 證據或說明卡點。");
                     } else {
                         reportStage(
-                                result.optBoolean(
-                                        "success", false)
-                                        ? "已點擊指定元素"
-                                        : "元素點擊未成功");
+                                submitted
+                                        ? "元素點擊已送出，待確認畫面效果"
+                                        : "元素點擊失敗：" + clickError);
                     }
                 } catch (Exception error) {
                     workingContext.setPendingTask("");

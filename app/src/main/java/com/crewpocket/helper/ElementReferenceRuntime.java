@@ -84,6 +84,28 @@ final class ElementReferenceRuntime {
     }
 
     private static Session active;
+    // Process-memory-only, sanitized manual assist outcome. No identifiers,
+    // labels, coordinates, text, screenshots or input utterances are retained.
+    private static volatile String lastManualOutcome = "NONE";
+
+    static String diagnosticSummary() {
+        return "Element reference (latest, RAM): " + lastManualOutcome;
+    }
+
+    static void noteTapOutcome(boolean submitted, String error) {
+        String code = error == null ? "" : error.trim();
+        if (submitted) {
+            lastManualOutcome = "TAP_DISPATCHED_AWAITING_EFFECT";
+        } else if ("ELEMENT_STALE_OR_NOT_FOUND".equals(code)) {
+            lastManualOutcome = "TAP_FAILED_STALE";
+        } else if ("ELEMENT_NOT_CLICKABLE".equals(code)) {
+            lastManualOutcome = "TAP_FAILED_NOT_CLICKABLE";
+        } else if ("SENSITIVE_TARGET_BLOCKED".equals(code)) {
+            lastManualOutcome = "TAP_BLOCKED_SENSITIVE";
+        } else {
+            lastManualOutcome = "TAP_FAILED_OTHER";
+        }
+    }
 
     private ElementReferenceRuntime() {}
 
@@ -165,6 +187,7 @@ final class ElementReferenceRuntime {
             synchronized (LOCK) {
                 clearLocked();
                 active = session;
+                lastManualOutcome = "OPENED_" + options.size() + "_OPTIONS";
             }
 
             ElementReferenceOverlay.show(
@@ -204,6 +227,7 @@ final class ElementReferenceRuntime {
             session = active;
             if (session == null) return Decision.none();
             if (session.expired()) {
+                lastManualOutcome = "SESSION_EXPIRED";
                 clearLocked();
                 ElementReferenceOverlay.dismiss();
                 return Decision.none();
@@ -212,15 +236,22 @@ final class ElementReferenceRuntime {
 
         if (!sameScreenContext(session)) {
             cancel();
+            lastManualOutcome = "SCREEN_CONTEXT_CHANGED";
             return Decision.none();
         }
 
         int index = ElementReferenceChoice.parseIndex(raw, session.options.size());
-        if (index < 0 || index >= session.options.size()) return Decision.none();
+        if (index < 0 || index >= session.options.size()) {
+            lastManualOutcome = "INVALID_CHOICE";
+            return Decision.none();
+        }
         Option chosen = session.options.get(index);
 
         synchronized (LOCK) {
-            if (active == session) clearLocked();
+            if (active == session) {
+                clearLocked();
+                lastManualOutcome = "CHOICE_RESOLVED";
+            }
         }
         ElementReferenceOverlay.dismiss();
         return Decision.selected(chosen.elementId);
@@ -304,6 +335,8 @@ final class ElementReferenceRuntime {
     }
 
     private static JSONObject failure(String code, String instruction) {
+        lastManualOutcome = "OPEN_FAILED_" +
+                (code == null ? "UNKNOWN" : code.replaceAll("[^A-Z_]", ""));
         JSONObject out = new JSONObject();
         try {
             out.put("success", false)

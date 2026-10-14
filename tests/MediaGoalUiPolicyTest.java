@@ -79,6 +79,12 @@ public final class MediaGoalUiPolicyTest {
         check(!MediaGoalUiPolicy.shouldRejectNumericTarget(
                         "10", true),
                 "numeric target remains valid during explicit element-reference mode");
+        check(MediaGoalUiPolicy.shouldRejectNumericTarget(
+                        "0", true),
+                "zero is invalid even during numbered overlay mode");
+        check(MediaGoalUiPolicy.shouldRejectNumericTarget(
+                        "0", false),
+                "zero is not a semantic tap target");
         check(!MediaGoalUiPolicy.looksLikeNumericOrdinalTarget("鄧紫棋"),
                 "semantic label is not numeric target");
 
