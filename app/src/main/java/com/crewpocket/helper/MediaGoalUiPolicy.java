@@ -139,7 +139,7 @@ final class MediaGoalUiPolicy {
             String target,
             boolean elementReferenceActive) {
         return looksLikeNumericOrdinalTarget(target)
-                && !elementReferenceActive;
+                && ("0".equals(clean(target)) || !elementReferenceActive);
     }
 
     private static boolean containsAny(
