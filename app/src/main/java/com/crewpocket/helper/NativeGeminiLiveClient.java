@@ -6239,6 +6239,8 @@ final class NativeGeminiLiveClient {
                             result.optBoolean("success", false);
                     String clickError =
                             result.optString("error", "");
+                    ElementReferenceRuntime.noteTapOutcome(
+                            submitted, clickError);
                     if (!submitted
                             && ("ELEMENT_STALE_OR_NOT_FOUND".equals(clickError)
                                 || "ELEMENT_NOT_CLICKABLE".equals(clickError))) {

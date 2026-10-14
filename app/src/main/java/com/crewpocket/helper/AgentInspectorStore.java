@@ -293,6 +293,8 @@ final class AgentInspectorStore {
         }
 
         out.append("\n\n")
+                .append(ElementReferenceRuntime.diagnosticSummary())
+                .append("\n\n")
                 .append(AgentPerformanceStore.buildReport(context))
                 .append("\n\n")
                 .append(PerformanceMetrics.buildReportForTask(task.optString("taskId", "")))
