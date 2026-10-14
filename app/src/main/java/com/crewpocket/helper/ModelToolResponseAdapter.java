@@ -82,6 +82,19 @@ final class ModelToolResponseAdapter {
             if (goalJson.length() > 0) out.put("goal", goalJson);
 
             String message = message(toolName, source, status);
+            if ("MEDIA:PLAY".equals(goalIntent)
+                    && ModelRuntimeContract.NEXT_CONTINUE.equals(goal.next)
+                    && DONE.equals(status)
+                    && ("search_current_app".equals(toolName)
+                        || "commit_search".equals(toolName))) {
+                // SEARCH is an intermediate result, never a completed PLAY
+                // goal. Give the model a concrete next step instead of letting
+                // it repeatedly inspect the same result page.
+                message = "搜尋只是第一步，播放尚未完成。"
+                        + "依 screen.items 選擇目前可見的歌手／歌曲結果，"
+                        + "接著使用 phone_action(action=TAP,target=播放)。"
+                        + "不要重複 SEARCH/inspect_ui；若沒有可靠控制，問使用者。";
+            }
             if (!message.isEmpty()) {
                 out.put("message", clip(message, MAX_MESSAGE));
             }
