@@ -4064,8 +4064,12 @@ final class NativeGeminiLiveClient {
 
                     boolean verifiedStandaloneAppOpen =
                             AgentTaskLifecyclePolicy.verifiedAppOpenIsTerminal(
-                                    workingContext.toProgressJson()
-                                            .optString("goalIntent", ""),
+                                    GoalIntentKey.isStandaloneAppOpen(
+                                            workingContext.toProgressJson()
+                                                    .optString("goal", ""))
+                                            ? workingContext.toProgressJson()
+                                                    .optString("goalIntent", "")
+                                            : "",
                                     name,
                                     succeeded,
                                     result.optString("taskState", ""),
