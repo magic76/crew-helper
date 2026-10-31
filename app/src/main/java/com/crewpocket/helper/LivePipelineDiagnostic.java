@@ -23,6 +23,7 @@ final class LivePipelineDiagnostic {
     private static int interactionIdleFrames;
     private static int toolCallsForIntent;
     private static int responsesForIntent;
+    private static boolean countedIdleWithoutTool;
 
     private LivePipelineDiagnostic() {}
 
@@ -44,6 +45,7 @@ final class LivePipelineDiagnostic {
         interactionIdleFrames = 0;
         toolCallsForIntent = 0;
         responsesForIntent = 0;
+        countedIdleWithoutTool = false;
     }
 
     static synchronized void onIntent(long generation, String rawGoal) {
@@ -52,6 +54,9 @@ final class LivePipelineDiagnostic {
         finalizedIntents++;
         toolCallsForIntent = 0;
         responsesForIntent = 0;
+        lastTool = "NONE";
+        lastAction = "NONE";
+        countedIdleWithoutTool = false;
     }
 
     static synchronized void onFrame(String status, boolean turnComplete,
@@ -62,7 +67,10 @@ final class LivePipelineDiagnostic {
             interaction = "IDLE";
             interactionIdleFrames++;
             if (activeIntentGeneration >= 0 && toolCallsForIntent == 0
-                    && !hasToolCalls) idleWithoutTool++;
+                    && !hasToolCalls && !countedIdleWithoutTool) {
+                idleWithoutTool++;
+                countedIdleWithoutTool = true;
+            }
         }
         if (turnComplete && "IN_PROGRESS".equals(interaction)) {
             incompleteUtterances++;
@@ -75,6 +83,10 @@ final class LivePipelineDiagnostic {
         toolCallsForIntent++;
         lastTool = allowedTool(name);
         lastAction = allowedAction(rawAction);
+    }
+
+    static synchronized int currentIntentTools() {
+        return toolCallsForIntent;
     }
 
     static synchronized void onExecution() {
