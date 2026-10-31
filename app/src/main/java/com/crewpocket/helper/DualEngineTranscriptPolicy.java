@@ -30,7 +30,17 @@ final class DualEngineTranscriptPolicy {
             String item = chunk.trim()
                     .replaceFirst("^(?i)(step\\s*[1-3]|[1-3]|first|second|third|next|finally)[.:：、)\\-\\s]+", "")
                     .trim();
-            if (item.length() < 8 || item.length() > 160) continue;
+            // Chinese semantic steps like "搜尋歌手" or "點擊播放" can
+            // be valid despite being shorter than English instructions.
+            boolean cjk = false;
+            for (int i = 0; i < item.length(); i++) {
+                char ch = item.charAt(i);
+                if (ch >= 0x3400 && ch <= 0x9fff) {
+                    cjk = true;
+                    break;
+                }
+            }
+            if (item.length() < (cjk ? 3 : 8) || item.length() > 160) continue;
             String value = item.toLowerCase(Locale.ROOT);
             if (!has(value, "search", "find", "tap", "play", "inspect",
                     "verify", "open", "select", "搜尋", "搜索", "找",
