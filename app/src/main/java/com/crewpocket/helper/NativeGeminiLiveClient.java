@@ -159,6 +159,7 @@ final class NativeGeminiLiveClient {
     private boolean currentModelTurnReceivedAudio = false;
     private String lastReportedInteractionStatus = "";
     private long lastAppOpenRecoveryGeneration = -1L;
+    private long lastNoToolTurnTraceGeneration = -1L;
     // Per-session read-only Live diagnosis, separate from opt-in export trace.
     private final LiveSelfDiagnosisPolicy liveSelfDiagnosis =
             new LiveSelfDiagnosisPolicy();
@@ -1333,6 +1334,7 @@ final class NativeGeminiLiveClient {
         LivePipelineDiagnostic.startSession(System.currentTimeMillis());
         liveSelfDiagnosis.reset();
         lastAppOpenRecoveryGeneration = -1L;
+        lastNoToolTurnTraceGeneration = -1L;
         loadVoiceprintProfile();
         reportStage("建立 Gemini WebSocket…");
         liveConnection.start();
@@ -1995,16 +1997,32 @@ final class NativeGeminiLiveClient {
 
     private void maybeRecoverNoToolAppOpen(
             GeminiLiveTurnHandler.Frame frame, boolean interactionComplete) {
-        if (!interactionComplete || frame == null || !running
+        if (frame == null || !running
                 || agentTaskCoordinator.activeRunning() != null) return;
         LiveTurnCoordinator.FinalizedTurn last = liveTurnCoordinator.latest();
         if (last.generation != userIntentGeneration) return;
+        int calls = LivePipelineDiagnostic.currentIntentTools();
+        boolean completedSpokenNoToolTurn =
+                frame.turnComplete
+                && currentModelTurnProducedSpeech
+                && !frame.hasToolCalls()
+                && calls == 0
+                && toolCallDispatcher.inFlightCountForTest() == 0
+                && !hasFreshInput(frame);
+        if (completedSpokenNoToolTurn
+                && lastNoToolTurnTraceGeneration != userIntentGeneration) {
+            lastNoToolTurnTraceGeneration = userIntentGeneration;
+            CrewDebugTrace.record("NO_TOOL_TURN_COMPLETE",
+                    userIntentGeneration, "", "NONE", "NONE",
+                    "NO_TOOL_CALL");
+        }
+        if (!interactionComplete && !completedSpokenNoToolTurn) return;
         String goal = workingContext.toProgressJson().optString("goalIntent", "");
         boolean shouldNudge = LiveAppOpenRecoveryPolicy.shouldRecover(
                 goal, last.text, currentForegroundPackageName(),
                 frame.interactionStatus, hasFreshInput(frame),
-                LivePipelineDiagnostic.currentIntentTools(),
-                lastAppOpenRecoveryGeneration == userIntentGeneration);
+                calls, lastAppOpenRecoveryGeneration == userIntentGeneration,
+                completedSpokenNoToolTurn);
         if (!shouldNudge) return;
         lastAppOpenRecoveryGeneration = userIntentGeneration;
         CrewDebugTrace.record("RECOVERY_REQUESTED", userIntentGeneration,
@@ -2622,6 +2640,8 @@ final class NativeGeminiLiveClient {
                         deckRuntimeController.isCreateStartup(),
                         deckRuntimeController.isPresentStartup(),
                         deckRuntimeController.hasWorkspaceStartup());
+        CrewDebugTrace.count("TOOL_CATALOG", userIntentGeneration,
+                "NONE", modelTools.length());
         setup.put("tools", new JSONArray().put(new JSONObject().put(
                 "functionDeclarations", modelTools)));
         String customPrompt = this.customPrompt;
