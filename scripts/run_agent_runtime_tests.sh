@@ -42,6 +42,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/LiveAppOpenRecoveryPolicy.java" \
   "$SRC/LiveModelSelection.java" \
   "$SRC/DualEnginePlanningPolicy.java" \
+  "$SRC/DualEngineTranscriptPolicy.java" \
   "$SRC/LiveSelfDiagnosisPolicy.java" \
   "$SRC/CrewDebugTrace.java" \
   "$SRC/CrewDebugBundle.java" \
@@ -134,6 +135,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/LiveAppOpenRecoveryPolicyTest.java" \
   "$ROOT/tests/LiveModelSelectionTest.java" \
   "$ROOT/tests/DualEnginePlanningPolicyTest.java" \
+  "$ROOT/tests/DualEngineTranscriptPolicyTest.java" \
   "$ROOT/tests/LiveSelfDiagnosisPolicyTest.java" \
   "$ROOT/tests/CrewDebugLabTest.java" \
   "$ROOT/tests/LiveHumanTurnBoundaryTest.java" \
@@ -239,6 +241,7 @@ java -cp "$OUT" com.crewpocket.helper.LivePipelineDiagnosticTest
 java -cp "$OUT" com.crewpocket.helper.LiveAppOpenRecoveryPolicyTest
 java -cp "$OUT" com.crewpocket.helper.LiveModelSelectionTest
 java -cp "$OUT" com.crewpocket.helper.DualEnginePlanningPolicyTest
+java -cp "$OUT" com.crewpocket.helper.DualEngineTranscriptPolicyTest
 java -cp "$OUT" com.crewpocket.helper.LiveSelfDiagnosisPolicyTest
 java -cp "$OUT" com.crewpocket.helper.CrewDebugLabTest
 java -cp "$OUT" com.crewpocket.helper.LiveHumanTurnBoundaryTest

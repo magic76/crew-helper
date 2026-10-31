@@ -1605,8 +1605,8 @@ public class MainActivity extends Activity
                         "3.8 Extended Thinking · Low"),
                 I18n.get(this, "3.8 Extended Thinking · Medium",
                         "3.8 Extended Thinking · Medium"),
-                I18n.get(this, "雙引擎 · 標準語音＋背景思考（實驗）",
-                        "Dual Engine · Standard voice + background thinking (experimental)")
+                I18n.get(this, "雙引擎 · Standard＋3.8 Extended（實驗）",
+                        "Dual Engine · Standard + 3.8 Extended (experimental)")
         };
         String saved = AppConfig.getLiveModelId(this);
         int selected = 0;

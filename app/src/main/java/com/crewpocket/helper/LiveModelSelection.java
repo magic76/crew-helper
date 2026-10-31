@@ -41,7 +41,7 @@ final class LiveModelSelection {
     static Config resolve(String savedId) {
         if (DUAL_ENGINE.equals(savedId)) {
             return new Config(DUAL_ENGINE, STANDARD_MODEL, "",
-                    "Standard Live + Background Thinking (experimental)");
+                    "Standard + 3.8 Extended Thinking (experimental)");
         }
         if (EXTENDED_LOW.equals(savedId)) {
             return new Config(EXTENDED_LOW, EXTENDED_MODEL, "LOW",

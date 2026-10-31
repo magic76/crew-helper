@@ -1,41 +1,40 @@
-# Crew Helper — Dual Engine P0 (Experimental)
+# Crew Helper — Dual Engine: Standard + 3.8 Extended Thinking (experimental)
 
 ## Architecture
 
-The **Dual Engine** setting uses exactly **one** Gemini Live socket: `gemini-3.8-live` is the sole microphone, spoken-response, and tool-calling owner. A *separate, text-only REST request* to `gemini-3.6-flash` (with `thinkingLevel=LOW`) may run concurrently for selected multi-step requests.
+There are **two independent Gemini Live WebSockets** for *eligible* multi-step requests:
 
-This is **not two Live sessions** and does **not** use `gemini-3.8-live-extended-thinking` for background planning. The extended Live model had confirmed tool-less `IDLE` events on device. The REST model supports thinking and structured JSON outputs.
+- Foreground: `gemini-3.8-live` owns the **only microphone**, **only audible output**, all tool declarations, and all Android Runtime actions.
+- Background: `gemini-3.8-live-extended-thinking` with `thinkingLevel=MEDIUM` receives a bounded **text** request, *no microphone*, and **no tool declarations**. The background AUDIO output is **discarded**; `outputAudioTranscription` is collected as optional, read-only advice.
 
-## On/off and rollback
+The Extended model does **not** support structured JSON output. Its voice transcript must be filtered as untrusted natural language. `turnComplete` ends a spoken utterance, not an Extended reasoning interaction; the planner accepts advice only on `interactionStatus=IDLE`.
 
-Settings → Gemini Live Model → **Dual Engine · Standard voice + background thinking (experimental)**. Applies only to the next call. **Standard 3.8 Live** remains the default and immediate rollback. The dual mode snapshots the selection when the Live client is created; no new DB or external account.
+## Safety and rollout
 
-## P0 eligibility and privacy
+Settings → Gemini Live Model → **Dual Engine · Standard + 3.8 Extended Thinking (experimental)**; applies on the **next call**. Default remains **Standard 3.8 Live**. Change back to Standard for immediate rollback.
 
-Pilot: only explicit multi-step **public media playback searches** (e.g. "find artist's song and play"). No background calls for note-taking, messaging, private chats, account/settings actions, payments, deletion, raw screen snapshots, screenshots, or navigation/destinations. The client rejects requests with URLs, email-like text, multi-digit identifiers, sensitive keywords, or overly long input. The bounded eligible media request goes to the **same Gemini API key/provider** as Live, but through a second endpoint. There is no on-device persistence of the planning prompt or plan; only aggregate process-local counters.
+P0 sends only explicitly qualified multi-step **public music search/play** requests. Do not send notes, private chats, URLs, phone screenshots, credentials, addresses, payment requests, or message content to the background socket. Its setup includes no tools and it cannot access Android. Requests are not persisted; only aggregate diagnostic counters remain during the process. This uses the existing Gemini API key and makes an additional billable Live connection per eligible intent; simultaneous-connection limits depend on the account.
 
-Each eligible user intent starts at most one background planner call, without blocking the Live WebSocket thread. 3-second connect / 8-second read limits, bounded JSON body and response, and cancellation/connection disconnect on a new intent or call stop. The planner has no tool declarations and no Android access.
+All background sessions have an 18-second ceiling and are cancelled immediately if the user starts another instruction or the call ends. Background failures, setup rejection, missing transcripts, and timeouts must **not** interrupt Standard Live or claim success.
 
-## Delivery and execution authority
+Transcript advice is bounded to three short action-oriented tips and screened for unsafe or false-completion text. Advice is attached **once**, to a subsequent `phone_action` or `inspect_ui` result *only if* the intent generation/goal still match and it fits the existing model-facing payload byte budget. It cannot override Runtime `goal.next`, `requiredTool`, permissions, SEND guards, or fresh UI verification. If the task finishes before advice arrives, the advice is unused.
 
-- Output is structured JSON (`steps` with at most three short advisory items).
-- Runtime rejects unsafe or oversized steps, and accepts a plan only for the **same current intent generation and goal**.
-- If ready *at a subsequent* `phone_action` or `inspect_ui` tool response, advice is included once as `thinkingAdvice`, strictly within the pre-existing tool-response byte budget.
-- Standard Live still chooses the next tool and the existing Runtime owns intent generation, SEND guard, duplicate suppression, fresh screen evidence and verification. The plan **cannot grant authorization or claim success**.
-- If the REST endpoint fails, times out, is unavailable, or the plan arrives too late, **Standard Live proceeds unchanged**. The plan is not injected as a fabricated user utterance and never interrupts an active voice turn. If the task needs no second tool result, the optional plan may be unused.
+## Verification
 
-## Debug and success criteria
+Agent Inspector's Live pipeline shows `Background Thinking: started / ready / failed / delivered`; none of these counters imply successful phone actions. Use these A/B checks on a device:
 
-Agent Inspector's *Live pipeline* includes `Background Thinking: started / ready / failed / delivered` (counts only; never content).
+1. Standard mode, request an explicit Crew Notebook note; verify `create_note`, real execution and persisted note.
+2. Dual mode, restart call. Inspector should show the **main** setup as `gemini-3.8-live`, `thinking=OFF`; **background** uses a separate `gemini-3.8-live-extended-thinking` WebSocket only for eligible tasks.
+3. Request "打開 Apple Music，找周杰倫的歌播放". The main socket must continue issuing real `phone_action` calls. The background planner may show `started`, then `ready` or `failed` depending on server quota, transcript delivery and timing; `delivered` only if a later tool result could include it.
+4. Interrupt with a different intent and verify old plans never appear.
+5. Disable connectivity, exhaust quota, or inject an empty/unsafe transcript: Standard still works, and the plan never creates a tool action.
+6. Simple note, private message and navigation tasks must not trigger the background connection.
+7. Measure mobile battery, data usage and cost before allowing wider rollout.
 
-1. Start **Standard**, ask "在 Crew 記事本建立一則測試筆記"; verify `toolCall`, execution, tool response and actual note creation.
-2. Select **Dual Engine**, end and restart Live, confirm Inspector's setup model remains `gemini-3.8-live`, with `thinking=OFF`.
-3. Ask "打開 Apple Music，找周杰倫的歌播放". Ensure normal tool calls occur and planner stats show `started`; `delivered` can be zero when the plan arrives after the last eligible tool result.
-4. Speak a new instruction before background work finishes. Old suggestions must not arrive in the new intent.
-5. Disable network access to the REST planner or exceed its quota. Standard Live tools must continue unaffected.
-6. For notes, SMS/LINE, private credentials, and addresses, confirm **planner started remains unchanged**.
-7. Check action verification, user interruption, voice routing, and app foreground behavior on the real phone.
+## Source documentation
 
-**No on-device or API-key acceptance test was run from GitHub**; CI tests cover the pure Java policy and the Android compilation path. This P0 is intended for a controlled A/B and not an automatic release.
+- https://ai.google.dev/gemini-api/docs/models/gemini-3.8-live-extended-thinking
+- https://ai.google.dev/gemini-api/docs/live-api/capabilities
+- https://ai.google.dev/api/live
 
-Official source: https://ai.google.dev/gemini-api/docs/models/gemini-3.6-flash
+**Status:** Source implementation and Java CI tests; no Gemini-key/on-device dual-socket acceptance test from GitHub.
