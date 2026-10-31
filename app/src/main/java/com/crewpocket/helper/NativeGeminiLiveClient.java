@@ -1466,7 +1466,11 @@ final class NativeGeminiLiveClient {
     private void handleJson(String raw) throws Exception {
         GeminiLiveTurnHandler.Frame frame =
                 geminiLiveTurnHandler.parse(raw);
-        boolean interactionComplete = isInteractionComplete(frame);
+        boolean interactionComplete = LiveInteractionCompletionPolicy.isComplete(
+                frame.interactionStatus,
+                hasFreshInput(frame),
+                frame.hasToolCalls(),
+                toolCallDispatcher.inFlightCountForTest());
         boolean utteranceComplete = isModelUtteranceComplete(frame);
 
         if (!frame.interimInputText.isEmpty()) {
@@ -1897,22 +1901,7 @@ final class NativeGeminiLiveClient {
 
     }
 
-    private static boolean isInteractionComplete(
-            GeminiLiveTurnHandler.Frame frame) {
-        String status = frame == null || frame.interactionStatus == null
-                ? ""
-                : frame.interactionStatus.trim().toUpperCase(Locale.ROOT);
-        if ("IN_PROGRESS".equals(status)) return false;
-        if ("IDLE".equals(status)) {
-            return !hasFreshInput(frame)
-                    || frame.turnComplete
-                    || frame.modelTurnPresent
-                    || frame.hasToolCalls();
-        }
-        return frame != null && frame.turnComplete;
-    }
-
-    private static boolean isModelUtteranceComplete(
+     private static boolean isModelUtteranceComplete(
             GeminiLiveTurnHandler.Frame frame) {
         if (frame == null) return false;
         String status = frame.interactionStatus == null
@@ -1920,9 +1909,7 @@ final class NativeGeminiLiveClient {
                 : frame.interactionStatus.trim().toUpperCase(Locale.ROOT);
         return frame.turnComplete
                 || ("IDLE".equals(status)
-                    && (!hasFreshInput(frame)
-                        || frame.modelTurnPresent
-                        || frame.hasToolCalls()));
+                    && !hasFreshInput(frame));
     }
 
     private static boolean hasFreshInput(
