@@ -60,6 +60,17 @@ public final class ToolCallDispatchLedgerTest {
         check(ledger.inFlightCount() == 0,
                 "running call can release after new intent");
 
+        ToolCallDispatchLedger.Registration running =
+                ledger.register("c5", "phone_action", "{action:TAP}", 10L);
+        ToolCallDispatchLedger.Registration runningDuplicate =
+                ledger.register("c6", "phone_action", "{action:TAP}", 10L);
+        check(running.accepted && runningDuplicate.coalesced,
+                "in-flight duplicate stays coalesced");
+        ledger.resetForNewIntent();
+        check(ledger.responseRecipients("c5", "phone_action").size() == 2,
+                "running async result still fans out to both call IDs");
+        ledger.releaseInFlight(running.signature);
+
         ToolCallDispatchLedger.Registration oldIdAgain =
                 ledger.register("c4", "tap_screen", "{x:1}", 9L);
         check(!oldIdAgain.accepted && oldIdAgain.duplicateCallId,
