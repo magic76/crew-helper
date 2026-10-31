@@ -21,7 +21,8 @@ final class CrewDebugTrace {
             + "|TOOL_CANCELLED|RUNTIME_GATE|MODEL_SPEECH|TRANSPORT_ERROR"
             + "|TOOL_RUNTIME_DONE|TASK_FINISHED|TASK_CANCELLED"
             + "|RECOVERY_REQUESTED|RECOVERY_FAILED"
-            + "|TOOL_CATALOG|PHONE_TOOL_DECLARED|NO_TOOL_TURN_COMPLETE|";
+            + "|TOOL_CATALOG|PHONE_TOOL_DECLARED|NO_TOOL_TURN_COMPLETE"
+            + "|MODEL_SETUP|";
     private static final String TOOLS =
             "|NONE|phone_action|inspect_ui|launch_app|tap_screen|tap_element"
             + "|search_current_app|commit_search|type_text|send_text|OTHER|";
@@ -38,7 +39,8 @@ final class CrewDebugTrace {
             + "|SEARCH_NEEDS_QUERY|LOCATOR_MARGIN_TOO_SMALL"
             + "|TARGET_REQUIRED|AMBIGUOUS|UNVERIFIED"
             + "|RECOVERY_TARGET_MISMATCH|RECOVERY_LIMIT_REACHED"
-            + "|COMPLETED|SUPERSEDED_BY_USER|USER_INTERRUPTED|OTHER|";
+            + "|COMPLETED|SUPERSEDED_BY_USER|USER_INTERRUPTED"
+            + "|STANDARD|EXTENDED_LOW|EXTENDED_MEDIUM|OTHER|";
     private static final ArrayDeque<String> events = new ArrayDeque<String>();
     private static final HashMap<String,String> callTokens = new HashMap<String,String>();
     private static final HashMap<String,Long> callGenerations =
