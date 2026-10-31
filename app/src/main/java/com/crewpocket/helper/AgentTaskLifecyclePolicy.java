@@ -155,6 +155,30 @@ final class AgentTaskLifecyclePolicy {
                 safe(taskState).trim().toUpperCase());
     }
 
+    /**
+     * An app launch is terminal only for a standalone APP:OPEN goal with fresh
+     * foreground evidence that matches the launched package. A V2 PENDING or
+     * merely LIKELY result is not sufficient to declare success.
+     */
+    static boolean verifiedAppOpenIsTerminal(
+            String goalIntent, String name, boolean succeeded,
+            String taskState, String verificationStatus,
+            boolean v2Enforced, String launchedPackage,
+            String observedPackage, boolean freshAfter) {
+        if (!"APP:OPEN".equals(goalIntent)
+                || !"launch_app".equals(name) || !succeeded
+                || !freshAfter
+                || launchedPackage == null || launchedPackage.isEmpty()
+                || !launchedPackage.equals(observedPackage)) return false;
+        if (v2Enforced && !"VERIFIED".equals(verificationStatus)) return false;
+        String state = safe(taskState).trim().toUpperCase();
+        return !"WAITING_USER".equals(state)
+                && !"NEED_USER".equals(state)
+                && !"BLOCKED".equals(state)
+                && !"WAITING_BACKGROUND".equals(state)
+                && !"IN_PROGRESS".equals(state);
+    }
+
     static boolean isOneShotCompletionTool(String name) {
         return "create_note".equals(name)
                 || "remember_app_guidance".equals(name)
