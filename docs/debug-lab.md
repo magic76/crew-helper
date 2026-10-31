@@ -147,9 +147,10 @@ or mark any unrelated task as done. This fallback may still fail if Gemini
 ignores function calls entirely.
 
 New sanitized evidence distinguishes setup from model noncompliance:
-`TOOL_CATALOG` records the declared function count and
-`NO_TOOL_TURN_COMPLETE` marks one completed no-tool spoken turn per
-generation. Neither event records microphone transcripts, tool arguments
+`TOOL_CATALOG` records the declared function count,
+`PHONE_TOOL_DECLARED` records whether `phone_action` was included in
+the outgoing model tool surface (0/1), and `NO_TOOL_TURN_COMPLETE`
+marks one completed no-tool spoken turn per generation. Neither event records microphone transcripts, tool arguments
 or raw device data.
 
 **Deployment caution:** the branch version is not necessarily the phone's
