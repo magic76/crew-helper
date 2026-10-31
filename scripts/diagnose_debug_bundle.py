@@ -57,10 +57,12 @@ def analyze(session, runtime, events):
         frames = events_by_name["LIVE_FRAME"]
         actions = [e.get("action") for e in calls]
         idle = any(e.get("code") == "IDLE" for e in frames)
-        if not any(e.get("event") == "INTENT_FINALIZED" for e in history):
+        started = [e for e in history if e.get("event") == "INTENT_FINALIZED"]
+        goal = started[-1].get("goal", "UNKNOWN") if started else "UNKNOWN"
+        if not started:
             classification = "PARTIAL_TRACE"
             rationale = "The intent start is missing from the captured window."
-        elif "TAP" in actions and session.get("latestGoal") == "APP:OPEN" and gen == session.get("latestGeneration"):
+        elif "TAP" in actions and goal == "APP:OPEN":
             classification = "WRONG_TOOL_ACTION"
             rationale = "The explicit app-open intent received a TAP instead of OPEN_APP."
         elif gates:
@@ -69,10 +71,13 @@ def analyze(session, runtime, events):
         elif not calls and idle:
             classification = "MODEL_NO_TOOL_CALL"
             rationale = "The interaction became IDLE without an observed tool call."
+        elif events_by_name["TOOL_RESPONSE_FAILED"]:
+            classification = "TOOL_RESPONSE_TRANSPORT_FAILED"
+            rationale = "A tool result could not be delivered to the Live websocket."
         elif calls and not replies and not canceled:
             classification = "TOOL_RESPONSE_MISSING"
             rationale = "Tool calls were received but no response appears in this capture."
-        elif len(replies) > 0 and any(e.get("code") == "FAILED" for e in replies):
+        elif len(replies) > 0 and any(e.get("code") not in ("SENT", "NONE") for e in replies):
             classification = "TOOL_FAILED"
             rationale = "At least one tool response reported failure."
         else:
