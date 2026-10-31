@@ -2714,6 +2714,104 @@ final class NativeGeminiLiveClient {
         toolCallDispatcher.enqueue(call, generation);
     }
 
+    /**
+     * Safe model-facing overview: current generation only, and at most eight
+     * already-sanitized Debug Lab events when manual tracing is enabled.
+     */
+    private JSONObject buildLiveDiagnosticSummary(long generation)
+            throws Exception {
+        LiveSelfDiagnosisPolicy.Snapshot state =
+                liveSelfDiagnosis.snapshot(generation);
+        JSONObject out = new JSONObject()
+                .put("success", true)
+                .put("scope", "CURRENT_INTENT")
+                .put("intentGeneration", state.generation)
+                .put("goalIntent", state.goal)
+                .put("lastTool", state.lastTool)
+                .put("lastAction", state.lastAction)
+                .put("lastFailureCode", state.failure)
+                .put("observedToolCalls", state.observedCalls)
+                .put("failures", state.failures)
+                .put("recoveryOffered", state.recoveryOffered)
+                .put("recoveryConsumed", state.recoveryConsumed)
+                .put("instruction",
+                        "這是本次指令的 Runtime 證據摘要，不是根因證明。"
+                                + "未經 Runtime 驗證不可宣稱操作成功。");
+        CrewDebugTrace.Snapshot trace = CrewDebugTrace.snapshot();
+        if (trace.enabled) {
+            String[] lines = trace.jsonl.split("\\n");
+            JSONArray recent = new JSONArray();
+            int first = Math.max(0, lines.length - 96);
+            for (int i = first; i < lines.length; i++) {
+                if (lines[i].isEmpty()) continue;
+                JSONObject event;
+                try {
+                    event = new JSONObject(lines[i]);
+                } catch (Exception ignored) {
+                    continue;
+                }
+                if (event.optLong("generation", -1L) != generation) continue;
+                if (recent.length() == 8) {
+                    JSONArray tail = new JSONArray();
+                    for (int j = 1; j < recent.length(); j++) {
+                        tail.put(recent.opt(j));
+                    }
+                    recent = tail;
+                }
+                recent.put(event);
+            }
+            out.put("debugEvents", recent);
+            out.put("debugEventsDropped", trace.dropped);
+        }
+        return out;
+    }
+
+    /**
+     * Generates at most one low-risk option per finalized user generation.
+     * This tool DOES NOT execute it or grant extra Android permissions.
+     */
+    private JSONObject buildLiveRecoveryOptions(long generation)
+            throws Exception {
+        LiveSelfDiagnosisPolicy.Snapshot state =
+                liveSelfDiagnosis.snapshot(generation);
+        AgentTaskRecord active = agentTaskCoordinator.activeRunning();
+        boolean canInspect = active == null
+                || active.consecutiveVisualObservations < 2;
+        LiveSelfDiagnosisPolicy.Option option = liveSelfDiagnosis.offer(
+                generation,
+                liveTurnCoordinator.latest().text,
+                currentForegroundPackageName(),
+                canInspect);
+        JSONObject out = new JSONObject()
+                .put("success", true)
+                .put("scope", "CURRENT_INTENT")
+                .put("intentGeneration", generation)
+                .put("failureCode", state.failure)
+                .put("hasRecoveryOption", option != null)
+                .put("maxRecoveryAttempts", 1)
+                .put("bypassesRuntimeSafety", false);
+        if (option != null) {
+            JSONObject next = new JSONObject()
+                    .put("tool", option.tool)
+                    .put("reason", option.reason);
+            if (!"NONE".equals(option.action)) {
+                next.put("action", option.action);
+            }
+            if (!option.target.isEmpty()) {
+                next.put("target", option.target);
+            }
+            out.put("option", next);
+            out.put("instruction",
+                    "只能用上述一般工具嘗試一次；所有操作仍必須通過 Runtime 驗證。"
+                            + "若被拒絕或失敗，停止復原並向使用者說明。");
+        } else {
+            out.put("instruction",
+                    "沒有足夠證據或安全且未使用的復原方案。"
+                            + "不可猜測座標、重複相同動作或繞過 Runtime。");
+        }
+        return out;
+    }
+
     private void executeSingleTool(final JSONObject call) {
         LivePipelineDiagnostic.onExecution();
         final String id = call.optString("id", "tool_" + System.nanoTime());
