@@ -892,6 +892,32 @@ final class NativeGeminiLiveClient {
         return true;
     }
 
+    /**
+     * Do not promote an effectful TAP, a search result for MEDIA:PLAY, or
+     * unverified model narration into whole-task success. Only evidence
+     * proven for the ORIGINAL goal can close the prior task.
+     */
+    private void finishVerifiedPriorGoalBeforeSupersession() {
+        AgentTaskRecord previous = agentTaskCoordinator.activeRunning();
+        if (previous == null) return;
+        boolean verified;
+        synchronized (agentTaskCoordinator.monitor()) {
+            verified = agentTaskCoordinator.isActive(previous)
+                    && !previous.finished
+                    && !previous.cancelled
+                    && TaskSupersessionEvidencePolicy.canFinalizePriorGoal(
+                            GoalIntentKey.derive(previous.recipeGoal),
+                            previous.lastTaskState,
+                            previous.lastCompletionEvidence,
+                            previous.refinedMemoryTerminalVerified,
+                            previous.requiresPostActionInspection,
+                            previous.blockedReason != null);
+        }
+        if (!verified) return;
+        finishAgentTask(previous, AgentTaskEndReason.COMPLETED,
+                previous.finalReply);
+    }
+
     private void supersedeActiveAgentTaskForNewUserInstruction(
             String previousUserTurn,
             String newUserTurn) {
@@ -1000,6 +1026,12 @@ final class NativeGeminiLiveClient {
     private void beginUserIntent(
             String userText,
             boolean supersedeActiveTask) {
+        // A new human utterance must not re-label an already verified goal as
+        // CANCELLED merely because its final spoken acknowledgement is late.
+        // This runs BEFORE WorkingContext changes to the new user's goal.
+        if (supersedeActiveTask) {
+            finishVerifiedPriorGoalBeforeSupersession();
+        }
         String previousUserTurn =
                 workingContext.toJson().optString("latestUserTurn", "");
 
