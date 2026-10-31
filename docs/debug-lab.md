@@ -155,6 +155,28 @@ A persistent zero-tool result in Extended alone may be model/service-specific
 rather than an Android Runtime bug. Always confirm whether the installed APK
 actually includes the tested GitHub branch.
 
+## Gemini Live model selector
+
+Go to **Settings → Gemini Live Model** and choose one of:
+
+- **Standard 3.8 Live** (default): `gemini-3.8-live` with no `thinkingConfig`.
+- **3.8 Extended Thinking · Low**: `gemini-3.8-live-extended-thinking`, `thinkingLevel=LOW`.
+- **3.8 Extended Thinking · Medium**: same Extended model, `thinkingLevel=MEDIUM`.
+
+Only these three allowlisted settings can be stored. Unknown saved values fall
+back to Standard. The model choice is snapshotted when a new Live client
+starts; current calls and network resumes remain on their original model.
+The new setting applies to the next separately created Live call, including
+calls started from the Always-On service.
+
+**Agent Inspector** prints both the **selected next-session model** and the
+**last Live setup requested by this app process**. The opt-in Debug Lab trace
+also records a sanitized `MODEL_SETUP` event with `STANDARD`,
+`EXTENDED_LOW`, or `EXTENDED_MEDIUM`. These reflect the requested setup,
+not an authoritative confirmation from Google's backend. Compare tool-call
+counts from fresh sessions of both models; an old Inspector task may persist
+across builds and must not be treated as evidence for the current run.
+
 ## Current P0 limits
 
 This phase exports useful deterministic evidence, **not** a remote debugger,
