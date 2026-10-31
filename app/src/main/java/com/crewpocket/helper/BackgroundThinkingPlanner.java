@@ -34,6 +34,9 @@ final class BackgroundThinkingPlanner {
     private long requestEpoch;
     private String goal = "";
     private JSONArray readySteps;
+    private String readyPhase = "";
+    private String safePublicRequest = "";
+    private int repairRequests;
     private boolean delivered;
     private boolean stopped;
 
@@ -41,15 +44,17 @@ final class BackgroundThinkingPlanner {
         final long intent;
         final long epoch;
         final String request;
+        final boolean repair;
         final GeminiLiveConnection connection;
         final StringBuilder transcript = new StringBuilder();
         ScheduledFuture<?> timeout;
         boolean sentInput;
 
-        Attempt(long intent, long epoch, String request) {
+        Attempt(long intent, long epoch, String request, boolean repair) {
             this.intent = intent;
             this.epoch = epoch;
             this.request = request;
+            this.repair = repair;
             this.connection = new GeminiLiveConnection(apiKey, this);
         }
 
@@ -111,18 +116,24 @@ final class BackgroundThinkingPlanner {
                         server.optString("interaction_status",
                                 frame.optString("interactionStatus",
                                         frame.optString("interaction_status", ""))));
-                if ("IDLE".equalsIgnoreCase(status.trim())) {
+                boolean idle = "IDLE".equalsIgnoreCase(status.trim());
+                // This background socket declares NO tools and its only output
+                // is unplayed audio. A completed speech turn with >=2 safe
+                // actionable steps can be used without interrupting foreground
+                // Live, even if Extended never emits IDLE.
+                boolean speechComplete = server.optBoolean("turnComplete",
+                        server.optBoolean("turn_complete", false));
+                if (idle || speechComplete) {
                     List<String> tips =
                             DualEngineTranscriptPolicy.advisorySteps(transcript.toString());
-                    if (tips.isEmpty()) {
-                        failed(this);
-                    } else {
+                    if (tips.size() >= 2) {
                         JSONArray accepted = new JSONArray();
                         for (String tip : tips) accepted.put(tip);
                         succeeded(this, accepted);
+                    } else if (idle) {
+                        failed(this);
                     }
                 }
-                // IN_PROGRESS and turnComplete are NOT completion signals.
             } catch (Exception ignored) {
                 failed(this);
             }
@@ -159,15 +170,73 @@ final class BackgroundThinkingPlanner {
         generation = newGeneration;
         goal = newGoal == null ? "" : newGoal;
         readySteps = null;
+        readyPhase = "";
         delivered = false;
+        repairRequests = 0;
+        safePublicRequest = enabled && !stopped
+                ? DualEnginePlanningPolicy.safePublicMediaPrompt(text, goal)
+                : "";
         long epoch = ++requestEpoch;
         if (!enabled || stopped) return;
         String eligibleRequest = DualEnginePlanningPolicy.eligiblePrompt(text, goal);
+        LivePipelineDiagnostic.onSupervisorIntent(eligibleRequest.isEmpty());
         if (eligibleRequest.isEmpty()) return;
 
         // Exactly one short-lived background connection for the eligible
         // instruction. No microphone, tool schema or audio playback attached.
-        Attempt attempt = new Attempt(newGeneration, epoch, eligibleRequest);
+        launchAttempt(new Attempt(newGeneration, epoch, eligibleRequest, false));
+    }
+
+    /**
+     * Only one safe public media failure per intent may request fresh planning.
+     * This never holds up Standard Live, never changes goal or authorization
+     * and cannot send arbitrary Android Runtime data to the second model.
+     */
+    synchronized void onToolOutcome(long intent, String currentGoal,
+            String tool, JSONObject result) {
+        if (!enabled || stopped || generation != intent
+                || !goal.equals(currentGoal) || result == null) return;
+        String taskState = result.optString("taskState", "");
+        if (DualEngineSupervisorPolicy.isTerminalState(taskState)) {
+            discardActiveLocked();
+            readySteps = null;
+            return;
+        }
+        boolean success = result.optBoolean("success", false)
+                && !"STEP_FAILED".equals(result.optString("stepResult", ""));
+        String code = result.optString("verificationCode", "");
+        if (DualEngineSupervisorPolicy.safeFailureCode(code).isEmpty()) {
+            code = result.optString("error", "");
+        }
+        if (DualEngineSupervisorPolicy.safeFailureCode(code).isEmpty()
+                && "STEP_FAILED".equals(result.optString("stepResult", ""))) {
+            code = "STEP_FAILED";
+        }
+        boolean blocked = result.optBoolean("blockedByRuntime", false)
+                || result.optBoolean("agentStopped", false)
+                || "BLOCKED".equals(taskState);
+        if (!DualEngineSupervisorPolicy.shouldRequestRepair(
+                currentGoal, !safePublicRequest.isEmpty(), tool, success,
+                result.optBoolean("needsUser", false), blocked,
+                result.optBoolean("cancelled", false), repairRequests, code)) {
+            return;
+        }
+        String safeCode = DualEngineSupervisorPolicy.safeFailureCode(code);
+        repairRequests++;
+        discardActiveLocked();
+        readySteps = null;
+        readyPhase = "";
+        delivered = false;
+        long epoch = ++requestEpoch;
+        LivePipelineDiagnostic.onSupervisorRepairRequested();
+        String request = safePublicRequest
+                + ". PREVIOUS STEP FAILED (" + safeCode
+                + "). Suggest a DIFFERENT safe semantic route, using fresh "
+                + "UI evidence and never retrying the same failed tap.";
+        launchAttempt(new Attempt(intent, epoch, request, true));
+    }
+
+    private void launchAttempt(Attempt attempt) {
         active = attempt;
         LivePipelineDiagnostic.onPlannerStarted();
         attempt.timeout = scheduler.schedule(() -> failed(attempt),
@@ -189,9 +258,13 @@ final class BackgroundThinkingPlanner {
         JSONObject out = new JSONObject();
         try {
             out.put("source", "3.8_extended_live_transcript");
+            out.put("mode", readyPhase);
             out.put("nonAuthoritative", true);
+            out.put("goal", goal);
+            out.put("completionRequirement",
+                    DualEngineSupervisorPolicy.completionRequirement(goal));
             out.put("steps", new JSONArray(readySteps.toString()));
-            out.put("rule", "Unverified spoken advice only. Runtime goal.next, requiredTool, screen evidence and authorization always win.");
+            out.put("rule", "Supervisor advice is non-executable. Live chooses tools from the fresh screen; Runtime permissions and verified goal completion always win.");
             return out;
         } catch (Exception ignored) {
             return null;
@@ -208,6 +281,8 @@ final class BackgroundThinkingPlanner {
         ++requestEpoch;
         discardActiveLocked();
         readySteps = null;
+        safePublicRequest = "";
+        readyPhase = "";
         delivered = true;
     }
 
@@ -231,6 +306,7 @@ final class BackgroundThinkingPlanner {
             active = null;
             if (attempt.timeout != null) attempt.timeout.cancel(false);
             readySteps = tips;
+            readyPhase = attempt.repair ? "RECOVERY" : "PLAN";
             LivePipelineDiagnostic.onPlannerReady();
         }
         attempt.connection.stop();
@@ -257,11 +333,13 @@ final class BackgroundThinkingPlanner {
 
     private static String setup() throws Exception {
         String instructions =
-                "You are the read-only, behind-the-scenes reasoning assistant for a "
+                "You are the read-only task supervisor for a "
                 + "public music playback request. Think through the goal before "
                 + "speaking. Speak ONLY two or three short numbered semantic "
-                + "steps for another assistant: search for the artist or song, "
-                + "inspect fresh results, and tap a verified Play control. "
+                + "steps for a separate Live Executor. On a failed step, "
+                + "propose an ALTERNATIVE and a fresh verification approach. "
+                + "For initial plans, search the song, inspect results, and "
+                + "verify playback rather than assuming taps succeeded. "
                 + "You have no phone access and must NOT claim any action has "
                 + "happened. Never invent screen labels, coordinates, tool "
                 + "results, authorization, or send messages. Do not ask a question. "
@@ -284,7 +362,9 @@ final class BackgroundThinkingPlanner {
         JSONObject turn = new JSONObject().put("role", "user")
                 .put("parts", new JSONArray().put(
                         new JSONObject().put("text",
-                                "Provide advisory steps only for: " + request)));
+                                "Provide semantic supervisor plan steps only. "
+                                + "No coordinates, no claims of success. Task: "
+                                + request)));
         return new JSONObject().put("clientContent", new JSONObject()
                 .put("turns", new JSONArray().put(turn))
                 .put("turnComplete", true)).toString();
