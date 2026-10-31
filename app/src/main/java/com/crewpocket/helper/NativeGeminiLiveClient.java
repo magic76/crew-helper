@@ -2711,7 +2711,8 @@ final class NativeGeminiLiveClient {
         if (ToolIntentRoutingPolicy.requiresOpenAppAction(
                 currentGoalIntent,
                 requestedName,
-                requestedArgs.optString("action", ""))) {
+                requestedArgs.optString("action", ""),
+                liveTurnCoordinator.latest().text)) {
             try {
                 sendToolResponse(id, requestedName, runtimeBlocked(
                         "APP_OPEN_ACTION_REQUIRED",
