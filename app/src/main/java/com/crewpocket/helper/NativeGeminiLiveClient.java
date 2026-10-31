@@ -1035,15 +1035,17 @@ final class NativeGeminiLiveClient {
         }
 
         String shadowTaskId = "";
+        JSONArray cancelledToolCalls;
         synchronized (agentLock) {
             userIntentGeneration++;
             contextPayloadAudit.beginTurn(userIntentGeneration);
             PerformanceMetrics.markAgentUserIntent(userIntentGeneration);
             // Calls that have not started belong to the old utterance. An
             // executing call is additionally guarded by its generation below.
-            toolCallDispatcher.resetForNewIntent();
+            cancelledToolCalls = toolCallDispatcher.resetForNewIntent();
             shadowTaskId = agentTaskCoordinator.activeTaskId();
         }
+        sendCancelledToolCalls(cancelledToolCalls);
 
         taskRecipeCandidateGeneration = -1L;
         taskRecipeCandidateId = "";
@@ -1086,6 +1088,19 @@ final class NativeGeminiLiveClient {
 
     private boolean isFinishedIntentGeneration(long generation) {
         return agentTaskCoordinator.isFinishedIntentGeneration(generation);
+    }
+
+    private void sendCancelledToolCalls(JSONArray cancelled) {
+        if (cancelled == null || cancelled.length() == 0) return;
+        try {
+            JSONObject payload = new JSONObject().put("toolResponse",
+                    new JSONObject().put("functionResponses", cancelled));
+            if (!liveConnection.send(payload.toString())) {
+                Log.w(TAG, "Could not report cancelled pending Live tool calls");
+            }
+        } catch (Exception error) {
+            Log.w(TAG, "Could not serialize cancelled Live tool calls", error);
+        }
     }
 
     private void sendFinishedIntentToolResponse(String id, String name) {
@@ -5683,11 +5698,13 @@ final class NativeGeminiLiveClient {
     }
 
     private void advanceRuntimeGenerationForConversationWake() {
+        JSONArray cancelledToolCalls;
         synchronized (agentLock) {
             userIntentGeneration++;
             contextPayloadAudit.beginTurn(userIntentGeneration);
-            toolCallDispatcher.resetForNewIntent();
+            cancelledToolCalls = toolCallDispatcher.resetForNewIntent();
         }
+        sendCancelledToolCalls(cancelledToolCalls);
         shadowAgentRuntime.onUserIntent(
                 userIntentGeneration,
                 conversationGoalId,
