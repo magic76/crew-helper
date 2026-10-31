@@ -85,6 +85,32 @@ reconstructed. `droppedOldestEvents` must be considered during diagnosis.
 6. Never automatically execute sensitive Android actions or upload the bundle.
    User authorization is required for any access beyond local analysis.
 
+
+## P0.5 — Gemini Live 3.8 self-diagnosis
+
+Two read-only tools are exposed in the normal phone-assistant mode:
+
+- `inspect_runtime_trace`: a current-finalized-intent-only summary of the
+  latest sanitized Runtime tool/action, bounded failure code, generation,
+  counts, and (only when Debug Lab is enabled) at most eight allowlisted
+  event records. No transcript, call ID, screen content, API key or raw error.
+- `get_recovery_options`: at most one deterministic low-risk suggestion for
+  the same generation. Currently supports explicit named-app `OPEN_APP`
+  after `APP_OPEN_ACTION_REQUIRED`, or fresh `inspect_ui` when a TAP is
+  ambiguous / search has no query. It never executes a phone operation.
+
+Regular `phone_action` or `inspect_ui` is still required to perform the
+suggested step. It must pass the existing voice permission and Runtime
+preflight checks. The one-shot recovery policy rejects a repeated identical
+recovery action for the same user generation, and resets on a new finalized
+user intent. Successful tool responses do not request additional diagnostic
+model calls; a short hint is attached to failed responses only.
+
+**Limits:** if the model emits no tool calls at all, these model tools also
+cannot run; the independent Android Debug Lab plus the offline analyzer
+remain the source of evidence. A model explanation is a hypothesis, not proof
+that the requested Android outcome was verified.
+
 ## Current P0 limits
 
 This phase exports useful deterministic evidence, **not** a remote debugger,
