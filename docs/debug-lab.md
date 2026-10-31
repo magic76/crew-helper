@@ -26,7 +26,15 @@ python3 scripts/diagnose_debug_bundle.py crew-debug-lab.zip \
 ```
 
 For **debuggable APKs only** and a connected, authorized ADB device, export the
-ZIP once in the app and pull it without opening the share sheet:
+ZIP once in the app and pull it without opening the share sheet. The simplest
+local-agent command is:
+
+```sh
+bash scripts/collect_crew_debug.sh
+# Output: debug-output/crew-debug-lab.zip and crew-debug-analysis.md
+```
+
+Or run the underlying ADB commands manually:
 
 ```sh
 adb exec-out run-as com.crewpocket.helper \
