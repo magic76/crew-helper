@@ -25,6 +25,9 @@ final class LivePipelineDiagnostic {
     private static int backgroundPlannerReady;
     private static int backgroundPlannerFailed;
     private static int backgroundPlannerDelivered;
+    private static int supervisorIntents;
+    private static int supervisorFastPaths;
+    private static int supervisorRepairRequested;
     private static int toolCallsForIntent;
     private static int responsesForIntent;
     private static boolean countedIdleWithoutTool;
@@ -51,6 +54,9 @@ final class LivePipelineDiagnostic {
         backgroundPlannerReady = 0;
         backgroundPlannerFailed = 0;
         backgroundPlannerDelivered = 0;
+        supervisorIntents = 0;
+        supervisorFastPaths = 0;
+        supervisorRepairRequested = 0;
         toolCallsForIntent = 0;
         responsesForIntent = 0;
         countedIdleWithoutTool = false;
@@ -60,6 +66,13 @@ final class LivePipelineDiagnostic {
     static synchronized void onPlannerReady() { backgroundPlannerReady++; }
     static synchronized void onPlannerFailed() { backgroundPlannerFailed++; }
     static synchronized void onPlannerDelivered() { backgroundPlannerDelivered++; }
+    static synchronized void onSupervisorIntent(boolean fastPath) {
+        supervisorIntents++;
+        if (fastPath) supervisorFastPaths++;
+    }
+    static synchronized void onSupervisorRepairRequested() {
+        supervisorRepairRequested++;
+    }
 
     static synchronized void onIntent(long generation, String rawGoal) {
         activeIntentGeneration = generation;
@@ -138,7 +151,10 @@ final class LivePipelineDiagnostic {
                 + "Background Thinking: started=" + backgroundPlannerStarted
                 + " ready=" + backgroundPlannerReady
                 + " failed=" + backgroundPlannerFailed
-                + " delivered=" + backgroundPlannerDelivered;
+                + " delivered=" + backgroundPlannerDelivered
+                + "\\nSupervisor: intents=" + supervisorIntents
+                + " fast-path=" + supervisorFastPaths
+                + " recovery-requested=" + supervisorRepairRequested;
     }
 
     private static String allowedGoal(String raw) {
