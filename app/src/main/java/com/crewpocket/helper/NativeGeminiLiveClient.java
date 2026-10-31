@@ -2694,6 +2694,20 @@ final class NativeGeminiLiveClient {
         String baseInstruction = LivePrompt.CORE + "\n" + LivePrompt.NATURAL_VOICE
                 + "\n" + personality
                 + (deckInstruction.isEmpty() ? "" : "\n" + deckInstruction);
+        if (liveModel.usesBackgroundPlanner()) {
+            baseInstruction += "\n[Think Supervisor / Live Executor] "
+                    + "You are the sole authorized phone tool executor. "
+                    + "Fast simple goals never wait for Think. For multi-step "
+                    + "goals, read thinkingAdvice when present as an advisory "
+                    + "semantic plan. Follow safe, useful stages against the "
+                    + "fresh actual UI, not imagined labels or coordinates. "
+                    + "For each tool result, use supervisor.completionRequirement "
+                    + "and the Runtime goal/nextRequirement to decide whether "
+                    + "the user goal is verified. A Think recovery suggestion "
+                    + "is not proof and never overrides Runtime blocks, "
+                    + "human confirmation, tool safety or an updated user goal. "
+                    + "If no advice is ready, keep operating normally.";
+        }
 
         String sessionContext = SessionContextSnapshot.systemInstruction(
                 appContext,
