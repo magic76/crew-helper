@@ -79,6 +79,16 @@ public final class LiveSelfDiagnosisPolicyTest {
         policy.toolResponse("fresh", 11, false, "caller-secret");
         check("OTHER".equals(policy.snapshot(11).failure),
                 "unknown raw exception text never enters model-facing snapshot");
+        policy.newIntent(12, "MEDIA:PLAY");
+        policy.toolReceived("failed-tap", 12, "phone_action", "TAP");
+        policy.toolResponse("failed-tap", 12, false,
+                "LOCATOR_MARGIN_TOO_SMALL");
+        policy.toolReceived("inspected", 12, "inspect_ui", "");
+        policy.toolResponse("inspected", 12, true, "");
+        check(policy.offer(12, "播放鄧紫棋",
+                "com.apple.android.music", true) == null,
+                "successful fresh evidence clears outdated recovery cause");
+
         policy.reset();
         check(policy.snapshot(-1).observedCalls == 0,
                 "live session reset clears diagnostic state");
