@@ -34,7 +34,8 @@ final class CrewDebugTrace {
             + "|SUPERSEDED_BY_NEW_INTENT|TASK_CANCELLED|SOCKET_CLOSED"
             + "|SOCKET_FAILURE|SETUP_COMPLETE|WEBSOCKET_OPEN|RECOVERY_ONCE|APP_NOT_FOUND"
             + "|SEARCH_NEEDS_QUERY|LOCATOR_MARGIN_TOO_SMALL"
-            + "|TARGET_REQUIRED|AMBIGUOUS|UNVERIFIED|OTHER|";
+            + "|TARGET_REQUIRED|AMBIGUOUS|UNVERIFIED"
+            + "|RECOVERY_TARGET_MISMATCH|RECOVERY_LIMIT_REACHED|OTHER|";
     private static final ArrayDeque<String> events = new ArrayDeque<String>();
     private static final HashMap<String,String> callTokens = new HashMap<String,String>();
     private static final HashMap<String,Long> callGenerations =
