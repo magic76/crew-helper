@@ -92,6 +92,14 @@ final class ToolCallDispatcher {
      * result under its original call ID, subject to Runtime's generation guard.
      */
     JSONArray resetForNewIntent() {
+        return clearPendingWithError("SUPERSEDED_BY_NEW_INTENT");
+    }
+
+    JSONArray clearPending() {
+        return clearPendingWithError("TASK_CANCELLED");
+    }
+
+    private JSONArray clearPendingWithError(String errorCode) {
         JSONArray cancelled = new JSONArray();
         JSONObject reason = new JSONObject();
         try {
@@ -99,7 +107,7 @@ final class ToolCallDispatcher {
             reason.put("stale", true);
             reason.put("blockedByRuntime", true);
             reason.put("taskState", "CANCELLED");
-            reason.put("error", "SUPERSEDED_BY_NEW_INTENT");
+            reason.put("error", errorCode);
         } catch (Exception ignored) {}
 
         synchronized (lock) {
@@ -118,12 +126,6 @@ final class ToolCallDispatcher {
             ledger.resetForNewIntent();
         }
         return cancelled;
-    }
-
-    void clearPending() {
-        synchronized (lock) {
-            pending.clear();
-        }
     }
 
     Thread activeWorker() {
