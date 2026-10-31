@@ -24,7 +24,9 @@ final class DualEnginePlanningPolicy {
                 "付款", "支付", "購買", "购买", "刪除", "删除", "帳號",
                 "账号", "email", "電話", "电话", "地址", "address",
                 "私人", "private", "記事本", "记事本", "筆記", "笔记",
-                "存檔", "儲存", "保存", "save", "note")) return "";
+                "存檔", "儲存", "保存", "save", "note",
+                "收藏", "我的", "我喜歡", "我喜欢", "favorite",
+                "playlist", "播放清單", "播放列表", "my ")) return "";
         if (lower.matches(".*[0-9]{4,}.*")) return "";
         return value;
     }
