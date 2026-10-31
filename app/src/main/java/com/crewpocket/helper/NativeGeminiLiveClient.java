@@ -8826,6 +8826,28 @@ final class NativeGeminiLiveClient {
         final JSONObject modelResult =
                 ModelToolResponseAdapter.forModel(
                         name, result, progressContext);
+        // Every dual-engine intent has an explicit completion contract, but
+        // only the foreground Live + Runtime may perform and verify actions.
+        // Think is asynchronous, has no phone tools, and cannot override this.
+        AgentTaskRecord supervisorTask = agentTaskCoordinator.activeRunning();
+        if (liveModel.usesBackgroundPlanner()
+                && supervisorTask != null
+                && supervisorTask.intentGeneration == userIntentGeneration
+                && !goalIntent.isEmpty()) {
+            backgroundThinkingPlanner.onToolOutcome(
+                    userIntentGeneration, goalIntent, name, result);
+            JSONObject contract = new JSONObject()
+                    .put("source", "runtime_verified_goal")
+                    .put("completionRequirement",
+                            DualEngineSupervisorPolicy.completionRequirement(goalIntent))
+                    .put("actionAuthority", "Live executor via Runtime only")
+                    .put("planAuthority", "Think advice is optional, never executable");
+            if (ContextPayloadBudget.utf8Bytes(modelResult.toString())
+                    + ContextPayloadBudget.utf8Bytes(contract.toString()) + 26
+                    <= ContextPayloadBudget.toolBudget(name)) {
+                modelResult.put("supervisor", contract);
+            }
+        }
         // Optional and only once per current intent. Never sacrifice current
         // screen evidence or exceed the existing model-facing byte budget.
         // Runtime goal.next/requiredTool and action verification always win.
