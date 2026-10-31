@@ -150,13 +150,14 @@ final class NativeGeminiLiveClient {
     private volatile SelectedRegionContext latestSelectedRegion;
 
     // 0046: Gemini Live may split toolCall/modelTurn/turnComplete across
-    // different WebSocket frames. These flags describe the whole current
-    // server model turn, not one handleJson() invocation.
+    // different WebSocket frames. Extended Thinking can also emit multiple
+    // completed speech utterances before the interaction becomes idle.
     private boolean currentModelTurnHadToolCall = false;
     private boolean currentModelTurnBlocksDeckAutoAdvance = false;
     private boolean currentModelTurnProducedSpeech = false;
     // 0047: transcript text is not audible-output proof.
     private boolean currentModelTurnReceivedAudio = false;
+    private String lastReportedInteractionStatus = "";
 
     NativeGeminiLiveClient(String apiKey, Listener listener) { this(apiKey, "", AppConfig.DEFAULT_VOICE, "auto", 35, "warm", "", 55, "call", listener); }
     NativeGeminiLiveClient(String apiKey, String serverUrl, Listener listener) { this(apiKey, serverUrl, AppConfig.DEFAULT_VOICE, "auto", 35, "warm", "", 55, "call", listener); }
@@ -1014,6 +1015,10 @@ final class NativeGeminiLiveClient {
             // when it is a follow-up within the same task capsule.
             pendingCondition = null;
         }
+        MediaFlowDiagnostic.voiceTurn(
+                "NEW_INTENT",
+                workingContext.toProgressJson()
+                        .optString("goalIntent", ""));
 
         SelectedRegionContext selectedReference = latestSelectedRegion;
         if (selectedReference != null
@@ -1063,6 +1068,10 @@ final class NativeGeminiLiveClient {
             String reason) {
         conversationGoalTouchedAt = System.currentTimeMillis();
         workingContext.mergeUserTurnSegment(effectiveText);
+        MediaFlowDiagnostic.voiceTurn(
+                "MERGED_SEGMENT",
+                workingContext.toProgressJson()
+                        .optString("goalIntent", ""));
         Log.d(
                 TAG,
                 "Merged finalized voice segment into generation="
@@ -1457,6 +1466,8 @@ final class NativeGeminiLiveClient {
     private void handleJson(String raw) throws Exception {
         GeminiLiveTurnHandler.Frame frame =
                 geminiLiveTurnHandler.parse(raw);
+        boolean interactionComplete = isInteractionComplete(frame);
+        boolean utteranceComplete = isModelUtteranceComplete(frame);
 
         if (!frame.interimInputText.isEmpty()) {
             liveHumanTurnBoundary.noteInterim(
@@ -1745,7 +1756,13 @@ final class NativeGeminiLiveClient {
                 frame.interactionStatus,
                 frame.waitingForInput);
 
-        if (!frame.serverPresent) return;
+        if (!frame.serverPresent) {
+            if (utteranceComplete) {
+                finishModelUtterance(interactionComplete);
+            }
+            reportInteractionStatus(frame, responseHasModelAudio);
+            return;
+        }
 
         if (frame.interrupted) {
             long interruptedIndex =
@@ -1873,34 +1890,97 @@ final class NativeGeminiLiveClient {
             }
         }
 
-        if (frame.turnComplete) {
-            boolean deckNarrationTurn =
-                    shouldAutoAdvanceDeckAfterCurrentTurn();
-            boolean deckTurnWasInterrupted =
-                    interruptedCurrentTurn;
+        if (utteranceComplete) {
+            finishModelUtterance(interactionComplete);
+        }
+        reportInteractionStatus(frame, responseHasModelAudio);
 
-            liveAudioController.finishTurn();
-            visualHoldUntil =
-                    System.currentTimeMillis() + 1000;
-            interruptedCurrentTurn = false;
-            interruptionHandler.removeCallbacks(
-                    clearInterruptedFallback);
-            if (aiSpeaking) {
-                aiSpeaking = false;
-                listener.onSpeakingChanged(false);
-            }
+    }
 
-            if (shouldEvaluateAgentTaskAtTurnComplete()) {
-                agentResponseCoordinator.finishIfAwaitingModel();
-            }
-            closeOperationalGenerationIfIdle();
-            clearExpiredInternalDirectiveTurn();
-            deckRuntimeController.onNarrationTurnComplete(
-                    deckNarrationTurn,
-                    deckTurnWasInterrupted);
-            resetCurrentModelTurnState();
+    private static boolean isInteractionComplete(
+            GeminiLiveTurnHandler.Frame frame) {
+        String status = frame == null || frame.interactionStatus == null
+                ? ""
+                : frame.interactionStatus.trim().toUpperCase(Locale.ROOT);
+        if ("IN_PROGRESS".equals(status)) return false;
+        if ("IDLE".equals(status)) {
+            return !hasFreshInput(frame)
+                    || frame.turnComplete
+                    || frame.modelTurnPresent
+                    || frame.hasToolCalls();
+        }
+        return frame != null && frame.turnComplete;
+    }
+
+    private static boolean isModelUtteranceComplete(
+            GeminiLiveTurnHandler.Frame frame) {
+        if (frame == null) return false;
+        String status = frame.interactionStatus == null
+                ? ""
+                : frame.interactionStatus.trim().toUpperCase(Locale.ROOT);
+        return frame.turnComplete
+                || ("IDLE".equals(status)
+                    && (!hasFreshInput(frame)
+                        || frame.modelTurnPresent
+                        || frame.hasToolCalls()));
+    }
+
+    private static boolean hasFreshInput(
+            GeminiLiveTurnHandler.Frame frame) {
+        return frame != null
+                && (!frame.inputText.isEmpty()
+                    || !frame.interimInputText.isEmpty());
+    }
+
+    private void finishModelUtterance(boolean interactionComplete) {
+        boolean deckNarrationTurn =
+                shouldAutoAdvanceDeckAfterCurrentTurn();
+        boolean deckTurnWasInterrupted = interruptedCurrentTurn;
+
+        liveAudioController.finishTurn();
+        visualHoldUntil = System.currentTimeMillis() + 1000;
+        interruptedCurrentTurn = false;
+        interruptionHandler.removeCallbacks(clearInterruptedFallback);
+        if (aiSpeaking) {
+            aiSpeaking = false;
+            listener.onSpeakingChanged(false);
         }
 
+        if (!interactionComplete) return;
+
+        if (shouldEvaluateAgentTaskAtTurnComplete()) {
+            agentResponseCoordinator.finishIfAwaitingModel();
+        }
+        closeOperationalGenerationIfIdle();
+        clearExpiredInternalDirectiveTurn();
+        deckRuntimeController.onNarrationTurnComplete(
+                deckNarrationTurn,
+                deckTurnWasInterrupted);
+        resetCurrentModelTurnState();
+    }
+
+    private void reportInteractionStatus(
+            GeminiLiveTurnHandler.Frame frame,
+            boolean modelAudioPresent) {
+        if (frame == null || frame.interactionStatus == null) return;
+        String status = frame.interactionStatus.trim().toUpperCase(Locale.ROOT);
+        if ("IN_PROGRESS".equals(status)) {
+            boolean utteranceEnded = frame.turnComplete;
+            boolean statusChanged = !"IN_PROGRESS".equals(
+                    lastReportedInteractionStatus);
+            if (utteranceEnded || (statusChanged && !modelAudioPresent)) {
+                reportStage("🤔 Gemini 正在思考並處理任務…");
+            }
+            lastReportedInteractionStatus = status;
+        } else if ("IDLE".equals(status)) {
+            boolean becameIdle = !"IDLE".equals(
+                    lastReportedInteractionStatus);
+            lastReportedInteractionStatus = status;
+            if (becameIdle && !hasFreshInput(frame)
+                    && !frame.turnComplete && !modelAudioPresent) {
+                reportStage("🎙️ 已就緒，請說話");
+            }
+        }
     }
 
     /**
@@ -2379,8 +2459,9 @@ final class NativeGeminiLiveClient {
 
     private String buildSetup() throws Exception {
         JSONObject root = new JSONObject(); JSONObject setup = new JSONObject();
-        setup.put("model", "models/gemini-3.8-live");
+        setup.put("model", "models/gemini-3.8-live-extended-thinking");
         JSONObject generation = new JSONObject(); generation.put("responseModalities", new JSONArray().put("AUDIO"));
+        generation.put("thinkingConfig", new JSONObject().put("thinkingLevel", "MEDIUM"));
         String safeVoice = mapToSupportedVoice(voiceName);
         generation.put("speechConfig", new JSONObject().put("voiceConfig", new JSONObject().put("prebuiltVoiceConfig", new JSONObject().put("voiceName", safeVoice))));
         setup.put("generationConfig", generation);
@@ -2528,6 +2609,12 @@ final class NativeGeminiLiveClient {
         final String requestedName = call.optString("name", "unknown");
         final JSONObject requestedArgs = call.optJSONObject("args") == null
                 ? new JSONObject() : call.optJSONObject("args");
+        MediaFlowDiagnostic.modelTool(
+                "RECEIVED",
+                requestedName,
+                requestedArgs.optString("action", ""),
+                workingContext.toProgressJson()
+                        .optString("goalIntent", ""));
         long callIntentGeneration = call.optLong("_crew_intent_generation", -1L);
         boolean internalDirectiveTool =
                 call.optBoolean(
@@ -2544,6 +2631,12 @@ final class NativeGeminiLiveClient {
                 callIntentGeneration,
                 internalDirectiveTool);
         if (reconciledGeneration == Long.MIN_VALUE) {
+            MediaFlowDiagnostic.toolGate(
+                    "OPERATIONAL_TURN_NOT_FINALIZED",
+                    requestedName,
+                    requestedArgs.optString("action", ""),
+                    workingContext.toProgressJson()
+                            .optString("goalIntent", ""));
             try {
                 sendToolResponse(
                         id,
@@ -2586,6 +2679,12 @@ final class NativeGeminiLiveClient {
         }
 
         if (!isCurrentUserIntent(callIntentGeneration)) {
+            MediaFlowDiagnostic.toolGate(
+                    "STALE_USER_INTENT",
+                    requestedName,
+                    requestedArgs.optString("action", ""),
+                    workingContext.toProgressJson()
+                            .optString("goalIntent", ""));
             // The user has already spoken a new command.  Do not execute a
             // queued mutation from the old turn, and do not create a new task
             // record that would inherit its repeat counter.
@@ -2595,11 +2694,23 @@ final class NativeGeminiLiveClient {
             return;
         }
         if (isFinishedIntentGeneration(callIntentGeneration)) {
+            MediaFlowDiagnostic.toolGate(
+                    "FINISHED_INTENT",
+                    requestedName,
+                    requestedArgs.optString("action", ""),
+                    workingContext.toProgressJson()
+                            .optString("goalIntent", ""));
             PerformanceMetrics.recordStalePostFinishTool(requestedName);
             sendFinishedIntentToolResponse(id, requestedName);
             return;
         }
         if (isRuntimeAppTeachHandledGeneration(callIntentGeneration)) {
+            MediaFlowDiagnostic.toolGate(
+                    "APP_TEACH_HANDLED",
+                    requestedName,
+                    requestedArgs.optString("action", ""),
+                    workingContext.toProgressJson()
+                            .optString("goalIntent", ""));
             PerformanceMetrics.recordAppTeachToolSuppressed();
             JSONObject handled = new JSONObject();
             try {
@@ -2620,6 +2731,12 @@ final class NativeGeminiLiveClient {
         if (ElementReferenceWaitPolicy.shouldBlockModelTool(
                 ElementReferenceRuntime.isActive(),
                 requestedName)) {
+            MediaFlowDiagnostic.toolGate(
+                    "ELEMENT_REFERENCE_WAITING",
+                    requestedName,
+                    requestedArgs.optString("action", ""),
+                    workingContext.toProgressJson()
+                            .optString("goalIntent", ""));
             JSONObject waiting = new JSONObject();
             try {
                 waiting.put("success", true)
@@ -2644,6 +2761,12 @@ final class NativeGeminiLiveClient {
                 requestedName,
                 requestedArgs,
                 callIntentGeneration)) {
+            MediaFlowDiagnostic.toolGate(
+                    "TASK_RECIPE_FAST_PATH",
+                    requestedName,
+                    requestedArgs.optString("action", ""),
+                    workingContext.toProgressJson()
+                            .optString("goalIntent", ""));
             return;
         }
 
@@ -2656,6 +2779,12 @@ final class NativeGeminiLiveClient {
                         requestedArgs)
                 && !userActionScope
                         .consumeElementReferenceAuthorization()) {
+            MediaFlowDiagnostic.toolGate(
+                    "ELEMENT_REFERENCE_AUTH_REQUIRED",
+                    requestedName,
+                    requestedArgs.optString("action", ""),
+                    workingContext.toProgressJson()
+                            .optString("goalIntent", ""));
             try {
                 sendToolResponse(
                         id,
@@ -2679,6 +2808,11 @@ final class NativeGeminiLiveClient {
                     progress.optString(
                             "goal",
                             progress.optString("rootGoal", ""));
+            MediaFlowDiagnostic.modelTool(
+                    "RESOLUTION_INPUT",
+                    requestedName,
+                    requestedArgs.optString("action", ""),
+                    goalIntent);
 
             JSONObject semanticInputArgs =
                     recoverMediaPlayTapArgs(
@@ -2691,6 +2825,11 @@ final class NativeGeminiLiveClient {
                     SemanticPhoneAction.resolve(
                             requestedName,
                             semanticInputArgs);
+            MediaFlowDiagnostic.semanticResolution(
+                    semanticInputArgs.optString("action", ""),
+                    resolved.runtimeName,
+                    resolved.runtimeArgs.optString("error", "NONE"),
+                    goalIntent);
 
             // Tool-intent correction must happen BEFORE preflight / Inspector /
             // verification so every layer agrees on what actually executed.
@@ -2731,6 +2870,11 @@ final class NativeGeminiLiveClient {
         }
         final String name = semantic.runtimeName;
         final JSONObject args = semantic.runtimeArgs;
+        MediaFlowDiagnostic.toolGate(
+                "SEMANTIC_RESOLUTION_COMPLETED",
+                requestedName,
+                requestedArgs.optString("action", ""),
+                workingContext.toProgressJson().optString("goalIntent", ""));
 
         if ("tap_screen".equals(name)
                 && args.optBoolean("visual_tap", false)) {
@@ -2890,6 +3034,12 @@ final class NativeGeminiLiveClient {
                                 name,
                                 args);
         if (!voicePreflight.allowed) {
+            MediaFlowDiagnostic.toolGate(
+                    "VOICE_PREFLIGHT_BLOCK",
+                    requestedName,
+                    semantic.semanticAction,
+                    workingContext.toProgressJson()
+                            .optString("goalIntent", ""));
             JSONObject blocked = new JSONObject();
             try {
                 blocked.put("success", false)
@@ -2925,6 +3075,12 @@ final class NativeGeminiLiveClient {
             if (!runtimePreflight.allowed()) {
                 String code = runtimePreflight.code;
                 if (runtimePreflight.decision == AgentRuntimeV2.PreflightDecision.REQUIRE_OBSERVE) {
+                    MediaFlowDiagnostic.toolGate(
+                            "OBSERVE_REQUIRED",
+                            requestedName,
+                            semantic.semanticAction,
+                            workingContext.toProgressJson()
+                                    .optString("goalIntent", ""));
                     JSONObject blocked = runtimeBlocked(
                             "OBSERVE_REQUIRED",
                             "上一個相同操作仍待驗證或剛失敗。先 inspect_ui 一次；不要原樣重做 mutation。");
@@ -2935,6 +3091,12 @@ final class NativeGeminiLiveClient {
                     } catch (Exception ignored) {}
                     return;
                 }
+                MediaFlowDiagnostic.toolGate(
+                        "AGENT_RUNTIME_PREFLIGHT_BLOCK",
+                        requestedName,
+                        semantic.semanticAction,
+                        workingContext.toProgressJson()
+                                .optString("goalIntent", ""));
                 sendRuntimeV2Blocked(id, requestedName, code,
                         runtimePreflight.decision == AgentRuntimeV2.PreflightDecision.REJECT_STALE
                                 ? "使用者已有較新的指令；舊操作已取消，不要重試。"
@@ -2975,6 +3137,12 @@ final class NativeGeminiLiveClient {
                 ? null
                 : agentStabilityPreflight(stabilityTask, name, args);
         if (stabilityBlock != null && stabilityTask != null) {
+            MediaFlowDiagnostic.toolGate(
+                    "STABILITY_PREFLIGHT_BLOCK",
+                    requestedName,
+                    semantic.semanticAction,
+                    workingContext.toProgressJson()
+                            .optString("goalIntent", ""));
             try {
                 stabilityTask.recordBlockedAttempt(
                         stabilityBlock.optString(
@@ -2991,6 +3159,12 @@ final class NativeGeminiLiveClient {
             } catch (Exception ignored) {}
             return;
         }
+
+        MediaFlowDiagnostic.toolGate(
+                "PREFLIGHT_PASSED",
+                requestedName,
+                semantic.semanticAction,
+                workingContext.toProgressJson().optString("goalIntent", ""));
 
         final AgentTaskRecord visualTask =
                 agentTaskCoordinator.activeRunning();
@@ -4063,6 +4237,16 @@ final class NativeGeminiLiveClient {
 
             if (decision
                     == AutonomyEscalationPolicy.Decision.RECOVER_ONCE) {
+                if (MediaGoalUiPolicy.isMediaPlayGoal(
+                        workingContext.toProgressJson()
+                                .optString("goalIntent", ""))) {
+                    MediaFlowDiagnostic.autonomy(
+                            "RECOVER_ONCE",
+                            task.autonomyRecoveryAttempts + 1,
+                            result.optString(
+                                    "completionEvidence",
+                                    result.optString("error", "NONE")));
+                }
                 task.autonomyRecoveryAttempts++;
                 try {
                     result.put(
@@ -4078,6 +4262,14 @@ final class NativeGeminiLiveClient {
 
             task.requiresPostActionInspection = false;
             task.postActionInspectionPrompted = false;
+            if (MediaGoalUiPolicy.isMediaPlayGoal(
+                    workingContext.toProgressJson()
+                            .optString("goalIntent", ""))) {
+                MediaFlowDiagnostic.autonomy(
+                        "EXHAUSTED",
+                        task.autonomyRecoveryAttempts,
+                        "AUTONOMY_RECOVERY_EXHAUSTED");
+            }
             try {
                 String previousEvidence =
                         result.optString(
@@ -4672,19 +4864,34 @@ final class NativeGeminiLiveClient {
                 requestedArgs == null
                         ? new JSONObject()
                         : requestedArgs;
-        if (!SemanticPhoneAction.TOOL_NAME.equals(requestedName)
-                || !MediaGoalUiPolicy.isMediaPlayGoal(goalIntent)) {
-            return original;
-        }
         String requestedAction =
                 original.optString("action", "").trim();
+        if (!SemanticPhoneAction.TOOL_NAME.equals(requestedName)) {
+            MediaFlowDiagnostic.recoveryWithGoal(
+                    "NOT_PHONE_ACTION", goalIntent, goalText,
+                    requestedAction, false, false, null, "");
+            return original;
+        }
+        if (!MediaGoalUiPolicy.isMediaPlayGoal(goalIntent)) {
+            MediaFlowDiagnostic.recoveryWithGoal(
+                    "NO_MEDIA_GOAL", goalIntent, goalText,
+                    requestedAction, false, false, null, "");
+            return original;
+        }
+        String foregroundPackage = currentForegroundPackageName();
+        boolean foregroundTrusted =
+                MediaPlaybackCompletionPolicy.isDefaultTrustedPackage(
+                        foregroundPackage);
         boolean unsupportedPlayAction =
                 MediaPlayFlowRecoveryPolicy.isUnsupportedPlayAction(
                         requestedAction,
                         goalIntent,
-                        currentForegroundPackageName());
+                        foregroundPackage);
         if (!"TAP".equalsIgnoreCase(requestedAction)
                 && !unsupportedPlayAction) {
+            MediaFlowDiagnostic.recoveryWithGoal(
+                    "ACTION_NOT_RECOVERABLE", goalIntent, goalText,
+                    requestedAction, foregroundTrusted, false, null, "");
             return original;
         }
 
@@ -4693,6 +4900,9 @@ final class NativeGeminiLiveClient {
         String visualLeaseId =
                 original.optString("visual_lease_id", "").trim();
         if (!elementId.isEmpty() || !visualLeaseId.isEmpty()) {
+            MediaFlowDiagnostic.recoveryWithGoal(
+                    "EXPLICIT_ELEMENT_HINT", goalIntent, goalText,
+                    requestedAction, foregroundTrusted, false, null, "");
             return original;
         }
 
@@ -4707,6 +4917,9 @@ final class NativeGeminiLiveClient {
         if (!unsupportedPlayAction
                 && !target.isEmpty()
                 && !numericTarget) {
+            MediaFlowDiagnostic.recoveryWithGoal(
+                    "SEMANTIC_TAP_ALREADY_VALID", goalIntent, goalText,
+                    requestedAction, foregroundTrusted, false, null, target);
             return original;
         }
 
@@ -4715,29 +4928,49 @@ final class NativeGeminiLiveClient {
         if (elementReferenceActive) {
             // An explicit numbered overlay is owned by the human, not by
             // the model's media recovery or an unsupported PLAY alias.
+            MediaFlowDiagnostic.recoveryWithGoal(
+                    "ELEMENT_REFERENCE_ACTIVE", goalIntent, goalText,
+                    requestedAction, foregroundTrusted, false, null, "");
             return original;
         }
 
         JSONObject current =
                 observationVerificationController
                         .readSemanticScreenQuietly();
+        boolean screenSuccess = current != null
+                && current.optBoolean("success", false);
+        boolean trustedPackage = screenSuccess
+                && MediaPlaybackCompletionPolicy.isDefaultTrustedPackage(
+                        current.optString("package", ""));
         if (unsupportedPlayAction
-                && (current == null
-                    || !current.optBoolean("success", false)
-                    || !MediaPlaybackCompletionPolicy.isDefaultTrustedPackage(
-                            current.optString("package", "")))) {
+                && (!screenSuccess || !trustedPackage)) {
+            MediaFlowDiagnostic.recoveryWithGoal(
+                    "TRUSTED_SCREEN_UNAVAILABLE", goalIntent, goalText,
+                    requestedAction, trustedPackage, screenSuccess,
+                    mediaRecoveryCandidates(current), "");
             return original;
         }
+        java.util.ArrayList<MediaTapRecoveryPolicy.Candidate> candidates =
+                mediaRecoveryCandidates(current);
+        String completedTarget =
+                latestActivatedTargetForMediaRecovery();
+        MediaFlowDiagnostic.continuation(
+                MediaPlayFlowRecoveryPolicy.isSearchAndPlayGoal(goalText),
+                !completedTarget.isEmpty());
         String recovered =
                 MediaPlayFlowRecoveryPolicy.safeNextTarget(
                         goalText,
-                        latestActivatedTargetForMediaRecovery(),
-                        mediaRecoveryCandidates(current));
+                        completedTarget,
+                        candidates);
 
         try {
             JSONObject out =
                     new JSONObject(original.toString());
             if (!recovered.isEmpty()) {
+                MediaFlowDiagnostic.recoveryWithGoal(
+                        "REPAIRED", goalIntent, goalText,
+                        requestedAction, trustedPackage, screenSuccess,
+                        candidates, recovered);
                 if (unsupportedPlayAction) {
                     // Preserve only the canonical semantic TAP. All mutations
                     // still pass existing Runtime authorization and verification.
@@ -4752,6 +4985,11 @@ final class NativeGeminiLiveClient {
                         .put("runtime_media_target_recovered", true);
                 return out;
             }
+
+            MediaFlowDiagnostic.recoveryWithGoal(
+                    "NO_UNAMBIGUOUS_CANDIDATE", goalIntent, goalText,
+                    requestedAction, trustedPackage, screenSuccess,
+                    candidates, "");
 
             // A bare ordinal is not a semantic media target. Without an
             // explicit element-reference session, fail as TARGET_REQUIRED
@@ -4906,6 +5144,11 @@ final class NativeGeminiLiveClient {
                                 "mediaPlaybackActive",
                                 musicActiveAfter || uiPlaying)
                         .put("verified", true);
+                MediaFlowDiagnostic.playbackCompletion(
+                        completionEvidence,
+                        musicActiveBefore,
+                        musicActiveAfter,
+                        uiPlaying);
             } catch (Exception ignored) {}
         }
         return observed;
@@ -7086,6 +7329,17 @@ final class NativeGeminiLiveClient {
             }
         }
 
+        if (MediaGoalUiPolicy.isMediaPlayGoal(
+                inspectProgress.optString("goalIntent", ""))) {
+            MediaFlowDiagnostic.observationLoop(
+                    pendingMediaSearch,
+                    observationLoopDecision != null
+                            && observationLoopDecision.blocked,
+                    observationLoopDecision == null
+                            ? 0
+                            : observationLoopDecision.nextSameScreenCount);
+        }
+
         JSONObject out = new JSONObject();
         out.put("success", semantic.optBoolean("success", false))
                 .put("visualSent", false)
@@ -7141,7 +7395,7 @@ final class NativeGeminiLiveClient {
             }
         }
 
-        if (observationLoopDecision != null
+                if (observationLoopDecision != null
                 && observationLoopDecision.blocked) {
             visualTapLease.clear();
 
@@ -7152,6 +7406,7 @@ final class NativeGeminiLiveClient {
             if (pendingMediaSearch) {
                 JSONObject reference =
                         openPendingMediaElementReferenceFallback(out);
+                MediaFlowDiagnostic.elementFallback(reference != null);
                 if (reference != null) {
                     return reference;
                 }
@@ -7266,6 +7521,7 @@ final class NativeGeminiLiveClient {
             if (pendingMediaSearch) {
                 JSONObject reference =
                         openPendingMediaElementReferenceFallback(out);
+                MediaFlowDiagnostic.elementFallback(reference != null);
                 if (reference != null) {
                     reference.put(
                             "visualError",

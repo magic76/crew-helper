@@ -362,11 +362,11 @@ final class LiveToolCatalog {
             }
 
             if (allow) {
-                // Gemini 3.8 Live defaults function calls to NON_BLOCKING.
-                // Crew's phone Runtime intentionally preserves the proven
-                // request -> tool result -> next model step ordering.
+                // Gemini 3.8 Live Extended Thinking supports asynchronous
+                // function execution only. ToolCallDispatcher runs each call
+                // off the WebSocket thread and returns its result when ready.
                 compactDescriptions(tool, 0);
-                exposed.put(tool.put("behavior", "BLOCKING"));
+                exposed.put(tool.put("behavior", "NON_BLOCKING"));
             }
         }
 

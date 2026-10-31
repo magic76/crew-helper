@@ -299,11 +299,12 @@ final class LiveHumanTurnBoundary {
         }
         this.waitingForInput = waitingForInput;
 
-        if (!turnComplete) return;
         if ("IDLE".equals(status)) {
             serverIdleSinceFinalized = true;
         } else if ("IN_PROGRESS".equals(status)) {
             serverIdleSinceFinalized = false;
+        } else if (turnComplete) {
+            serverIdleSinceFinalized = true;
         }
     }
 
