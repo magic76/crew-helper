@@ -23,6 +23,22 @@ public final class ToolIntentRoutingPolicyTest {
                         "type_text", true, "SEARCH:RESULT", false),
                 "empty TYPE payload is not remapped");
 
+        check(ToolIntentRoutingPolicy.requiresOpenAppAction(
+                        "APP:OPEN", "phone_action", "TAP"),
+                "new Maps open goal blocks a stale media TAP");
+        check(ToolIntentRoutingPolicy.requiresOpenAppAction(
+                        "APP:OPEN", "phone_action", "SEARCH"),
+                "app open must not search the previous foreground app");
+        check(!ToolIntentRoutingPolicy.requiresOpenAppAction(
+                        "APP:OPEN", "phone_action", "OPEN_APP"),
+                "app open accepts correct semantic action");
+        check(!ToolIntentRoutingPolicy.requiresOpenAppAction(
+                        "APP:OPEN", "inspect_ui", ""),
+                "observation remains available for app open");
+        check(!ToolIntentRoutingPolicy.requiresOpenAppAction(
+                        "MEDIA:PLAY", "phone_action", "TAP"),
+                "media playback TAP remains valid for media goals");
+
         System.out.println(
                 "ToolIntentRoutingPolicyTest passed "
                         + checks + " checks");
