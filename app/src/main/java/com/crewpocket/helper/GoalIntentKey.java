@@ -57,7 +57,8 @@ final class GoalIntentKey {
             return "APP:OPEN";
         }
         if (containsAny(value, "幫我開", "帮我开", "請開", "请开",
-                "開一下", "开一下", "開地圖", "开地图", "開", "开")
+                "開一下", "开一下", "開地圖", "开地图",
+                "開 google", "开 google", "開google", "开google")
                 && containsAny(value, "google maps", "google map",
                         "地圖", "地图", "apple music", "chrome",
                         "youtube", "應用程式", "应用程序", " app ")) {
