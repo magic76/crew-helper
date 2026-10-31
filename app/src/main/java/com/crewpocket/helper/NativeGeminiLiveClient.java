@@ -159,6 +159,9 @@ final class NativeGeminiLiveClient {
     private boolean currentModelTurnReceivedAudio = false;
     private String lastReportedInteractionStatus = "";
     private long lastAppOpenRecoveryGeneration = -1L;
+    // Per-session read-only Live diagnosis, separate from opt-in export trace.
+    private final LiveSelfDiagnosisPolicy liveSelfDiagnosis =
+            new LiveSelfDiagnosisPolicy();
 
     NativeGeminiLiveClient(String apiKey, Listener listener) { this(apiKey, "", AppConfig.DEFAULT_VOICE, "auto", 35, "warm", "", 55, "call", listener); }
     NativeGeminiLiveClient(String apiKey, String serverUrl, Listener listener) { this(apiKey, serverUrl, AppConfig.DEFAULT_VOICE, "auto", 35, "warm", "", 55, "call", listener); }
@@ -1064,6 +1067,8 @@ final class NativeGeminiLiveClient {
                 workingContext.toProgressJson().optString("goalIntent", ""));
         LivePipelineDiagnostic.onIntent(userIntentGeneration,
                 workingContext.toProgressJson().optString("goalIntent", ""));
+        liveSelfDiagnosis.newIntent(userIntentGeneration,
+                workingContext.toProgressJson().optString("goalIntent", ""));
 
         taskRecipeCandidateGeneration = -1L;
         taskRecipeCandidateId = "";
@@ -1324,6 +1329,7 @@ final class NativeGeminiLiveClient {
         CrewDebugTrace.setEnabled(debugEnabled);
         if (debugEnabled) CrewDebugTrace.startSession();
         LivePipelineDiagnostic.startSession(System.currentTimeMillis());
+        liveSelfDiagnosis.reset();
         lastAppOpenRecoveryGeneration = -1L;
         loadVoiceprintProfile();
         reportStage("建立 Gemini WebSocket…");
@@ -1823,6 +1829,11 @@ final class NativeGeminiLiveClient {
                             call.optJSONObject("args") == null ? "" :
                                     call.optJSONObject("args").optString("action", ""),
                             "NONE");
+                    liveSelfDiagnosis.toolReceived(
+                            call.optString("id", ""), userIntentGeneration,
+                            call.optString("name", ""),
+                            call.optJSONObject("args") == null ? "" :
+                                    call.optJSONObject("args").optString("action", ""));
                     executeToolAsync(call);
                 }
             }
@@ -2812,6 +2823,36 @@ final class NativeGeminiLiveClient {
             sendFinishedIntentToolResponse(id, requestedName);
             return;
         }
+        // Read-only diagnosis is handled after stale/finished generation gates
+        // but before any semantic mutation or Android Runtime operation.
+        if ("inspect_runtime_trace".equals(requestedName)
+                || "get_recovery_options".equals(requestedName)) {
+            try {
+                JSONObject diagnostic = "inspect_runtime_trace".equals(requestedName)
+                        ? buildLiveDiagnosticSummary(callIntentGeneration)
+                        : buildLiveRecoveryOptions(callIntentGeneration);
+                sendToolResponse(id, requestedName, diagnostic);
+            } catch (Exception error) {
+                Log.w(TAG, "Read-only Live diagnosis response failed", error);
+            }
+            return;
+        }
+
+        // A published recovery option is consumed only through the ordinary
+        // phone/inspection tool path, never bypassing preflight or permission.
+        if (liveSelfDiagnosis.isRepeatedRecovery(callIntentGeneration,
+                requestedName, requestedArgs.optString("action", ""))) {
+            try {
+                sendToolResponse(id, requestedName, runtimeBlocked(
+                        "RECOVERY_LIMIT_REACHED",
+                        "這次指令的安全復原已用過一次，不可重複。"
+                                + "請向使用者回報尚未完成的原因。"));
+            } catch (Exception ignored) {}
+            return;
+        }
+        liveSelfDiagnosis.consumeRecovery(callIntentGeneration,
+                requestedName, requestedArgs.optString("action", ""));
+
         String currentGoalIntent =
                 workingContext.toProgressJson().optString("goalIntent", "");
         if (ToolIntentRoutingPolicy.requiresOpenAppAction(
