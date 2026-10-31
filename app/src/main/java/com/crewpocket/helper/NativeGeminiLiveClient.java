@@ -1109,8 +1109,13 @@ final class NativeGeminiLiveClient {
     private void sendCancelledToolCalls(JSONArray cancelled) {
         if (cancelled == null || cancelled.length() == 0) return;
         LivePipelineDiagnostic.onCancelledQueued(cancelled.length());
-        CrewDebugTrace.count("TOOL_CANCELLED", userIntentGeneration,
-                "SUPERSEDED_BY_NEW_INTENT", cancelled.length());
+        for (int i = 0; i < cancelled.length(); i++) {
+            JSONObject item = cancelled.optJSONObject(i);
+            if (item == null) continue;
+            CrewDebugTrace.record("TOOL_CANCELLED", userIntentGeneration,
+                    item.optString("id", ""), item.optString("name", ""),
+                    "NONE", "SUPERSEDED_BY_NEW_INTENT");
+        }
         try {
             JSONObject payload = new JSONObject().put("toolResponse",
                     new JSONObject().put("functionResponses", cancelled));
@@ -2770,6 +2775,10 @@ final class NativeGeminiLiveClient {
         }
 
         if (!isCurrentUserIntent(callIntentGeneration)) {
+            CrewDebugTrace.record("RUNTIME_GATE", callIntentGeneration,
+                    id, requestedName,
+                    requestedArgs.optString("action", ""),
+                    "STALE_USER_INTENT");
             MediaFlowDiagnostic.toolGate(
                     "STALE_USER_INTENT",
                     requestedName,
@@ -2802,6 +2811,10 @@ final class NativeGeminiLiveClient {
                 requestedName,
                 requestedArgs.optString("action", ""),
                 liveTurnCoordinator.latest().text)) {
+            CrewDebugTrace.record("RUNTIME_GATE", callIntentGeneration,
+                    id, requestedName,
+                    requestedArgs.optString("action", ""),
+                    "APP_OPEN_ACTION_REQUIRED");
             try {
                 sendToolResponse(id, requestedName, runtimeBlocked(
                         "APP_OPEN_ACTION_REQUIRED",
@@ -8624,6 +8637,8 @@ final class NativeGeminiLiveClient {
 
         if (!liveConnection.isAvailable()
                 || !liveConnection.send(payload)) {
+            CrewDebugTrace.record("TOOL_RESPONSE_FAILED", userIntentGeneration,
+                    id, name, "NONE", "SOCKET_CLOSED");
             throw new Exception("工具結果無法傳回 Gemini");
         }
         LivePipelineDiagnostic.onToolResponse();
