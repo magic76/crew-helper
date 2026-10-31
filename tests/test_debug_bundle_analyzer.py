@@ -70,6 +70,26 @@ def run():
         s, r, events = module.load(path)
         assert "INSUFFICIENT_EVIDENCE" in module.analyze(s, r, events)
 
+        task_done = event("TASK_FINISHED", code="COMPLETED")
+        timing = event("TOOL_RUNTIME_DONE", code="NONE")
+        timing["count"] = 788
+        make_bundle(path, [start,
+                           event("LIVE_TOOL_CALL", action="OPEN_APP"),
+                           event("TOOL_RESPONSE", code="SENT"),
+                           timing, task_done])
+        s, r, events = module.load(path)
+        report = module.analyze(s, r, events)
+        assert "TASK_FINISHED" in report and "788 ms" in report
+
+        make_bundle(path, [start,
+                           event("LIVE_TOOL_CALL", action="OPEN_APP"),
+                           event("TOOL_RESPONSE", code="SENT"),
+                           event("TASK_CANCELLED", code="SUPERSEDED_BY_USER")])
+        s, r, events = module.load(path)
+        report = module.analyze(s, r, events)
+        assert "TASK_CANCELLED" in report
+        assert "SUPERSEDED_BY_USER" in report
+
         with zipfile.ZipFile(path, "w") as bundle:
             bundle.writestr("session.json", "{}")
         try:
@@ -77,7 +97,7 @@ def run():
             raise AssertionError("missing required bundle entries accepted")
         except ValueError:
             pass
-    print("PASS debug bundle analyzer tests: 7 cases")
+    print("PASS debug bundle analyzer tests: 9 cases")
 
 
 if __name__ == "__main__":
