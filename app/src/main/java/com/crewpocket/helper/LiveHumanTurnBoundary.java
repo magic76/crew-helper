@@ -299,7 +299,8 @@ final class LiveHumanTurnBoundary {
         }
         this.waitingForInput = waitingForInput;
 
-        if (!turnComplete) return;
+        // Extended Thinking can emit a standalone interactionStatus event.
+        // Only IDLE, never an intermediate turnComplete, ends its interaction.
         if ("IDLE".equals(status)) {
             serverIdleSinceFinalized = true;
         } else if ("IN_PROGRESS".equals(status)) {

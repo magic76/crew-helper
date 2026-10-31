@@ -1063,6 +1063,17 @@ public class MainActivity extends Activity
                 }));
 
         if (advancedSettingsExpanded) {
+            final boolean thinking = LiveExtendedThinkingPolicy.isExtended(
+                    AppConfig.getLiveModel(this));
+            pageContent.addView(makeSettingsRow(
+                    CrewIcons.BRAIN,
+                    I18n.get(this, "Live 模型（實驗）", "Live model (experimental)"),
+                    thinking
+                            ? "3.8 Extended Thinking · Low"
+                            : "3.8 Live · Standard",
+                    thinking ? CrewTheme.AMBER_400 : CrewTheme.TEXT_MUTED,
+                    v -> showLiveModelDialog()));
+
             String customPrompt = AppConfig.getCustomSystemPrompt(this);
             pageContent.addView(makeSettingsRow(
                     CrewIcons.BRAIN,
@@ -1959,6 +1970,30 @@ public class MainActivity extends Activity
         if ("en".equals(language)) return "English";
         if ("zh".equals(language)) return "中文";
         return I18n.get(this, "跟隨系統", "System default");
+    }
+
+    private void showLiveModelDialog() {
+        final String standard = LiveExtendedThinkingPolicy.STANDARD_MODEL;
+        final String extended = LiveExtendedThinkingPolicy.EXTENDED_MODEL;
+        final boolean thinking = extended.equals(AppConfig.getLiveModel(this));
+        final String[] options = {
+                "Gemini 3.8 Live · Standard",
+                "Gemini 3.8 Live Extended Thinking · Low (experimental)"
+        };
+        new android.app.AlertDialog.Builder(this)
+                .setTitle(I18n.get(this, "Live 模型", "Live model"))
+                .setSingleChoiceItems(options, thinking ? 1 : 0, (dialog, which) -> {
+                    AppConfig.setLiveModel(MainActivity.this,
+                            which == 1 ? extended : standard);
+                    dialog.dismiss();
+                    renderSettingsPage();
+                    Toast.makeText(MainActivity.this, I18n.get(
+                            MainActivity.this,
+                            "下次開始語音通話時套用",
+                            "Applies to the next Live call"), Toast.LENGTH_SHORT).show();
+                })
+                .setNegativeButton(I18n.get(this, "取消", "Cancel"), null)
+                .show();
     }
 
     private void showVoiceAndPersonalitySettings() {

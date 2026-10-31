@@ -7,6 +7,8 @@ public class AppConfig {
     public static final String PREFS_NAME = "crew_helper_config";
     public static final String KEY_GEMINI_API_KEY = "gemini_api_key";
     public static final String KEY_VOICE_NAME = "live_voice_name";
+    /** Opt-in only; defaults to the proven low-latency Live model. */
+    public static final String KEY_LIVE_MODEL = "live_model_v1";
     public static final String KEY_LOCAL_BRIDGE = "local_bridge_enabled";
     /** 0084: private per-install capability token for localhost:8766. */
     public static final String KEY_LOCAL_BRIDGE_TOKEN = "local_bridge_token";
@@ -68,6 +70,17 @@ public class AppConfig {
             }
         }
         return prefs;
+    }
+
+    public static String getLiveModel(Context context) {
+        return LiveExtendedThinkingPolicy.safeModel(
+                getPrefs(context).getString(
+                        KEY_LIVE_MODEL, LiveExtendedThinkingPolicy.STANDARD_MODEL));
+    }
+
+    public static void setLiveModel(Context context, String model) {
+        getPrefs(context).edit().putString(
+                KEY_LIVE_MODEL, LiveExtendedThinkingPolicy.safeModel(model)).apply();
     }
 
     // ── 1. Gemini API Key (BYOK) ──

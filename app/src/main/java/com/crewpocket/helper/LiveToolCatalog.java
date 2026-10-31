@@ -24,6 +24,15 @@ final class LiveToolCatalog {
             boolean createMode,
             boolean presentMode,
             boolean workspaceMode) throws Exception {
+        return build(deckMode, createMode, presentMode, workspaceMode, false);
+    }
+
+    static JSONArray build(
+            boolean deckMode,
+            boolean createMode,
+            boolean presentMode,
+            boolean workspaceMode,
+            boolean extendedThinking) throws Exception {
         JSONArray tools = new JSONArray();
         JSONObject phoneActionProperties = new JSONObject()
                 .put("action", new JSONObject().put("type", "STRING")
@@ -328,7 +337,8 @@ final class LiveToolCatalog {
                 deckMode,
                 createMode,
                 presentMode,
-                workspaceMode);
+                workspaceMode,
+                extendedThinking);
     }
 
     /** 0082: keep the Live model surface small and mode-specific. */
@@ -337,7 +347,8 @@ final class LiveToolCatalog {
             boolean deckMode,
             boolean createMode,
             boolean presentMode,
-            boolean workspaceMode) throws Exception {
+            boolean workspaceMode,
+            boolean extendedThinking) throws Exception {
         JSONArray exposed = new JSONArray();
 
         for (int i = 0; i < declared.length(); i++) {
@@ -362,11 +373,12 @@ final class LiveToolCatalog {
             }
 
             if (allow) {
-                // Gemini 3.8 Live defaults function calls to NON_BLOCKING.
-                // Crew's phone Runtime intentionally preserves the proven
-                // request -> tool result -> next model step ordering.
+                // Standard Live preserves blocking tool ordering. Thinking
+                // requires NON_BLOCKING; Runtime still serializes actual phone
+                // mutations and validates each action before returning results.
                 compactDescriptions(tool, 0);
-                exposed.put(tool.put("behavior", "BLOCKING"));
+                exposed.put(tool.put("behavior",
+                        LiveExtendedThinkingPolicy.toolBehavior(extendedThinking)));
             }
         }
 

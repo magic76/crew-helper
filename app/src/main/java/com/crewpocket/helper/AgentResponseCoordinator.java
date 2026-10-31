@@ -26,12 +26,17 @@ final class AgentResponseCoordinator {
             new Handler(Looper.getMainLooper());
 
     private Runnable responseWatchdog;
+    private boolean extendedThinking;
 
     AgentResponseCoordinator(
             AgentTaskCoordinator tasks,
             Host host) {
         this.tasks = tasks;
         this.host = host;
+    }
+
+    void setExtendedThinking(boolean value) {
+        extendedThinking = value;
     }
 
     void clear() {
@@ -69,14 +74,14 @@ final class AgentResponseCoordinator {
                 "結論指令");
         scheduleWatchdog(
                 task,
-                FORCED_CONCLUSION_WAIT_MS,
+                extendedThinking ? 15_000L : FORCED_CONCLUSION_WAIT_MS,
                 "任務已停止：Gemini 未在結論要求後回覆");
     }
 
     void scheduleWatchdog(final AgentTaskRecord task) {
         scheduleWatchdog(
                 task,
-                FINAL_RESPONSE_WAIT_MS,
+                extendedThinking ? 45_000L : FINAL_RESPONSE_WAIT_MS,
                 "任務未完成：Gemini 未在工具結果後繼續");
     }
 
