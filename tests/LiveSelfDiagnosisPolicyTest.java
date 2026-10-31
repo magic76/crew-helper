@@ -26,6 +26,10 @@ public final class LiveSelfDiagnosisPolicyTest {
         check(policy.offer(7, "打開 Google Maps",
                 "com.apple.android.music", true) == null,
                 "only one option issuance per intent");
+        check(policy.isRecoveryTargetMismatch(7, "phone_action", "OPEN_APP",
+                "Apple Music"), "recovery cannot substitute another App");
+        check(!policy.isRecoveryTargetMismatch(7, "phone_action", "OPEN_APP",
+                "Google Maps"), "matching App may be opened");
         check(!policy.consumeRecovery(7, "phone_action", "TAP"),
                 "wrong recovery action cannot consume the lease");
         check(policy.consumeRecovery(7, "phone_action", "OPEN_APP"),
