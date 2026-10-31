@@ -34,13 +34,13 @@ public final class CrewDebugLabTest {
         CrewDebugTrace.record("TASK_CANCELLED", 4L, "",
                 "NONE", "NONE", "SUPERSEDED_BY_USER");
         CrewDebugTrace.Snapshot snap = CrewDebugTrace.snapshot();
-        check(snap.jsonl.contains("\\"event\\":\\"TOOL_RUNTIME_DONE\\""),
+        check(snap.jsonl.contains("\"event\":\"TOOL_RUNTIME_DONE\""),
                 "tool execution duration is included in sanitized timeline");
-        check(snap.jsonl.contains("\\"count\\":788"),
+        check(snap.jsonl.contains("\"count\":788"),
                 "duration is recorded as bounded milliseconds");
-        check(snap.jsonl.contains("\\"event\\":\\"TASK_FINISHED\\""),
+        check(snap.jsonl.contains("\"event\":\"TASK_FINISHED\""),
                 "explicit completion is traced");
-        check(snap.jsonl.contains("\\"event\\":\\"TASK_CANCELLED\\""),
+        check(snap.jsonl.contains("\"event\":\"TASK_CANCELLED\""),
                 "supersession is traced");
         check(snap.toolCalls == 2, "counts calls");
         check(snap.responses == 1, "counts responses");
