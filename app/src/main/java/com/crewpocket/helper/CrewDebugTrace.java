@@ -19,6 +19,7 @@ final class CrewDebugTrace {
             + "|LIVE_FRAME|LIVE_TOOL_CALL|TOOL_QUEUED|TOOL_COALESCED"
             + "|TOOL_EXECUTING|TOOL_RESPONSE|TOOL_RESPONSE_FAILED"
             + "|TOOL_CANCELLED|RUNTIME_GATE|MODEL_SPEECH|TRANSPORT_ERROR"
+            + "|TOOL_RUNTIME_DONE|TASK_FINISHED|TASK_CANCELLED"
             + "|RECOVERY_REQUESTED|RECOVERY_FAILED|";
     private static final String TOOLS =
             "|NONE|phone_action|inspect_ui|launch_app|tap_screen|tap_element"
@@ -35,7 +36,8 @@ final class CrewDebugTrace {
             + "|SOCKET_FAILURE|SETUP_COMPLETE|WEBSOCKET_OPEN|RECOVERY_ONCE|APP_NOT_FOUND"
             + "|SEARCH_NEEDS_QUERY|LOCATOR_MARGIN_TOO_SMALL"
             + "|TARGET_REQUIRED|AMBIGUOUS|UNVERIFIED"
-            + "|RECOVERY_TARGET_MISMATCH|RECOVERY_LIMIT_REACHED|OTHER|";
+            + "|RECOVERY_TARGET_MISMATCH|RECOVERY_LIMIT_REACHED"
+            + "|COMPLETED|SUPERSEDED_BY_USER|USER_INTERRUPTED|OTHER|";
     private static final ArrayDeque<String> events = new ArrayDeque<String>();
     private static final HashMap<String,String> callTokens = new HashMap<String,String>();
     private static final HashMap<String,Long> callGenerations =
@@ -100,6 +102,15 @@ final class CrewDebugTrace {
         if (!enabled) return;
         append(event, intentGeneration, "", "NONE", "NONE", code,
                 Math.max(0, Math.min(value, 10000)));
+    }
+
+    /** Runtime duration in ms; count is used as a bounded duration field. */
+    static synchronized void duration(
+            long intentGeneration, String callId, String tool, long durationMs) {
+        if (!enabled) return;
+        append("TOOL_RUNTIME_DONE", intentGeneration, callId,
+                tool, "NONE", "NONE",
+                (int) Math.max(0L, Math.min(300000L, durationMs)));
     }
 
     static synchronized Snapshot snapshot() {
