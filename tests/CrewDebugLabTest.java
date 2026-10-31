@@ -27,6 +27,9 @@ public final class CrewDebugLabTest {
         CrewDebugTrace.record("LIVE_TOOL_CALL", 4L,
                 "contains_sensitive_user_data", "user raw PII",
                 "REVEAL_SECRET", "raw-password");
+        CrewDebugTrace.count("TOOL_CATALOG", 4L, "NONE", 16);
+        CrewDebugTrace.record("NO_TOOL_TURN_COMPLETE", 4L,
+                "", "NONE", "NONE", "NO_TOOL_CALL");
         CrewDebugTrace.duration(4L, "secret-call-123",
                 "launch_app", 788L);
         CrewDebugTrace.record("TASK_FINISHED", 4L, "",
@@ -34,6 +37,12 @@ public final class CrewDebugLabTest {
         CrewDebugTrace.record("TASK_CANCELLED", 4L, "",
                 "NONE", "NONE", "SUPERSEDED_BY_USER");
         CrewDebugTrace.Snapshot snap = CrewDebugTrace.snapshot();
+        check(snap.jsonl.contains("\"event\":\"TOOL_CATALOG\""),
+                "declared tool count is recorded without tool descriptions");
+        check(snap.jsonl.contains("\"event\":\"NO_TOOL_TURN_COMPLETE\""),
+                "no-tool model turn is recorded as sanitized metadata");
+        check(snap.jsonl.contains("\"count\":16"),
+                "setup tool count uses bounded numeric metadata");
         check(snap.jsonl.contains("\"event\":\"TOOL_RUNTIME_DONE\""),
                 "tool execution duration is included in sanitized timeline");
         check(snap.jsonl.contains("\"count\":788"),
