@@ -38,6 +38,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/LiveTurnCoordinator.java" \
   "$SRC/LiveTurnOrderingPolicy.java" \
   "$SRC/LiveInteractionCompletionPolicy.java" \
+  "$SRC/LivePipelineDiagnostic.java" \
   "$SRC/LiveHumanTurnBoundary.java" \
   "$SRC/NaturalVoiceFollowUpPolicy.java" \
   "$SRC/LiveModelProgressPolicy.java" \
@@ -123,6 +124,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/LiveTurnCoordinatorTest.java" \
   "$ROOT/tests/LiveTurnOrderingPolicyTest.java" \
   "$ROOT/tests/LiveInteractionCompletionPolicyTest.java" \
+  "$ROOT/tests/LivePipelineDiagnosticTest.java" \
   "$ROOT/tests/LiveHumanTurnBoundaryTest.java" \
   "$ROOT/tests/NaturalVoiceFollowUpPolicyTest.java" \
   "$ROOT/tests/DirectGestureCompletionPolicyTest.java" \
@@ -222,6 +224,7 @@ java -cp "$OUT" com.crewpocket.helper.SendAuthorizationTest
 java -cp "$OUT" com.crewpocket.helper.LiveTurnCoordinatorTest
 java -cp "$OUT" com.crewpocket.helper.LiveTurnOrderingPolicyTest
 java -cp "$OUT" com.crewpocket.helper.LiveInteractionCompletionPolicyTest
+java -cp "$OUT" com.crewpocket.helper.LivePipelineDiagnosticTest
 java -cp "$OUT" com.crewpocket.helper.LiveHumanTurnBoundaryTest
 java -cp "$OUT" com.crewpocket.helper.NaturalVoiceFollowUpPolicyTest
 java -cp "$OUT" com.crewpocket.helper.DirectGestureCompletionPolicyTest
