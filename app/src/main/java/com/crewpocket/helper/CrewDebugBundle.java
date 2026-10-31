@@ -61,7 +61,13 @@ final class CrewDebugBundle {
     private static String diagnosis(CrewDebugTrace.Snapshot trace) {
         String kind;
         String detail;
-        if (trace.toolCalls == 0) {
+        if (trace.generation < 0L) {
+            kind = "NO_FINALIZED_INTENT";
+            detail = "Capture contains no finalized user command. Reproduce the command before exporting.";
+        } else if (trace.dropped > 0) {
+            kind = "PARTIAL_TRACE";
+            detail = "Oldest events were dropped. The missing prefix may contain the first decisive action.";
+        } else if (trace.toolCalls == 0) {
             kind = "MODEL_NO_TOOL_CALL_OBSERVED";
             detail = "No function call appears in the captured timeline. "
                     + "Check transcription, model output, and Live status before blaming Android Runtime.";
