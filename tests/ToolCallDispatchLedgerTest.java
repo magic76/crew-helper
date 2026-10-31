@@ -52,8 +52,13 @@ public final class ToolCallDispatchLedgerTest {
                 "same action may run again after prior call completed");
 
         ledger.resetForNewIntent();
+        check(ledger.inFlightCount() == 1,
+                "new intent preserves running async response ownership");
+        check(ledger.responseRecipients("c4", "tap_screen").size() == 1,
+                "running call remains addressable by its original response id");
+        ledger.releaseInFlight(repeatAfterCompletion.signature);
         check(ledger.inFlightCount() == 0,
-                "new intent clears in-flight dispatch state");
+                "running call can release after new intent");
 
         ToolCallDispatchLedger.Registration oldIdAgain =
                 ledger.register("c4", "tap_screen", "{x:1}", 9L);
