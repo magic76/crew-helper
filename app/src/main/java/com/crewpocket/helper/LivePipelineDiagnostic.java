@@ -152,7 +152,7 @@ final class LivePipelineDiagnostic {
                 + " ready=" + backgroundPlannerReady
                 + " failed=" + backgroundPlannerFailed
                 + " delivered=" + backgroundPlannerDelivered
-                + "\\nSupervisor: intents=" + supervisorIntents
+                + "\nSupervisor: intents=" + supervisorIntents
                 + " fast-path=" + supervisorFastPaths
                 + " recovery-requested=" + supervisorRepairRequested;
     }
