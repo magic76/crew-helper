@@ -2870,6 +2870,10 @@ final class NativeGeminiLiveClient {
             try {
                 call.put("_crew_intent_generation", callIntentGeneration);
             } catch (Exception ignored) {}
+            // Live function calls may precede authoritative transcription.
+            // Rebind diagnosis to the reconciled generation, not arrival time.
+            liveSelfDiagnosis.toolReceived(id, callIntentGeneration,
+                    requestedName, requestedArgs.optString("action", ""));
 
             LiveTurnCoordinator.FinalizedTurn finalizedTurn =
                     liveTurnCoordinator.latest();
