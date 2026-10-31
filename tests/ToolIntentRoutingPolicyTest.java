@@ -24,21 +24,24 @@ public final class ToolIntentRoutingPolicyTest {
                 "empty TYPE payload is not remapped");
 
         check(ToolIntentRoutingPolicy.requiresOpenAppAction(
-                        "APP:OPEN", "phone_action", "TAP"),
+                        "APP:OPEN", "phone_action", "TAP", "打開 Google Maps"),
                 "new Maps open goal blocks a stale media TAP");
         check(ToolIntentRoutingPolicy.requiresOpenAppAction(
-                        "APP:OPEN", "phone_action", "SEARCH"),
+                        "APP:OPEN", "phone_action", "SEARCH", "打開 Google Maps"),
                 "app open must not search the previous foreground app");
         check(!ToolIntentRoutingPolicy.requiresOpenAppAction(
-                        "APP:OPEN", "phone_action", "OPEN_APP"),
+                        "APP:OPEN", "phone_action", "OPEN_APP", "打開 Google Maps"),
                 "app open accepts correct semantic action");
         check(!ToolIntentRoutingPolicy.requiresOpenAppAction(
-                        "APP:OPEN", "inspect_ui", ""),
+                        "APP:OPEN", "inspect_ui", "", "打開 Google Maps"),
                 "observation remains available for app open");
         check(!ToolIntentRoutingPolicy.requiresOpenAppAction(
-                        "MEDIA:PLAY", "phone_action", "TAP"),
+                        "MEDIA:PLAY", "phone_action", "TAP", "播放鄧紫棋"),
                 "media playback TAP remains valid for media goals");
 
+        check(!ToolIntentRoutingPolicy.requiresOpenAppAction(
+                        "APP:OPEN", "phone_action", "TAP", "打開這份文件"),
+                "generic open-document flow does not inherit app-only restriction");
         System.out.println(
                 "ToolIntentRoutingPolicyTest passed "
                         + checks + " checks");
