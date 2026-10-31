@@ -31,3 +31,6 @@ Thumbs.db
 *.log
 *.tmp
 *.idsig
+
+# Local opt-in Crew Debug Lab artifacts (never commit incident bundles)
+debug-output/
