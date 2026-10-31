@@ -20,6 +20,17 @@ public final class LiveModelSelectionTest {
         expect(!LiveModelSelection.resolve("").usesThinking(),
                 "empty preference defaults to standard");
 
+        LiveModelSelection.Config dual =
+                LiveModelSelection.resolve(LiveModelSelection.DUAL_ENGINE);
+        expect(LiveModelSelection.DUAL_ENGINE.equals(dual.id),
+                "dual engine must be explicitly selected");
+        expect(LiveModelSelection.STANDARD_MODEL.equals(dual.model),
+                "dual engine always uses Standard Live for tools");
+        expect(!dual.usesThinking() && dual.thinkingLevel.isEmpty(),
+                "dual engine MUST omit Live thinkingConfig");
+        expect(dual.usesBackgroundPlanner() && !standard.usesBackgroundPlanner(),
+                "only dual mode activates second model");
+
         LiveModelSelection.Config low =
                 LiveModelSelection.resolve(LiveModelSelection.EXTENDED_LOW);
         expect(LiveModelSelection.EXTENDED_MODEL.equals(low.model),

@@ -166,6 +166,7 @@ final class NativeGeminiLiveClient {
     // Snapshot at client creation: a settings change cannot silently change
     // the model during session resumption or a network reconnect.
     private final LiveModelSelection.Config liveModel;
+    private final BackgroundThinkingPlanner backgroundThinkingPlanner;
 
     NativeGeminiLiveClient(String apiKey, Listener listener) { this(apiKey, "", AppConfig.DEFAULT_VOICE, "auto", 35, "warm", "", 55, "call", listener); }
     NativeGeminiLiveClient(String apiKey, String serverUrl, Listener listener) { this(apiKey, serverUrl, AppConfig.DEFAULT_VOICE, "auto", 35, "warm", "", 55, "call", listener); }
@@ -186,6 +187,8 @@ final class NativeGeminiLiveClient {
         this.appContext = context == null ? null : context.getApplicationContext();
         this.liveModel = LiveModelSelection.resolve(
                 AppConfig.getLiveModelId(this.appContext));
+        this.backgroundThinkingPlanner = new BackgroundThinkingPlanner(
+                apiKey, this.liveModel.usesBackgroundPlanner());
         this.voiceName = voiceName == null || voiceName.trim().isEmpty()
                 ? AppConfig.DEFAULT_VOICE : voiceName.trim();
         this.noiseMode = "quiet".equals(noiseMode) || "noisy".equals(noiseMode)
@@ -1077,6 +1080,11 @@ final class NativeGeminiLiveClient {
                 workingContext.toProgressJson().optString("goalIntent", ""));
         liveSelfDiagnosis.newIntent(userIntentGeneration,
                 workingContext.toProgressJson().optString("goalIntent", ""));
+        // Never block the Live WebSocket or delay the first action. This
+        // optional one-shot planner cannot execute a phone or notebook tool.
+        backgroundThinkingPlanner.newIntent(
+                userIntentGeneration, userText,
+                workingContext.toProgressJson().optString("goalIntent", ""));
 
         taskRecipeCandidateGeneration = -1L;
         taskRecipeCandidateId = "";
@@ -1101,6 +1109,9 @@ final class NativeGeminiLiveClient {
             String reason) {
         conversationGoalTouchedAt = System.currentTimeMillis();
         workingContext.mergeUserTurnSegment(effectiveText);
+        // A late speech fragment may change the goal; do not reuse advice
+        // based on an earlier partial transcript.
+        backgroundThinkingPlanner.invalidate();
         MediaFlowDiagnostic.voiceTurn(
                 "MERGED_SEGMENT",
                 workingContext.toProgressJson()
@@ -1491,6 +1502,7 @@ final class NativeGeminiLiveClient {
     void stop() {
         contextPayloadAudit.flushTurn();
         stopConversationDelegation("LIVE_SESSION_STOPPED");
+        backgroundThinkingPlanner.stop();
         workingContext.setPendingTask("");
 
         boolean wasRunning = running;
@@ -2682,6 +2694,20 @@ final class NativeGeminiLiveClient {
         String baseInstruction = LivePrompt.CORE + "\n" + LivePrompt.NATURAL_VOICE
                 + "\n" + personality
                 + (deckInstruction.isEmpty() ? "" : "\n" + deckInstruction);
+        if (liveModel.usesBackgroundPlanner()) {
+            baseInstruction += "\n[Think Supervisor / Live Executor] "
+                    + "You are the sole authorized phone tool executor. "
+                    + "Fast simple goals never wait for Think. For multi-step "
+                    + "goals, read thinkingAdvice when present as an advisory "
+                    + "semantic plan. Follow safe, useful stages against the "
+                    + "fresh actual UI, not imagined labels or coordinates. "
+                    + "For each tool result, use supervisor.completionRequirement "
+                    + "and the Runtime goal/nextRequirement to decide whether "
+                    + "the user goal is verified. A Think recovery suggestion "
+                    + "is not proof and never overrides Runtime blocks, "
+                    + "human confirmation, tool safety or an updated user goal. "
+                    + "If no advice is ready, keep operating normally.";
+        }
 
         String sessionContext = SessionContextSnapshot.systemInstruction(
                 appContext,
@@ -8814,6 +8840,47 @@ final class NativeGeminiLiveClient {
         final JSONObject modelResult =
                 ModelToolResponseAdapter.forModel(
                         name, result, progressContext);
+        // Every dual-engine intent has an explicit completion contract, but
+        // only the foreground Live + Runtime may perform and verify actions.
+        // Think is asynchronous, has no phone tools, and cannot override this.
+        AgentTaskRecord supervisorTask = agentTaskCoordinator.activeRunning();
+        if (liveModel.usesBackgroundPlanner()
+                && supervisorTask != null
+                && supervisorTask.intentGeneration == userIntentGeneration
+                && !goalIntent.isEmpty()) {
+            backgroundThinkingPlanner.onToolOutcome(
+                    userIntentGeneration, goalIntent, name, result);
+            JSONObject contract = new JSONObject()
+                    .put("source", "runtime_verified_goal")
+                    .put("completionRequirement",
+                            DualEngineSupervisorPolicy.completionRequirement(goalIntent))
+                    .put("actionAuthority", "Live executor via Runtime only")
+                    .put("planAuthority", "Think advice is optional, never executable");
+            if (ContextPayloadBudget.utf8Bytes(modelResult.toString())
+                    + ContextPayloadBudget.utf8Bytes(contract.toString()) + 26
+                    <= ContextPayloadBudget.toolBudget(name)) {
+                modelResult.put("supervisor", contract);
+            }
+        }
+        // Optional and only once per current intent. Never sacrifice current
+        // screen evidence or exceed the existing model-facing byte budget.
+        // Runtime goal.next/requiredTool and action verification always win.
+        if ("phone_action".equals(name) || "inspect_ui".equals(name)) {
+            JSONObject plan = backgroundThinkingPlanner.peekIfReady(
+                    userIntentGeneration, goalIntent);
+            JSONObject goalJson = modelResult.optJSONObject("goal");
+            if (plan != null && goalJson != null
+                    && !"FINISH".equals(goalJson.optString("next"))
+                    && !"DONE".equals(goalJson.optString("state"))) {
+                int projected = ContextPayloadBudget.utf8Bytes(
+                        modelResult.toString())
+                        + ContextPayloadBudget.utf8Bytes(plan.toString()) + 24;
+                if (projected <= ContextPayloadBudget.toolBudget(name)) {
+                    modelResult.put("thinkingAdvice", plan);
+                    backgroundThinkingPlanner.markDelivered(userIntentGeneration);
+                }
+            }
+        }
         // Error-only nudge; ordinary successful calls incur zero extra model
         // requests or additional diagnostic payload.
         if (!shadowSuccess

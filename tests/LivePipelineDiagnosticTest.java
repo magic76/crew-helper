@@ -22,6 +22,12 @@ public final class LivePipelineDiagnosticTest {
         check(LivePipelineDiagnostic.report().contains("phone_action/OTHER"),
                 "unrecognized action not leaked");
         LivePipelineDiagnostic.startSession(200L);
+        LivePipelineDiagnostic.onSupervisorIntent(true);
+        LivePipelineDiagnostic.onSupervisorIntent(false);
+        LivePipelineDiagnostic.onSupervisorRepairRequested();
+        check(LivePipelineDiagnostic.report().contains(
+                "Supervisor: intents=2 fast-path=1 recovery-requested=1"),
+                "supervisor counters distinguish fast path and failure recovery");
         check(LivePipelineDiagnostic.report().contains("toolCall frames=0"),
                 "fresh session clears historical counters");
         System.out.println("PASS LivePipelineDiagnosticTest");
