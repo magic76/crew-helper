@@ -11,6 +11,20 @@ package com.crewpocket.helper;
 final class ToolIntentRoutingPolicy {
     private ToolIntentRoutingPolicy() {}
 
+    /**
+     * An APP:OPEN instruction cannot authorize a TAP/SEARCH/PLAY mutation.
+     * With non-blocking Live calls, a late media action may otherwise be
+     * attributed to the new app-open generation. Ask the model for OPEN_APP
+     * instead; do not invent an application target in the Runtime.
+     */
+    static boolean requiresOpenAppAction(
+            String goalIntent, String toolName, String action) {
+        return "APP:OPEN".equals(goalIntent)
+                && "phone_action".equals(toolName)
+                && !"OPEN_APP".equalsIgnoreCase(
+                        action == null ? "" : action.trim());
+    }
+
     static boolean shouldRemapTypeToSearch(
             String runtimeName,
             boolean explicitSearchIntent,
