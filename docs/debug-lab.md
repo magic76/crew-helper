@@ -111,6 +111,28 @@ cannot run; the independent Android Debug Lab plus the offline analyzer
 remain the source of evidence. A model explanation is a hypothesis, not proof
 that the requested Android outcome was verified.
 
+## Verified app-open completion and latency evidence
+
+A finalized standalone `APP:OPEN` intent now closes the Agent task
+immediately when `launch_app` succeeds, the post-action Accessibility
+observation is fresh, the reported launched package equals the observed
+foreground package, and enforced Runtime V2 verification is `VERIFIED`.
+An `EVIDENCE_AVAILABLE` state alone is **never** terminal. Navigation,
+search, and media-play goals are explicitly excluded from this fast finish.
+
+Common spoken variants such as 「幫我開地圖」 and 「啟動 Apple Music」 now
+map to `APP:OPEN`, but a compound 「搜尋／導航／播放」 request retains its
+original higher-priority goal. The known-app recovery matcher uses the same
+goal parser to prevent conflicting interpretations.
+
+For new captures, events include `TOOL_RUNTIME_DONE` (its integer
+`count` field represents clamped execution milliseconds), plus
+`TASK_FINISHED` and `TASK_CANCELLED` with allowlisted reason codes.
+This distinguishes time before the model's first tool from Android execution
+and from waiting to close the task. It does not remove the time Gemini spends
+deciding which first tool to emit; any direct app-open execution before the
+model must be implemented separately with existing Runtime authorizations.
+
 ## Current P0 limits
 
 This phase exports useful deterministic evidence, **not** a remote debugger,
