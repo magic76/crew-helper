@@ -23,31 +23,21 @@ final class LiveAppOpenRecoveryPolicy {
         return "";
     }
 
-    static boolean shouldRecover(String goalIntent,
-            String finalizedUserText, String foregroundPackage,
-            String interactionStatus, boolean freshInput,
-            int toolCallsForIntent, boolean alreadyNudged) {
-        return shouldRecover(goalIntent, finalizedUserText, foregroundPackage,
-                interactionStatus, freshInput, toolCallsForIntent,
-                alreadyNudged, false);
-    }
-
     /**
-     * Live Extended Thinking sometimes never sends IDLE. A completed spoken
-     * model turn with no tool is a bounded fallback signal for a *standalone*
-     * named-app launch, not a general-purpose task/interaction completion.
+     * Extended Thinking may speak while still reasoning. A spoken turn ending
+     * with IN_PROGRESS is NOT an authorization to inject another clientContent:
+     * turnComplete=true on an outbound clientContent interrupts active reasoning.
+     * Only the authoritative server IDLE boundary can trigger a one-shot nudge.
      */
     static boolean shouldRecover(String goalIntent,
             String finalizedUserText, String foregroundPackage,
             String interactionStatus, boolean freshInput,
-            int toolCallsForIntent, boolean alreadyNudged,
-            boolean completedSpokenNoToolTurn) {
+            int toolCallsForIntent, boolean alreadyNudged) {
         if (alreadyNudged || freshInput || toolCallsForIntent != 0
                 || !"APP:OPEN".equals(goalIntent)
                 || !GoalIntentKey.isStandaloneAppOpen(finalizedUserText)
-                || (!"IDLE".equalsIgnoreCase(
-                        interactionStatus == null ? "" : interactionStatus.trim())
-                    && !completedSpokenNoToolTurn)) {
+                || !"IDLE".equalsIgnoreCase(
+                        interactionStatus == null ? "" : interactionStatus.trim())) {
             return false;
         }
         String target = requestedPackage(finalizedUserText);
