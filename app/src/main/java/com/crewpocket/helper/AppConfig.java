@@ -7,6 +7,7 @@ public class AppConfig {
     public static final String PREFS_NAME = "crew_helper_config";
     public static final String KEY_GEMINI_API_KEY = "gemini_api_key";
     public static final String KEY_VOICE_NAME = "live_voice_name";
+    public static final String KEY_LIVE_MODEL = "live_model_selection";
     public static final String KEY_LOCAL_BRIDGE = "local_bridge_enabled";
     /** 0084: private per-install capability token for localhost:8766. */
     public static final String KEY_LOCAL_BRIDGE_TOKEN = "local_bridge_token";
@@ -239,6 +240,21 @@ public class AppConfig {
     public static void setVoiceName(Context context, String voice) {
         if (context == null) return;
         getPrefs(context).edit().putString(KEY_VOICE_NAME, voice == null ? DEFAULT_VOICE : voice.trim()).apply();
+    }
+
+    /** Model changes apply to the next new Gemini Live WebSocket session. */
+    public static String getLiveModelId(Context context) {
+        if (context == null) return LiveModelSelection.STANDARD;
+        return LiveModelSelection.resolve(
+                getPrefs(context).getString(
+                        KEY_LIVE_MODEL, LiveModelSelection.STANDARD)).id;
+    }
+
+    public static void setLiveModelId(Context context, String modelId) {
+        if (context == null) return;
+        getPrefs(context).edit()
+                .putString(KEY_LIVE_MODEL, LiveModelSelection.resolve(modelId).id)
+                .apply();
     }
 
     // ── 4. App-internal Runtime Bridge (:8766) ──
