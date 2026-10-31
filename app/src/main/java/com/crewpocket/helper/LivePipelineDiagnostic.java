@@ -21,6 +21,10 @@ final class LivePipelineDiagnostic {
     private static int idleWithoutTool;
     private static int incompleteUtterances;
     private static int interactionIdleFrames;
+    private static int backgroundPlannerStarted;
+    private static int backgroundPlannerReady;
+    private static int backgroundPlannerFailed;
+    private static int backgroundPlannerDelivered;
     private static int toolCallsForIntent;
     private static int responsesForIntent;
     private static boolean countedIdleWithoutTool;
@@ -43,10 +47,19 @@ final class LivePipelineDiagnostic {
         idleWithoutTool = 0;
         incompleteUtterances = 0;
         interactionIdleFrames = 0;
+        backgroundPlannerStarted = 0;
+        backgroundPlannerReady = 0;
+        backgroundPlannerFailed = 0;
+        backgroundPlannerDelivered = 0;
         toolCallsForIntent = 0;
         responsesForIntent = 0;
         countedIdleWithoutTool = false;
     }
+
+    static synchronized void onPlannerStarted() { backgroundPlannerStarted++; }
+    static synchronized void onPlannerReady() { backgroundPlannerReady++; }
+    static synchronized void onPlannerFailed() { backgroundPlannerFailed++; }
+    static synchronized void onPlannerDelivered() { backgroundPlannerDelivered++; }
 
     static synchronized void onIntent(long generation, String rawGoal) {
         activeIntentGeneration = generation;
@@ -121,7 +134,11 @@ final class LivePipelineDiagnostic {
                 + "Current intent: tools=" + toolCallsForIntent
                 + " responses=" + responsesForIntent
                 + " · IDLE-without-tool=" + idleWithoutTool + "\n"
-                + "Last requested: " + lastTool + "/" + lastAction;
+                + "Last requested: " + lastTool + "/" + lastAction + "\n"
+                + "Background Thinking: started=" + backgroundPlannerStarted
+                + " ready=" + backgroundPlannerReady
+                + " failed=" + backgroundPlannerFailed
+                + " delivered=" + backgroundPlannerDelivered;
     }
 
     private static String allowedGoal(String raw) {

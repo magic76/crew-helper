@@ -1595,7 +1595,8 @@ public class MainActivity extends Activity
         final String[] ids = {
                 LiveModelSelection.STANDARD,
                 LiveModelSelection.EXTENDED_LOW,
-                LiveModelSelection.EXTENDED_MEDIUM
+                LiveModelSelection.EXTENDED_MEDIUM,
+                LiveModelSelection.DUAL_ENGINE
         };
         final String[] options = {
                 I18n.get(this, "標準 3.8 Live（建議）",
@@ -1603,7 +1604,9 @@ public class MainActivity extends Activity
                 I18n.get(this, "3.8 Extended Thinking · Low",
                         "3.8 Extended Thinking · Low"),
                 I18n.get(this, "3.8 Extended Thinking · Medium",
-                        "3.8 Extended Thinking · Medium")
+                        "3.8 Extended Thinking · Medium"),
+                I18n.get(this, "雙引擎 · 標準語音＋背景思考（實驗）",
+                        "Dual Engine · Standard voice + background thinking (experimental)")
         };
         String saved = AppConfig.getLiveModelId(this);
         int selected = 0;

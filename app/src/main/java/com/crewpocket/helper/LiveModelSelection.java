@@ -11,6 +11,7 @@ final class LiveModelSelection {
     static final String STANDARD = "standard";
     static final String EXTENDED_LOW = "extended_low";
     static final String EXTENDED_MEDIUM = "extended_medium";
+    static final String DUAL_ENGINE = "dual_engine";
 
     static final String STANDARD_MODEL = "gemini-3.8-live";
     static final String EXTENDED_MODEL = "gemini-3.8-live-extended-thinking";
@@ -29,6 +30,7 @@ final class LiveModelSelection {
         }
 
         boolean usesThinking() { return !thinkingLevel.isEmpty(); }
+        boolean usesBackgroundPlanner() { return DUAL_ENGINE.equals(id); }
     }
 
     private static volatile Config lastRequestedSetup;
@@ -37,6 +39,10 @@ final class LiveModelSelection {
 
     /** Fail closed to standard Live for old, missing or invalid preferences. */
     static Config resolve(String savedId) {
+        if (DUAL_ENGINE.equals(savedId)) {
+            return new Config(DUAL_ENGINE, STANDARD_MODEL, "",
+                    "Standard Live + Background Thinking (experimental)");
+        }
         if (EXTENDED_LOW.equals(savedId)) {
             return new Config(EXTENDED_LOW, EXTENDED_MODEL, "LOW",
                     "3.8 Extended Thinking · Low");
