@@ -38,6 +38,41 @@ public final class LiveAppOpenRecoveryPolicyTest {
         check(LiveAppOpenRecoveryPolicy.requestedPackage(
                 "開 Apple Music 播放歌曲").isEmpty(),
                 "media playback goal cannot be degraded into app launch");
+        check(LiveAppOpenRecoveryPolicy.shouldRecover(
+                "APP:OPEN", "幫我開地圖",
+                "com.apple.android.music", "IN_PROGRESS", false, 0,
+                false, true),
+                "completed spoken no-tool turn may nudge without IDLE");
+        check(!LiveAppOpenRecoveryPolicy.shouldRecover(
+                "APP:OPEN", "幫我開地圖",
+                "com.apple.android.music", "IN_PROGRESS", false, 0,
+                false, false),
+                "IN_PROGRESS alone never triggers recovery");
+        check(!LiveAppOpenRecoveryPolicy.shouldRecover(
+                "APP:OPEN", "幫我開地圖",
+                "com.apple.android.music", "IN_PROGRESS", false, 1,
+                false, true),
+                "do not nudge after a real model tool call");
+        check(!LiveAppOpenRecoveryPolicy.shouldRecover(
+                "APP:OPEN", "幫我開地圖",
+                "com.apple.android.music", "IN_PROGRESS", false, 0,
+                true, true),
+                "completed no-tool turn still has one-shot lease");
+        check(!LiveAppOpenRecoveryPolicy.shouldRecover(
+                "APP:OPEN", "幫我開地圖然後看看附近",
+                "com.apple.android.music", "IN_PROGRESS", false, 0,
+                false, true),
+                "never treat a compound app open as terminal fallback");
+        check(!LiveAppOpenRecoveryPolicy.shouldRecover(
+                "APP:OPEN", "開會",
+                "com.apple.android.music", "IN_PROGRESS", false, 0,
+                false, true),
+                "unknown app cannot be invented by bounded fallback");
+        check(!LiveAppOpenRecoveryPolicy.shouldRecover(
+                "APP:OPEN", "幫我開地圖",
+                "com.google.android.apps.maps", "IN_PROGRESS", false, 0,
+                false, true),
+                "do not relaunch app already in foreground");
         System.out.println("PASS LiveAppOpenRecoveryPolicyTest");
     }
     static void check(boolean value, String description) {
