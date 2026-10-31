@@ -53,7 +53,7 @@ final class GoalIntentKey {
             return "SEARCH:RESULT";
         }
         if (containsAny(value,
-                "打開", "打开", "開啟", "开启", "open app", "open ")) {
+                "打開", "打开", "開啟", "开启", "啟動", "启动", "開起來", "开起来", "open app", "open ")) {
             return "APP:OPEN";
         }
         return "";
