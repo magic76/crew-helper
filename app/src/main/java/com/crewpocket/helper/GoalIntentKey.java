@@ -67,6 +67,18 @@ final class GoalIntentKey {
         return "";
     }
 
+    /** Conservative terminal shortcut: reject compound requests even if
+     * the first clause itself is an app-open action. */
+    static boolean isStandaloneAppOpen(String text) {
+        if (!"APP:OPEN".equals(derive(text))) return false;
+        String normalized = normalize(text);
+        return !containsAny(normalized,
+                "然後", "然后", "接著", "接着",
+                "順便", "顺便", "再幫", "再帮",
+                "再找", "幫我找", "帮我找", "再查",
+                "and then", "after that");
+    }
+
     private static String normalize(String text) {
         if (text == null) return "";
         return (" " + text.toLowerCase(Locale.ROOT)
