@@ -971,6 +971,14 @@ public class MainActivity extends Activity
                 CrewTheme.CYAN_400,
                 v -> showConversationExperienceSettings()));
 
+        pageContent.addView(makeSettingsOverviewRow(
+                CrewIcons.BRAIN,
+                I18n.get(this, "Gemini Live 模型", "Gemini Live Model"),
+                LiveModelSelection.resolve(
+                        AppConfig.getLiveModelId(this)).label,
+                CrewTheme.INDIGO_400,
+                v -> showLiveModelDialog()));
+
         boolean alwaysOn = AppConfig.isAlwaysOnEnabled(this);
         boolean notificationReady =
                 notificationPermissionGranted() && notificationsEnabled();
@@ -1581,6 +1589,42 @@ public class MainActivity extends Activity
                 });
         }
         builder.show();
+    }
+
+    private void showLiveModelDialog() {
+        final String[] ids = {
+                LiveModelSelection.STANDARD,
+                LiveModelSelection.EXTENDED_LOW,
+                LiveModelSelection.EXTENDED_MEDIUM
+        };
+        final String[] options = {
+                I18n.get(this, "標準 3.8 Live（建議）",
+                        "Standard 3.8 Live (recommended)"),
+                I18n.get(this, "3.8 Extended Thinking · Low",
+                        "3.8 Extended Thinking · Low"),
+                I18n.get(this, "3.8 Extended Thinking · Medium",
+                        "3.8 Extended Thinking · Medium")
+        };
+        String saved = AppConfig.getLiveModelId(this);
+        int selected = 0;
+        for (int i = 0; i < ids.length; i++) {
+            if (ids[i].equals(saved)) selected = i;
+        }
+        new android.app.AlertDialog.Builder(this)
+                .setTitle(I18n.get(this, "Gemini Live 模型",
+                        "Gemini Live Model"))
+                .setSingleChoiceItems(options, selected, (dialog, which) -> {
+                    AppConfig.setLiveModelId(MainActivity.this, ids[which]);
+                    dialog.dismiss();
+                    renderSettingsPage();
+                    Toast.makeText(MainActivity.this,
+                            I18n.get(MainActivity.this,
+                                    "已儲存，下一次建立 Live 通話時生效。進行中的通話不會切換。",
+                                    "Saved. Applies to the next Live session; current calls are unchanged."),
+                            Toast.LENGTH_LONG).show();
+                })
+                .setNegativeButton(I18n.get(this, "取消", "Cancel"), null)
+                .show();
     }
 
     private void showSettingsDialog() {

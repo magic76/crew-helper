@@ -114,6 +114,8 @@ final class ModelToolResponseAdapter {
                     goalIntent,
                     goalText,
                     completedTarget);
+            MediaFlowDiagnostic.modelScreen(
+                    toolName, goalIntent, goalText, screen);
             if (screen.length() > 0) out.put("screen", screen);
 
             JSONObject context = context(progressContext, action);

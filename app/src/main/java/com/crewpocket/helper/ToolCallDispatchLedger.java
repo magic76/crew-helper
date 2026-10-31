@@ -98,9 +98,10 @@ final class ToolCallDispatchLedger {
     }
 
     synchronized void resetForNewIntent() {
-        inFlightSignatures.clear();
-        primarySignatures.clear();
-        coalescedRecipients.clear();
+        // Keep the in-flight primary call and all coalesced recipient IDs.
+        // NON_BLOCKING tool results can arrive after a newer human command.
+        // Pending calls are explicitly cancelled by ToolCallDispatcher;
+        // running calls must still be able to fan out their final response.
     }
 
     synchronized int inFlightCount() {

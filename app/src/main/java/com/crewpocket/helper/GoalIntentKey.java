@@ -53,10 +53,30 @@ final class GoalIntentKey {
             return "SEARCH:RESULT";
         }
         if (containsAny(value,
-                "打開", "打开", "開啟", "开启", "open app", "open ")) {
+                "打開", "打开", "開啟", "开启", "啟動", "启动", "開起來", "开起来", "open app", "open ")) {
+            return "APP:OPEN";
+        }
+        if (containsAny(value, "幫我開", "帮我开", "請開", "请开",
+                "開一下", "开一下", "開地圖", "开地图",
+                "開 google", "开 google", "開google", "开google")
+                && containsAny(value, "google maps", "google map",
+                        "地圖", "地图", "apple music", "chrome",
+                        "youtube", "應用程式", "应用程序", " app ")) {
             return "APP:OPEN";
         }
         return "";
+    }
+
+    /** Conservative terminal shortcut: reject compound requests even if
+     * the first clause itself is an app-open action. */
+    static boolean isStandaloneAppOpen(String text) {
+        if (!"APP:OPEN".equals(derive(text))) return false;
+        String normalized = normalize(text);
+        return !containsAny(normalized,
+                "然後", "然后", "接著", "接着",
+                "順便", "顺便", "再幫", "再帮",
+                "再找", "幫我找", "帮我找", "再查",
+                "and then", "after that");
     }
 
     private static String normalize(String text) {

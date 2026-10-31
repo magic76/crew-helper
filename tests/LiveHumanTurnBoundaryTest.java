@@ -42,6 +42,25 @@ public final class LiveHumanTurnBoundaryTest {
                         && second.effectiveText.contains("導航過去"),
                 "merged segment keeps the whole human goal");
 
+        // Extended Thinking can end an audio utterance while the overall
+        // interaction is still running. An absent status is NOT server IDLE.
+        boundary.observeServerState(
+                true, "", false);
+        LiveHumanTurnBoundary.Resolution thinkingContinuation =
+                boundary.resolve(
+                        "然後導航過去",
+                        2_500L,
+                        true,
+                        0L,
+                        0L,
+                        0L,
+                        "",
+                        false,
+                        false);
+        check(thinkingContinuation.decision
+                        == LiveHumanTurnBoundary.Decision.MERGE_CURRENT_SEGMENT,
+                "intermediate turnComplete keeps related live interaction open");
+
         boundary.observeServerState(
                 true, "IDLE", false);
         boundary.noteModelSpeech();

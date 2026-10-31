@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.crewpocket.helper"
 >
 
 
@@ -62,6 +63,12 @@
             android:name=".DeckActivity"
             android:screenOrientation="portrait"
             android:exported="false" />
+
+        <provider
+            android:name=".CrewDebugShareProvider"
+            android:authorities="com.crewpocket.helper.debugbundle"
+            android:exported="false"
+            android:grantUriPermissions="true" />
 
         <activity
             android:name=".AgentInspectorActivity"
