@@ -28,6 +28,7 @@ public final class CrewDebugLabTest {
                 "contains_sensitive_user_data", "user raw PII",
                 "REVEAL_SECRET", "raw-password");
         CrewDebugTrace.count("TOOL_CATALOG", 4L, "NONE", 16);
+        CrewDebugTrace.count("PHONE_TOOL_DECLARED", 4L, "NONE", 1);
         CrewDebugTrace.record("NO_TOOL_TURN_COMPLETE", 4L,
                 "", "NONE", "NONE", "NO_TOOL_CALL");
         CrewDebugTrace.duration(4L, "secret-call-123",
@@ -37,6 +38,8 @@ public final class CrewDebugLabTest {
         CrewDebugTrace.record("TASK_CANCELLED", 4L, "",
                 "NONE", "NONE", "SUPERSEDED_BY_USER");
         CrewDebugTrace.Snapshot snap = CrewDebugTrace.snapshot();
+        check(snap.jsonl.contains("\"event\":\"PHONE_TOOL_DECLARED\""),
+                "whether phone_action was offered is recorded without schema");
         check(snap.jsonl.contains("\"event\":\"TOOL_CATALOG\""),
                 "declared tool count is recorded without tool descriptions");
         check(snap.jsonl.contains("\"event\":\"NO_TOOL_TURN_COMPLETE\""),
