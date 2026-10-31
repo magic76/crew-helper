@@ -1046,6 +1046,8 @@ final class NativeGeminiLiveClient {
             shadowTaskId = agentTaskCoordinator.activeTaskId();
         }
         sendCancelledToolCalls(cancelledToolCalls);
+        LivePipelineDiagnostic.onIntent(userIntentGeneration,
+                workingContext.toProgressJson().optString("goalIntent", ""));
 
         taskRecipeCandidateGeneration = -1L;
         taskRecipeCandidateId = "";
@@ -1092,6 +1094,7 @@ final class NativeGeminiLiveClient {
 
     private void sendCancelledToolCalls(JSONArray cancelled) {
         if (cancelled == null || cancelled.length() == 0) return;
+        LivePipelineDiagnostic.onCancelledQueued(cancelled.length());
         try {
             JSONObject payload = new JSONObject().put("toolResponse",
                     new JSONObject().put("functionResponses", cancelled));
@@ -1292,6 +1295,7 @@ final class NativeGeminiLiveClient {
     void start() {
         if (running) return;
         running = true;
+        LivePipelineDiagnostic.startSession(System.currentTimeMillis());
         loadVoiceprintProfile();
         reportStage("建立 Gemini WebSocket…");
         liveConnection.start();
@@ -1481,6 +1485,9 @@ final class NativeGeminiLiveClient {
     private void handleJson(String raw) throws Exception {
         GeminiLiveTurnHandler.Frame frame =
                 geminiLiveTurnHandler.parse(raw);
+        LivePipelineDiagnostic.onFrame(frame.interactionStatus, frame.turnComplete,
+                frame.modelTurnPresent || !frame.outputText.isEmpty(),
+                frame.hasToolCalls());
         boolean interactionComplete = LiveInteractionCompletionPolicy.isComplete(
                 frame.interactionStatus,
                 hasFreshInput(frame),
@@ -1765,6 +1772,10 @@ final class NativeGeminiLiveClient {
                                     true);
                         } catch (Exception ignored) {}
                     }
+                    LivePipelineDiagnostic.onToolFrame(
+                            call.optString("name", ""),
+                            call.optJSONObject("args") == null ? "" :
+                                    call.optJSONObject("args").optString("action", ""));
                     executeToolAsync(call);
                 }
             }
@@ -2607,6 +2618,7 @@ final class NativeGeminiLiveClient {
     }
 
     private void executeSingleTool(final JSONObject call) {
+        LivePipelineDiagnostic.onExecution();
         final String id = call.optString("id", "tool_" + System.nanoTime());
         final String requestedName = call.optString("name", "unknown");
         final JSONObject requestedArgs = call.optJSONObject("args") == null
@@ -8537,6 +8549,7 @@ final class NativeGeminiLiveClient {
                 || !liveConnection.send(payload)) {
             throw new Exception("工具結果無法傳回 Gemini");
         }
+        LivePipelineDiagnostic.onToolResponse();
 
         if (refinedSelection != null
                 && refinedMemoryTask != null
