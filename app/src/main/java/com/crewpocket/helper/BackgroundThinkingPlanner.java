@@ -32,6 +32,7 @@ final class BackgroundThinkingPlanner {
     private Future<?> current;
     private HttpURLConnection activeConnection;
     private long generation = -1L;
+    private long requestEpoch;
     private String goal = "";
     private JSONArray readySteps;
     private boolean delivered;
@@ -50,6 +51,7 @@ final class BackgroundThinkingPlanner {
 
     synchronized void newIntent(long newGeneration, String text, String newGoal) {
         cancelCurrentLocked();
+        final long epoch = ++requestEpoch;
         generation = newGeneration;
         goal = newGoal == null ? "" : newGoal;
         readySteps = null;
@@ -64,13 +66,15 @@ final class BackgroundThinkingPlanner {
                 JSONArray steps = plan(task, purpose);
                 synchronized (BackgroundThinkingPlanner.this) {
                     if (stopped || generation != newGeneration
+                            || requestEpoch != epoch
                             || !goal.equals(purpose)) return;
                     readySteps = steps;
                     LivePipelineDiagnostic.onPlannerReady();
                 }
             } catch (Exception ignored) {
                 synchronized (BackgroundThinkingPlanner.this) {
-                    if (!stopped && generation == newGeneration) {
+                    if (!stopped && generation == newGeneration
+                            && requestEpoch == epoch) {
                         LivePipelineDiagnostic.onPlannerFailed();
                     }
                 }
@@ -99,6 +103,7 @@ final class BackgroundThinkingPlanner {
     }
 
     synchronized void invalidate() {
+        requestEpoch++;
         cancelCurrentLocked();
         readySteps = null;
         delivered = true;
