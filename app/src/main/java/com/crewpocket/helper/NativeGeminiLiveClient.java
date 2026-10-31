@@ -262,6 +262,13 @@ final class NativeGeminiLiveClient {
         this.toolCallDispatcher = new ToolCallDispatcher(
                 new ToolCallDispatcher.Host() {
                     @Override public void executeTool(JSONObject call) {
+                        CrewDebugTrace.record("TOOL_EXECUTING",
+                                call.optLong("_crew_intent_generation", -1L),
+                                call.optString("id", ""),
+                                call.optString("name", ""),
+                                call.optJSONObject("args") == null ? "" :
+                                    call.optJSONObject("args").optString("action", ""),
+                                "EXECUTING");
                         executeSingleTool(call);
                     }
 
@@ -269,6 +276,8 @@ final class NativeGeminiLiveClient {
                             String id,
                             String name,
                             long generation) {
+                        CrewDebugTrace.record("TOOL_QUEUED", generation, id,
+                                name, "", "QUEUED");
                         shadowAgentRuntime.onToolQueued(id, name, generation);
                         agentRuntimeV2.onToolQueued(id, name, generation);
                     }
@@ -277,6 +286,8 @@ final class NativeGeminiLiveClient {
                             String id,
                             String name,
                             long generation) {
+                        CrewDebugTrace.record("TOOL_COALESCED", generation, id,
+                                name, "", "COALESCED");
                         shadowAgentRuntime.onDuplicateIgnored(
                                 id, name, generation);
                     }
@@ -1047,6 +1058,8 @@ final class NativeGeminiLiveClient {
             shadowTaskId = agentTaskCoordinator.activeTaskId();
         }
         sendCancelledToolCalls(cancelledToolCalls);
+        CrewDebugTrace.intent(userIntentGeneration,
+                workingContext.toProgressJson().optString("goalIntent", ""));
         LivePipelineDiagnostic.onIntent(userIntentGeneration,
                 workingContext.toProgressJson().optString("goalIntent", ""));
 
@@ -1096,6 +1109,8 @@ final class NativeGeminiLiveClient {
     private void sendCancelledToolCalls(JSONArray cancelled) {
         if (cancelled == null || cancelled.length() == 0) return;
         LivePipelineDiagnostic.onCancelledQueued(cancelled.length());
+        CrewDebugTrace.count("TOOL_CANCELLED", userIntentGeneration,
+                "SUPERSEDED_BY_NEW_INTENT", cancelled.length());
         try {
             JSONObject payload = new JSONObject().put("toolResponse",
                     new JSONObject().put("functionResponses", cancelled));
@@ -1296,6 +1311,11 @@ final class NativeGeminiLiveClient {
     void start() {
         if (running) return;
         running = true;
+        boolean debugEnabled = appContext.getSharedPreferences(
+                "crew_debug_lab", android.content.Context.MODE_PRIVATE)
+                .getBoolean("enabled", false);
+        CrewDebugTrace.setEnabled(debugEnabled);
+        if (debugEnabled) CrewDebugTrace.startSession();
         LivePipelineDiagnostic.startSession(System.currentTimeMillis());
         lastAppOpenRecoveryGeneration = -1L;
         loadVoiceprintProfile();
@@ -1490,6 +1510,16 @@ final class NativeGeminiLiveClient {
         LivePipelineDiagnostic.onFrame(frame.interactionStatus, frame.turnComplete,
                 frame.modelTurnPresent || !frame.outputText.isEmpty(),
                 frame.hasToolCalls());
+        if ("IDLE".equalsIgnoreCase(frame.interactionStatus)) {
+            CrewDebugTrace.record("LIVE_FRAME", userIntentGeneration, "",
+                    "", "", "IDLE");
+        } else if ("IN_PROGRESS".equalsIgnoreCase(frame.interactionStatus)) {
+            CrewDebugTrace.record("LIVE_FRAME", userIntentGeneration, "",
+                    "", "", "IN_PROGRESS");
+        } else if (frame.turnComplete) {
+            CrewDebugTrace.record("LIVE_FRAME", userIntentGeneration, "",
+                    "", "", "TURN_COMPLETE");
+        }
         boolean interactionComplete = LiveInteractionCompletionPolicy.isComplete(
                 frame.interactionStatus,
                 hasFreshInput(frame),
@@ -1778,6 +1808,12 @@ final class NativeGeminiLiveClient {
                             call.optString("name", ""),
                             call.optJSONObject("args") == null ? "" :
                                     call.optJSONObject("args").optString("action", ""));
+                    CrewDebugTrace.record("LIVE_TOOL_CALL", userIntentGeneration,
+                            call.optString("id", ""),
+                            call.optString("name", ""),
+                            call.optJSONObject("args") == null ? "" :
+                                    call.optJSONObject("args").optString("action", ""),
+                            "NONE");
                     executeToolAsync(call);
                 }
             }
@@ -1923,6 +1959,10 @@ final class NativeGeminiLiveClient {
             }
         }
 
+        if (responseHasModelAudio || responseHasModelText) {
+            CrewDebugTrace.record("MODEL_SPEECH", userIntentGeneration,
+                    "", "NONE", "NONE", "NONE");
+        }
         if (utteranceComplete) {
             finishModelUtterance(interactionComplete);
         }
@@ -2678,6 +2718,10 @@ final class NativeGeminiLiveClient {
                 callIntentGeneration,
                 internalDirectiveTool);
         if (reconciledGeneration == Long.MIN_VALUE) {
+            CrewDebugTrace.record("RUNTIME_GATE", callIntentGeneration,
+                    id, requestedName,
+                    requestedArgs.optString("action", ""),
+                    "OPERATIONAL_TURN_NOT_FINALIZED");
             MediaFlowDiagnostic.toolGate(
                     "OPERATIONAL_TURN_NOT_FINALIZED",
                     requestedName,
@@ -8583,6 +8627,9 @@ final class NativeGeminiLiveClient {
             throw new Exception("工具結果無法傳回 Gemini");
         }
         LivePipelineDiagnostic.onToolResponse();
+        CrewDebugTrace.record("TOOL_RESPONSE", userIntentGeneration,
+                id, name, "NONE", result != null &&
+                result.optBoolean("success", false) ? "SENT" : "FAILED");
 
         if (refinedSelection != null
                 && refinedMemoryTask != null
