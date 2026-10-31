@@ -113,6 +113,34 @@ public class AgentInspectorActivity extends Activity {
         root.addView(scroll, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
+        Button debugLab = smallButton("");
+        updateDebugLabLabel(debugLab);
+        LinearLayout.LayoutParams debugLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(44));
+        debugLp.setMargins(dp(3), dp(10), dp(3), 0);
+        debugLab.setOnClickListener(v -> {
+            boolean on = !getSharedPreferences(
+                    "crew_debug_lab", Context.MODE_PRIVATE)
+                    .getBoolean("enabled", false);
+            getSharedPreferences("crew_debug_lab", Context.MODE_PRIVATE)
+                    .edit().putBoolean("enabled", on).apply();
+            CrewDebugTrace.setEnabled(on);
+            if (!on) {
+                CrewDebugShareProvider.targetFile(this).delete();
+            }
+            updateDebugLabLabel(debugLab);
+            refreshReport();
+        });
+        root.addView(debugLab, debugLp);
+
+        Button exportDebug = smallButton(I18n.get(
+                this, "匯出 Debug ZIP（手動分享）", "Export Debug ZIP (share manually)"));
+        LinearLayout.LayoutParams exportLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(44));
+        exportLp.setMargins(dp(3), dp(8), dp(3), 0);
+        exportDebug.setOnClickListener(v -> exportDebugBundle(exportDebug));
+        root.addView(exportDebug, exportLp);
+
         Button voiceDebug = smallButton("");
         updateVoiceDebugLabel(voiceDebug);
         LinearLayout.LayoutParams voiceDebugLp = new LinearLayout.LayoutParams(
@@ -167,6 +195,8 @@ public class AgentInspectorActivity extends Activity {
         clear.setTextColor(Color.parseColor("#FDA4AF"));
         clear.setOnClickListener(v -> {
             AgentInspectorStore.clear(AgentInspectorActivity.this);
+            if (CrewDebugTrace.enabled()) CrewDebugTrace.startSession();
+            CrewDebugShareProvider.targetFile(this).delete();
             ReflectionHistoryStore.clear(AgentInspectorActivity.this);
             VoiceDebugTrace.clear();
             refreshReport();
@@ -194,6 +224,60 @@ public class AgentInspectorActivity extends Activity {
         refreshReport();
     }
 
+    private void updateDebugLabLabel(Button button) {
+        boolean on = getSharedPreferences(
+                "crew_debug_lab", Context.MODE_PRIVATE)
+                .getBoolean("enabled", false);
+        button.setText(on
+                ? I18n.get(this, "Debug Lab：開啟（點擊停止並清除）",
+                        "Debug Lab: ON (tap to stop and clear)")
+                : I18n.get(this, "Debug Lab：關閉（點擊開始記錄）",
+                        "Debug Lab: OFF (tap to start)"));
+    }
+
+    private void exportDebugBundle(Button button) {
+        CrewDebugTrace.Snapshot snapshot = CrewDebugTrace.snapshot();
+        if (!snapshot.enabled || snapshot.startedAt <= 0L) {
+            Toast.makeText(this,
+                    I18n.get(this, "請先開啟 Debug Lab 再重現問題",
+                            "Enable Debug Lab and reproduce the issue first"),
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        button.setEnabled(false);
+        Context app = getApplicationContext();
+        new Thread(() -> {
+            try {
+                String version = getPackageManager()
+                        .getPackageInfo(getPackageName(), 0).versionName;
+                CrewDebugBundle.write(
+                        CrewDebugShareProvider.targetFile(app),
+                        snapshot, version, LivePipelineDiagnostic.report());
+                runOnUiThread(() -> {
+                    button.setEnabled(true);
+                    Intent send = new Intent(Intent.ACTION_SEND);
+                    send.setType("application/zip");
+                    send.putExtra(Intent.EXTRA_STREAM,
+                            CrewDebugShareProvider.SHARE_URI);
+                    send.setClipData(ClipData.newUri(
+                            getContentResolver(), "Crew Debug Lab",
+                            CrewDebugShareProvider.SHARE_URI));
+                    send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    startActivity(Intent.createChooser(send,
+                            I18n.get(this, "分享診斷 ZIP", "Share debug ZIP")));
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    button.setEnabled(true);
+                    Toast.makeText(this,
+                            I18n.get(this, "診斷 ZIP 產生失敗",
+                                    "Debug ZIP export failed"),
+                            Toast.LENGTH_LONG).show();
+                });
+            }
+        }, "CrewDebugLabExport").start();
+    }
+
     private void updateVoiceDebugLabel(Button button) {
         boolean on = VoiceDebugTrace.enabled(this);
         button.setText(on
@@ -204,7 +288,9 @@ public class AgentInspectorActivity extends Activity {
     }
 
     private String buildFullReport() {
-        return VoiceDebugTrace.report(this)
+        return CrewDebugTrace.snapshot().summary()
+                + "\n\n────────────────────\n\n"
+                + VoiceDebugTrace.report(this)
                 + "\n\n────────────────────\n\n"
                 + ReflectionLessonStore.buildReport(this)
                 + "\n\n────────────────────\n\n"
