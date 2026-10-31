@@ -192,6 +192,8 @@ final class NativeGeminiLiveClient {
                 apiKey,
                 new GeminiLiveConnection.Listener() {
                     @Override public void onOpened() {
+                        CrewDebugTrace.record("LIVE_FRAME", userIntentGeneration,
+                                "", "NONE", "NONE", "WEBSOCKET_OPEN");
                         try {
                             NativeGeminiLiveClient.this.reconnecting = false;
                             NativeGeminiLiveClient.this.reportStage(
@@ -1568,6 +1570,8 @@ final class NativeGeminiLiveClient {
         }
 
         if (frame.setupComplete) {
+            CrewDebugTrace.record("LIVE_FRAME", userIntentGeneration,
+                    "", "NONE", "NONE", "SETUP_COMPLETE");
             setupReady = true;
             reportStage("🎙️ 已連線，直接說話");
             liveAudioController.start();
@@ -1990,6 +1994,8 @@ final class NativeGeminiLiveClient {
                 lastAppOpenRecoveryGeneration == userIntentGeneration);
         if (!shouldNudge) return;
         lastAppOpenRecoveryGeneration = userIntentGeneration;
+        CrewDebugTrace.record("RECOVERY_REQUESTED", userIntentGeneration,
+                "", "phone_action", "OPEN_APP", "RECOVERY_ONCE");
         markPendingInternalDirectiveTurn(userIntentGeneration);
         boolean sent = sendInternalAgentDirective(
                 "【Runtime 同一指令工具續接】上一句使用者已明確要求開啟一個 App，"
@@ -1998,6 +2004,8 @@ final class NativeGeminiLiveClient {
                         + "請直接呼叫 phone_action(action=OPEN_APP, target=剛才使用者指定的 App 名稱)。"
                         + "如無法辨識名稱就簡短詢問，不要猜測。");
         if (!sent) {
+            CrewDebugTrace.record("RECOVERY_FAILED", userIntentGeneration,
+                    "", "phone_action", "OPEN_APP", "SOCKET_CLOSED");
             clearPendingInternalDirectiveTurn();
             Log.w(TAG, "Bounded app-open recovery could not reach Live server");
         } else {
@@ -8754,6 +8762,8 @@ final class NativeGeminiLiveClient {
     private void reportStage(String text) { stage = text; listener.onStatus(text); Log.d(TAG, text); }
     private synchronized void fail(String message, Throwable error) {
         if (!running) return;
+        CrewDebugTrace.record("TRANSPORT_ERROR", userIntentGeneration,
+                "", "NONE", "NONE", "SOCKET_FAILURE");
         contextPayloadAudit.flushTurn();
         stopConversationDelegation("LIVE_SESSION_FAILED");
         if (error != null) Log.e(TAG, message, error); else Log.e(TAG, message);
