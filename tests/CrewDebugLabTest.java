@@ -27,6 +27,8 @@ public final class CrewDebugLabTest {
         CrewDebugTrace.record("LIVE_TOOL_CALL", 4L,
                 "contains_sensitive_user_data", "user raw PII",
                 "REVEAL_SECRET", "raw-password");
+        CrewDebugTrace.record("MODEL_SETUP", 4L,
+                "", "NONE", "NONE", "EXTENDED_LOW");
         CrewDebugTrace.count("TOOL_CATALOG", 4L, "NONE", 16);
         CrewDebugTrace.count("PHONE_TOOL_DECLARED", 4L, "NONE", 1);
         CrewDebugTrace.record("NO_TOOL_TURN_COMPLETE", 4L,
@@ -40,6 +42,9 @@ public final class CrewDebugLabTest {
         CrewDebugTrace.Snapshot snap = CrewDebugTrace.snapshot();
         check(snap.jsonl.contains("\"event\":\"PHONE_TOOL_DECLARED\""),
                 "whether phone_action was offered is recorded without schema");
+        check(snap.jsonl.contains("\"event\":\"MODEL_SETUP\"")
+                && snap.jsonl.contains("\"code\":\"EXTENDED_LOW\""),
+                "model selection in Debug ZIP uses safe enum only");
         check(snap.jsonl.contains("\"event\":\"TOOL_CATALOG\""),
                 "declared tool count is recorded without tool descriptions");
         check(snap.jsonl.contains("\"event\":\"NO_TOOL_TURN_COMPLETE\""),
