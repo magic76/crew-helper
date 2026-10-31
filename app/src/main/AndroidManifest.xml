@@ -64,6 +64,12 @@
             android:screenOrientation="portrait"
             android:exported="false" />
 
+        <provider
+            android:name=".CrewDebugShareProvider"
+            android:authorities="com.crewpocket.helper.debugbundle"
+            android:exported="false"
+            android:grantUriPermissions="true" />
+
         <activity
             android:name=".AgentInspectorActivity"
             android:screenOrientation="portrait"
