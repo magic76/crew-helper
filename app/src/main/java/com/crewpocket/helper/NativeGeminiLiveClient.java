@@ -8703,6 +8703,18 @@ final class NativeGeminiLiveClient {
         final JSONObject modelResult =
                 ModelToolResponseAdapter.forModel(
                         name, result, progressContext);
+        // Error-only nudge; ordinary successful calls incur zero extra model
+        // requests or additional diagnostic payload.
+        if (!shadowSuccess
+                && !"inspect_runtime_trace".equals(name)
+                && !"get_recovery_options".equals(name)
+                && result != null
+                && !result.optBoolean("needsUser", false)) {
+            modelResult.put("runtimeDiagnosis",
+                    "Use inspect_runtime_trace to check current evidence; "
+                            + "use get_recovery_options only if a safe retry "
+                            + "is justified. Never bypass Runtime.");
+        }
         JSONObject modelAction = modelResult.optJSONObject("action");
         if (modelAction != null) {
             workingContext.recordModelStep(
@@ -8793,6 +8805,10 @@ final class NativeGeminiLiveClient {
                 : result.optBoolean("success", false) ? "SENT"
                 : result.optString("verificationCode",
                         result.optString("error", "FAILED"));
+        // Only a successfully delivered result becomes a model-visible
+        // diagnosis. Raw error text is reduced to a fixed enum by the policy.
+        liveSelfDiagnosis.toolResponse(id, userIntentGeneration,
+                shadowSuccess, diagnosticCode);
         if (result != null && result.optBoolean("blockedByRuntime", false)) {
             CrewDebugTrace.record("RUNTIME_GATE", userIntentGeneration,
                     id, name, "NONE", diagnosticCode);
