@@ -2956,6 +2956,18 @@ final class NativeGeminiLiveClient {
 
         // A published recovery option is consumed only through the ordinary
         // phone/inspection tool path, never bypassing preflight or permission.
+        if (liveSelfDiagnosis.isRecoveryTargetMismatch(callIntentGeneration,
+                requestedName, requestedArgs.optString("action", ""),
+                requestedArgs.optString("target", ""))) {
+            try {
+                sendToolResponse(id, requestedName, runtimeBlocked(
+                        "RECOVERY_TARGET_MISMATCH",
+                        "復原目標與 Runtime 核准的選項不同，不執行。"
+                                + "請依 get_recovery_options 的 target 原樣呼叫，"
+                                + "或停止並詢問使用者。"));
+            } catch (Exception ignored) {}
+            return;
+        }
         if (liveSelfDiagnosis.isRepeatedRecovery(callIntentGeneration,
                 requestedName, requestedArgs.optString("action", ""))) {
             try {
