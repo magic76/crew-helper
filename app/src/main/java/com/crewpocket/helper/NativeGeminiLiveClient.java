@@ -871,6 +871,8 @@ final class NativeGeminiLiveClient {
 
         liveTurnCoordinator.closeOperationalGeneration(
                 task.intentGeneration);
+        CrewDebugTrace.record("TASK_CANCELLED", task.intentGeneration,
+                "", "NONE", "NONE", task.cancelCategory);
         PerformanceMetrics.markAgentTaskFinished(
                 task.taskId, task.intentGeneration, "CANCELLED");
         PerformanceMetrics.recordAgentTask(
@@ -3569,6 +3571,8 @@ final class NativeGeminiLiveClient {
         } finally {
             long toolElapsedMs = android.os.SystemClock.elapsedRealtime() - toolStartedAt;
             PerformanceMetrics.recordTool(name, toolElapsedMs);
+            CrewDebugTrace.duration(callIntentGeneration, id,
+                    requestedName, toolElapsedMs);
             PerformanceMetrics.markAgentToolRuntime(
                     task.taskId, task.intentGeneration, name, toolElapsedMs);
         }
@@ -5536,6 +5540,10 @@ final class NativeGeminiLiveClient {
         if (!agentTaskCoordinator.finish(task, reason, finalReply)) {
             return;
         }
+        CrewDebugTrace.record("TASK_FINISHED", task.intentGeneration,
+                "", "NONE", "NONE",
+                AgentTaskEndReason.COMPLETED.equals(reason)
+                        ? "COMPLETED" : "OTHER");
         if (AgentTaskEndReason.COMPLETED.equals(reason)) {
             liveHumanTurnBoundary.noteTaskCompleted(
                     task.intentGeneration,
