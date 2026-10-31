@@ -38,3 +38,73 @@ Agent Inspector's Live pipeline shows `Background Thinking: started / ready / fa
 - https://ai.google.dev/api/live
 
 **Status:** Source implementation and Java CI tests; no Gemini-key/on-device dual-socket acceptance test from GitHub.
+
+
+## P1 — Think Supervisor / Live Executor (incremental)
+
+All finalized intents in **Dual Engine** mode are now registered in the
+process-local Supervisor ledger. Trivial/open-app, notes and private tasks
+use the **fast path**: the foreground Standard Live begins immediately,
+without starting or waiting for a second connection. They still receive
+a deterministic `supervisor.completionRequirement` in subsequent tool
+responses when an active task exists. This requirement is derived from
+the goal type, *not* a hallucinated success claim.
+
+For bounded, public **multi-step MEDIA:PLAY** requests the Supervisor
+starts the Extended planning socket in parallel as before. Advice is now
+phase-tagged (`PLAN` / `RECOVERY`) and includes a per-goal verification
+contract. The foreground Live session has explicit instructions to use
+available semantic advice but to check fresh Android Runtime evidence
+before selecting tools or declaring completion.
+
+When a public playback tool step actually fails, the Supervisor checks
+an allowlist of Runtime error categories, plus the current intent
+generation, tool name, user-confirmation requirement and terminal task
+state. Exactly **one** bounded recovery-planning connection is allowed
+for that intent. It replaces an obsolete initial plan; no private
+screen, messages, addresses, coordinates, account data or raw exception
+text are sent. The recovery request contains only the originally
+approved public music request and a sanitized failure category.
+The foreground executor **never blocks**, and will continue its
+usual Runtime-owned recovery when Think is unavailable or late.
+
+A background socket has **no tool declarations, microphone or audible
+output**. Unlike a foreground tool-bearing Live session, this
+tool-free planning socket may accept at least **two actionable safe
+advisory steps** after a fully completed speech turn, even if its
+server does not issue an explicit `IDLE`. It does not inject a new
+`clientContent` into an ongoing foreground thinking turn. Advice is
+delivered to the foreground only in a later valid tool response,
+within the response budget and the same generation/goal. If it arrives
+after the last tool, it is discarded; this is a documented remaining
+limitation of P1.
+
+### Operator acceptance checks
+
+1. Switch to Dual Engine and start a **new** Live call. Say
+   "打開 Google Maps". Expect the app to open without any new
+   background planning connection; `Supervisor fast-path` increases.
+2. In a new call say "打開 Apple Music，搜尋鄧紫棋的歌並播放".
+   Expect foreground `toolCall` as usual and background
+   `started > 0`, followed by `ready` or `failed`.
+3. Trigger a *real* allowlisted, non-blocking public music tool failure.
+   Expect `Supervisor recovery-requested=1`, never more than one per
+   intent. If a later phone/inspect response has budget and the
+   background is ready, it may carry `thinkingAdvice.mode=RECOVERY`.
+4. Start a new user intent before recovery finishes. The old advice
+   must never be delivered under the new generation/goal.
+5. Try private messages, notes, addresses, and payment requests:
+   no request data may be forwarded to background Think.
+6. Compare task success, recovery rate, extra latency, battery and
+   API usage against Standard-only. No efficacy claim can be made
+   until real-device A/B results exist.
+
+### Still not implemented
+
+This is not a strict central planner that always blocks Live
+until a Think plan arrives. Requiring such a wait would regress the
+reliable 1–2 second app-open path and create privacy/cost concerns.
+The next phase, if on-device results justify it, can add structured
+plan stages, verified stage transitions and a bounded, explicit
+hand-off for long-running cross-app tasks. Runtime remains the
+execution authority regardless of mode.
