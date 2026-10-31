@@ -61,6 +61,11 @@ final class LiveToolCatalog {
                 .put("parameters", new JSONObject().put("type", "OBJECT")
                         .put("properties", phoneActionProperties)
                         .put("required", new JSONArray().put("action"))));
+        // Read-only and generation-scoped: no ADB, screenshot or free-form logs.
+        tools.put(new JSONObject().put("name", "inspect_runtime_trace")
+                .put("description", "When a phone tool fails or a user requests debugging, read a small sanitized summary for the CURRENT finalized user intent only. Includes bounded event types, failure codes and original tool action, never transcripts, raw arguments, keys or screen contents. Do not call on ordinary success."));
+        tools.put(new JSONObject().put("name", "get_recovery_options")
+                .put("description", "After a failed phone action, ask Runtime for at most ONE safe alternate next step. This is READ ONLY: options are suggestions, not permission. If Runtime provides one, execute it with its named normal tool once. All authorization and verification gates still apply. Do not call on ordinary success."));
         tools.put(new JSONObject().put("name", "get_selected_region").put("description",
                 "METADATA FALLBACK for the latest explicit user-selected region. The frozen visual crop has already been sent to you. If the crop itself answers the user's question, answer directly and DO NOT call this tool. Call only when selected text/package/bounds metadata is actually needed. Never treat crop coordinates as phone coordinates; phone execution still uses semantic Runtime actions and normal verification."));
 
@@ -381,6 +386,8 @@ final class LiveToolCatalog {
     private static boolean isNormalPhoneModelTool(String name) {
         return "phone_action".equals(name)
                 || "inspect_ui".equals(name)
+                || "inspect_runtime_trace".equals(name)
+                || "get_recovery_options".equals(name)
                 // 0103: Crew Notebook is a first-class normal-mode capability.
                 // Keep the surface intentionally small: create/search/list only.
                 || "create_note".equals(name)
