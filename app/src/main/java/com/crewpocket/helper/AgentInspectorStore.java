@@ -241,6 +241,12 @@ final class AgentInspectorStore {
             String cancelCategory = task.optString("cancelCategory", "");
             if (!cancelCategory.isEmpty()) {
                 out.append("Cancel category: ").append(cancelCategory).append("\n");
+                String progress = task.optString("cancelProgressEvidence", "");
+                if (!progress.isEmpty()) {
+                    out.append("Progress before supersession: ")
+                            .append(progress)
+                            .append(" (not whole-goal success)\n");
+                }
             }
             String retryIntentFamily = task.optString("retryIntentFamily", "");
             if (!retryIntentFamily.isEmpty()) {
@@ -573,6 +579,13 @@ final class AgentInspectorStore {
             String cancelCategory = raw.optString("cancelCategory", "").trim();
             if (!cancelCategory.isEmpty()) {
                 safe.put("cancelCategory", cancelCategory);
+            }
+            String progress = raw.optString("cancelProgressEvidence", "");
+            if (TaskSupersessionEvidencePolicy.VERIFIED_STEP_ONLY.equals(progress)
+                    || TaskSupersessionEvidencePolicy.EXECUTED_UNVERIFIED.equals(progress)
+                    || TaskSupersessionEvidencePolicy.NO_MUTATION.equals(progress)
+                    || TaskSupersessionEvidencePolicy.VERIFIED_GOAL.equals(progress)) {
+                safe.put("cancelProgressEvidence", progress);
             }
             String retryIntentFamily = raw.optString("retryIntentFamily", "").trim();
             if (SAFE_SEMANTIC_TARGET.matcher(retryIntentFamily).matches()) {
