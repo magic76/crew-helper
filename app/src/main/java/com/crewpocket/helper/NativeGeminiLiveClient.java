@@ -2016,13 +2016,15 @@ final class NativeGeminiLiveClient {
                     userIntentGeneration, "", "NONE", "NONE",
                     "NO_TOOL_CALL");
         }
-        if (!interactionComplete && !completedSpokenNoToolTurn) return;
+        // An intermediate spoken turn is diagnostic evidence only. Never
+        // send clientContent while Extended Thinking is IN_PROGRESS: an
+        // outbound turnComplete would interrupt the pending background work.
+        if (!interactionComplete) return;
         String goal = workingContext.toProgressJson().optString("goalIntent", "");
         boolean shouldNudge = LiveAppOpenRecoveryPolicy.shouldRecover(
                 goal, last.text, currentForegroundPackageName(),
                 frame.interactionStatus, hasFreshInput(frame),
-                calls, lastAppOpenRecoveryGeneration == userIntentGeneration,
-                completedSpokenNoToolTurn);
+                calls, lastAppOpenRecoveryGeneration == userIntentGeneration);
         if (!shouldNudge) return;
         lastAppOpenRecoveryGeneration = userIntentGeneration;
         CrewDebugTrace.record("RECOVERY_REQUESTED", userIntentGeneration,
