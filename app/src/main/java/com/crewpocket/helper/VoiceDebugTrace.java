@@ -11,6 +11,9 @@ import java.util.Locale;
 final class VoiceDebugTrace {
     private static final String PREF = "crew_voice_debug";
     private static volatile String latest = "";
+    private static volatile String latestProtocol = "";
+    private static int receivedToolCalls;
+    private static int modelSpeechFrames;
 
     private VoiceDebugTrace() {}
 
@@ -28,7 +31,32 @@ final class VoiceDebugTrace {
         clear();
     }
 
-    static void clear() { latest = ""; }
+    static synchronized void clear() {
+        latest = "";
+        latestProtocol = "";
+        receivedToolCalls = 0;
+        modelSpeechFrames = 0;
+    }
+
+    /** Debug-only metadata; no tool arguments, prompts, transcript or audio. */
+    static synchronized void recordProtocol(
+            Context context, String model, String status,
+            boolean turnComplete, int calls, boolean modelOutput) {
+        if (!enabled(context)) return;
+        receivedToolCalls += Math.max(0, calls);
+        if (modelOutput) modelSpeechFrames++;
+        String safeStatus = "IDLE".equals(status) || "IN_PROGRESS".equals(status)
+                ? status : "not provided";
+        latestProtocol = "Live model: " + (LiveExtendedThinkingPolicy.isExtended(model)
+                ? "Extended Thinking" : "Standard")
+                + "\nLast interaction status: " + safeStatus
+                + "\nLast speech boundary: " + (turnComplete ? "turnComplete" : "none")
+                + "\nTool calls received: " + receivedToolCalls
+                + "\nModel output frames: " + modelSpeechFrames
+                + (receivedToolCalls == 0 && modelSpeechFrames > 0
+                        ? "\nNo tool call arrived; a model-side failure cannot be ruled out."
+                        : "");
+    }
 
     static void record(Context context, String rawTranscript,
             String boundaryDecision, String boundaryReason,
@@ -56,6 +84,7 @@ final class VoiceDebugTrace {
         String sample = latest;
         return "Voice Debug: ON — latest speech in RAM only (may contain private text)\n"
                 + (sample.isEmpty()
-                        ? "No finalized voice turn captured yet." : sample);
+                        ? "No finalized voice turn captured yet." : sample)
+                + (latestProtocol.isEmpty() ? "" : "\n\n" + latestProtocol);
     }
 }

@@ -50,9 +50,6 @@ final class NativeGeminiLiveClient {
     private final Listener listener;
     /** App-owned storage must not depend on AccessibilityService being alive. */
     private final Context appContext;
-    // Session snapshot: changing the setting takes effect on the next call.
-    private final String liveModel;
-    private final boolean extendedThinking;
     private final NotebookToolHandler notebookToolHandler;
     private final AppPlaybookStore appPlaybookStore;
     private final AppCapabilityStore appCapabilityStore;
@@ -178,10 +175,6 @@ final class NativeGeminiLiveClient {
     }
     NativeGeminiLiveClient(Context context, String apiKey, String serverUrl, String voiceName, String noiseMode, int noiseSuppression, String liveTone, String customPrompt, int interruptionSensitivity, String audioOutput, Listener listener) {
         this.appContext = context == null ? null : context.getApplicationContext();
-        this.liveModel = this.appContext == null
-                ? LiveExtendedThinkingPolicy.STANDARD_MODEL
-                : AppConfig.getLiveModel(this.appContext);
-        this.extendedThinking = LiveExtendedThinkingPolicy.isExtended(liveModel);
         this.voiceName = voiceName == null || voiceName.trim().isEmpty()
                 ? AppConfig.DEFAULT_VOICE : voiceName.trim();
         this.noiseMode = "quiet".equals(noiseMode) || "noisy".equals(noiseMode)
@@ -507,7 +500,6 @@ final class NativeGeminiLiveClient {
                                 .finishAgentTask(task, reason, finalReply);
                     }
                 });
-        this.agentResponseCoordinator.setExtendedThinking(extendedThinking);
 
         this.deckRuntimeController = new DeckRuntimeController(
                 new DeckRuntimeController.Host() {
@@ -1465,6 +1457,10 @@ final class NativeGeminiLiveClient {
     private void handleJson(String raw) throws Exception {
         GeminiLiveTurnHandler.Frame frame =
                 geminiLiveTurnHandler.parse(raw);
+        VoiceDebugTrace.recordProtocol(
+                appContext, liveModel, frame.interactionStatus,
+                frame.turnComplete, frame.toolCalls.length(),
+                !frame.outputText.isEmpty() || !frame.modelParts.isEmpty());
 
         if (!frame.interimInputText.isEmpty()) {
             liveHumanTurnBoundary.noteInterim(
@@ -1753,15 +1749,7 @@ final class NativeGeminiLiveClient {
                 frame.interactionStatus,
                 frame.waitingForInput);
 
-        // Extended Thinking may deliver IDLE as a top-level status-only frame.
-        // The final interaction boundary is NOT the intermediate turnComplete.
-        boolean toolsPending = toolCallDispatcher.inFlightCountForTest() > 0
-                || toolCallDispatcher.pendingCountForTest() > 0;
-        boolean interactionCompleted =
-                LiveExtendedThinkingPolicy.interactionComplete(
-                        extendedThinking, frame.turnComplete,
-                        frame.interactionStatus, toolsPending);
-        if (!frame.serverPresent && !interactionCompleted) return;
+        if (!frame.serverPresent) return;
 
         if (frame.interrupted) {
             long interruptedIndex =
@@ -1808,11 +1796,6 @@ final class NativeGeminiLiveClient {
                         responseHasToolCall,
                         substantiveModelProgress,
                         agentAwaitingIncompleteAction);
-        if (extendedThinking && !interactionCompleted && !responseHasToolCall) {
-            // Intermediate spoken fillers are not an Agent result. Do not
-            // consume the watchdog or treat them as a final response.
-            clearAgentWatchdog = false;
-        }
 
         if (clearAgentWatchdog
                 && !responseHasToolCall) {
@@ -1894,39 +1877,31 @@ final class NativeGeminiLiveClient {
             }
         }
 
-        // A spoken utterance still drains playback on turnComplete. The
-        // interaction can remain IN_PROGRESS and emit more tools/audio.
         if (frame.turnComplete) {
-            liveAudioController.finishTurn();
-            visualHoldUntil = System.currentTimeMillis() + 1000;
-            if (aiSpeaking) {
-                aiSpeaking = false;
-                listener.onSpeakingChanged(false);
-            }
-        }
-
-        if (interactionCompleted) {
             boolean deckNarrationTurn =
                     shouldAutoAdvanceDeckAfterCurrentTurn();
             boolean deckTurnWasInterrupted =
                     interruptedCurrentTurn;
-            // IDLE can arrive in a separate status-only frame.
-            if (!frame.turnComplete && extendedThinking) {
-                liveAudioController.finishTurn();
-                if (aiSpeaking) {
-                    aiSpeaking = false;
-                    listener.onSpeakingChanged(false);
-                }
-            }
+
+            liveAudioController.finishTurn();
+            visualHoldUntil =
+                    System.currentTimeMillis() + 1000;
             interruptedCurrentTurn = false;
-            interruptionHandler.removeCallbacks(clearInterruptedFallback);
+            interruptionHandler.removeCallbacks(
+                    clearInterruptedFallback);
+            if (aiSpeaking) {
+                aiSpeaking = false;
+                listener.onSpeakingChanged(false);
+            }
+
             if (shouldEvaluateAgentTaskAtTurnComplete()) {
                 agentResponseCoordinator.finishIfAwaitingModel();
             }
             closeOperationalGenerationIfIdle();
             clearExpiredInternalDirectiveTurn();
             deckRuntimeController.onNarrationTurnComplete(
-                    deckNarrationTurn, deckTurnWasInterrupted);
+                    deckNarrationTurn,
+                    deckTurnWasInterrupted);
             resetCurrentModelTurnState();
         }
 
@@ -2408,15 +2383,10 @@ final class NativeGeminiLiveClient {
 
     private String buildSetup() throws Exception {
         JSONObject root = new JSONObject(); JSONObject setup = new JSONObject();
-        setup.put("model", "models/" + liveModel);
+        setup.put("model", "models/gemini-3.8-live");
         JSONObject generation = new JSONObject(); generation.put("responseModalities", new JSONArray().put("AUDIO"));
         String safeVoice = mapToSupportedVoice(voiceName);
         generation.put("speechConfig", new JSONObject().put("voiceConfig", new JSONObject().put("prebuiltVoiceConfig", new JSONObject().put("voiceName", safeVoice))));
-        if (extendedThinking) {
-            // Extended Thinking only; ordinary 3.8 Live rejects thinkingConfig.
-            generation.put("thinkingConfig", new JSONObject()
-                    .put("thinkingLevel", "LOW"));
-        }
         setup.put("generationConfig", generation);
 
         // 0097: Gemini server VAD is the speech/turn authority. Android keeps
@@ -2462,8 +2432,7 @@ final class NativeGeminiLiveClient {
                         deckRuntimeController.isSessionMode(),
                         deckRuntimeController.isCreateStartup(),
                         deckRuntimeController.isPresentStartup(),
-                        deckRuntimeController.hasWorkspaceStartup(),
-                        extendedThinking);
+                        deckRuntimeController.hasWorkspaceStartup());
         setup.put("tools", new JSONArray().put(new JSONObject().put(
                 "functionDeclarations", modelTools)));
         String customPrompt = this.customPrompt;
