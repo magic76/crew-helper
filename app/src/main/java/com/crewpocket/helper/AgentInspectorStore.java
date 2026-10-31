@@ -212,6 +212,8 @@ final class AgentInspectorStore {
 
         if (updatedAt > 0L) out.append("Updated: ").append(formatTime(updatedAt)).append("\n");
 
+        out.append(LivePipelineDiagnostic.report()).append("\n\n");
+        out.append("Task snapshot below may be from a previous session.\n");
         if (task.length() > 0) {
             String taskState = task.optString("state",
                     task.optBoolean("active", false)
