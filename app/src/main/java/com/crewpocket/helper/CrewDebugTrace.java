@@ -21,7 +21,7 @@ final class CrewDebugTrace {
             + "|TOOL_CANCELLED|RUNTIME_GATE|MODEL_SPEECH|TRANSPORT_ERROR"
             + "|TOOL_RUNTIME_DONE|TASK_FINISHED|TASK_CANCELLED"
             + "|RECOVERY_REQUESTED|RECOVERY_FAILED"
-            + "|TOOL_CATALOG|NO_TOOL_TURN_COMPLETE|";
+            + "|TOOL_CATALOG|PHONE_TOOL_DECLARED|NO_TOOL_TURN_COMPLETE|";
     private static final String TOOLS =
             "|NONE|phone_action|inspect_ui|launch_app|tap_screen|tap_element"
             + "|search_current_app|commit_search|type_text|send_text|OTHER|";
