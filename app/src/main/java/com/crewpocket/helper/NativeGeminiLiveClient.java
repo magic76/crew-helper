@@ -2706,6 +2706,23 @@ final class NativeGeminiLiveClient {
             sendFinishedIntentToolResponse(id, requestedName);
             return;
         }
+        String currentGoalIntent =
+                workingContext.toProgressJson().optString("goalIntent", "");
+        if (ToolIntentRoutingPolicy.requiresOpenAppAction(
+                currentGoalIntent,
+                requestedName,
+                requestedArgs.optString("action", ""))) {
+            try {
+                sendToolResponse(id, requestedName, runtimeBlocked(
+                        "APP_OPEN_ACTION_REQUIRED",
+                        "使用者最新指令是開啟 App。這個非 OPEN_APP 動作與目前目的不符；"
+                                + "不要點擊舊畫面或播放控制。請改用 "
+                                + "phone_action(action=OPEN_APP, target=使用者指定的 App)。"));
+            } catch (Exception error) {
+                Log.w(TAG, "Failed to report incompatible app-open tool", error);
+            }
+            return;
+        }
         if (isRuntimeAppTeachHandledGeneration(callIntentGeneration)) {
             MediaFlowDiagnostic.toolGate(
                     "APP_TEACH_HANDLED",
