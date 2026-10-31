@@ -27,7 +27,21 @@ public final class CrewDebugLabTest {
         CrewDebugTrace.record("LIVE_TOOL_CALL", 4L,
                 "contains_sensitive_user_data", "user raw PII",
                 "REVEAL_SECRET", "raw-password");
+        CrewDebugTrace.duration(4L, "secret-call-123",
+                "launch_app", 788L);
+        CrewDebugTrace.record("TASK_FINISHED", 4L, "",
+                "NONE", "NONE", "COMPLETED");
+        CrewDebugTrace.record("TASK_CANCELLED", 4L, "",
+                "NONE", "NONE", "SUPERSEDED_BY_USER");
         CrewDebugTrace.Snapshot snap = CrewDebugTrace.snapshot();
+        check(snap.jsonl.contains("\\"event\\":\\"TOOL_RUNTIME_DONE\\""),
+                "tool execution duration is included in sanitized timeline");
+        check(snap.jsonl.contains("\\"count\\":788"),
+                "duration is recorded as bounded milliseconds");
+        check(snap.jsonl.contains("\\"event\\":\\"TASK_FINISHED\\""),
+                "explicit completion is traced");
+        check(snap.jsonl.contains("\\"event\\":\\"TASK_CANCELLED\\""),
+                "supersession is traced");
         check(snap.toolCalls == 2, "counts calls");
         check(snap.responses == 1, "counts responses");
         check(snap.jsonl.contains("\"call\":\"c1\""),
