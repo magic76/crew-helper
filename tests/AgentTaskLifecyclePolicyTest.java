@@ -192,6 +192,63 @@ public final class AgentTaskLifecyclePolicyTest {
                         0),
                 "read-only screenshot task may finish from fresh evidence");
 
+        check(AgentTaskLifecyclePolicy.verifiedAppOpenIsTerminal(
+                        "APP:OPEN", "launch_app", true, "",
+                        "VERIFIED", true,
+                        "com.google.android.apps.maps",
+                        "com.google.android.apps.maps", true),
+                "standalone verified foreground app launch is terminal");
+        check(!AgentTaskLifecyclePolicy.verifiedAppOpenIsTerminal(
+                        "MEDIA:PLAY", "launch_app", true, "",
+                        "VERIFIED", true, "com.apple.android.music",
+                        "com.apple.android.music", true),
+                "open-then-play remains a multi-step goal");
+        check(!AgentTaskLifecyclePolicy.verifiedAppOpenIsTerminal(
+                        "NAVIGATION:START", "launch_app", true, "",
+                        "VERIFIED", true, "com.google.android.apps.maps",
+                        "com.google.android.apps.maps", true),
+                "opening Maps never completes navigation");
+        check(!AgentTaskLifecyclePolicy.verifiedAppOpenIsTerminal(
+                        "APP:OPEN", "launch_app", true, "",
+                        "PENDING", true, "com.google.android.apps.maps",
+                        "com.google.android.apps.maps", true),
+                "pending V2 verification must not complete");
+        check(!AgentTaskLifecyclePolicy.verifiedAppOpenIsTerminal(
+                        "APP:OPEN", "launch_app", true, "",
+                        "LIKELY", true, "com.google.android.apps.maps",
+                        "com.google.android.apps.maps", true),
+                "weak V2 evidence must not complete");
+        check(!AgentTaskLifecyclePolicy.verifiedAppOpenIsTerminal(
+                        "APP:OPEN", "launch_app", false, "",
+                        "VERIFIED", true, "com.google.android.apps.maps",
+                        "com.google.android.apps.maps", true),
+                "failed launch cannot complete");
+        check(!AgentTaskLifecyclePolicy.verifiedAppOpenIsTerminal(
+                        "APP:OPEN", "launch_app", true, "",
+                        "VERIFIED", true, "com.google.android.apps.maps",
+                        "com.apple.android.music", true),
+                "foreground package must match requested launch");
+        check(!AgentTaskLifecyclePolicy.verifiedAppOpenIsTerminal(
+                        "APP:OPEN", "launch_app", true, "",
+                        "VERIFIED", true, "com.google.android.apps.maps",
+                        "com.google.android.apps.maps", false),
+                "stale foreground observation cannot complete");
+        check(!AgentTaskLifecyclePolicy.verifiedAppOpenIsTerminal(
+                        "APP:OPEN", "launch_app", true, "WAITING_USER",
+                        "VERIFIED", true, "com.google.android.apps.maps",
+                        "com.google.android.apps.maps", true),
+                "waiting for user cannot be bypassed");
+        check(AgentTaskLifecyclePolicy.verifiedAppOpenIsTerminal(
+                        "APP:OPEN", "launch_app", true, "",
+                        "", false, "com.google.android.apps.maps",
+                        "com.google.android.apps.maps", true),
+                "legacy Runtime also requires same fresh foreground package");
+        check(!AgentTaskLifecyclePolicy.verifiedAppOpenIsTerminal(
+                        "APP:OPEN", "tap_screen", true, "",
+                        "VERIFIED", true, "com.google.android.apps.maps",
+                        "com.google.android.apps.maps", true),
+                "generic tap is not standalone app-open terminal proof");
+
         System.out.println("PASS AgentTaskLifecyclePolicyTest: " + assertions + " checks");
     }
 }
