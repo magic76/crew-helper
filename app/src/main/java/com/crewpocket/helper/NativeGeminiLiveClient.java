@@ -2642,6 +2642,18 @@ final class NativeGeminiLiveClient {
                         deckRuntimeController.hasWorkspaceStartup());
         CrewDebugTrace.count("TOOL_CATALOG", userIntentGeneration,
                 "NONE", modelTools.length());
+        boolean phoneToolDeclared = false;
+        for (int i = 0; i < modelTools.length(); i++) {
+            JSONObject declaration = modelTools.optJSONObject(i);
+            if (declaration != null
+                    && "phone_action".equals(
+                            declaration.optString("name", ""))) {
+                phoneToolDeclared = true;
+                break;
+            }
+        }
+        CrewDebugTrace.count("PHONE_TOOL_DECLARED",
+                userIntentGeneration, "NONE", phoneToolDeclared ? 1 : 0);
         setup.put("tools", new JSONArray().put(new JSONObject().put(
                 "functionDeclarations", modelTools)));
         String customPrompt = this.customPrompt;
