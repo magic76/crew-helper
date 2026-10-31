@@ -30,7 +30,7 @@ public final class CrewDebugLabTest {
         CrewDebugTrace.Snapshot snap = CrewDebugTrace.snapshot();
         check(snap.toolCalls == 2, "counts calls");
         check(snap.responses == 1, "counts responses");
-        check(snap.jsonl.contains("\\"call\\":\\"c1\\""),
+        check(snap.jsonl.contains("\"call\":\"c1\""),
                 "pseudonyms are stable across events");
         check(!snap.jsonl.contains("secret-call-123"),
                 "original call ID is never exported");
