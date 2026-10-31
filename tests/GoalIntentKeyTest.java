@@ -23,7 +23,22 @@ public final class GoalIntentKeyTest {
         expect("", GoalIntentKey.derive("幫我開會"));
         expect("", GoalIntentKey.derive("Google Maps 開發計畫"));
         expect("", GoalIntentKey.derive("今天天氣如何"));
+        check(GoalIntentKey.isStandaloneAppOpen("幫我開地圖"),
+                "simple app-open request can finish");
+        check(!GoalIntentKey.isStandaloneAppOpen("幫我開地圖然後看看附近"),
+                "open followed by another task cannot finish early");
+        check(!GoalIntentKey.isStandaloneAppOpen("開 Google Maps 順便幫我找停車位"),
+                "open with secondary goal cannot finish early");
+        check(!GoalIntentKey.isStandaloneAppOpen("啟動 Apple Music 再找我收藏的歌"),
+                "open followed by music-library task cannot finish early");
+        check(!GoalIntentKey.isStandaloneAppOpen("導航去大皇宮"),
+                "navigation request is not standalone open");
         System.out.println("GoalIntentKeyTest passed " + checks + " checks");
+    }
+
+    private static void check(boolean value, String description) {
+        checks++;
+        if (!value) throw new AssertionError(description);
     }
 
     private static void expect(String expected, String actual) {
