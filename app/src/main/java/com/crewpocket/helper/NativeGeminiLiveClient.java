@@ -158,6 +158,7 @@ final class NativeGeminiLiveClient {
     // 0047: transcript text is not audible-output proof.
     private boolean currentModelTurnReceivedAudio = false;
     private String lastReportedInteractionStatus = "";
+    private long lastAppOpenRecoveryGeneration = -1L;
 
     NativeGeminiLiveClient(String apiKey, Listener listener) { this(apiKey, "", AppConfig.DEFAULT_VOICE, "auto", 35, "warm", "", 55, "call", listener); }
     NativeGeminiLiveClient(String apiKey, String serverUrl, Listener listener) { this(apiKey, serverUrl, AppConfig.DEFAULT_VOICE, "auto", 35, "warm", "", 55, "call", listener); }
@@ -1296,6 +1297,7 @@ final class NativeGeminiLiveClient {
         if (running) return;
         running = true;
         LivePipelineDiagnostic.startSession(System.currentTimeMillis());
+        lastAppOpenRecoveryGeneration = -1L;
         loadVoiceprintProfile();
         reportStage("建立 Gemini WebSocket…");
         liveConnection.start();
@@ -1791,6 +1793,7 @@ final class NativeGeminiLiveClient {
                 finishModelUtterance(interactionComplete);
             }
             reportInteractionStatus(frame, responseHasModelAudio);
+            maybeRecoverNoToolAppOpen(frame, interactionComplete);
             return;
         }
 
@@ -1924,10 +1927,40 @@ final class NativeGeminiLiveClient {
             finishModelUtterance(interactionComplete);
         }
         reportInteractionStatus(frame, responseHasModelAudio);
+        maybeRecoverNoToolAppOpen(frame, interactionComplete);
 
     }
 
-     private static boolean isModelUtteranceComplete(
+    private void maybeRecoverNoToolAppOpen(
+            GeminiLiveTurnHandler.Frame frame, boolean interactionComplete) {
+        if (!interactionComplete || frame == null || !running
+                || agentTaskCoordinator.activeRunning() != null) return;
+        LiveTurnCoordinator.FinalizedTurn last = liveTurnCoordinator.latest();
+        if (last.generation != userIntentGeneration) return;
+        String goal = workingContext.toProgressJson().optString("goalIntent", "");
+        boolean shouldNudge = LiveAppOpenRecoveryPolicy.shouldRecover(
+                goal, last.text, currentForegroundPackageName(),
+                frame.interactionStatus, hasFreshInput(frame),
+                LivePipelineDiagnostic.currentIntentTools(),
+                lastAppOpenRecoveryGeneration == userIntentGeneration);
+        if (!shouldNudge) return;
+        lastAppOpenRecoveryGeneration = userIntentGeneration;
+        markPendingInternalDirectiveTurn(userIntentGeneration);
+        boolean sent = sendInternalAgentDirective(
+                "【Runtime 同一指令工具續接】上一句使用者已明確要求開啟一個 App，"
+                        + "但本次回應在沒有任何手機工具呼叫的情況下就結束了。"
+                        + "現在不要口頭宣稱已開啟、不要 TAP 舊畫面；"
+                        + "請直接呼叫 phone_action(action=OPEN_APP, target=剛才使用者指定的 App 名稱)。"
+                        + "如無法辨識名稱就簡短詢問，不要猜測。");
+        if (!sent) {
+            clearPendingInternalDirectiveTurn();
+            Log.w(TAG, "Bounded app-open recovery could not reach Live server");
+        } else {
+            reportStage("正在補上未執行的 App 開啟動作…");
+        }
+    }
+
+    private static boolean isModelUtteranceComplete(
             GeminiLiveTurnHandler.Frame frame) {
         if (frame == null) return false;
         String status = frame.interactionStatus == null
