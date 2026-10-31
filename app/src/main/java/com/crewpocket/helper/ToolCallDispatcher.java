@@ -55,19 +55,18 @@ final class ToolCallDispatcher {
         final String argsIdentity = call.optJSONObject("args") == null
                 ? "{}"
                 : call.optJSONObject("args").toString();
-        final ToolCallDispatchLedger.Registration registration =
-                ledger.register(id, name, argsIdentity, generation);
-
-        if (registration.duplicateCallId) return false;
-        if (registration.coalesced) {
-            host.onDuplicateIgnored(id, name, generation);
-            Log.d(TAG, "coalesced duplicate call: "
-                    + registration.signature);
-            return false;
-        }
-        if (!registration.accepted) return false;
-
         synchronized (lock) {
+            // Registration and pending insertion must be atomic with reset.
+            final ToolCallDispatchLedger.Registration registration =
+                    ledger.register(id, name, argsIdentity, generation);
+            if (registration.duplicateCallId) return false;
+            if (registration.coalesced) {
+                host.onDuplicateIgnored(id, name, generation);
+                Log.d(TAG, "coalesced duplicate call: "
+                        + registration.signature);
+                return false;
+            }
+            if (!registration.accepted) return false;
             try {
                 call.put("_crew_intent_generation", generation);
                 call.put(
@@ -87,11 +86,38 @@ final class ToolCallDispatcher {
         return true;
     }
 
-    void resetForNewIntent() {
+    /**
+     * Cancel queued calls without silently dropping Gemini function-call IDs.
+     * The active worker is intentionally not cancelled here; it must return a
+     * result under its original call ID, subject to Runtime's generation guard.
+     */
+    JSONArray resetForNewIntent() {
+        JSONArray cancelled = new JSONArray();
+        JSONObject reason = new JSONObject();
+        try {
+            reason.put("success", false);
+            reason.put("stale", true);
+            reason.put("blockedByRuntime", true);
+            reason.put("taskState", "CANCELLED");
+            reason.put("error", "SUPERSEDED_BY_NEW_INTENT");
+        } catch (Exception ignored) {}
+
         synchronized (lock) {
+            for (JSONObject call : pending) {
+                String id = call.optString("id", "");
+                String name = call.optString("name", "unknown");
+                for (ToolCallDispatchLedger.Recipient recipient
+                        : ledger.responseRecipients(id, name)) {
+                    cancelled.put(response(recipient.id, recipient.name, reason));
+                }
+                ledger.releaseInFlight(call.optString(
+                        "_crew_inflight_signature", ""));
+            }
             pending.clear();
+            // Running async calls still need their response-recipient ledger.
             ledger.resetForNewIntent();
         }
+        return cancelled;
     }
 
     void clearPending() {
