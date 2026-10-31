@@ -9,10 +9,7 @@ final class LiveAppOpenRecoveryPolicy {
     static String requestedPackage(String rawText) {
         String text = rawText == null ? "" :
                 rawText.toLowerCase(Locale.ROOT).trim();
-        boolean explicitOpen = text.contains("打開") || text.contains("打开")
-                || text.contains("開啟") || text.contains("开启")
-                || text.contains("open ");
-        if (!explicitOpen) return "";
+        if (!"APP:OPEN".equals(GoalIntentKey.derive(rawText))) return "";
         if (text.contains("google maps") || text.contains("google map")
                 || text.contains("google 地圖") || text.contains("google 地图")
                 || text.contains("地圖") || text.contains("地图")) {
