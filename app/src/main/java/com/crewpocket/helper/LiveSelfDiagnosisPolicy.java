@@ -177,6 +177,16 @@ final class LiveSelfDiagnosisPolicy {
         return candidate;
     }
 
+    synchronized boolean isRecoveryTargetMismatch(long gen,
+            String tool, String action, String target) {
+        if (gen != generation || !recoveryOffered || recoveryConsumed
+                || !matches(recoveryOption, tool, action)
+                || recoveryOption == null
+                || recoveryOption.target.isEmpty()) return false;
+        return !recoveryOption.target.equalsIgnoreCase(
+                target == null ? "" : target.trim());
+    }
+
     synchronized boolean isRepeatedRecovery(long gen,
             String tool, String action) {
         return gen == generation && recoveryOffered && recoveryConsumed
