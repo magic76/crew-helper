@@ -2591,9 +2591,17 @@ final class NativeGeminiLiveClient {
 
     private String buildSetup() throws Exception {
         JSONObject root = new JSONObject(); JSONObject setup = new JSONObject();
-        setup.put("model", "models/gemini-3.8-live-extended-thinking");
-        JSONObject generation = new JSONObject(); generation.put("responseModalities", new JSONArray().put("AUDIO"));
-        generation.put("thinkingConfig", new JSONObject().put("thinkingLevel", "MEDIUM"));
+        LiveModelSelection.Config model = LiveModelSelection.resolve(
+                AppConfig.getLiveModelId(appContext));
+        setup.put("model", "models/" + model.model);
+        JSONObject generation = new JSONObject();
+        generation.put("responseModalities", new JSONArray().put("AUDIO"));
+        // Standard 3.8 Live does not support thinkingConfig. Never send it
+        // outside the explicit Extended Thinking variants.
+        if (model.usesThinking()) {
+            generation.put("thinkingConfig", new JSONObject()
+                    .put("thinkingLevel", model.thinkingLevel));
+        }
         String safeVoice = mapToSupportedVoice(voiceName);
         generation.put("speechConfig", new JSONObject().put("voiceConfig", new JSONObject().put("prebuiltVoiceConfig", new JSONObject().put("voiceName", safeVoice))));
         setup.put("generationConfig", generation);
@@ -2721,6 +2729,10 @@ final class NativeGeminiLiveClient {
                 ContextPayloadBudget.utf8Bytes(baseInstruction),
                 ContextPayloadBudget.utf8Bytes(modelTools.toString()),
                 ContextPayloadBudget.utf8Bytes(payload));
+        LiveModelSelection.noteSetupRequested(model);
+        CrewDebugTrace.record("MODEL_SETUP", userIntentGeneration,
+                "", "NONE", "NONE",
+                model.id.toUpperCase(java.util.Locale.ROOT));
         return payload;
     }
 
