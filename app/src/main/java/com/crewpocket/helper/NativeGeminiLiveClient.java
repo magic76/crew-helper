@@ -2930,6 +2930,20 @@ final class NativeGeminiLiveClient {
                         ? buildLiveDiagnosticSummary(callIntentGeneration)
                         : buildLiveRecoveryOptions(callIntentGeneration);
                 sendToolResponse(id, requestedName, diagnostic);
+                // A diagnostic lookup is not a terminal phone step. The Live
+                // response watchdog must remain armed for the next model action.
+                AgentTaskRecord waitingTask = agentTaskCoordinator.activeRunning();
+                if (waitingTask != null) {
+                    synchronized (agentTaskCoordinator.monitor()) {
+                        if (agentTaskCoordinator.isActive(waitingTask)
+                                && !waitingTask.finished
+                                && !waitingTask.cancelled) {
+                            waitingTask.awaitingModel = true;
+                            waitingTask.watchdogPrompted = false;
+                        }
+                    }
+                    agentResponseCoordinator.scheduleWatchdog(waitingTask);
+                }
             } catch (Exception error) {
                 Log.w(TAG, "Read-only Live diagnosis response failed", error);
             }
