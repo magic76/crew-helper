@@ -23,6 +23,12 @@ public final class DualEnginePlanningPolicyTest {
         check(DualEnginePlanningPolicy.safePublicMediaPrompt(
                 "播放歌曲到地址：台北", "MEDIA:PLAY").isEmpty(),
                 "address never forwarded to background");
+        check(DualEnginePlanningPolicy.safePublicMediaPrompt(
+                "幫我播放我的收藏歌曲", "MEDIA:PLAY").isEmpty(),
+                "private music library never sent to Think");
+        check(DualEnginePlanningPolicy.safePublicMediaPrompt(
+                "Play my playlist", "MEDIA:PLAY").isEmpty(),
+                "personal playlist always stays on foreground executor");
         check(!DualEnginePlanningPolicy.eligible(
                 "播放歌曲", "MEDIA:PLAY"),
                 "simple request does not wait for Think");
