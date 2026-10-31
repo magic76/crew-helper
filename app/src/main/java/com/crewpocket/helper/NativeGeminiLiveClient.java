@@ -8627,9 +8627,23 @@ final class NativeGeminiLiveClient {
             throw new Exception("工具結果無法傳回 Gemini");
         }
         LivePipelineDiagnostic.onToolResponse();
-        CrewDebugTrace.record("TOOL_RESPONSE", userIntentGeneration,
-                id, name, "NONE", result != null &&
-                result.optBoolean("success", false) ? "SENT" : "FAILED");
+        String diagnosticCode = result == null ? "FAILED"
+                : result.optBoolean("success", false) ? "SENT"
+                : result.optString("verificationCode",
+                        result.optString("error", "FAILED"));
+        if (result != null && result.optBoolean("blockedByRuntime", false)) {
+            CrewDebugTrace.record("RUNTIME_GATE", userIntentGeneration,
+                    id, name, "NONE", diagnosticCode);
+        }
+        JSONArray delivered = responses;
+        for (int i = 0; i < delivered.length(); i++) {
+            JSONObject recipient = delivered.optJSONObject(i);
+            if (recipient == null) continue;
+            CrewDebugTrace.record("TOOL_RESPONSE", userIntentGeneration,
+                    recipient.optString("id", ""),
+                    recipient.optString("name", name),
+                    "NONE", diagnosticCode);
+        }
 
         if (refinedSelection != null
                 && refinedMemoryTask != null
