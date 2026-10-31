@@ -124,7 +124,11 @@ final class LiveSelfDiagnosisPolicy {
         if (call == null || call.generation != generation
                 || gen != generation) return;
         // Ignore earlier generation responses and safe diagnostic lookups.
-        if (success) return;
+        // Fresh successful evidence supersedes a prior recoverable failure.
+        if (success) {
+            failure = "NONE";
+            return;
+        }
         lastTool = call.name;
         lastAction = call.action;
         failure = failureToken(rawCode);
