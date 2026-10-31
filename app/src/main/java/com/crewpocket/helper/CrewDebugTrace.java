@@ -32,9 +32,13 @@ final class CrewDebugTrace {
             + "|STALE_USER_INTENT|FINISHED_INTENT|OPERATIONAL_TURN_NOT_FINALIZED"
             + "|APP_OPEN_ACTION_REQUIRED|PRE_FLIGHT_BLOCK|RUNTIME_BLOCK"
             + "|SUPERSEDED_BY_NEW_INTENT|TASK_CANCELLED|SOCKET_CLOSED"
-            + "|SOCKET_FAILURE|RECOVERY_ONCE|OTHER|";
+            + "|SOCKET_FAILURE|RECOVERY_ONCE|APP_NOT_FOUND"
+            + "|SEARCH_NEEDS_QUERY|LOCATOR_MARGIN_TOO_SMALL"
+            + "|TARGET_REQUIRED|AMBIGUOUS|UNVERIFIED|OTHER|";
     private static final ArrayDeque<String> events = new ArrayDeque<String>();
     private static final HashMap<String,String> callTokens = new HashMap<String,String>();
+    private static final HashMap<String,Long> callGenerations =
+            new HashMap<String,Long>();
     private static boolean enabled;
     private static long startMs;
     private static long sequence;
@@ -108,6 +112,7 @@ final class CrewDebugTrace {
     private static void reset() {
         events.clear();
         callTokens.clear();
+        callGenerations.clear();
         startMs = 0L;
         sequence = 0L;
         generation = -1L;
@@ -135,12 +140,24 @@ final class CrewDebugTrace {
         if ("LIVE_TOOL_CALL".equals(event)) tools++;
         if ("TOOL_RESPONSE".equals(event)) responses++;
         if ("TOOL_CANCELLED".equals(event)) cancellations += Math.max(1, count);
+        if (id != null && !id.isEmpty()
+                && ("LIVE_TOOL_CALL".equals(event)
+                    || "TOOL_QUEUED".equals(event))
+                && callGenerations.size() < MAX_CALLS
+                && !callGenerations.containsKey(id)) {
+            callGenerations.put(id, gen);
+        }
+        Long originalGeneration = id == null ? null : callGenerations.get(id);
+        long correlatedGeneration =
+                originalGeneration == null ? gen : originalGeneration;
         String callRef = tokenForCall(id);
         long now = System.currentTimeMillis();
         String item = "{\"seq\":" + (++sequence)
                 + ",\"ms\":" + Math.max(0L, now - startMs)
-                + ",\"generation\":" + gen
+                + ",\"generation\":" + correlatedGeneration
                 + ",\"event\":\"" + event + "\""
+                + ("INTENT_FINALIZED".equals(event)
+                    ? ",\"goal\":\"" + currentGoal + "\"" : "")
                 + ",\"call\":\"" + callRef + "\""
                 + ",\"tool\":\"" + tool + "\""
                 + ",\"action\":\"" + action + "\""
