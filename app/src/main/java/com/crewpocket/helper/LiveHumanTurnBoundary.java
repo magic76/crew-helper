@@ -303,9 +303,9 @@ final class LiveHumanTurnBoundary {
             serverIdleSinceFinalized = true;
         } else if ("IN_PROGRESS".equals(status)) {
             serverIdleSinceFinalized = false;
-        } else if (turnComplete) {
-            serverIdleSinceFinalized = true;
         }
+        // Extended Thinking can finish a speech utterance without ending the
+        // interaction. turnComplete without IDLE must not close the human turn.
     }
 
     synchronized void noteInterim(
