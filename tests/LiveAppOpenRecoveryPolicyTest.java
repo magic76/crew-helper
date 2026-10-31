@@ -26,6 +26,18 @@ public final class LiveAppOpenRecoveryPolicyTest {
         check(!LiveAppOpenRecoveryPolicy.shouldRecover(
                 "APP:OPEN", "打開 Google Maps", "com.apple.android.music",
                 "IDLE", true, 0, false), "same-frame fresh input stays untouched");
+        check("com.google.android.apps.maps".equals(
+                LiveAppOpenRecoveryPolicy.requestedPackage("幫我開地圖")),
+                "spoken Maps open resolves to the safe known package");
+        check("com.apple.android.music".equals(
+                LiveAppOpenRecoveryPolicy.requestedPackage("啟動 Apple Music")),
+                "spoken Apple Music open resolves to the safe known package");
+        check(LiveAppOpenRecoveryPolicy.requestedPackage(
+                "開地圖導航去大皇宮").isEmpty(),
+                "navigation goal cannot be degraded into app launch");
+        check(LiveAppOpenRecoveryPolicy.requestedPackage(
+                "開 Apple Music 播放歌曲").isEmpty(),
+                "media playback goal cannot be degraded into app launch");
         System.out.println("PASS LiveAppOpenRecoveryPolicyTest");
     }
     static void check(boolean value, String description) {
