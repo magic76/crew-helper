@@ -133,6 +133,30 @@ and from waiting to close the task. It does not remove the time Gemini spends
 deciding which first tool to emit; any direct app-open execution before the
 model must be implemented separately with existing Runtime authorizations.
 
+## No-tool spoken-turn recovery when Live never emits IDLE
+
+In sessions where Gemini 3.8 Extended Thinking reports continuous
+`IN_PROGRESS` but a model speech turn completes with **zero tool calls**,
+the original `IDLE`-only app-open nudge could never run. The bounded fallback
+now accepts `turnComplete` **only when** model audio was actually emitted,
+the latest finalized generation is current, there are no queued or in-flight
+tools and the user requested an explicitly named **standalone** app launch.
+It injects one same-generation directive for `phone_action(OPEN_APP)`.
+A completed model speech turn does not authorize arbitrary Android execution
+or mark any unrelated task as done. This fallback may still fail if Gemini
+ignores function calls entirely.
+
+New sanitized evidence distinguishes setup from model noncompliance:
+`TOOL_CATALOG` records the declared function count and
+`NO_TOOL_TURN_COMPLETE` marks one completed no-tool spoken turn per
+generation. Neither event records microphone transcripts, tool arguments
+or raw device data.
+
+**Deployment caution:** the branch version is not necessarily the phone's
+installed version. Integrate with the on-device source before testing; verify
+the installed build actually contains this change. Debug Lab's historical
+Inspector task snapshot may predate the current session.
+
 ## Current P0 limits
 
 This phase exports useful deterministic evidence, **not** a remote debugger,
