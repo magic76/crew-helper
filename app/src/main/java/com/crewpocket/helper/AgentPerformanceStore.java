@@ -76,6 +76,8 @@ final class AgentPerformanceStore {
                         .put("success", terminalSuccess)
                         .put("cancelled", cancelled)
                         .put("cancelCategory", task.optString("cancelCategory", ""))
+                        .put("cancelProgressEvidence",
+                                task.optString("cancelProgressEvidence", ""))
                         .put("partial", partial)
                         .put("recovered", recovered)
                         .put("steps", task.optInt("stepCount", 0))
@@ -113,6 +115,9 @@ final class AgentPerformanceStore {
         int partial = 0;
         int cancelled = 0;
         int implicitUserRetries = 0;
+        int verifiedStepSupersedes = 0;
+        int executedUnverifiedSupersedes = 0;
+        int noMutationSupersedes = 0;
         int excludedFromSuccessRate = 0;
         int hardFailure = 0;
         LinkedHashMap<String, Integer> cancelCategories =
@@ -136,6 +141,14 @@ final class AgentPerformanceStore {
             else if ("PARTIAL".equals(outcome)) partial++;
             else if ("CANCELLED".equals(outcome)) {
                 cancelled++;
+                String progress = item.optString("cancelProgressEvidence", "");
+                if (TaskSupersessionEvidencePolicy.VERIFIED_STEP_ONLY.equals(progress)) {
+                    verifiedStepSupersedes++;
+                } else if (TaskSupersessionEvidencePolicy.EXECUTED_UNVERIFIED.equals(progress)) {
+                    executedUnverifiedSupersedes++;
+                } else if (TaskSupersessionEvidencePolicy.NO_MUTATION.equals(progress)) {
+                    noMutationSupersedes++;
+                }
                 String category = item.optString("cancelCategory", "").trim();
                 if (category.isEmpty()) category = "UNKNOWN";
                 if (UserRetryAfterUnconfirmedOutcomePolicy.CATEGORY.equals(category)) {
@@ -183,6 +196,16 @@ final class AgentPerformanceStore {
                 out.append(entry.getKey()).append("=").append(entry.getValue());
             }
             out.append("\n");
+        }
+        if (verifiedStepSupersedes + executedUnverifiedSupersedes
+                + noMutationSupersedes > 0) {
+            out.append("Superseded progress (not whole-goal success): verified-step=")
+                    .append(verifiedStepSupersedes)
+                    .append(" · executed-unverified=")
+                    .append(executedUnverifiedSupersedes)
+                    .append(" · no-mutation=")
+                    .append(noMutationSupersedes)
+                    .append("\n");
         }
         if (implicitUserRetries > 0) {
             out.append("User retries after unconfirmed outcome: ")
@@ -255,6 +278,9 @@ final class AgentPerformanceStore {
         int partial = 0;
         int hardFailure = 0;
         int cancelled = 0;
+        int verifiedStepSupersedes = 0;
+        int executedUnverifiedSupersedes = 0;
+        int noMutationSupersedes = 0;
         int excluded = 0;
         LinkedHashMap<String, Integer> cancelCategories =
                 new LinkedHashMap<String, Integer>();
@@ -274,6 +300,14 @@ final class AgentPerformanceStore {
                 else if ("PARTIAL".equals(outcome)) partial++;
                 else if ("CANCELLED".equals(outcome)) {
                     cancelled++;
+                    String progress = item.optString("cancelProgressEvidence", "");
+                    if (TaskSupersessionEvidencePolicy.VERIFIED_STEP_ONLY.equals(progress)) {
+                        verifiedStepSupersedes++;
+                    } else if (TaskSupersessionEvidencePolicy.EXECUTED_UNVERIFIED.equals(progress)) {
+                        executedUnverifiedSupersedes++;
+                    } else if (TaskSupersessionEvidencePolicy.NO_MUTATION.equals(progress)) {
+                        noMutationSupersedes++;
+                    }
                     String category =
                             item.optString("cancelCategory", "").trim();
                     if (category.isEmpty()) category = "UNKNOWN";
@@ -320,6 +354,15 @@ final class AgentPerformanceStore {
                         .append("=")
                         .append(entry.getValue());
             }
+        }
+        if (verifiedStepSupersedes + executedUnverifiedSupersedes
+                + noMutationSupersedes > 0) {
+            out.append("\nSuperseded progress: verified-step=")
+                    .append(verifiedStepSupersedes)
+                    .append(" · executed-unverified=")
+                    .append(executedUnverifiedSupersedes)
+                    .append(" · no-mutation=")
+                    .append(noMutationSupersedes);
         }
         out.append("\nFull-success rate: ");
         if (evaluated == 0) {

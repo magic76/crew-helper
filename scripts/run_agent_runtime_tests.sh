@@ -21,6 +21,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/CandidateArbitrationOutcomePolicy.java" \
   "$SRC/LocatorFallbackPolicy.java" \
   "$SRC/AgentTaskLifecyclePolicy.java" \
+  "$SRC/TaskSupersessionEvidencePolicy.java" \
   "$SRC/AgentSpeechGatePolicy.java" \
   "$SRC/DirectGestureCompletionPolicy.java" \
   "$SRC/AutonomyEscalationPolicy.java" \
@@ -179,6 +180,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/CandidateArbitrationExecutionPolicyTest.java" \
   "$ROOT/tests/CandidateArbitrationOutcomePolicyTest.java" \
   "$ROOT/tests/AgentTaskLifecyclePolicyTest.java" \
+  "$ROOT/tests/TaskSupersessionEvidencePolicyTest.java" \
   "$ROOT/tests/AgentSpeechGatePolicyTest.java" \
   "$ROOT/tests/AutonomyEscalationPolicyTest.java" \
   "$ROOT/tests/ObservationLoopPolicyTest.java" \
@@ -286,6 +288,7 @@ java -cp "$OUT" com.crewpocket.helper.CandidateArbitrationPolicyTest
 java -cp "$OUT" com.crewpocket.helper.CandidateArbitrationExecutionPolicyTest
 java -cp "$OUT" com.crewpocket.helper.CandidateArbitrationOutcomePolicyTest
 java -cp "$OUT" com.crewpocket.helper.AgentTaskLifecyclePolicyTest
+java -cp "$OUT" com.crewpocket.helper.TaskSupersessionEvidencePolicyTest
 java -cp "$OUT" com.crewpocket.helper.AgentSpeechGatePolicyTest
 java -cp "$OUT" com.crewpocket.helper.AutonomyEscalationPolicyTest
 java -cp "$OUT" com.crewpocket.helper.ObservationLoopPolicyTest

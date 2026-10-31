@@ -140,6 +140,17 @@ final class AgentTaskCoordinator {
             AgentTaskRecord task = active;
             if (task == null || task.finished) return null;
 
+            // A cancelled task may have verified useful progress without
+            // completing the user's whole goal. Keep these separate in stats.
+            task.cancelProgressEvidence =
+                    TaskSupersessionEvidencePolicy.progressAtCancellation(
+                            GoalIntentKey.derive(task.recipeGoal),
+                            task.lastTaskState,
+                            task.lastCompletionEvidence,
+                            task.refinedMemoryTerminalVerified,
+                            task.requiresPostActionInspection,
+                            task.blockedReason != null,
+                            task.mutationActions);
             task.cancelled = true;
             task.cancelCategory = category == null ? "OTHER" : category;
             task.finished = true;

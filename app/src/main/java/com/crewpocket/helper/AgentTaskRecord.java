@@ -62,6 +62,8 @@ final class AgentTaskRecord {
     boolean postActionInspectionPrompted;
     boolean cancelled;
     String cancelCategory = "";
+    // An enum describing evidence present at cancellation, not user text.
+    String cancelProgressEvidence = "";
     boolean suspended;
     String suspensionReason = "";
     long suspendedAtMs;
@@ -534,6 +536,7 @@ final class AgentTaskRecord {
                     .put("prematureModelReplies", prematureModelReplies)
                     .put("autonomyRecoveryAttempts", autonomyRecoveryAttempts)
                     .put("cancelCategory", cancelCategory)
+                    .put("cancelProgressEvidence", cancelProgressEvidence)
                     .put("suspended", suspended)
                     .put("suspensionReason", suspensionReason)
                     .put("suspendedAtMs", suspendedAtMs)
