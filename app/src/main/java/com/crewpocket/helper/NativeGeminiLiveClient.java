@@ -163,6 +163,9 @@ final class NativeGeminiLiveClient {
     // Per-session read-only Live diagnosis, separate from opt-in export trace.
     private final LiveSelfDiagnosisPolicy liveSelfDiagnosis =
             new LiveSelfDiagnosisPolicy();
+    // Snapshot at client creation: a settings change cannot silently change
+    // the model during session resumption or a network reconnect.
+    private final LiveModelSelection.Config liveModel;
 
     NativeGeminiLiveClient(String apiKey, Listener listener) { this(apiKey, "", AppConfig.DEFAULT_VOICE, "auto", 35, "warm", "", 55, "call", listener); }
     NativeGeminiLiveClient(String apiKey, String serverUrl, Listener listener) { this(apiKey, serverUrl, AppConfig.DEFAULT_VOICE, "auto", 35, "warm", "", 55, "call", listener); }
@@ -181,6 +184,8 @@ final class NativeGeminiLiveClient {
     }
     NativeGeminiLiveClient(Context context, String apiKey, String serverUrl, String voiceName, String noiseMode, int noiseSuppression, String liveTone, String customPrompt, int interruptionSensitivity, String audioOutput, Listener listener) {
         this.appContext = context == null ? null : context.getApplicationContext();
+        this.liveModel = LiveModelSelection.resolve(
+                AppConfig.getLiveModelId(this.appContext));
         this.voiceName = voiceName == null || voiceName.trim().isEmpty()
                 ? AppConfig.DEFAULT_VOICE : voiceName.trim();
         this.noiseMode = "quiet".equals(noiseMode) || "noisy".equals(noiseMode)
@@ -2591,8 +2596,7 @@ final class NativeGeminiLiveClient {
 
     private String buildSetup() throws Exception {
         JSONObject root = new JSONObject(); JSONObject setup = new JSONObject();
-        LiveModelSelection.Config model = LiveModelSelection.resolve(
-                AppConfig.getLiveModelId(appContext));
+        LiveModelSelection.Config model = liveModel;
         setup.put("model", "models/" + model.model);
         JSONObject generation = new JSONObject();
         generation.put("responseModalities", new JSONArray().put("AUDIO"));
