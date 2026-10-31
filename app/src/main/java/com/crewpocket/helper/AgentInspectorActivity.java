@@ -288,7 +288,14 @@ public class AgentInspectorActivity extends Activity {
     }
 
     private String buildFullReport() {
+        LiveModelSelection.Config selected = LiveModelSelection.resolve(
+                AppConfig.getLiveModelId(this));
         return CrewDebugTrace.snapshot().summary()
+                + "\nGemini Live selected (next session): " + selected.model
+                + " · thinking=" + (selected.usesThinking()
+                        ? selected.thinkingLevel : "OFF")
+                + "\nLast Live setup requested (current process): "
+                + LiveModelSelection.lastRequestedSetupSummary()
                 + "\n\n────────────────────\n\n"
                 + VoiceDebugTrace.report(this)
                 + "\n\n────────────────────\n\n"
