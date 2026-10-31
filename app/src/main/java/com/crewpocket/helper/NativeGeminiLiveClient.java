@@ -4058,7 +4058,26 @@ final class NativeGeminiLiveClient {
                                                     afterPackage,
                                                     after.toString());
 
-                    if (verifiedNavigationStart) {
+                    boolean verifiedStandaloneAppOpen =
+                            AgentTaskLifecyclePolicy.verifiedAppOpenIsTerminal(
+                                    workingContext.toProgressJson()
+                                            .optString("goalIntent", ""),
+                                    name,
+                                    succeeded,
+                                    result.optString("taskState", ""),
+                                    v2Verification,
+                                    runtimeV2Enforced,
+                                    result.optString("package", "").trim(),
+                                    afterPackage,
+                                    freshAfter);
+                    if (verifiedStandaloneAppOpen) {
+                        result.put("taskState", "DONE")
+                                .put("completionEvidence",
+                                        "APP_OPEN_FOREGROUND_VERIFIED")
+                                .put("nextRequirement", "NONE")
+                                .put("verified", true);
+                        task.requiresPostActionInspection = false;
+                    } else if (verifiedNavigationStart) {
                         result.put("taskState", "DONE")
                                 .put("completionEvidence",
                                         "MAPS_NAVIGATION_ACTIVE_VERIFIED")
