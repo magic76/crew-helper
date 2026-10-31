@@ -9,16 +9,16 @@ import java.util.Locale;
 final class DualEnginePlanningPolicy {
     private DualEnginePlanningPolicy() {}
 
-    static String eligiblePrompt(String text, String goal) {
+    /** Only public, bounded media requests may leave the primary Live socket. */
+    static String safePublicMediaPrompt(String text, String goal) {
         if (!"MEDIA:PLAY".equals(goal) || text == null) return "";
         String value = text.trim();
-        if (value.length() < 8 || value.length() > 260) return "";
+        if (value.length() < 5 || value.length() > 260) return "";
         String lower = value.toLowerCase(Locale.ROOT);
-        boolean search = contains(lower, "找", "搜尋", "搜索", "search", "find", "查");
-        boolean play = contains(lower, "播放", "播歌", "play", "放音樂", "放音乐");
-        if (!search || !play) return "";
-        // Do not forward personal chat, identifiers, account instructions, or
-        // text containing numeric secrets. A narrow public-media pilot only.
+        if (!contains(lower, "播放", "播歌", "play", "放音樂", "放音乐"))
+            return "";
+        // Never forward potentially identifying search text or private app
+        // content; repair prompts reuse exactly the same privacy boundary.
         if (contains(lower, "http", "www.", "@", "line", "whatsapp", "訊息",
                 "消息", "message", "密碼", "密码", "otp", "驗證", "验证",
                 "付款", "支付", "購買", "购买", "刪除", "删除", "帳號",
@@ -27,6 +27,15 @@ final class DualEnginePlanningPolicy {
                 "存檔", "儲存", "保存", "save", "note")) return "";
         if (lower.matches(".*[0-9]{4,}.*")) return "";
         return value;
+    }
+
+    /** Proactive thinking is limited to multi-step public media requests. */
+    static String eligiblePrompt(String text, String goal) {
+        String safe = safePublicMediaPrompt(text, goal);
+        if (safe.isEmpty()) return "";
+        String lower = safe.toLowerCase(Locale.ROOT);
+        return contains(lower, "找", "搜尋", "搜索", "search", "find", "查")
+                ? safe : "";
     }
 
     static boolean eligible(String text, String goal) {
