@@ -74,6 +74,16 @@ def analyze(session, runtime, events):
         elif events_by_name["TOOL_RESPONSE_FAILED"]:
             classification = "TOOL_RESPONSE_TRANSPORT_FAILED"
             rationale = "A tool result could not be delivered to the Live websocket."
+        elif events_by_name["TASK_CANCELLED"]:
+            classification = "TASK_CANCELLED"
+            rationale = ("The task was cancelled after this intent. "
+                         "Review the task cancellation code and compare it to "
+                         "tool completion; a SENT response alone does not prove "
+                         "the whole user goal was achieved.")
+        elif events_by_name["TASK_FINISHED"]:
+            classification = "TASK_FINISHED"
+            rationale = ("Runtime recorded a terminal lifecycle result. "
+                         "Verify its completion evidence independently.")
         elif calls and not replies and not canceled:
             classification = "TOOL_RESPONSE_MISSING"
             rationale = "Tool calls were received but no response appears in this capture."
@@ -94,6 +104,18 @@ def analyze(session, runtime, events):
             + " · cancellations: " + str(len(canceled)),
             "",
         ])
+        if events_by_name["TOOL_RUNTIME_DONE"]:
+            runtimes = events_by_name["TOOL_RUNTIME_DONE"]
+            out.append("Observed tool runtime: " + ", ".join(
+                str(x.get("count", 0)) + " ms"
+                for x in runtimes[:10]))
+            out.append("")
+        if events_by_name["TASK_CANCELLED"] or events_by_name["TASK_FINISHED"]:
+            terminals = events_by_name["TASK_CANCELLED"] + events_by_name["TASK_FINISHED"]
+            out.append("Task end: " + ", ".join(
+                str(x.get("event")) + " / " + str(x.get("code"))
+                for x in terminals))
+            out.append("")
         if gates:
             out.append("Gate codes: " + ", ".join(sorted(set(
                 e.get("code", "UNKNOWN") for e in gates))))
