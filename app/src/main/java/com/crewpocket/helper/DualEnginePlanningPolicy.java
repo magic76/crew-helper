@@ -13,7 +13,7 @@ final class DualEnginePlanningPolicy {
     static String safePublicMediaPrompt(String text, String goal) {
         if (!"MEDIA:PLAY".equals(goal) || text == null) return "";
         String value = text.trim();
-        if (value.length() < 5 || value.length() > 260) return "";
+        if (value.length() < 4 || value.length() > 260) return "";
         String lower = value.toLowerCase(Locale.ROOT);
         if (!contains(lower, "播放", "播歌", "play", "放音樂", "放音乐"))
             return "";
