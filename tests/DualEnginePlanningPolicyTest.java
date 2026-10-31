@@ -14,6 +14,18 @@ public final class DualEnginePlanningPolicyTest {
         check(DualEnginePlanningPolicy.eligible(
                 "search for songs by an artist and play music", "MEDIA:PLAY"),
                 "English public media task");
+        check("播放歌曲".equals(DualEnginePlanningPolicy.safePublicMediaPrompt(
+                "播放歌曲", "MEDIA:PLAY")),
+                "simple public playback can request recovery on a later failure");
+        check(DualEnginePlanningPolicy.safePublicMediaPrompt(
+                "打開 LINE 找朋友然後播放語音", "MEDIA:PLAY").isEmpty(),
+                "private conversation never sent even on recovery");
+        check(DualEnginePlanningPolicy.safePublicMediaPrompt(
+                "播放歌曲到地址：台北", "MEDIA:PLAY").isEmpty(),
+                "address never forwarded to background");
+        check(!DualEnginePlanningPolicy.eligible(
+                "播放歌曲", "MEDIA:PLAY"),
+                "simple request does not wait for Think");
         check(!DualEnginePlanningPolicy.eligible(
                 "幫我打開 Apple Music", "APP:OPEN"), "simple open has zero planner cost");
         check(!DualEnginePlanningPolicy.eligible(
