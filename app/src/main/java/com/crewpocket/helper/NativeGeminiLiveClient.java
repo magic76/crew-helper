@@ -846,7 +846,7 @@ final class NativeGeminiLiveClient {
                 : agentTaskCoordinator.cancelActive(reason, category);
         if (task == null) return false;
 
-        toolCallDispatcher.clearPending();
+        sendCancelledToolCalls(toolCallDispatcher.clearPending());
         agentResponseCoordinator.clear();
         phoneRuntimeExecutor.cancelActiveRequest();
         Thread worker = activeToolThread;
