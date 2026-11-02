@@ -2701,6 +2701,18 @@ final class NativeGeminiLiveClient {
                         deckRuntimeController.isPresentStartup(),
                         deckRuntimeController.hasWorkspaceStartup(),
                         AppConfig.isBackgroundLiveEnabled(appContext));
+        boolean backgroundToolDeclared = false;
+        for (int i = 0; i < modelTools.length(); i++) {
+            JSONObject declaration = modelTools.optJSONObject(i);
+            if (declaration != null
+                    && "background_phone".equals(
+                            declaration.optString("name", ""))) {
+                backgroundToolDeclared = true;
+                break;
+            }
+        }
+        LivePipelineDiagnostic.onBackgroundToolDeclared(
+                backgroundToolDeclared);
         CrewDebugTrace.count("TOOL_CATALOG", userIntentGeneration,
                 "NONE", modelTools.length());
         boolean phoneToolDeclared = false;

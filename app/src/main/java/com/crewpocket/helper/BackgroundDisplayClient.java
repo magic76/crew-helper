@@ -1,5 +1,6 @@
 package com.crewpocket.helper;
 
+import android.content.Context;
 import org.json.JSONObject;
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
@@ -16,7 +17,7 @@ import java.util.Iterator;
 final class BackgroundDisplayClient {
     private BackgroundDisplayClient() {}
 
-    static JSONObject request(JSONObject operation) {
+    static JSONObject request(Context context, JSONObject operation) {
         if (android.os.Build.VERSION.SDK_INT < 31) return error("ANDROID_12_REQUIRED");
         if (operation == null) return error("EMPTY_REQUEST");
         String op = operation.optString("op", "");
@@ -24,13 +25,13 @@ final class BackgroundDisplayClient {
             JSONObject hello = new JSONObject();
             try { hello.put("op", "status"); }
             catch (Exception invalid) { return error("INVALID_PROTOCOL_REQUEST"); }
-            JSONObject check = send(hello);
+            JSONObject check = send(context, hello);
             if (!check.optBoolean("success", false)) return check;
             if (check.optInt("protocolVersion", -1)
                     != BackgroundDisplayShell.PROTOCOL_VERSION)
                 return protocolMismatch(check);
         }
-        JSONObject result = send(operation);
+        JSONObject result = send(context, operation);
         if (!result.optBoolean("success", false)) return result;
         if (result.optInt("protocolVersion", -1)
                 != BackgroundDisplayShell.PROTOCOL_VERSION)
@@ -59,9 +60,9 @@ final class BackgroundDisplayClient {
         return names.toString();
     }
 
-    private static JSONObject send(JSONObject operation) {
+    private static JSONObject send(Context context, JSONObject operation) {
         BackgroundDisplayEndpointReceiver.Endpoint endpoint =
-                BackgroundDisplayEndpointReceiver.getEndpoint();
+                BackgroundDisplayEndpointReceiver.getEndpoint(context);
         if (endpoint == null)
             return transportError("HELPER_NOT_CONNECTED", "ENDPOINT_DISCOVERY",
                     "NONE", "ENDPOINT_NOT_READY");
@@ -125,8 +126,8 @@ final class BackgroundDisplayClient {
         return result;
     }
 
-    static JSONObject command(String op) {
-        try { return request(new JSONObject().put("op", op)); }
+    static JSONObject command(Context context, String op) {
+        try { return request(context, new JSONObject().put("op", op)); }
         catch (Exception ignored) { return error("INVALID_COMMAND"); }
     }
 

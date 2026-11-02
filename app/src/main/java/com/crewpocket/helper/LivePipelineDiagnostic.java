@@ -12,6 +12,7 @@ final class LivePipelineDiagnostic {
     private static String interaction = "UNKNOWN";
     private static String lastTool = "NONE";
     private static String lastAction = "NONE";
+    private static String backgroundTool = "UNKNOWN";
     private static int finalizedIntents;
     private static int incomingToolCalls;
     private static int executedToolCalls;
@@ -41,6 +42,7 @@ final class LivePipelineDiagnostic {
         interaction = "UNKNOWN";
         lastTool = "NONE";
         lastAction = "NONE";
+        backgroundTool = "UNKNOWN";
         finalizedIntents = 0;
         incomingToolCalls = 0;
         executedToolCalls = 0;
@@ -111,6 +113,10 @@ final class LivePipelineDiagnostic {
         lastAction = allowedAction(rawAction);
     }
 
+    static synchronized void onBackgroundToolDeclared(boolean declared) {
+        backgroundTool = declared ? "DECLARED" : "NOT_DECLARED";
+    }
+
     static synchronized int currentIntentTools() {
         return toolCallsForIntent;
     }
@@ -148,6 +154,7 @@ final class LivePipelineDiagnostic {
                 + " responses=" + responsesForIntent
                 + " · IDLE-without-tool=" + idleWithoutTool + "\n"
                 + "Last requested: " + lastTool + "/" + lastAction + "\n"
+                + "Background tool at Live setup: " + backgroundTool + "\n"
                 + "Background Thinking: started=" + backgroundPlannerStarted
                 + " ready=" + backgroundPlannerReady
                 + " failed=" + backgroundPlannerFailed
@@ -167,7 +174,8 @@ final class LivePipelineDiagnostic {
     }
 
     private static String allowedTool(String raw) {
-        if ("phone_action".equals(raw) || "inspect_ui".equals(raw)
+        if ("phone_action".equals(raw) || "background_phone".equals(raw)
+                || "inspect_ui".equals(raw)
                 || "send_text".equals(raw) || "wait_then_action".equals(raw)) {
             return raw;
         }

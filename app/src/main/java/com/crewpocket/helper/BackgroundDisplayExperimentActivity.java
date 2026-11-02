@@ -161,7 +161,7 @@ public final class BackgroundDisplayExperimentActivity extends Activity {
             JSONObject reply;
             try {
                 request.put("op", op);
-                reply = BackgroundDisplayClient.request(request);
+                reply = BackgroundDisplayClient.request(this, request);
             } catch (Exception error) {
                 reply = new JSONObject();
             }
@@ -213,7 +213,7 @@ public final class BackgroundDisplayExperimentActivity extends Activity {
         busy = true;
         status.setText("讀取背景畫面…");
         worker.execute(() -> {
-            JSONObject reply = BackgroundDisplayClient.command("preview");
+            JSONObject reply = BackgroundDisplayClient.command(this, "preview");
             Bitmap bitmap = null;
             if (reply.optBoolean("success", false)) {
                 try {

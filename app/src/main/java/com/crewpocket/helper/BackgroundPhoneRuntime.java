@@ -43,7 +43,7 @@ final class BackgroundPhoneRuntime {
                 return rejected("BACKGROUND_LIVE_DISABLED");
             if (stillCurrent == null || !stillCurrent.getAsBoolean())
                 return rejected("STALE_USER_INTENT");
-            JSONObject state = BackgroundDisplayClient.command("status");
+            JSONObject state = BackgroundDisplayClient.command(app, "status");
             if (!state.optBoolean("success", false)) {
                 invalidateScreen();
                 return rejectHelper(state); // Preserve HELPER_RESTART_REQUIRED and other codes.
@@ -68,7 +68,7 @@ final class BackgroundPhoneRuntime {
                 if (!stillCurrent.getAsBoolean()) return rejected("STALE_USER_INTENT");
                 JSONObject launch = new JSONObject().put("op", "open")
                         .put("package", chosen.chosen.packageName);
-                JSONObject outcome = BackgroundDisplayClient.request(launch);
+                JSONObject outcome = BackgroundDisplayClient.request(app, launch);
                 if (!outcome.optBoolean("success", false)) return rejectHelper(outcome);
                 leasedDisplayId = outcome.optInt("displayId", -1);
                 leasedPackage = outcome.optString("package", "");
@@ -80,7 +80,7 @@ final class BackgroundPhoneRuntime {
                     // The user superseded this turn while Shell was starting
                     // the App. Release only the display we just created.
                     try {
-                        BackgroundDisplayClient.request(new JSONObject()
+                        BackgroundDisplayClient.request(app, new JSONObject()
                                 .put("op", "close")
                                 .put("expectedDisplayId", leasedDisplayId)
                                 .put("expectedPackage", leasedPackage));
@@ -144,7 +144,7 @@ final class BackgroundPhoneRuntime {
                         .put("op", "HANDOFF".equals(action) ? "front" : "close")
                         .put("expectedDisplayId", leasedDisplayId)
                         .put("expectedPackage", leasedPackage);
-                JSONObject result = BackgroundDisplayClient.request(request);
+                JSONObject result = BackgroundDisplayClient.request(app, request);
                 if (!result.optBoolean("success", false)) return rejectHelper(result);
                 if ("HANDOFF".equals(action) && !result.optBoolean("handedOff", false))
                     return rejected("HANDOFF_NOT_CONFIRMED");
