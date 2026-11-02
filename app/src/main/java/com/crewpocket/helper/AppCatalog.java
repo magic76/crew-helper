@@ -58,7 +58,7 @@ final class AppCatalog {
         long started = System.currentTimeMillis();
         // Known exact app names bypass fuzzy launcher labels and stale aliases.
         // Verify visibility/installation before using a package shortcut.
-        String knownPackage = AppLaunchTargetPolicy.knownPackage(query);
+        String knownPackage = AppLaunchTargetPolicy.knownPackageForOpenTarget(query);
         if (!knownPackage.isEmpty()) {
             try {
                 if (context.getPackageManager()
