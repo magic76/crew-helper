@@ -31,6 +31,8 @@ public final class BackgroundDisplayExperimentActivity extends Activity {
     private Bitmap previewBitmap;
     private boolean busy;
     private int screenWidth, screenHeight;
+    private float pressX, pressY;
+    private long pressAt;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -77,18 +79,28 @@ public final class BackgroundDisplayExperimentActivity extends Activity {
         layout.addView(preview, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, dp(420)));
         preview.setOnTouchListener((view, event) -> {
-            if (event.getAction() != MotionEvent.ACTION_UP
-                    || previewBitmap == null || screenWidth <= 0 || screenHeight <= 0)
+            if (event.getAction() == MotionEvent.ACTION_DOWN) {
+                pressX = event.getX();
+                pressY = event.getY();
+                pressAt = event.getEventTime();
                 return true;
-            RectF bounds = new RectF(0, 0, previewBitmap.getWidth(), previewBitmap.getHeight());
-            Matrix matrix = preview.getImageMatrix();
-            matrix.mapRect(bounds);
-            bounds.offset(preview.getPaddingLeft(), preview.getPaddingTop());
-            if (!bounds.contains(event.getX(), event.getY())) return true;
-            int x = (int) ((event.getX() - bounds.left) / bounds.width() * screenWidth);
-            int y = (int) ((event.getY() - bounds.top) / bounds.height() * screenHeight);
+            }
+            if (event.getAction() != MotionEvent.ACTION_UP) return true;
+            int[] from = pointOnDisplay(pressX, pressY);
+            int[] to = pointOnDisplay(event.getX(), event.getY());
+            if (from == null || to == null) return true;
             try {
-                run("tap", new JSONObject().put("x", x).put("y", y));
+                boolean swipe = Math.hypot(event.getX() - pressX, event.getY() - pressY) > dp(24);
+                JSONObject gesture = new JSONObject();
+                if (swipe) {
+                    gesture.put("x1", from[0]).put("y1", from[1])
+                            .put("x2", to[0]).put("y2", to[1])
+                            .put("durationMs", (int) Math.max(100, Math.min(3000,
+                                    event.getEventTime() - pressAt)));
+                } else {
+                    gesture.put("x", to[0]).put("y", to[1]);
+                }
+                run(swipe ? "swipe" : "tap", gesture);
             } catch (Exception ignored) {}
             return true;
         });
@@ -96,6 +108,20 @@ public final class BackgroundDisplayExperimentActivity extends Activity {
         addButton(layout, "移到主螢幕（人工接管）", () -> run("front", null));
         addButton(layout, "關閉背景螢幕", () -> run("close", null));
         run("status", null);
+    }
+
+    private int[] pointOnDisplay(float x, float y) {
+        if (previewBitmap == null || screenWidth <= 0 || screenHeight <= 0) return null;
+        RectF bounds = new RectF(0, 0, previewBitmap.getWidth(), previewBitmap.getHeight());
+        Matrix matrix = preview.getImageMatrix();
+        matrix.mapRect(bounds);
+        bounds.offset(preview.getPaddingLeft(), preview.getPaddingTop());
+        if (!bounds.contains(x, y) || bounds.width() <= 0 || bounds.height() <= 0)
+            return null;
+        return new int[]{
+            Math.min(screenWidth - 1, (int) ((x - bounds.left) / bounds.width() * screenWidth)),
+            Math.min(screenHeight - 1, (int) ((y - bounds.top) / bounds.height() * screenHeight))
+        };
     }
 
     private int dp(int value) {
