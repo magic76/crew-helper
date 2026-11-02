@@ -59,7 +59,19 @@ start_helper() {
       com.crewpocket.helper.BackgroundDisplayShell \
       >/data/local/tmp/crew-bg-helper.log 2>&1 </dev/null &
   '
-  echo "Helper launch requested; check in the App UI and use logs if necessary."
+  # ADB may accept the shell command even when app_process fails immediately.
+  # Report the real helper PID instead of claiming that launch succeeded.
+  local ready=""
+  for attempt in 1 2 3 4 5; do
+    ready="$(read_pid)"
+    [[ -n "$ready" ]] && break
+    sleep 0.2
+  done
+  if [[ -z "$ready" ]]; then
+    echo "Shell helper did not start. Run: bash scripts/background_display_local.sh logs" >&2
+    return 5
+  fi
+  echo "Shell helper running at PID $ready. Verify protocol in Crew Helper's Background Display page."
 }
 
 restart_helper() {
@@ -73,8 +85,22 @@ restart_helper() {
   start_helper
 }
 
+doctor() {
+  local installed api wireless pids
+  check
+  wireless="$(adb_run shell settings get global adb_wifi_enabled 2>/dev/null | tr -d '\r' || true)"
+  pids="$(read_pid)"
+  echo "Wireless debugging: $wireless (1=on, 0=off, device-dependent)"
+  if [[ -z "$pids" ]]; then
+    echo "No Shell helper. Pair/authorize ADB first, then run: bash scripts/background_display_local.sh start"
+  else
+    echo "Shell helper found. If the APK was updated, run 'restart' only after ending active background tasks."
+  fi
+  echo "In the App: Settings > Advanced > Background Display POC > Check Helper"
+}
+
 usage() {
-  echo "Usage: bash scripts/background_display_local.sh check|start|restart|logs"
+  echo "Usage: bash scripts/background_display_local.sh check|doctor|start|restart|logs"
   echo "Set ANDROID_SERIAL if more than one ADB device is connected."
 }
 
@@ -82,6 +108,7 @@ main() {
   [[ $# -eq 1 ]] || { usage; exit 2; }
   case "$1" in
     check) require_device; check ;;
+    doctor) require_device; doctor ;;
     start) require_device; check; start_helper ;;
     restart) require_device; check; restart_helper ;;
     logs) require_device; adb_run shell tail -n 40 "$LOG" ;;
