@@ -1314,14 +1314,20 @@ public class CrewAccessibilityService extends AccessibilityService {
                     if (!queued) launchError[0] = "LAUNCH_MAIN_HANDLER_UNAVAILABLE";
                     else if (!finished) launchError[0] = "LAUNCH_TIMED_OUT";
                     boolean submitted = finished && launchSuccess[0];
-                    responseJson = "{\\"success\\":" + submitted
-                            + ",\\"action\\":\\"LAUNCH\\""
-                            + ",\\"package\\":\\"" + jsonEscape(resolvedPackage)
-                            + "\\",\\"label\\":\\"" + jsonEscape(resolvedLabel)
-                            + "\\",\\"error\\":\\"" + launchError[0]
-                            + "\\",\\"launchSubmitted\\":" + submitted
-                            + ",\\"runtimeMs\\":" +
-                                    (System.currentTimeMillis() - requestStartedAt) + "}";
+                    JSONObject launchResult = new JSONObject();
+                    try {
+                        launchResult.put("success", submitted);
+                        launchResult.put("action", "LAUNCH");
+                        launchResult.put("package", resolvedPackage);
+                        launchResult.put("label", resolvedLabel);
+                        launchResult.put("error", launchError[0]);
+                        launchResult.put("launchSubmitted", submitted);
+                        launchResult.put("runtimeMs",
+                                System.currentTimeMillis() - requestStartedAt);
+                        responseJson = launchResult.toString();
+                    } catch (Exception invalid) {
+                        responseJson = new JSONObject().toString();
+                    }
                 }
             } else if (path.startsWith("/apps")) {
                 String query = getJsonString(body, "query");
