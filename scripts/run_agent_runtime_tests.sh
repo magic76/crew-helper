@@ -44,6 +44,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/LiveInteractionCompletionPolicy.java" \
   "$SRC/LivePipelineDiagnostic.java" \
   "$SRC/LiveAppOpenRecoveryPolicy.java" \
+  "$SRC/AppLaunchTargetPolicy.java" \
   "$SRC/LiveModelSelection.java" \
   "$SRC/DualEnginePlanningPolicy.java" \
   "$SRC/DualEngineSupervisorPolicy.java" \
@@ -141,6 +142,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/LiveInteractionCompletionPolicyTest.java" \
   "$ROOT/tests/LivePipelineDiagnosticTest.java" \
   "$ROOT/tests/LiveAppOpenRecoveryPolicyTest.java" \
+  "$ROOT/tests/AppLaunchTargetPolicyTest.java" \
   "$ROOT/tests/LiveModelSelectionTest.java" \
   "$ROOT/tests/DualEnginePlanningPolicyTest.java" \
   "$ROOT/tests/DualEngineSupervisorPolicyTest.java" \
@@ -252,6 +254,7 @@ java -cp "$OUT" com.crewpocket.helper.LiveTurnOrderingPolicyTest
 java -cp "$OUT" com.crewpocket.helper.LiveInteractionCompletionPolicyTest
 java -cp "$OUT" com.crewpocket.helper.LivePipelineDiagnosticTest
 java -cp "$OUT" com.crewpocket.helper.LiveAppOpenRecoveryPolicyTest
+java -cp "$OUT" com.crewpocket.helper.AppLaunchTargetPolicyTest
 java -cp "$OUT" com.crewpocket.helper.LiveModelSelectionTest
 java -cp "$OUT" com.crewpocket.helper.DualEnginePlanningPolicyTest
 java -cp "$OUT" com.crewpocket.helper.DualEngineSupervisorPolicyTest
