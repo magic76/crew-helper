@@ -41,6 +41,41 @@ final class AppLaunchTargetPolicy {
         }
     }
 
+    /**
+     * A narrowly bounded fallback for segmented speech such as:
+     * "那 你 前 进 打 开 Google Maps". Do not extract from unrelated
+     * sentences, negations, compound goals, or multiple app names.
+     */
+    static String knownPackageForOpenTarget(String text) {
+        String exact = knownPackage(text);
+        if (!exact.isEmpty()) return exact;
+        if (text == null) return "";
+        String s = text.toLowerCase(Locale.ROOT).trim();
+        if (s.isEmpty()) return "";
+        for (String blocked : new String[]{"不要", "不准", "別", "别",
+                "don't", "do not", "not open", "然後", "然后",
+                "接著", "接着", "順便", "顺便", "搜尋", "搜索",
+                "導航", "导航", "播放", "payment", "delete"}) {
+            if (s.contains(blocked)) return "";
+        }
+        if (!s.matches("(?s).*(打\\s*[開开]|[開开]\\s*[啟启]|"
+                + "[啟启]\\s*[動动]|幫\\s*我\\s*[開开]|帮\\s*我\\s*[開开]|"
+                + "(?<![a-z])open(?![a-z])).*")) return "";
+        boolean maps = s.contains("google maps") || s.contains("google map")
+                || s.contains("地圖") || s.contains("地图");
+        boolean music = s.contains("apple music") || s.contains("蘋果音樂")
+                || s.contains("苹果音乐");
+        boolean chrome = s.contains("chrome");
+        boolean youtube = s.contains("youtube");
+        int named = (maps ? 1 : 0) + (music ? 1 : 0)
+                + (chrome ? 1 : 0) + (youtube ? 1 : 0);
+        if (named != 1) return "";
+        return maps ? "com.google.android.apps.maps"
+                : music ? "com.apple.android.music"
+                : chrome ? "com.android.chrome"
+                : "com.google.android.youtube";
+    }
+
     static boolean observedOnExpectedPackage(String expected, String observed) {
         return expected != null && !expected.isEmpty()
                 && expected.equals(observed);
