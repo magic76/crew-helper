@@ -122,3 +122,20 @@ virtual display privilege, task moving or third-party App compatibility.
 - Live handoff/close now includes expected display ID and package. The
   Shell helper refuses the request if its actual display changed between
   inspection and command, instead of moving/closing an unrelated session.
+
+### One-command local ADB utility
+
+From a Mac/Linux/Termux terminal with authorized ADB:
+
+```sh
+bash scripts/background_display_local.sh check
+bash scripts/background_display_local.sh start
+# When updating the APK or if the Helper reports old protocol:
+bash scripts/background_display_local.sh restart
+bash scripts/background_display_local.sh logs
+```
+
+`restart` explicitly kills **only the exact** `crew-bg-helper` PID, never
+a broad matching process name. Do not run `restart` during active
+background work. `logs` may contain device diagnostic details: review
+before sharing.
