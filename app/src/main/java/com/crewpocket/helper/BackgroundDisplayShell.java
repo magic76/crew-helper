@@ -1,5 +1,6 @@
 package com.crewpocket.helper;
 
+import android.annotation.SuppressLint;
 import android.app.ActivityManager;
 import android.app.Application;
 import android.app.Instrumentation;
@@ -328,6 +329,7 @@ public final class BackgroundDisplayShell {
         }
     }
 
+    @SuppressLint("BlockedPrivateApi")
     private static Context shellContext() throws Exception {
         Class<?> at = Class.forName("android.app.ActivityThread");
         Object thread = at.getMethod("currentActivityThread").invoke(null);
