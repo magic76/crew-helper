@@ -227,3 +227,45 @@ existing Gemini Live channel; only real-device testing can prove the
 model associates that image with the correct tool turn. Visual TAP is
 intentionally conservative and may refuse animated screens or incomplete
 Accessibility trees.
+
+
+## 2026-11-03 — foreground App launch reliability / Mika architecture comparison
+
+The existing ordinary `phone_action(OPEN_APP)` uses the foreground
+Accessibility bridge (`/launch`), **not** the opt-in background
+Shell virtual-display helper. This patch does not silently redirect normal
+foreground actions to the virtual display or grant Shell permissions.
+
+Improvements:
+- Exact known App targets (Google Maps/地圖, Apple Music, Chrome, YouTube,
+  explicit package IDs) are resolved by package instead of fuzzy localized
+  launcher labels; arbitrary App names still use the installed App catalog.
+- Android returns a distinct bounded launch result:
+  `APP_NOT_FOUND`, `LAUNCH_INTENT_NOT_FOUND`, `LAUNCH_SECURITY_DENIED`,
+  `LAUNCH_RUNTIME_EXCEPTION`, `LAUNCH_TIMED_OUT`, or
+  `LAUNCH_MAIN_HANDLER_UNAVAILABLE`. It no longer discards all exceptions.
+- A launch is verified only when Accessibility observes the **expected
+  package** in the foreground. Screen motion or a different App is insufficient.
+- The ADB local helper script verifies a running PID before reporting a
+  successful start. `bash scripts/background_display_local.sh doctor`
+  prints non-sensitive prerequisites and next steps.
+- The Background Display experiment page can open Android developer options
+  for user-authorized Wireless Debugging.
+
+Manual checks:
+1. Ask Live to open Google Maps, Apple Music, and one unfamiliar installed App.
+   Confirm the **package** in the returned foreground observation.
+2. Test an uninstalled App. Expect a meaningful failure, not blind repeated
+   taps or a false claim of success.
+3. Repeat with Accessibility disabled, a restricted App, or stale Helper.
+   Check failure codes. Do not count an arbitrary changed screen as success.
+4. Run `bash scripts/run_agent_runtime_tests.sh` and Android CI build.
+5. On a Galaxy S25 Ultra, test foreground and virtual paths **separately**
+   with physical-screen isolation.
+
+**Not yet implemented:** Mika's complete in-app Wireless ADB pairing and
+watchdog reattachment. Starting the Shell helper continues to require an
+authorized ADB session and an explicit user action. Automatically enabling
+Wireless Debugging or silently escalating a normal App's privileges would
+violate the existing safety boundary. Real-device acceptance is still
+required before claiming Mika-equivalent operation.
