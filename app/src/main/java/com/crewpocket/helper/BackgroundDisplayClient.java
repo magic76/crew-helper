@@ -16,6 +16,25 @@ final class BackgroundDisplayClient {
     static JSONObject request(JSONObject operation) {
         if (android.os.Build.VERSION.SDK_INT < 31) return error("ANDROID_12_REQUIRED");
         if (operation == null) return error("EMPTY_REQUEST");
+        String op = operation.optString("op", "");
+        if (!"status".equals(op)) {
+            JSONObject hello = new JSONObject();
+            try { hello.put("op", "status"); }
+            catch (Exception invalid) { return error("INVALID_PROTOCOL_REQUEST"); }
+            JSONObject check = send(hello);
+            if (!check.optBoolean("success", false)) return check;
+            if (check.optInt("protocolVersion", -1)
+                    != BackgroundDisplayShell.PROTOCOL_VERSION)
+                return error("HELPER_RESTART_REQUIRED");
+        }
+        JSONObject result = send(operation);
+        if (result.optInt("protocolVersion", -1)
+                != BackgroundDisplayShell.PROTOCOL_VERSION)
+            return error("HELPER_RESTART_REQUIRED");
+        return result;
+    }
+
+    private static JSONObject send(JSONObject operation) {
         LocalSocket socket = new LocalSocket();
         try {
             socket.connect(new LocalSocketAddress(BackgroundDisplayShell.SOCKET,

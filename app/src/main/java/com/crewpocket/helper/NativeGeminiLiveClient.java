@@ -3088,6 +3088,21 @@ final class NativeGeminiLiveClient {
             return;
         }
 
+        // Explicit virtual-display requests cannot accidentally execute the
+        // model's normal foreground phone_action. This applies even when the
+        // experimental flag is OFF: never substitute physical-screen control.
+        LiveTurnCoordinator.FinalizedTurn backgroundTurn = liveTurnCoordinator.latest();
+        if (backgroundTurn.generation == callIntentGeneration
+                && BackgroundPhonePolicy.blocksForegroundTool(
+                        requestedName, backgroundTurn.text)) {
+            try {
+                sendToolResponse(id, requestedName, runtimeBlocked(
+                        "BACKGROUND_TOOL_REQUIRED",
+                        "使用者要求操作背景虛擬螢幕，禁止改點實體主螢幕。請只使用背景專用工具；若未啟用或 Helper 不可用，直接說明未執行。"));
+            } catch (Exception ignored) {}
+            return;
+        }
+
         // Read-only diagnosis is handled after stale/finished generation gates
         // but before any semantic mutation or Android Runtime operation.
         if ("inspect_runtime_trace".equals(requestedName)

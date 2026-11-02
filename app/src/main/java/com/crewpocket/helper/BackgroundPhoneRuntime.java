@@ -71,6 +71,18 @@ final class BackgroundPhoneRuntime {
                     clearLease();
                     return rejected("DISPLAY_IDENTITY_MISMATCH");
                 }
+                if (!stillCurrent.getAsBoolean()) {
+                    // The user superseded this turn while Shell was starting
+                    // the App. Release only the display we just created.
+                    try {
+                        BackgroundDisplayClient.request(new JSONObject()
+                                .put("op", "close")
+                                .put("expectedDisplayId", leasedDisplayId)
+                                .put("expectedPackage", leasedPackage));
+                    } catch (Exception ignored) {}
+                    clearLease();
+                    return rejected("STALE_USER_INTENT");
+                }
                 openedGeneration = generation;
                 invalidateScreen();
                 return new JSONObject().put("success", true)
@@ -81,20 +93,23 @@ final class BackgroundPhoneRuntime {
                         .put("instruction", "App 已要求在背景開啟。先 INSPECT 確認畫面；不得把開啟回覆當成目標任務完成。");
             }
 
-            // A manual test may have opened the display. Re-lease only if
-            // the socket reports a single non-main display and same package.
+            // Live never adopts a display created manually or by a previous
+            // Live session. The model must own the exact OPEN_APP result.
             int id = state.optInt("displayId", -1);
             String pkg = state.optString("package", "");
             if (id <= 0 || pkg.isEmpty()) return rejected("INVALID_BACKGROUND_DISPLAY");
-            if (leasedDisplayId != id || !pkg.equals(leasedPackage)) {
-                leasedDisplayId = id;
-                leasedPackage = pkg;
-                invalidateScreen();
+            if (openedGeneration < 0 || leasedDisplayId != id
+                    || !pkg.equals(leasedPackage)) {
+                clearLease();
+                return rejected("BACKGROUND_SESSION_NOT_OWNED_BY_LIVE");
             }
             if ("INSPECT".equals(action)) {
                 Snapshot shot = takeSnapshot(leasedDisplayId, leasedPackage);
                 if (!shot.ok()) return rejected(shot.error);
-                if (!stillCurrent.getAsBoolean()) return rejected("STALE_USER_INTENT");
+                if (!stillCurrent.getAsBoolean()) {
+                    shot.close();
+                    return rejected("STALE_USER_INTENT");
+                }
                 screenToken = UUID.randomUUID().toString();
                 screenFingerprint = shot.ui.optString("fingerprint", "");
                 screenTokenAt = SystemClock.elapsedRealtime();
@@ -103,6 +118,7 @@ final class BackgroundPhoneRuntime {
                         .put("displayId", leasedDisplayId)
                         .put("package", leasedPackage)
                         .put("screenToken", screenToken)
+                        .put("screen_token", screenToken)
                         .put("taskState", "IN_PROGRESS")
                         .put("screen", shot.ui);
                 shot.close();
@@ -111,8 +127,11 @@ final class BackgroundPhoneRuntime {
             if ("HANDOFF".equals(action) || "CLOSE".equals(action)) {
                 if (!stillCurrent.getAsBoolean()) return rejected("STALE_USER_INTENT");
                 invalidateScreen();
-                JSONObject result = BackgroundDisplayClient.command(
-                        "HANDOFF".equals(action) ? "front" : "close");
+                JSONObject request = new JSONObject()
+                        .put("op", "HANDOFF".equals(action) ? "front" : "close")
+                        .put("expectedDisplayId", leasedDisplayId)
+                        .put("expectedPackage", leasedPackage);
+                JSONObject result = BackgroundDisplayClient.request(request);
                 if (!result.optBoolean("success", false)) return rejectHelper(result);
                 if ("HANDOFF".equals(action) && !result.optBoolean("handedOff", false))
                     return rejected("HANDOFF_NOT_CONFIRMED");
@@ -139,6 +158,9 @@ final class BackgroundPhoneRuntime {
                 return rejected("BACKGROUND_SCREEN_CHANGED");
             }
             final String beforeFingerprint = screenFingerprint;
+            // Every mutation attempt consumes the observation lease, including
+            // a failed or blocked tap. A subsequent attempt requires INSPECT.
+            invalidateScreen();
             AccessibilityNodeInfo element = findElement(shot.root, elementId, -1, 0);
             try {
                 if (element == null) return rejected("BACKGROUND_ELEMENT_NOT_FOUND");
@@ -180,7 +202,6 @@ final class BackgroundPhoneRuntime {
                     b.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value);
                     dispatched = element.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, b);
                 }
-                invalidateScreen(); // One-shot lease, even when dispatch failed.
                 if (!dispatched) return rejected("BACKGROUND_ACTION_NOT_DISPATCHED");
             } finally {
                 if (element != null) element.recycle();
@@ -195,8 +216,8 @@ final class BackgroundPhoneRuntime {
             return new JSONObject().put("success", true)
                     .put("background", true).put("action", action)
                     .put("taskState", "IN_PROGRESS")
-                    .put("stepResult", changed ? "STEP_OK" : "STEP_PENDING")
-                    .put("verificationStatus", changed ? "CHANGED" : "PENDING")
+                    .put("stepResult", "STEP_PENDING")
+                    .put("verificationStatus", changed ? "OBSERVED_CHANGE_UNVERIFIED" : "PENDING")
                     .put("nextRequirement", "INSPECT_BACKGROUND")
                     .put("instruction", "Android 已接收操作，不代表整個目標已完成；請重新 INSPECT 背景畫面驗證。");
         } catch (Throwable error) {

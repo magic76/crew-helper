@@ -49,6 +49,7 @@ import java.util.concurrent.TimeUnit;
  */
 public final class BackgroundDisplayShell {
     static final String SOCKET = "com.crewpocket.helper.background.v1";
+    static final int PROTOCOL_VERSION = 3;
     private static final String PACKAGE = "com.crewpocket.helper";
     private final Context context;
     private final int appUid;
@@ -59,6 +60,7 @@ public final class BackgroundDisplayShell {
     private Bitmap lastFrame;
     private int displayId = Display.INVALID_DISPLAY;
     private String openedPackage = "";
+    private boolean focusIsolated = false;
     private int width, height;
     private long frameAt;
 
@@ -110,6 +112,7 @@ public final class BackgroundDisplayShell {
                     response = fail("OPERATION_FAILED_" + failure.getClass().getSimpleName());
                 }
             }
+            response.put("protocolVersion", PROTOCOL_VERSION);
             out.write(response.toString());
             out.write('\n');
             out.flush();
@@ -120,6 +123,7 @@ public final class BackgroundDisplayShell {
         String op = req.optString("op", "");
         if ("status".equals(op)) return status();
         if ("close".equals(op)) {
+            if (!matchesExpectedDisplay(req)) return fail("DISPLAY_OWNERSHIP_CHANGED");
             closeDisplay();
             return ok().put("active", false);
         }
@@ -144,7 +148,10 @@ public final class BackgroundDisplayShell {
                     String.valueOf(x2), String.valueOf(y2), String.valueOf(ms))
                     ? ok() : fail("INPUT_REJECTED");
         }
-        if ("front".equals(op)) return handoff();
+        if ("front".equals(op)) {
+            if (!matchesExpectedDisplay(req)) return fail("DISPLAY_OWNERSHIP_CHANGED");
+            return handoff();
+        }
         return fail("UNKNOWN_OPERATION");
     }
 
@@ -169,9 +176,12 @@ public final class BackgroundDisplayShell {
         reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 3);
         reader.setOnImageAvailableListener(this::onFrame, new Handler(frameThread.getLooper()));
         try {
-            try { display = createDisplay(reader.getSurface(), dpi, true); }
-            catch (Exception trustedFailure) {
+            try {
+                display = createDisplay(reader.getSurface(), dpi, true);
+                focusIsolated = Build.VERSION.SDK_INT >= 34;
+            } catch (Exception trustedFailure) {
                 display = createDisplay(reader.getSurface(), dpi, false);
+                focusIsolated = false;
             }
         } catch (Exception createFailure) {
             closeDisplay(); // Failed displays must never strand an ImageReader.
@@ -186,6 +196,12 @@ public final class BackgroundDisplayShell {
                 "-n", launch.getComponent().flattenToShortString())) {
             closeDisplay();
             return fail("LAUNCH_FAILED");
+        }
+        // am's process exit code is NOT proof the App was launched on the
+        // virtual display. Never claim success without task+display evidence.
+        if (!awaitTaskLocation(pkg, -1, displayId)) {
+            closeDisplay();
+            return fail("LAUNCH_NOT_ON_VIRTUAL_DISPLAY");
         }
         openedPackage = pkg;
         return status();
@@ -273,6 +289,8 @@ public final class BackgroundDisplayShell {
                     String.valueOf(taskId), String.valueOf(Display.DEFAULT_DISPLAY));
         }
         if (!moved) return fail("HANDOFF_FAILED");
+        if (!awaitTaskLocation(openedPackage, taskId, Display.DEFAULT_DISPLAY))
+            return fail("HANDOFF_NOT_VERIFIED");
         closeDisplay();
         return ok().put("handedOff", true).put("taskId", taskId);
     }
@@ -295,12 +313,39 @@ public final class BackgroundDisplayShell {
         }
     }
 
+    private boolean awaitTaskLocation(String packageName, int knownTaskId, int targetDisplay) {
+        ActivityManager am = context.getSystemService(ActivityManager.class);
+        for (int attempt = 0; attempt < 15; attempt++) {
+            for (ActivityManager.RunningTaskInfo task : am.getRunningTasks(100)) {
+                if (knownTaskId >= 0 && task.id != knownTaskId) continue;
+                if (displayOf(task) != targetDisplay) continue;
+                if (knownTaskId < 0 && (task.topActivity == null
+                        || !packageName.equals(task.topActivity.getPackageName()))) continue;
+                return true;
+            }
+            SystemClock.sleep(120);
+        }
+        return false;
+    }
+
+    private boolean matchesExpectedDisplay(JSONObject request) {
+        if (request.has("expectedDisplayId")
+                && request.optInt("expectedDisplayId", Display.INVALID_DISPLAY) != displayId)
+            return false;
+        if (request.has("expectedPackage")
+                && !request.optString("expectedPackage", "").equals(openedPackage))
+            return false;
+        return true;
+    }
+
     private boolean valid(int x, int y) {
         return x >= 0 && y >= 0 && x < width && y < height;
     }
     private JSONObject status() throws Exception {
         return ok().put("active", display != null).put("displayId", displayId)
-                .put("width", width).put("height", height).put("package", openedPackage);
+                .put("width", width).put("height", height)
+                .put("focusIsolated", focusIsolated)
+                .put("package", openedPackage);
     }
     private static JSONObject ok() throws Exception {
         return new JSONObject().put("success", true);
@@ -318,6 +363,7 @@ public final class BackgroundDisplayShell {
             frameAt = 0;
         }
         displayId = Display.INVALID_DISPLAY;
+        focusIsolated = false;
         openedPackage = "";
     }
 
