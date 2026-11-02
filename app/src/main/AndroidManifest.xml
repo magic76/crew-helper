@@ -74,6 +74,15 @@
             android:name=".BackgroundDisplayExperimentActivity"
             android:exported="false" />
 
+        <receiver
+            android:name=".BackgroundDisplayEndpointReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="com.crewpocket.helper.BG_ENDPOINT_READY" />
+            </intent-filter>
+        </receiver>
+
         <activity
             android:name=".AgentInspectorActivity"
             android:screenOrientation="portrait"

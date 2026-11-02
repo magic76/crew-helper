@@ -1,13 +1,16 @@
 package com.crewpocket.helper;
 
-import android.net.LocalSocket;
-import android.net.LocalSocketAddress;
 import org.json.JSONObject;
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
+import java.util.Locale;
+import java.util.Iterator;
 
 /** Local-only, user-initiated POC. No Gemini Live tool uses this bridge. */
 final class BackgroundDisplayClient {
@@ -25,37 +28,101 @@ final class BackgroundDisplayClient {
             if (!check.optBoolean("success", false)) return check;
             if (check.optInt("protocolVersion", -1)
                     != BackgroundDisplayShell.PROTOCOL_VERSION)
-                return error("HELPER_RESTART_REQUIRED");
+                return protocolMismatch(check);
         }
         JSONObject result = send(operation);
+        if (!result.optBoolean("success", false)) return result;
         if (result.optInt("protocolVersion", -1)
                 != BackgroundDisplayShell.PROTOCOL_VERSION)
-            return error("HELPER_RESTART_REQUIRED");
+            return protocolMismatch(result);
         return result;
     }
 
-    private static JSONObject send(JSONObject operation) {
-        LocalSocket socket = new LocalSocket();
+    private static JSONObject protocolMismatch(JSONObject received) {
+        JSONObject mismatch = error("HELPER_RESTART_REQUIRED");
         try {
-            socket.connect(new LocalSocketAddress(BackgroundDisplayShell.SOCKET,
-                    LocalSocketAddress.Namespace.ABSTRACT));
+            mismatch.put("protocolVersion", received.optInt("protocolVersion", -1))
+                    .put("protocolFieldPresent", received.has("protocolVersion"))
+                    .put("expectedProtocolVersion", BackgroundDisplayShell.PROTOCOL_VERSION)
+                    .put("responseFields", fieldNames(received));
+        } catch (Exception ignored) {}
+        return mismatch;
+    }
+
+    private static String fieldNames(JSONObject object) {
+        StringBuilder names = new StringBuilder();
+        Iterator<String> fields = object.keys();
+        while (fields.hasNext()) {
+            if (names.length() > 0) names.append(',');
+            names.append(fields.next());
+        }
+        return names.toString();
+    }
+
+    private static JSONObject send(JSONObject operation) {
+        BackgroundDisplayEndpointReceiver.Endpoint endpoint =
+                BackgroundDisplayEndpointReceiver.getEndpoint();
+        if (endpoint == null)
+            return transportError("HELPER_NOT_CONNECTED", "ENDPOINT_DISCOVERY",
+                    "NONE", "ENDPOINT_NOT_READY");
+        Socket socket = null;
+        String stage = "TCP_SOCKET_CREATE";
+        try {
+            socket = new Socket();
+            stage = "TCP_CONNECT";
+            socket.connect(new InetSocketAddress(InetAddress.getByName("127.0.0.1"), endpoint.port), 3000);
+            stage = "TCP_TIMEOUT";
             socket.setSoTimeout(8000);
+            stage = "STREAM_SETUP";
             BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(
                     socket.getOutputStream(), StandardCharsets.UTF_8));
             BufferedReader reader = new BufferedReader(new InputStreamReader(
                     socket.getInputStream(), StandardCharsets.UTF_8));
-            writer.write(operation.toString());
+            stage = "WRITE_REQUEST";
+            JSONObject authenticatedOperation = new JSONObject(operation.toString());
+            authenticatedOperation.put("_session", endpoint.token);
+            writer.write(authenticatedOperation.toString());
             writer.write('\n');
             writer.flush();
+            stage = "READ_RESPONSE";
             String response = reader.readLine();
-            if (response == null || response.length() > 2 * 1024 * 1024)
-                return error("INVALID_HELPER_RESPONSE");
+            if (response == null)
+                return transportError("INVALID_HELPER_RESPONSE", "READ_EOF", "NONE", "NONE");
+            if (response.length() > 2 * 1024 * 1024)
+                return transportError("INVALID_HELPER_RESPONSE", "RESPONSE_TOO_LARGE", "NONE", "NONE");
+            stage = "PARSE_RESPONSE";
             return new JSONObject(response);
         } catch (Exception failure) {
-            return error("HELPER_NOT_CONNECTED");
+            return transportError("HELPER_NOT_CONNECTED", stage,
+                    failure.getClass().getSimpleName(), transportCode(failure));
         } finally {
-            try { socket.close(); } catch (Exception ignored) {}
+            if (socket != null) try { socket.close(); } catch (Exception ignored) {}
         }
+    }
+
+    private static String transportCode(Exception failure) {
+        String message = failure.getMessage();
+        if (message == null) return "UNKNOWN";
+        String normalized = message.toLowerCase(Locale.ROOT);
+        if (normalized.contains("eacces") || normalized.contains("permission denied")) return "EACCES";
+        if (normalized.contains("econnrefused") || normalized.contains("connection refused")) return "ECONNREFUSED";
+        if (normalized.contains("enoent") || normalized.contains("no such file")) return "ENOENT";
+        if (normalized.contains("etimedout") || normalized.contains("timed out")) return "ETIMEDOUT";
+        if (normalized.contains("econnreset") || normalized.contains("connection reset")) return "ECONNRESET";
+        if (normalized.contains("eaddrinuse") || normalized.contains("address already in use")) return "EADDRINUSE";
+        if (normalized.contains("eafnosupport") || normalized.contains("address family not supported")) return "EAFNOSUPPORT";
+        return "UNKNOWN";
+    }
+
+    private static JSONObject transportError(String code, String stage, String exceptionType,
+                                             String transportCode) {
+        JSONObject result = error(code);
+        try {
+            result.put("transportStage", stage)
+                    .put("transportException", exceptionType)
+                    .put("transportCode", transportCode);
+        } catch (Exception ignored) {}
+        return result;
     }
 
     static JSONObject command(String op) {

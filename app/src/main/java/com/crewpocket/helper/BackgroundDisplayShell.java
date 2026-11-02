@@ -5,6 +5,7 @@ import android.app.ActivityManager;
 import android.app.Application;
 import android.app.Instrumentation;
 import android.content.AttributionSource;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.ContextWrapper;
 import android.content.Intent;
@@ -14,8 +15,6 @@ import android.graphics.PixelFormat;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
 import android.media.ImageReader;
-import android.net.LocalServerSocket;
-import android.net.LocalSocket;
 import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -32,9 +31,15 @@ import java.io.ByteArrayOutputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.io.BufferedWriter;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
+import java.security.MessageDigest;
+import java.security.SecureRandom;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -48,11 +53,10 @@ import java.util.concurrent.TimeUnit;
  * The protocol is explicitly NOT connected to Gemini Live production tools.
  */
 public final class BackgroundDisplayShell {
-    static final String SOCKET = "com.crewpocket.helper.background.v1";
     static final int PROTOCOL_VERSION = 3;
     private static final String PACKAGE = "com.crewpocket.helper";
     private final Context context;
-    private final int appUid;
+    private final String authToken;
     private final HandlerThread frameThread = new HandlerThread("crew-bg-frame");
     private final Object frameLock = new Object();
     private ImageReader reader;
@@ -64,9 +68,9 @@ public final class BackgroundDisplayShell {
     private int width, height;
     private long frameAt;
 
-    private BackgroundDisplayShell(Context context, int uid) {
+    private BackgroundDisplayShell(Context context, String authToken) {
         this.context = context;
-        this.appUid = uid;
+        this.authToken = authToken;
         frameThread.start();
     }
 
@@ -75,17 +79,16 @@ public final class BackgroundDisplayShell {
             throw new SecurityException("adb shell UID 2000 and Android 12+ required");
         Looper.prepareMainLooper();
         Context ctx = shellContext();
-        int uid = ctx.getPackageManager().getApplicationInfo(PACKAGE, 0).uid;
-        BackgroundDisplayShell helper = new BackgroundDisplayShell(ctx, uid);
-        try (LocalServerSocket server = new LocalServerSocket(SOCKET)) {
+        ctx.getPackageManager().getApplicationInfo(PACKAGE, 0);
+        String token = newSessionToken();
+        BackgroundDisplayShell helper = new BackgroundDisplayShell(ctx, token);
+        try (ServerSocket server = new ServerSocket()) {
+            server.setReuseAddress(false);
+            server.bind(new InetSocketAddress(InetAddress.getByName("127.0.0.1"), 0), 4);
+            announceEndpoint(ctx, server.getLocalPort(), token);
             for (;;) {
-                LocalSocket client = server.accept();
+                Socket client = server.accept();
                 try {
-                    if (client.getPeerCredentials() == null
-                            || client.getPeerCredentials().getUid() != helper.appUid) {
-                        client.close();
-                        continue;
-                    }
                     helper.handle(client);
                 } catch (Exception error) {
                     try { client.close(); } catch (Exception ignored) {}
@@ -97,9 +100,34 @@ public final class BackgroundDisplayShell {
         }
     }
 
-    private void handle(LocalSocket socket) throws Exception {
+    private static String newSessionToken() {
+        byte[] bytes = new byte[32];
+        new SecureRandom().nextBytes(bytes);
+        return Base64.encodeToString(bytes, Base64.URL_SAFE | Base64.NO_WRAP | Base64.NO_PADDING);
+    }
+
+    private static void announceEndpoint(Context context, int port, String token) {
+        Intent ready = new Intent(BackgroundDisplayEndpointReceiver.ACTION);
+        ready.setComponent(new ComponentName(PACKAGE,
+                PACKAGE + ".BackgroundDisplayEndpointReceiver"));
+        ready.putExtra(BackgroundDisplayEndpointReceiver.EXTRA_PORT, port);
+        ready.putExtra(BackgroundDisplayEndpointReceiver.EXTRA_TOKEN, token);
+        try {
+            context.sendBroadcast(ready);
+        } catch (Exception failure) {
+            System.err.println("endpoint_announce_failed=" + failure.getClass().getSimpleName());
+        }
+    }
+
+    private boolean validSession(String candidate) {
+        if (candidate == null) return false;
+        return MessageDigest.isEqual(authToken.getBytes(StandardCharsets.US_ASCII),
+                candidate.getBytes(StandardCharsets.US_ASCII));
+    }
+
+    private void handle(Socket socket) throws Exception {
         socket.setSoTimeout(8000);
-        try (LocalSocket client = socket;
+        try (Socket client = socket;
              BufferedReader in = new BufferedReader(new InputStreamReader(client.getInputStream(), StandardCharsets.UTF_8));
              BufferedWriter out = new BufferedWriter(new OutputStreamWriter(client.getOutputStream(), StandardCharsets.UTF_8))) {
             String line = in.readLine();
@@ -107,7 +135,15 @@ public final class BackgroundDisplayShell {
             if (line == null || line.length() > 8192) {
                 response = fail("INVALID_REQUEST");
             } else {
-                try { response = execute(new JSONObject(line)); }
+                try {
+                    JSONObject request = new JSONObject(line);
+                    if (!validSession(request.optString("_session", null))) {
+                        response = fail("UNAUTHORIZED");
+                    } else {
+                        request.remove("_session");
+                        response = execute(request);
+                    }
+                }
                 catch (Throwable failure) {
                     response = fail("OPERATION_FAILED_" + failure.getClass().getSimpleName());
                 }

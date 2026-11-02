@@ -168,11 +168,17 @@ public final class BackgroundDisplayExperimentActivity extends Activity {
             final JSONObject result = reply;
             runOnUiThread(() -> {
                 busy = false;
-                lastDiagnostics = "Crew Helper BG 1.8.116"
+                lastDiagnostics = "Crew Helper BG " + appVersionName()
                         + " | op=" + op
                         + " | success=" + result.optBoolean("success", false)
                         + " | error=" + result.optString("error", "NONE")
                         + " | protocol=" + result.optInt("protocolVersion", -1)
+                        + " | protocolFieldPresent=" + result.optBoolean("protocolFieldPresent", result.has("protocolVersion"))
+                        + " | expectedProtocol=" + result.optInt("expectedProtocolVersion", BackgroundDisplayShell.PROTOCOL_VERSION)
+                        + " | transportStage=" + result.optString("transportStage", "NONE")
+                        + " | transportException=" + result.optString("transportException", "NONE")
+                        + " | transportCode=" + result.optString("transportCode", "NONE")
+                        + " | responseFields=" + result.optString("responseFields", "NONE")
                         + " | active=" + result.optBoolean("active", false)
                         + " | displayId=" + result.optInt("displayId", -1)
                         + " | focusIsolated=" + result.optBoolean("focusIsolated", false);
@@ -183,9 +189,20 @@ public final class BackgroundDisplayExperimentActivity extends Activity {
                                     ? " · 獨立焦點" : " · 共用焦點／未確認") : ""));
                     if ("front".equals(op) || "close".equals(op)) clearFrame();
                 } else {
-                    status.setText("操作失敗：" + result.optString("error", "UNKNOWN")
-                            + ("HELPER_RESTART_REQUIRED".equals(result.optString("error", ""))
-                                    ? "（請重啟 ADB Helper）" : ""));
+                    String error = result.optString("error", "UNKNOWN");
+                    String transportStage = result.optString("transportStage", "NONE");
+                    String transportException = result.optString("transportException", "NONE");
+                    String transportCode = result.optString("transportCode", "NONE");
+                    String responseFields = result.optString("responseFields", "NONE");
+                    String detail = "NONE".equals(transportStage) ? ""
+                            : " · " + transportStage + "/" + transportException
+                                    + "/" + transportCode;
+                    if ("NONE".equals(transportStage) && !"NONE".equals(responseFields))
+                        detail = " · fields=" + responseFields;
+                    status.setText("操作失敗：" + error
+                            + ("HELPER_RESTART_REQUIRED".equals(error)
+                                    ? "（請重啟 ADB Helper）" : "")
+                            + detail);
                 }
             });
         });
@@ -219,6 +236,15 @@ public final class BackgroundDisplayExperimentActivity extends Activity {
                 status.setText("背景畫面 " + screenWidth + " × " + screenHeight);
             });
         });
+    }
+
+    private String appVersionName() {
+        try {
+            String value = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+            return value == null ? "unknown" : value;
+        } catch (Exception ignored) {
+            return "unknown";
+        }
     }
 
     private void clearFrame() {
