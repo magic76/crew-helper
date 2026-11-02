@@ -44,3 +44,23 @@ then run adb shell kill PID (substitute the returned numeric PID).
 On a real Galaxy S25 Ultra, compare foreground vs. virtual behavior for
 Google Maps and Apple Music, especially focus, task continuity and failures.
 The production Live/Accessibility path stays unchanged until real-device evidence.
+
+## Stage 2: Gemini Live semantic virtual-display experiment
+
+Opt-in at **Crew Helper > Settings > Advanced > Background Display POC >
+啟用 Gemini Live 背景操作**. Default is OFF; restart Live to apply the tool
+catalog. Start ADB Shell helper first. On a new user turn, explicitly say
+"背景" / "虛擬螢幕" so the tool cannot silently redirect front-screen actions.
+
+Voice test:「在背景螢幕打開 Apple Music，看看畫面。」
+The model uses background_phone(OPEN_APP) then INSPECT. INSPECT reads only
+windows on the created virtual display, with existing SemanticScreenState
+and SensitiveDataGuard redaction. TAP/SCROLL/TYPE require a one-shot token,
+an exact accessible element ID, and the same screen fingerprint. There is
+no model-controlled coordinate fallback or accidental display-0 redirect.
+Ask「把背景的 App 交給我看」for HANDOFF, or「關閉背景螢幕」for CLOSE.
+
+This remains experimental: dispatch and a changed fingerprint do NOT
+prove the user's full goal. It requires Galaxy S25 Ultra real-device
+testing and is not yet the production AgentRuntimeV2 verifier. Use only
+non-sensitive Apps/screens; no payment, messaging commits or credentials.

@@ -10,6 +10,7 @@ import android.os.Bundle;
 import android.util.Base64;
 import android.view.MotionEvent;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -50,10 +51,17 @@ public final class BackgroundDisplayExperimentActivity extends Activity {
         layout.addView(title);
 
         TextView info = new TextView(this);
-        info.setText("需先透過 ADB 啟動 Shell Helper。此頁僅供手動測試，Gemini Live 操作維持原樣。");
+        info.setText("需先透過 ADB 啟動 Shell Helper。可選擇開啟 Gemini Live 背景操作實驗，前景工具維持原樣。");
         info.setTextSize(14);
         info.setPadding(0, dp(12), 0, dp(12));
         layout.addView(info);
+
+        CheckBox liveMode = new CheckBox(this);
+        liveMode.setText("啟用 Gemini Live 背景操作（需重新開始 Live）");
+        liveMode.setChecked(AppConfig.isBackgroundLiveEnabled(this));
+        liveMode.setOnCheckedChangeListener((button, enabled) ->
+                AppConfig.setBackgroundLiveEnabled(this, enabled));
+        layout.addView(liveMode);
 
         status = new TextView(this);
         status.setText("尚未檢查 Helper");

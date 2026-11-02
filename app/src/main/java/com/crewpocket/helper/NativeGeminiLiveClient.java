@@ -68,6 +68,7 @@ final class NativeGeminiLiveClient {
     private volatile long taskRecipeCandidateGeneration = -1L;
     private volatile String taskRecipeCandidateId = "";
     private final PhoneRuntimeExecutor phoneRuntimeExecutor;
+    private final BackgroundPhoneRuntime backgroundPhoneRuntime;
     private final CandidateArbitrationExperimentController
             candidateArbitrationController;
     private final RuntimeToolExecutor runtimeToolExecutor;
@@ -185,6 +186,7 @@ final class NativeGeminiLiveClient {
     }
     NativeGeminiLiveClient(Context context, String apiKey, String serverUrl, String voiceName, String noiseMode, int noiseSuppression, String liveTone, String customPrompt, int interruptionSensitivity, String audioOutput, Listener listener) {
         this.appContext = context == null ? null : context.getApplicationContext();
+        this.backgroundPhoneRuntime = new BackgroundPhoneRuntime(this.appContext);
         this.liveModel = LiveModelSelection.resolve(
                 AppConfig.getLiveModelId(this.appContext));
         this.backgroundThinkingPlanner = new BackgroundThinkingPlanner(
@@ -2697,7 +2699,8 @@ final class NativeGeminiLiveClient {
                         deckRuntimeController.isSessionMode(),
                         deckRuntimeController.isCreateStartup(),
                         deckRuntimeController.isPresentStartup(),
-                        deckRuntimeController.hasWorkspaceStartup());
+                        deckRuntimeController.hasWorkspaceStartup(),
+                        AppConfig.isBackgroundLiveEnabled(appContext));
         CrewDebugTrace.count("TOOL_CATALOG", userIntentGeneration,
                 "NONE", modelTools.length());
         boolean phoneToolDeclared = false;
@@ -2922,6 +2925,51 @@ final class NativeGeminiLiveClient {
         return out;
     }
 
+    /**
+     * Generation checked at dispatch and immediately before each sensitive
+     * display operation. Background never feeds the foreground Runtime path.
+     */
+    private void executeBackgroundLiveTool(String id, JSONObject args, long generation) {
+        AgentTaskRecord task = beginAgentStep("background_phone", args);
+        if (task == null || task.cancelled || task.finished || !isCurrentUserIntent(generation)) {
+            try { sendToolResponse(id, "background_phone",
+                    runtimeBlocked("STALE_BACKGROUND_INTENT",
+                            "背景操作已取消；不操作實體螢幕。")); }
+            catch (Exception ignored) {}
+            return;
+        }
+        JSONObject result = backgroundPhoneRuntime.execute(
+                args, liveTurnCoordinator.latest().text, generation,
+                () -> isCurrentUserIntent(generation)
+                        && !task.cancelled && !task.finished);
+        if (task.cancelled || task.finished || !isCurrentUserIntent(generation)) {
+            try { sendFinishedIntentToolResponse(id, "background_phone"); }
+            catch (Exception ignored) {}
+            return;
+        }
+        try {
+            task.lastToolName = "background_phone";
+            task.lastTaskState = result.optString("taskState", "");
+            task.lastCompletionEvidence = result.optString("completionEvidence", "");
+            task.addStep("background_phone", result);
+            sendToolResponse(id, "background_phone", result);
+            if ("DONE".equals(result.optString("taskState", ""))
+                    && result.optBoolean("success", false)) {
+                finishAgentTask(task, "背景任務已移交或結束", "");
+            } else {
+                synchronized (agentTaskCoordinator.monitor()) {
+                    if (!task.cancelled && !task.finished) {
+                        task.awaitingModel = true;
+                        task.watchdogPrompted = false;
+                    }
+                }
+                agentResponseCoordinator.scheduleWatchdog(task);
+            }
+        } catch (Exception failure) {
+            Log.w(TAG, "Background Live tool response failed", failure);
+        }
+    }
+
     private void executeSingleTool(final JSONObject call) {
         LivePipelineDiagnostic.onExecution();
         final String id = call.optString("id", "tool_" + System.nanoTime());
@@ -3035,6 +3083,11 @@ final class NativeGeminiLiveClient {
             sendFinishedIntentToolResponse(id, requestedName);
             return;
         }
+        if ("background_phone".equals(requestedName)) {
+            executeBackgroundLiveTool(id, requestedArgs, callIntentGeneration);
+            return;
+        }
+
         // Read-only diagnosis is handled after stale/finished generation gates
         // but before any semantic mutation or Android Runtime operation.
         if ("inspect_runtime_trace".equals(requestedName)

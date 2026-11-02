@@ -24,6 +24,12 @@ final class LiveToolCatalog {
             boolean createMode,
             boolean presentMode,
             boolean workspaceMode) throws Exception {
+        return build(deckMode, createMode, presentMode, workspaceMode, false);
+    }
+
+    static JSONArray build(boolean deckMode, boolean createMode,
+            boolean presentMode, boolean workspaceMode,
+            boolean backgroundEnabled) throws Exception {
         JSONArray tools = new JSONArray();
         JSONObject phoneActionProperties = new JSONObject()
                 .put("action", new JSONObject().put("type", "STRING")
@@ -61,6 +67,24 @@ final class LiveToolCatalog {
                 .put("parameters", new JSONObject().put("type", "OBJECT")
                         .put("properties", phoneActionProperties)
                         .put("required", new JSONArray().put("action"))));
+        if (backgroundEnabled) {
+            JSONObject bg = new JSONObject()
+                .put("action", new JSONObject().put("type", "STRING")
+                    .put("enum", new JSONArray().put("OPEN_APP").put("INSPECT")
+                        .put("TAP").put("SCROLL").put("TYPE")
+                        .put("HANDOFF").put("CLOSE").put("STATUS")))
+                .put("app", new JSONObject().put("type", "STRING"))
+                .put("screen_token", new JSONObject().put("type", "STRING"))
+                .put("element_id", new JSONObject().put("type", "STRING"))
+                .put("direction", new JSONObject().put("type", "STRING")
+                    .put("enum", new JSONArray().put("forward").put("backward")))
+                .put("text", new JSONObject().put("type", "STRING"));
+            tools.put(new JSONObject().put("name", "background_phone")
+                .put("description", "EXPERIMENTAL. Use ONLY for an explicit user's background/virtual screen request; ordinary phone_action always controls the foreground. OPEN_APP launches one App in background, INSPECT returns semantic elements and a screenToken, TAP/SCROLL/TYPE require the exact element_id and screen_token from the latest INSPECT. After mutations INSPECT again. Never guess coordinates, submit/send/pay/delete or touch sensitive fields. HANDOFF requires an explicit user request to show the App in foreground, CLOSE requires explicit close request. Never fall back to physical screen after error.")
+                .put("parameters", new JSONObject().put("type", "OBJECT")
+                    .put("properties", bg)
+                    .put("required", new JSONArray().put("action"))));
+        }
         // Read-only and generation-scoped: no ADB, screenshot or free-form logs.
         tools.put(new JSONObject().put("name", "inspect_runtime_trace")
                 .put("description", "When a phone tool fails or a user requests debugging, read a small sanitized summary for the CURRENT finalized user intent only. Includes bounded event types, failure codes and original tool action, never transcripts, raw arguments, keys or screen contents. Do not call on ordinary success."));
@@ -384,7 +408,8 @@ final class LiveToolCatalog {
     }
 
     private static boolean isNormalPhoneModelTool(String name) {
-        return "phone_action".equals(name)
+        return "background_phone".equals(name)
+                || "phone_action".equals(name)
                 || "inspect_ui".equals(name)
                 || "inspect_runtime_trace".equals(name)
                 || "get_recovery_options".equals(name)

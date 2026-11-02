@@ -105,6 +105,7 @@ final class BackgroundPhoneRuntime {
                         .put("screenToken", screenToken)
                         .put("taskState", "IN_PROGRESS")
                         .put("screen", shot.ui);
+                shot.close();
                 return result;
             }
             if ("HANDOFF".equals(action) || "CLOSE".equals(action)) {
@@ -133,9 +134,11 @@ final class BackgroundPhoneRuntime {
             Snapshot shot = takeSnapshot(leasedDisplayId, leasedPackage);
             if (!shot.ok()) return rejected(shot.error);
             if (!screenFingerprint.equals(shot.ui.optString("fingerprint", ""))) {
+                shot.close();
                 invalidateScreen();
                 return rejected("BACKGROUND_SCREEN_CHANGED");
             }
+            final String beforeFingerprint = screenFingerprint;
             AccessibilityNodeInfo element = findElement(shot.root, elementId, -1, 0);
             try {
                 if (element == null) return rejected("BACKGROUND_ELEMENT_NOT_FOUND");
@@ -182,7 +185,7 @@ final class BackgroundPhoneRuntime {
             // App state change is evidence, not proof of the entire user goal.
             SystemClock.sleep(180);
             Snapshot after = takeSnapshot(leasedDisplayId, leasedPackage);
-            boolean changed = after.ok() && !screenFingerprint.equals(
+            boolean changed = after.ok() && !beforeFingerprint.equals(
                     after.ui.optString("fingerprint", ""));
             if (after.root != null) after.close();
             return new JSONObject().put("success", true)
