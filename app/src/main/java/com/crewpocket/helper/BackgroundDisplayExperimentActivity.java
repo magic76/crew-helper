@@ -58,11 +58,20 @@ public final class BackgroundDisplayExperimentActivity extends Activity {
         layout.addView(info);
 
         CheckBox liveMode = new CheckBox(this);
-        liveMode.setText("啟用 Gemini Live 背景操作（需重新開始 Live）");
+        liveMode.setText("啟用 Gemini Live 背景操作（含背景畫面辨識）");
         liveMode.setChecked(AppConfig.isBackgroundLiveEnabled(this));
         liveMode.setOnCheckedChangeListener((button, enabled) ->
                 AppConfig.setBackgroundLiveEnabled(this, enabled));
         layout.addView(liveMode);
+
+        TextView visionPrivacy = new TextView(this);
+        visionPrivacy.setText("啟用後，當背景語意辨識不足或你要求查看畫面時，"
+                + "背景螢幕影像可能送往 Gemini 分析。"
+                + "請勿在登入、付款、驗證碼或其他私密畫面測試；背景影像不會另存成檔案。"
+                + "變更設定後需重新開始 Live。");
+        visionPrivacy.setTextSize(12);
+        visionPrivacy.setPadding(0, dp(4), 0, dp(14));
+        layout.addView(visionPrivacy);
 
         status = new TextView(this);
         status.setText("尚未檢查 Helper");
