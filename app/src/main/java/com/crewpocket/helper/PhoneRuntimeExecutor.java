@@ -190,6 +190,24 @@ final class PhoneRuntimeExecutor {
                     reply, true, "launch:" + explicitPkg);
         }
 
+        // Exact known App targets use the package path, avoiding locale-dependent
+        // launcher labels. This never guesses from a sentence or a partial name.
+        String knownPackage = AppLaunchTargetPolicy.knownPackage(app);
+        if (!knownPackage.isEmpty()) {
+            JSONObject reply = post("/launch",
+                    new JSONObject().put("package", knownPackage));
+            if (reply.optBoolean("success", false)) {
+                lastCandidateApps.clear();
+                reply.put("app", app)
+                        .put("message", "Android 已接受啟動要求，接著核查前景畫面。");
+            } else {
+                String instruction = AppLaunchTargetPolicy.failureInstruction(
+                        reply.optString("error", ""));
+                if (!instruction.isEmpty()) reply.put("instruction", instruction);
+            }
+            return new MutationResult(reply, true, "launch:" + knownPackage);
+        }
+
         int selectedIndex = parseOrdinalIndex(app);
         if (selectedIndex < 0 && explicitIndex > 0) {
             selectedIndex = explicitIndex - 1;
@@ -264,6 +282,11 @@ final class PhoneRuntimeExecutor {
                     .put("error", prompt.toString().trim())
                     .put("instruction",
                             "只詢問使用者要開第幾個；回答後再呼叫 phone_action(action=OPEN_APP,target=使用者選的序號)。");
+        }
+        if (!reply.optBoolean("success", false)) {
+            String instruction = AppLaunchTargetPolicy.failureInstruction(
+                    reply.optString("error", ""));
+            if (!instruction.isEmpty()) reply.put("instruction", instruction);
         }
         return new MutationResult(reply, false, "");
     }
