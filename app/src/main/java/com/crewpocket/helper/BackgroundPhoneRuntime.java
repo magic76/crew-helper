@@ -115,8 +115,11 @@ final class BackgroundPhoneRuntime {
             if ("HANDOFF".equals(action) || "CLOSE".equals(action)) {
                 if (!stillCurrent.getAsBoolean()) return rejected("STALE_USER_INTENT");
                 invalidateScreen();
-                JSONObject result = BackgroundDisplayClient.command(
-                        "HANDOFF".equals(action) ? "front" : "close");
+                JSONObject request = new JSONObject()
+                        .put("op", "HANDOFF".equals(action) ? "front" : "close")
+                        .put("expectedDisplayId", leasedDisplayId)
+                        .put("expectedPackage", leasedPackage);
+                JSONObject result = BackgroundDisplayClient.request(request);
                 if (!result.optBoolean("success", false)) return rejectHelper(result);
                 if ("HANDOFF".equals(action) && !result.optBoolean("handedOff", false))
                     return rejected("HANDOFF_NOT_CONFIRMED");

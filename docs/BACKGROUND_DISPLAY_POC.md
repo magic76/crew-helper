@@ -118,3 +118,7 @@ Avoid broad `pkill -f` matching; it can kill unrelated processes.
 
 These are acceptance tests to perform locally; GitHub CI cannot test One UI,
 virtual display privilege, task moving or third-party App compatibility.
+
+- Live handoff/close now includes expected display ID and package. The
+  Shell helper refuses the request if its actual display changed between
+  inspection and command, instead of moving/closing an unrelated session.

@@ -123,6 +123,7 @@ public final class BackgroundDisplayShell {
         String op = req.optString("op", "");
         if ("status".equals(op)) return status();
         if ("close".equals(op)) {
+            if (!matchesExpectedDisplay(req)) return fail("DISPLAY_OWNERSHIP_CHANGED");
             closeDisplay();
             return ok().put("active", false);
         }
@@ -147,7 +148,10 @@ public final class BackgroundDisplayShell {
                     String.valueOf(x2), String.valueOf(y2), String.valueOf(ms))
                     ? ok() : fail("INPUT_REJECTED");
         }
-        if ("front".equals(op)) return handoff();
+        if ("front".equals(op)) {
+            if (!matchesExpectedDisplay(req)) return fail("DISPLAY_OWNERSHIP_CHANGED");
+            return handoff();
+        }
         return fail("UNKNOWN_OPERATION");
     }
 
@@ -322,6 +326,16 @@ public final class BackgroundDisplayShell {
             SystemClock.sleep(120);
         }
         return false;
+    }
+
+    private boolean matchesExpectedDisplay(JSONObject request) {
+        if (request.has("expectedDisplayId")
+                && request.optInt("expectedDisplayId", Display.INVALID_DISPLAY) != displayId)
+            return false;
+        if (request.has("expectedPackage")
+                && !request.optString("expectedPackage", "").equals(openedPackage))
+            return false;
+        return true;
     }
 
     private boolean valid(int x, int y) {
