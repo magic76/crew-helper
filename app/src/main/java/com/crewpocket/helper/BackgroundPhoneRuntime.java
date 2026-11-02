@@ -336,10 +336,21 @@ final class BackgroundPhoneRuntime {
     private static JSONObject rejected(String code) {
         JSONObject out = new JSONObject();
         try {
+            boolean explicitBackgroundRequired =
+                    "BACKGROUND_REQUEST_REQUIRED".equals(code);
             out.put("success", false).put("blockedByRuntime", true)
                     .put("error", code).put("taskState", "NEED_USER")
-                    .put("nextRequirement", "ASK_USER_OR_INSPECT")
-                    .put("instruction", "背景操作已停止於安全邊界；不可改操作主螢幕，也不可猜座標。");
+                    .put("nextRequirement", explicitBackgroundRequired
+                            ? "ASK_USER_FOR_EXPLICIT_BACKGROUND_REQUEST"
+                            : "ASK_USER_OR_INSPECT")
+                    .put("instruction", explicitBackgroundRequired
+                            ? "Crew Helper Runtime 的明確背景意圖檢查未通過；這不是 Android 系統安全設定、ADB Helper 連線或 App 權限錯誤。Runtime 收到的最終請求文字未符合明確背景操作條件。不得聲稱 Android 阻擋，也不得改操作前景畫面。若使用者仍要執行，請其明確要求在虛擬螢幕中操作，再重新開始。"
+                            : "背景操作已停止於安全邊界；不可改操作主螢幕，也不可猜座標。");
+            if (explicitBackgroundRequired) {
+                out.put("errorSource", "CREW_HELPER_BACKGROUND_INTENT_POLICY")
+                        .put("authorizationCheck", "EXPLICIT_BACKGROUND_REQUEST")
+                        .put("authorizationResult", "NOT_RECOGNIZED");
+            }
         } catch (Exception ignored) {}
         return out;
     }
