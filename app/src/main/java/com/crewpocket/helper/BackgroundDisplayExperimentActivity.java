@@ -84,6 +84,17 @@ public final class BackgroundDisplayExperimentActivity extends Activity {
         packageField.setText("com.apple.android.music");
         layout.addView(packageField);
         addButton(layout, "檢查 Helper", () -> run("status", null));
+        // The app cannot grant itself shell UID or silently turn on ADB.
+        // Guide users to Android's own settings; pairing stays user-authorized.
+        addButton(layout, "開啟開發人員選項（無線偵錯）", () -> {
+            try {
+                startActivity(new android.content.Intent(
+                        android.provider.Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS));
+            } catch (Exception missing) {
+                startActivity(new android.content.Intent(
+                        android.provider.Settings.ACTION_SETTINGS));
+            }
+        });
         addButton(layout, "複製不含畫面內容的診斷摘要", () -> {
             android.content.ClipboardManager clipboard =
                     (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
@@ -177,7 +188,7 @@ public final class BackgroundDisplayExperimentActivity extends Activity {
             final JSONObject result = reply;
             runOnUiThread(() -> {
                 busy = false;
-                lastDiagnostics = "Crew Helper BG 1.8.116"
+                lastDiagnostics = "Crew Helper BG"
                         + " | op=" + op
                         + " | success=" + result.optBoolean("success", false)
                         + " | error=" + result.optString("error", "NONE")
