@@ -228,8 +228,34 @@ final class ObservationVerificationController {
                         && GoogleMapsRuntimeAdapter.PACKAGE_NAME.equals(
                                 after.optString("package", ""));
 
-        final boolean finalSuccess =
-                executionSuccess
+        // A different screen is NOT evidence that OPEN_APP reached its target.
+        // Require an exact foreground package observation after launch.
+        String expectedLaunchPackage = "launch_app".equals(actionName)
+                ? actionResult.optString("package", "").trim() : "";
+        if (!expectedLaunchPackage.isEmpty()
+                && !AppLaunchTargetPolicy.observedOnExpectedPackage(
+                        expectedLaunchPackage,
+                        after == null ? "" : after.optString("package", ""))
+                && !Thread.currentThread().isInterrupted()) {
+            try { Thread.sleep(300L); }
+            catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            }
+            if (!Thread.currentThread().isInterrupted()) {
+                JSONObject second = readSemanticScreenQuietly();
+                if (second != null && second.optBoolean("success", false)) {
+                    after = second;
+                    changed = semanticScreenChanged(after, beforeFingerprint);
+                }
+            }
+        }
+        final boolean launchTargetObserved =
+                AppLaunchTargetPolicy.observedOnExpectedPackage(
+                        expectedLaunchPackage,
+                        after == null ? "" : after.optString("package", ""));
+        final boolean finalSuccess = !expectedLaunchPackage.isEmpty()
+                ? launchTargetObserved
+                : executionSuccess
                         || (!reconciliationBlocked && changed)
                         || mapsTapAwaitingVerification;
 
@@ -269,6 +295,17 @@ final class ObservationVerificationController {
             actionResult.remove("verification");
             actionResult.remove("fingerprint");
 
+            if (!expectedLaunchPackage.isEmpty()) {
+                actionResult.put("verification",
+                        launchTargetObserved
+                                ? "LAUNCH_TARGET_VISIBLE"
+                                : "LAUNCH_TARGET_NOT_VISIBLE");
+                if (!launchTargetObserved
+                        && actionResult.optString("error", "").isEmpty()) {
+                    actionResult.put("error", "LAUNCH_NOT_VISIBLE");
+                }
+            }
+
             if (finalSuccess) {
                 actionResult.remove("error");
                 if (mapsTapAwaitingVerification) {
@@ -290,7 +327,9 @@ final class ObservationVerificationController {
             } else {
                 actionResult.put(
                         "message",
-                        "這一步未確認生效，請依最新畫面改用其他方法，不要重複相同操作。");
+                        !expectedLaunchPackage.isEmpty()
+                                ? "尚未確認目標 App 在前景；不要宣稱已開啟，請檢查錯誤代碼或目前畫面。"
+                                : "這一步未確認生效，請依最新畫面改用其他方法，不要重複相同操作。");
             }
 
             workingContext.updateLastResult(
