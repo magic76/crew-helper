@@ -34,6 +34,7 @@ public final class BackgroundDisplayExperimentActivity extends Activity {
     private int screenWidth, screenHeight;
     private float pressX, pressY;
     private long pressAt;
+    private String lastDiagnostics = "尚未檢查 Helper";
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -74,6 +75,13 @@ public final class BackgroundDisplayExperimentActivity extends Activity {
         packageField.setText("com.apple.android.music");
         layout.addView(packageField);
         addButton(layout, "檢查 Helper", () -> run("status", null));
+        addButton(layout, "複製不含畫面內容的診斷摘要", () -> {
+            android.content.ClipboardManager clipboard =
+                    (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            clipboard.setPrimaryClip(android.content.ClipData.newPlainText(
+                    "Crew Background Diagnostic", lastDiagnostics));
+            android.widget.Toast.makeText(this, "已複製背景診斷摘要", android.widget.Toast.LENGTH_SHORT).show();
+        });
         addButton(layout, "背景開啟 App", () -> {
             try {
                 run("open", new JSONObject().put(
@@ -160,12 +168,24 @@ public final class BackgroundDisplayExperimentActivity extends Activity {
             final JSONObject result = reply;
             runOnUiThread(() -> {
                 busy = false;
+                lastDiagnostics = "Crew Helper BG 1.8.116"
+                        + " | op=" + op
+                        + " | success=" + result.optBoolean("success", false)
+                        + " | error=" + result.optString("error", "NONE")
+                        + " | protocol=" + result.optInt("protocolVersion", -1)
+                        + " | active=" + result.optBoolean("active", false)
+                        + " | displayId=" + result.optInt("displayId", -1)
+                        + " | focusIsolated=" + result.optBoolean("focusIsolated", false);
                 if (result.optBoolean("success", false)) {
                     status.setText("成功 · " + result.optString("package", op)
-                            + " · Display " + result.optInt("displayId", -1));
+                            + " · Display " + result.optInt("displayId", -1)
+                            + ("status".equals(op) ? (result.optBoolean("focusIsolated", false)
+                                    ? " · 獨立焦點" : " · 共用焦點／未確認") : ""));
                     if ("front".equals(op) || "close".equals(op)) clearFrame();
                 } else {
-                    status.setText("操作失敗：" + result.optString("error", "UNKNOWN"));
+                    status.setText("操作失敗：" + result.optString("error", "UNKNOWN")
+                            + ("HELPER_RESTART_REQUIRED".equals(result.optString("error", ""))
+                                    ? "（請重啟 ADB Helper）" : ""));
                 }
             });
         });

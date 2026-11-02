@@ -76,3 +76,45 @@ abstract socket is not still served by the previous APK process:
 Then re-run the documented `adb shell 'APK=... app_process ...'` helper
 command. Confirm the new helper is responding before enabling Live mode.
 Avoid broad `pkill -f` matching; it can kill unrelated processes.
+
+## Stage 3 — reliability and local diagnostics (v1.8.116)
+
+- Shell protocol version 3 is checked *before* each state-mutating command.
+  A stale helper returns `HELPER_RESTART_REQUIRED` and refuses execution.
+- `OPEN_APP` succeeds only when Android reports the target task on the
+  allocated virtual display, not merely when `am start` exits 0.
+- `HANDOFF` succeeds only when Android reports the *same task ID* on
+  display 0. Otherwise it returns `HANDOFF_NOT_VERIFIED` and retains
+  the virtual display instead of falsely declaring success.
+- A Live session will **not adopt a background App launched by the manual
+  experiment page or a previous Live session**. Close the manual display
+  first, then ask Live to open the App in background.
+- Background screen tokens are single-use even when mutation is rejected.
+  Dispatch is `STEP_PENDING` until a separate INSPECT confirms evidence.
+- Natural-language negative commands such as 「不要切到主螢幕」and
+  「不要關閉背景」do not authorize handoff or release.
+- Foreground `phone_action` is rejected when the current finalized user
+  instruction explicitly requests a virtual/background screen.
+- The experiment page has a **Copy diagnostic** button. It copies only
+  operation, result code, protocol, virtual display ID and focus-isolation
+  flag: no screenshots, transcripts, user content or API keys.
+
+### Recommended S25 Ultra acceptance checks
+
+1. With helper OFF, `Check Helper` must report `HELPER_NOT_CONNECTED`.
+2. After installing v1.8.116 **without restarting helper**, check must report
+   `HELPER_RESTART_REQUIRED`. Restart the helper, then check protocol 3.
+3. Open Apple Music on virtual screen; inspect/tap without affecting the
+   physical display. Verify focusIsolated is true (if false, record One UI
+   shared-focus limitation).
+4. Move the task to the main display. Confirm same task's UI is visible and
+   navigation state remains. Repeat on Google Maps with a non-navigation UI.
+5. In Live, explicitly say 「在背景螢幕打開 Apple Music」then INSPECT and TAP.
+   Verify a blocked or stale screen token never becomes a physical tap.
+6. Say 「不要切到主螢幕」and 「不要關閉背景」; neither may move/close it.
+7. Disable experiment; confirm ordinary Live map/music interaction still
+   succeeds and virtual display tool returns disabled.
+8. Copy the non-sensitive diagnostic summary and note behavior/failure code.
+
+These are acceptance tests to perform locally; GitHub CI cannot test One UI,
+virtual display privilege, task moving or third-party App compatibility.

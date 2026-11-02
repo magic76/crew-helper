@@ -11,28 +11,41 @@ final class BackgroundPhonePolicy {
 
     static boolean explicitlyBackground(String text) {
         String v = normalize(text);
-        return v.contains("背景") || v.contains("虛擬螢幕") ||
-                v.contains("虚拟屏") || v.contains("virtual screen") ||
-                v.contains("virtual display") || v.contains("background display") ||
-                v.contains("in the background");
+        // "背景音樂" means playback in the background, not a request to
+        // control a separate display. Never infer permission from that alone.
+        if (hasAny(v, "不要在背景", "別在背景", "不要用背景", "不要開背景",
+                "不是背景", "不用背景", "do not use background",
+                "don't use background", "not in the background"))
+            return false;
+        return hasAny(v, "在背景", "背景螢幕", "背景屏幕", "虛擬螢幕",
+                "虚拟屏", "背景操作", "背景執行", "背景開啟",
+                "背景打開", "背景點", "背景輸入", "背景搜尋",
+                "virtual screen", "virtual display", "background display",
+                "in the background", "background screen");
     }
 
     static boolean explicitlyHandoff(String text) {
         String v = normalize(text);
-        return v.contains("前景") || v.contains("主螢幕") ||
-                v.contains("主屏幕") || v.contains("交給我") ||
-                v.contains("我來接手") || v.contains("給我看") ||
-                v.contains("顯示給我") || v.contains("切到手機") ||
-                v.contains("show me") || v.contains("hand over") ||
-                v.contains("foreground");
+        if (hasAny(v, "不要切到前景", "不要到前景", "不要移到前景",
+                "不要切到主螢幕", "不要切到主屏幕", "別移到前景",
+                "不要交給我", "不要顯示給我", "不要給我看",
+                "don't show", "do not hand over", "don't hand over",
+                "do not move to foreground", "not foreground")) return false;
+        // "給我看" alone is an inspection request, not consent to
+        // move an Android task to the user's physical screen.
+        return hasAny(v, "前景", "主螢幕", "主屏幕",
+                "交給我", "我來接手", "切到手機",
+                "hand over", "handoff", "foreground");
     }
 
     static boolean explicitlyClose(String text) {
         String v = normalize(text);
-        return v.contains("關掉背景") || v.contains("關閉背景") ||
-                v.contains("停止背景") || v.contains("結束背景") ||
-                v.contains("關掉虛擬") || v.contains("關閉虛擬") ||
-                v.contains("close background") || v.contains("stop background");
+        if (hasAny(v, "不要關掉背景", "不要關閉背景", "不要停止背景",
+                "別關背景", "別關閉背景", "不要關掉虛擬", "不要關閉虛擬",
+                "don't close background", "do not close background",
+                "don't stop background")) return false;
+        return hasAny(v, "關掉背景", "關閉背景", "停止背景", "結束背景",
+                "關掉虛擬", "關閉虛擬", "close background", "stop background");
     }
 
     static String deny(String action, String text, boolean enabled,
@@ -70,6 +83,17 @@ final class BackgroundPhonePolicy {
                 value.contains("delete") || value.contains("send message") ||
                 value.contains("submit") || value.contains("password") ||
                 value.contains("otp") || value.contains("payment");
+    }
+
+    static boolean blocksForegroundTool(String tool, String finalizedText) {
+        return explicitlyBackground(finalizedText)
+                && hasAny(normalize(tool), "phone_action", "send_text",
+                        "run_app_capability", "wait_then_action");
+    }
+
+    private static boolean hasAny(String v, String... snippets) {
+        for (String s : snippets) if (v.contains(s)) return true;
+        return false;
     }
 
     private static String normalize(String s) {

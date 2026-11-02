@@ -6,6 +6,19 @@ public final class BackgroundPhonePolicyTest {
     }
     public static void main(String[] args) {
         ok(!BackgroundPhonePolicy.explicitlyBackground("打開音樂"), "front default");
+        ok(!BackgroundPhonePolicy.explicitlyBackground("背景音樂繼續播放"), "music background not virtual");
+        ok(!BackgroundPhonePolicy.explicitlyBackground("不要在背景打開音樂"), "negated background");
+        ok(!BackgroundPhonePolicy.explicitlyBackground("不要用背景螢幕"), "negated display");
+        ok(BackgroundPhonePolicy.explicitlyBackground("在背景點播放"), "explicit background action");
+        ok(!BackgroundPhonePolicy.explicitlyHandoff("給我看搜尋結果"), "inspection not handoff");
+        ok(!BackgroundPhonePolicy.explicitlyHandoff("不要切到主螢幕"), "negated handoff");
+        ok(!BackgroundPhonePolicy.explicitlyClose("不要關閉背景"), "negated close");
+        ok(BackgroundPhonePolicy.blocksForegroundTool("phone_action",
+                "在背景螢幕開啟地圖"), "reject foreground fallback");
+        ok(!BackgroundPhonePolicy.blocksForegroundTool("phone_action",
+                "背景音樂繼續播放"), "normal music playback");
+        ok(!BackgroundPhonePolicy.blocksForegroundTool("background_phone",
+                "在背景螢幕開啟地圖"), "background tool authorized");
         ok(BackgroundPhonePolicy.explicitlyBackground("在背景螢幕打開音樂"), "background intent");
         ok("BACKGROUND_LIVE_DISABLED".equals(
                 BackgroundPhonePolicy.deny("OPEN_APP", "在背景開地圖", false, false, false)), "opt-in");
