@@ -1093,6 +1093,15 @@ public class MainActivity extends Activity
                             AgentInspectorActivity.class))));
 
             pageContent.addView(makeSettingsRow(
+                    CrewIcons.PHONE_ACTIONS,
+                    I18n.get(this, "背景螢幕實驗", "Background Display POC"),
+                    I18n.get(this, "需 ADB Shell · 不影響 Live", "ADB Shell · Live unchanged"),
+                    CrewTheme.TEXT_SECONDARY,
+                    v -> startActivity(new Intent(
+                            MainActivity.this,
+                            BackgroundDisplayExperimentActivity.class))));
+
+            pageContent.addView(makeSettingsRow(
                     CrewIcons.DIAGNOSTICS,
                     I18n.get(this, "診斷資訊", "Diagnostics"),
                     I18n.get(this, "服務與 Runtime 狀態", "Services & runtime state"),
