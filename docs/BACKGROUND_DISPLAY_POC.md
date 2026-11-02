@@ -64,3 +64,15 @@ This remains experimental: dispatch and a changed fingerprint do NOT
 prove the user's full goal. It requires Galaxy S25 Ultra real-device
 testing and is not yet the production AgentRuntimeV2 verifier. Use only
 non-sensitive Apps/screens; no payment, messaging commits or credentials.
+
+### Updating from the Stage 1 test build
+
+After installing v1.8.115, **stop the old background Shell Helper** so the
+abstract socket is not still served by the previous APK process:
+
+    adb shell pidof crew-bg-helper
+    adb shell kill <EXACT_PID_FROM_ABOVE>
+
+Then re-run the documented `adb shell 'APK=... app_process ...'` helper
+command. Confirm the new helper is responding before enabling Live mode.
+Avoid broad `pkill -f` matching; it can kill unrelated processes.

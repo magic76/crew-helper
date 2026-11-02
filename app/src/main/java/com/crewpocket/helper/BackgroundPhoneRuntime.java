@@ -146,15 +146,17 @@ final class BackgroundPhoneRuntime {
                         : element.getText()) + " " +
                         String.valueOf(element.getContentDescription() == null ? ""
                         : element.getContentDescription());
+                String viewId = element.getViewIdResourceName() == null
+                        ? "" : element.getViewIdResourceName();
                 if (SensitiveDataGuard.isSensitiveNode(element)
-                        || BackgroundPhonePolicy.isSensitiveTarget(label))
+                        || BackgroundPhonePolicy.isSensitiveTarget(label + " " + viewId)
+                        || AccessibilityNodeRepository.isSendIntent(label, viewId))
                     return rejected("SENSITIVE_BACKGROUND_ACTION_BLOCKED");
                 if (!stillCurrent.getAsBoolean()) return rejected("STALE_USER_INTENT");
                 boolean dispatched;
                 if ("TAP".equals(action)) {
                     if (!element.isClickable() || !element.isEnabled()) return rejected("NOT_CLICKABLE");
-                    PolicyEngine.Result policy = PolicyEngine.evaluate("click",
-                            label, String.valueOf(element.getViewIdResourceName()), false);
+                    PolicyEngine.Result policy = PolicyEngine.evaluate("click", label, viewId, false);
                     if (policy.blocked()) return rejected("POLICY_REJECTED");
                     dispatched = element.performAction(AccessibilityNodeInfo.ACTION_CLICK);
                 } else if ("SCROLL".equals(action)) {
@@ -168,6 +170,8 @@ final class BackgroundPhoneRuntime {
                 } else {
                     if (!element.isEditable() || !element.isEnabled())
                         return rejected("NOT_EDITABLE");
+                    if (PolicyEngine.evaluate("type", label, viewId, false).blocked())
+                        return rejected("TYPE_POLICY_REJECTED");
                     String value = args.optString("text", "");
                     if (value.length() > 160 || value.isEmpty()
                             || BackgroundPhonePolicy.isSensitiveTarget(value))
