@@ -44,6 +44,28 @@ final class BackgroundVisionPolicy {
                 "next track", "skip", "zoom", "magnify");
     }
 
+    /**
+     * Coarse sampled-frame guard against a changed virtual screen after the
+     * model viewed it. Allows minor animation/compression variation, but fails
+     * closed for substantial content changes. Semantic fingerprint is checked
+     * independently by the Runtime.
+     */
+    static boolean similarFrames(int[] first, int[] second) {
+        if (first == null || second == null
+                || first.length != 64 || second.length != 64) return false;
+        long total = 0;
+        int largeChanges = 0;
+        for (int i = 0; i < 64; i++) {
+            int a = first[i], b = second[i];
+            int delta = (Math.abs(((a >>> 16) & 255) - ((b >>> 16) & 255))
+                    + Math.abs(((a >>> 8) & 255) - ((b >>> 8) & 255))
+                    + Math.abs((a & 255) - (b & 255))) / 3;
+            total += delta;
+            if (delta > 35) largeChanges++;
+        }
+        return total / 64 <= 14 && largeChanges <= 10;
+    }
+
     static boolean validCoordinate(double normalized) {
         return Double.isFinite(normalized) && normalized >= 0d && normalized <= 1000d;
     }
