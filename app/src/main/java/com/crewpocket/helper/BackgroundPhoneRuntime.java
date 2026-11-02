@@ -1,6 +1,10 @@
 package com.crewpocket.helper;
 
 import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Rect;
+import android.util.Base64;
 import android.os.Bundle;
 import android.os.SystemClock;
 import android.util.SparseArray;
@@ -29,11 +33,28 @@ final class BackgroundPhoneRuntime {
     private long openedGeneration = -1L;
     private long screenTokenGeneration = -1L;
     private final BackgroundPhoneSessionPolicy session = new BackgroundPhoneSessionPolicy();
+    // Pending frame is ephemeral, App-process memory only, consumed before
+    // functionResponse; the raw JPEG must NEVER enter a tool JSON response.
+    private byte[] pendingVisionJpeg;
+    private String visionToken = "";
+    private long visionGeneration = -1L;
+    private long visionAtMs;
+    private int visionWidth;
+    private int visionHeight;
+    private int[] visionGrid;
 
     BackgroundPhoneRuntime(Context context) {
         this.app = context == null ? null : context.getApplicationContext();
         this.apps = app == null ? null : new AppCatalog(app);
     }
+
+    synchronized byte[] consumeVisionFrame() {
+        byte[] bytes = pendingVisionJpeg;
+        pendingVisionJpeg = null;
+        return bytes;
+    }
+
+    synchronized void revokeVisionLease() { clearVision(); }
 
     synchronized JSONObject execute(JSONObject args, String userText,
                                     long generation, BooleanSupplier stillCurrent) {
@@ -111,8 +132,78 @@ final class BackgroundPhoneRuntime {
             }
             String budgetError = session.preflight(action);
             if (!budgetError.isEmpty()) return rejected(budgetError);
+            if ("VISION".equals(action)) {
+                session.recordInspection();
+                session.recordVision();
+                if (!BackgroundVisionPolicy.permittedPackage(leasedPackage))
+                    return rejected("BACKGROUND_VISION_APP_NOT_ALLOWLISTED");
+                if (!state.optBoolean("focusIsolated", false))
+                    return rejected("BACKGROUND_VISION_REQUIRES_ISOLATED_FOCUS");
+                Snapshot shot = awaitSnapshot(leasedDisplayId, leasedPackage, stillCurrent);
+                if (!shot.ok()) return rejected(shot.error);
+                try {
+                    if (sensitiveScreen(shot.ui))
+                        return rejected("BACKGROUND_VISION_SENSITIVE_SCREEN");
+                    if (!shot.ui.optBoolean("visionRecommended", false)
+                            && !BackgroundVisionPolicy.explicitVisualRequest(userText))
+                        return rejected("BACKGROUND_SEMANTIC_UI_SUFFICIENT");
+                    if (!stillCurrent.getAsBoolean())
+                        return rejected("STALE_USER_INTENT");
+                    JSONObject photo = previewOnOwnedDisplay(leasedDisplayId, leasedPackage);
+                    if (!photo.optBoolean("success", false)) return rejectHelper(photo);
+                    if (photo.optInt("width", 0) != state.optInt("width", 0)
+                            || photo.optInt("height", 0) != state.optInt("height", 0)
+                            || !BackgroundVisionPolicy.fresh(
+                                android.os.SystemClock.uptimeMillis(),
+                                android.os.SystemClock.uptimeMillis()
+                                        - photo.optLong("frameAgeMs", Long.MAX_VALUE),
+                                BackgroundVisionPolicy.MAX_FRAME_AGE_MS))
+                        return rejected("BACKGROUND_FRAME_DIMENSION_OR_AGE_MISMATCH");
+                    String encoded = photo.optString("jpegBase64", "");
+                    if (encoded.isEmpty() || encoded.length() > 1_100_000)
+                        return rejected("BACKGROUND_FRAME_SIZE_INVALID");
+                    byte[] bytes = Base64.decode(encoded, Base64.DEFAULT);
+                    if (bytes.length == 0
+                            || bytes.length > BackgroundVisionPolicy.MAX_JPEG_BYTES)
+                        return rejected("BACKGROUND_FRAME_SIZE_INVALID");
+                    int[] grid = sampledGrid(bytes);
+                    if (grid == null) return rejected("BACKGROUND_IMAGE_DECODE_FAILED");
+                    if (!stillCurrent.getAsBoolean()) return rejected("STALE_USER_INTENT");
+
+                    invalidateScreen();
+                    screenFingerprint = shot.ui.optString("fingerprint", "");
+                    visionToken = UUID.randomUUID().toString();
+                    visionGeneration = generation;
+                    visionAtMs = SystemClock.elapsedRealtime();
+                    visionWidth = photo.optInt("width");
+                    visionHeight = photo.optInt("height");
+                    visionGrid = grid;
+                    pendingVisionJpeg = bytes;
+                    session.onObservedScreen(screenFingerprint);
+                    return new JSONObject().put("success", true)
+                            .put("background", true).put("action", "VISION")
+                            .put("visualReady", true)
+                            .put("visionToken", visionToken)
+                            .put("visual_token", visionToken)
+                            .put("width", visionWidth).put("height", visionHeight)
+                            .put("displayId", leasedDisplayId)
+                            .put("package", leasedPackage)
+                            .put("taskState", "IN_PROGRESS")
+                            .put("verificationStatus", "PENDING")
+                            .put("nextRequirement", "VISION_OR_VISUAL_TAP")
+                            .put("visionCaptures", session.visionCount())
+                            .put("screen", shot.ui)
+                            .put("instruction", "這張影像僅是背景虛擬螢幕，不是手機主螢幕。"
+                                    + "只有看清低風險按鈕且元素不完整時，才以 visual_token + "
+                                    + "normalized visual_x/visual_y + target 執行一次 VISUAL_TAP。"
+                                    + "不得送出、登入、支付、刪除或猜測座標。");
+                } finally {
+                    shot.close();
+                }
+            }
             if ("INSPECT".equals(action)) {
                 session.recordInspection();
+                clearVision();
                 Snapshot shot = awaitSnapshot(leasedDisplayId, leasedPackage, stillCurrent);
                 if (!shot.ok()) return rejected(shot.error);
                 if (!stillCurrent.getAsBoolean()) {
@@ -154,6 +245,82 @@ final class BackgroundPhoneRuntime {
                         .put("taskState", "DONE")
                         .put("completionEvidence", "HANDOFF".equals(action)
                                 ? "VIRTUAL_TASK_MOVED_TO_MAIN_DISPLAY" : "VIRTUAL_DISPLAY_RELEASED");
+            }
+            if ("VISUAL_TAP".equals(action)) {
+                if (!BackgroundVisionPolicy.permittedPackage(leasedPackage)
+                        || !state.optBoolean("focusIsolated", false))
+                    return rejected("BACKGROUND_VISUAL_TAP_NOT_ALLOWED");
+                String token = args.optString("visual_token", "");
+                if (visionToken.isEmpty() || !visionToken.equals(token)
+                        || visionGeneration != generation
+                        || !BackgroundVisionPolicy.fresh(SystemClock.elapsedRealtime(),
+                                visionAtMs, BackgroundVisionPolicy.TAP_LEASE_MS))
+                    return rejected("STALE_BACKGROUND_VISION_LEASE");
+                double nx = args.optDouble("visual_x", Double.NaN);
+                double ny = args.optDouble("visual_y", Double.NaN);
+                String target = args.optString("target", "").trim();
+                if (!BackgroundVisionPolicy.lowRiskTarget(target)
+                        || !BackgroundVisionPolicy.validCoordinate(nx)
+                        || !BackgroundVisionPolicy.validCoordinate(ny))
+                    return rejected("BACKGROUND_VISUAL_TARGET_REJECTED");
+                int x = BackgroundVisionPolicy.coordinate(nx, visionWidth);
+                int y = BackgroundVisionPolicy.coordinate(ny, visionHeight);
+                String before = screenFingerprint;
+                String key = BackgroundPhoneSessionPolicy.actionKey(
+                        "VISUAL_TAP", target + ":" + x + ":" + y, "", "");
+                // Capture the frozen visual signature before the lease is consumed.
+                int[] lastVisionGrid = visionGrid;
+                // Consume lease before inspecting / tapping, even on failure.
+                invalidateScreen();
+                if (session.blocksRepeat(key, before))
+                    return rejected("REPEATED_UNVERIFIED_BACKGROUND_ACTION");
+                Snapshot shot = takeSnapshot(leasedDisplayId, leasedPackage);
+                if (!shot.ok()) return rejected(shot.error);
+                try {
+                    if (!before.equals(shot.ui.optString("fingerprint", "")))
+                        return rejected("BACKGROUND_SCREEN_CHANGED");
+                    if (sensitiveScreen(shot.ui) || sensitiveAt(shot.root, x, y))
+                        return rejected("BACKGROUND_VISION_SENSITIVE_TARGET");
+                    if (PolicyEngine.evaluate("click", target, "", false).blocked())
+                        return rejected("BACKGROUND_VISUAL_POLICY_REJECTED");
+                    if (!stillCurrent.getAsBoolean())
+                        return rejected("STALE_USER_INTENT");
+                    JSONObject fresh = previewOnOwnedDisplay(leasedDisplayId, leasedPackage);
+                    if (!fresh.optBoolean("success", false)) return rejectHelper(fresh);
+                    byte[] latest = Base64.decode(fresh.optString("jpegBase64", ""),
+                            Base64.DEFAULT);
+                    if (latest.length == 0
+                            || latest.length > BackgroundVisionPolicy.MAX_JPEG_BYTES)
+                        return rejected("BACKGROUND_FRAME_SIZE_INVALID");
+                    int[] currentGrid = sampledGrid(latest);
+                    if (!BackgroundVisionPolicy.similarFrames(lastVisionGrid, currentGrid))
+                        return rejected("BACKGROUND_VISUAL_FRAME_CHANGED");
+                    if (!stillCurrent.getAsBoolean())
+                        return rejected("STALE_USER_INTENT");
+                    session.recordMutation();
+                    JSONObject command = new JSONObject().put("op", "tap")
+                            .put("expectedDisplayId", leasedDisplayId)
+                            .put("expectedPackage", leasedPackage)
+                            .put("x", x).put("y", y);
+                    JSONObject tap = BackgroundDisplayClient.request(command);
+                    if (!tap.optBoolean("success", false)) return rejectHelper(tap);
+                } finally {
+                    shot.close();
+                }
+                SystemClock.sleep(180);
+                Snapshot after = takeSnapshot(leasedDisplayId, leasedPackage);
+                boolean changed = after.ok() && !before.equals(
+                        after.ui.optString("fingerprint", ""));
+                if (after.ok()) after.close();
+                session.recordOutcome(key, before, changed);
+                return new JSONObject().put("success", true)
+                        .put("background", true).put("action", "VISUAL_TAP")
+                        .put("taskState", "IN_PROGRESS")
+                        .put("stepResult", "STEP_PENDING")
+                        .put("verificationStatus",
+                                changed ? "OBSERVED_CHANGE_UNVERIFIED" : "PENDING")
+                        .put("nextRequirement", "INSPECT_BACKGROUND")
+                        .put("instruction", "只完成虛擬螢幕的低風險點擊，尚未驗證使用者整體目標；請重新 INSPECT。");
             }
             if (!"TAP".equals(action) && !"SCROLL".equals(action) && !"TYPE".equals(action))
                 return rejected("UNKNOWN_BACKGROUND_ACTION");
@@ -260,10 +427,93 @@ final class BackgroundPhoneRuntime {
         invalidateScreen();
     }
     private void invalidateScreen() {
+        clearVision();
         screenTokenGeneration = -1L;
         screenToken = "";
         screenFingerprint = "";
         screenTokenAt = 0L;
+    }
+
+    private void clearVision() {
+        // Clear the pending image and one-shot coordinate authority together.
+        pendingVisionJpeg = null;
+        visionToken = "";
+        visionGeneration = -1L;
+        visionAtMs = 0L;
+        visionWidth = 0;
+        visionHeight = 0;
+        visionGrid = null;
+    }
+
+    private JSONObject previewOnOwnedDisplay(int id, String pkg) throws Exception {
+        JSONObject request = new JSONObject().put("op", "preview")
+                .put("expectedDisplayId", id)
+                .put("expectedPackage", pkg);
+        JSONObject image = BackgroundDisplayClient.request(request);
+        if (image.optBoolean("success", false)
+                && (image.optInt("displayId", -1) != id
+                || !pkg.equals(image.optString("package", ""))))
+            return new JSONObject().put("success", false)
+                    .put("error", "BACKGROUND_PREVIEW_IDENTITY_MISMATCH");
+        return image;
+    }
+
+    private static boolean sensitiveScreen(JSONObject screen) {
+        if (screen == null) return true;
+        JSONArray elements = screen.optJSONArray("elements");
+        if (elements == null) return true;
+        for (int i = 0; i < elements.length(); i++) {
+            JSONObject el = elements.optJSONObject(i);
+            if (el == null) continue;
+            if (el.optBoolean("sensitive", false)
+                    || BackgroundPhonePolicy.isSensitiveTarget(
+                            el.optString("label", "") + " "
+                            + el.optString("viewId", "")))
+                return true;
+        }
+        return false;
+    }
+
+    private static boolean sensitiveAt(AccessibilityNodeInfo node, int x, int y) {
+        if (node == null) return false;
+        Rect bounds = new Rect();
+        node.getBoundsInScreen(bounds);
+        if (!bounds.contains(x, y)) return false;
+        if (SensitiveDataGuard.isSensitiveNode(node)) return true;
+        String label = String.valueOf(node.getText() == null ? "" : node.getText())
+                + " " + String.valueOf(node.getContentDescription() == null
+                    ? "" : node.getContentDescription());
+        String viewId = node.getViewIdResourceName() == null
+                ? "" : node.getViewIdResourceName();
+        if (BackgroundPhonePolicy.isSensitiveTarget(label + " " + viewId)
+                || AccessibilityNodeRepository.isSendIntent(label, viewId))
+            return true;
+        for (int i = 0; i < node.getChildCount(); i++) {
+            AccessibilityNodeInfo child = node.getChild(i);
+            if (child == null) continue;
+            try {
+                if (sensitiveAt(child, x, y)) return true;
+            } finally { child.recycle(); }
+        }
+        return false;
+    }
+
+    private static int[] sampledGrid(byte[] jpeg) {
+        Bitmap source = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.length);
+        if (source == null || source.getWidth() < 40 || source.getHeight() < 40)
+            return null;
+        try {
+            int[] grid = new int[64];
+            for (int row = 0; row < 8; row++)
+                for (int col = 0; col < 8; col++) {
+                    int x = (int) ((col + 0.5) * source.getWidth() / 8.0);
+                    int y = (int) ((row + 0.5) * source.getHeight() / 8.0);
+                    grid[row * 8 + col] = source.getPixel(x, y);
+                }
+            return grid;
+        } finally {
+            source.recycle();
+        }
     }
 
     /** Wait only for ordinary App startup; never retry a rejected mutation. */
