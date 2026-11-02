@@ -27,6 +27,8 @@ final class BackgroundPhoneRuntime {
     private String screenFingerprint = "";
     private long screenTokenAt;
     private long openedGeneration = -1L;
+    private long screenTokenGeneration = -1L;
+    private final BackgroundPhoneSessionPolicy session = new BackgroundPhoneSessionPolicy();
 
     BackgroundPhoneRuntime(Context context) {
         this.app = context == null ? null : context.getApplicationContext();
@@ -42,7 +44,10 @@ final class BackgroundPhoneRuntime {
             if (stillCurrent == null || !stillCurrent.getAsBoolean())
                 return rejected("STALE_USER_INTENT");
             JSONObject state = BackgroundDisplayClient.command("status");
-            if (!state.optBoolean("success", false)) return rejected("SHELL_HELPER_NOT_CONNECTED");
+            if (!state.optBoolean("success", false)) {
+                invalidateScreen();
+                return rejectHelper(state); // Preserve HELPER_RESTART_REQUIRED and other codes.
+            }
             boolean active = state.optBoolean("active", false)
                     && state.optInt("displayId", -1) > 0
                     && !state.optString("package", "").isEmpty();
@@ -84,6 +89,7 @@ final class BackgroundPhoneRuntime {
                     return rejected("STALE_USER_INTENT");
                 }
                 openedGeneration = generation;
+                session.reset();
                 invalidateScreen();
                 return new JSONObject().put("success", true)
                         .put("background", true).put("action", action)
@@ -103,8 +109,11 @@ final class BackgroundPhoneRuntime {
                 clearLease();
                 return rejected("BACKGROUND_SESSION_NOT_OWNED_BY_LIVE");
             }
+            String budgetError = session.preflight(action);
+            if (!budgetError.isEmpty()) return rejected(budgetError);
             if ("INSPECT".equals(action)) {
-                Snapshot shot = takeSnapshot(leasedDisplayId, leasedPackage);
+                session.recordInspection();
+                Snapshot shot = awaitSnapshot(leasedDisplayId, leasedPackage, stillCurrent);
                 if (!shot.ok()) return rejected(shot.error);
                 if (!stillCurrent.getAsBoolean()) {
                     shot.close();
@@ -113,6 +122,8 @@ final class BackgroundPhoneRuntime {
                 screenToken = UUID.randomUUID().toString();
                 screenFingerprint = shot.ui.optString("fingerprint", "");
                 screenTokenAt = SystemClock.elapsedRealtime();
+                screenTokenGeneration = generation;
+                session.onObservedScreen(screenFingerprint);
                 JSONObject result = new JSONObject().put("success", true)
                         .put("action", action).put("background", true)
                         .put("displayId", leasedDisplayId)
@@ -120,6 +131,8 @@ final class BackgroundPhoneRuntime {
                         .put("screenToken", screenToken)
                         .put("screen_token", screenToken)
                         .put("taskState", "IN_PROGRESS")
+                        .put("inspectionAttempts", session.inspectionCount())
+                        .put("mutationAttempts", session.mutationCount())
                         .put("screen", shot.ui);
                 shot.close();
                 return result;
@@ -147,6 +160,7 @@ final class BackgroundPhoneRuntime {
             String token = args.optString("screen_token", "");
             String elementId = args.optString("element_id", "");
             if (token.isEmpty() || !token.equals(screenToken)
+                    || screenTokenGeneration != generation
                     || elementId.isEmpty()
                     || SystemClock.elapsedRealtime() - screenTokenAt > LEASE_MS)
                 return rejected("STALE_BACKGROUND_SCREEN");
@@ -158,6 +172,14 @@ final class BackgroundPhoneRuntime {
                 return rejected("BACKGROUND_SCREEN_CHANGED");
             }
             final String beforeFingerprint = screenFingerprint;
+            final String actionKey = BackgroundPhoneSessionPolicy.actionKey(
+                    action, elementId, args.optString("direction", ""),
+                    args.optString("text", ""));
+            if (session.blocksRepeat(actionKey, beforeFingerprint)) {
+                shot.close();
+                invalidateScreen();
+                return rejected("REPEATED_UNVERIFIED_BACKGROUND_ACTION");
+            }
             // Every mutation attempt consumes the observation lease, including
             // a failed or blocked tap. A subsequent attempt requires INSPECT.
             invalidateScreen();
@@ -175,6 +197,7 @@ final class BackgroundPhoneRuntime {
                         || AccessibilityNodeRepository.isSendIntent(label, viewId))
                     return rejected("SENSITIVE_BACKGROUND_ACTION_BLOCKED");
                 if (!stillCurrent.getAsBoolean()) return rejected("STALE_USER_INTENT");
+                session.recordMutation(); // Counts attempts, not inferred success.
                 boolean dispatched;
                 if ("TAP".equals(action)) {
                     if (!element.isClickable() || !element.isEnabled()) return rejected("NOT_CLICKABLE");
@@ -213,10 +236,13 @@ final class BackgroundPhoneRuntime {
             boolean changed = after.ok() && !beforeFingerprint.equals(
                     after.ui.optString("fingerprint", ""));
             if (after.root != null) after.close();
+            session.recordOutcome(actionKey, beforeFingerprint, changed);
             return new JSONObject().put("success", true)
                     .put("background", true).put("action", action)
                     .put("taskState", "IN_PROGRESS")
                     .put("stepResult", "STEP_PENDING")
+                    .put("inspectionAttempts", session.inspectionCount())
+                    .put("mutationAttempts", session.mutationCount())
                     .put("verificationStatus", changed ? "OBSERVED_CHANGE_UNVERIFIED" : "PENDING")
                     .put("nextRequirement", "INSPECT_BACKGROUND")
                     .put("instruction", "Android 已接收操作，不代表整個目標已完成；請重新 INSPECT 背景畫面驗證。");
@@ -227,15 +253,31 @@ final class BackgroundPhoneRuntime {
     }
 
     private void clearLease() {
+        session.reset();
         leasedDisplayId = -1;
         leasedPackage = "";
         openedGeneration = -1;
         invalidateScreen();
     }
     private void invalidateScreen() {
+        screenTokenGeneration = -1L;
         screenToken = "";
         screenFingerprint = "";
         screenTokenAt = 0L;
+    }
+
+    /** Wait only for ordinary App startup; never retry a rejected mutation. */
+    private Snapshot awaitSnapshot(int displayId, String pkg, BooleanSupplier stillCurrent) {
+        Snapshot shot = takeSnapshot(displayId, pkg);
+        for (int attempt = 0; attempt < 2 && !shot.ok(); attempt++) {
+            if (!"DISPLAY_WINDOWS_UNAVAILABLE".equals(shot.error)
+                    && !"TARGET_APP_WINDOW_NOT_FOUND".equals(shot.error))
+                break;
+            if (!stillCurrent.getAsBoolean()) break;
+            SystemClock.sleep(160);
+            shot = takeSnapshot(displayId, pkg);
+        }
+        return shot;
     }
 
     private Snapshot takeSnapshot(int displayId, String pkg) {

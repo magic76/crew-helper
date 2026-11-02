@@ -139,3 +139,33 @@ bash scripts/background_display_local.sh logs
 a broad matching process name. Do not run `restart` during active
 background work. `logs` may contain device diagnostic details: review
 before sharing.
+
+
+## Stage 4 — bounded background execution (v1.8.117)
+
+- An opened virtual App gets a fresh per-session budget of **10 mutation
+  attempts and 18 inspections**. Shell STATUS, explicit HANDOFF, and CLOSE
+  remain possible after the budget is reached; there is no infinite AI tap
+  loop. To reset, finish/close the existing session and start a fresh App.
+- Every `INSPECT` issues a screen token scoped to the **authoritative finalized
+  user generation**. A new user turn must INSPECT again, even if 15 seconds
+  have not yet elapsed. A mutation attempt consumes that token.
+- If a mutation is dispatched but an actual screen change is not observed,
+  the exact same element/action on the unchanged screen is blocked with
+  `REPEATED_UNVERIFIED_BACKGROUND_ACTION`. A different action or a genuinely
+  changed screen can proceed after a fresh INSPECT.
+- During startup, `INSPECT` retries up to two times at 160 ms intervals
+  only for windows not yet available; no blind tap retries occur.
+- Helper error codes such as `HELPER_RESTART_REQUIRED` are returned unchanged
+  to Live rather than being replaced by a generic disconnected error.
+- Neither Android gesture dispatch nor changing semantic fingerprints are
+  accepted as proof that the **whole user goal** succeeded.
+- JVM test: `BackgroundPhoneSessionPolicyTest`; Android CI builds the APK.
+
+### Local acceptance notes
+Test with a non-sensitive screen. Launch a background App, INSPECT, tap a
+low-risk UI control, and INSPECT again. Deliberately request the exact same
+unverified action on the unchanged screen and verify it gets blocked. Check
+that a new voice instruction cannot reuse an earlier token. After deliberately
+exhausting the mutation budget, confirm HANDOFF and CLOSE still work. Continue
+checking One UI's main-screen focus and task continuity on real hardware.
