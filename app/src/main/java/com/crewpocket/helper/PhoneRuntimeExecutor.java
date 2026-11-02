@@ -192,7 +192,7 @@ final class PhoneRuntimeExecutor {
 
         // Exact known App targets use the package path, avoiding locale-dependent
         // launcher labels. This never guesses from a sentence or a partial name.
-        String knownPackage = AppLaunchTargetPolicy.knownPackage(app);
+        String knownPackage = AppLaunchTargetPolicy.knownPackageForOpenTarget(app);
         if (!knownPackage.isEmpty()) {
             JSONObject reply = post("/launch",
                     new JSONObject().put("package", knownPackage));
