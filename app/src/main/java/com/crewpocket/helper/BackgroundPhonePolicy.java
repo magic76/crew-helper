@@ -11,15 +11,20 @@ final class BackgroundPhonePolicy {
 
     static boolean explicitlyBackground(String text) {
         String v = normalize(text);
-        // "背景音樂" means playback in the background, not a request to
+        // Background music means playback in the background, not a request to
         // control a separate display. Never infer permission from that alone.
-        if (hasAny(v, "不要在背景", "別在背景", "不要用背景", "不要開背景",
+        if (hasAny(v, "背景音樂", "后台音乐", "不要在背景", "別在背景",
+                "不要用背景", "不要開背景", "不要在后台", "别在后台",
+                "不要用后台", "不要开后台", "不要打开背景", "不要打开后台",
                 "不是背景", "不用背景", "do not use background",
                 "don't use background", "not in the background"))
             return false;
-        return hasAny(v, "在背景", "背景螢幕", "背景屏幕", "虛擬螢幕",
-                "虚拟屏", "背景操作", "背景執行", "背景開啟",
-                "背景打開", "背景點", "背景輸入", "背景搜尋",
+        return hasAny(v, "在背景", "背景螢幕", "背景屏幕", "在后台",
+                "后台屏幕", "背景操作", "后台操作", "虛擬螢幕",
+                "虚拟屏", "虚拟屏幕", "背景執行", "后台运行",
+                "背景開啟", "背景开启", "背景打開", "背景打开",
+                "后台打开", "后台开启", "背景點", "背景点",
+                "背景輸入", "背景输入", "背景搜尋", "背景搜索",
                 "virtual screen", "virtual display", "background display",
                 "in the background", "background screen");
     }
@@ -88,7 +93,11 @@ final class BackgroundPhonePolicy {
     static boolean blocksForegroundTool(String tool, String finalizedText) {
         return explicitlyBackground(finalizedText)
                 && hasAny(normalize(tool), "phone_action", "send_text",
-                        "run_app_capability", "wait_then_action");
+                        "run_app_capability", "wait_then_action",
+                        "launch_app", "inspect_ui", "take_screenshot",
+                        "tap_screen", "tap_element", "swipe_screen",
+                        "type_text", "search_current_app", "commit_search",
+                        "press_key", "take_photo");
     }
 
     private static boolean hasAny(String v, String... snippets) {
