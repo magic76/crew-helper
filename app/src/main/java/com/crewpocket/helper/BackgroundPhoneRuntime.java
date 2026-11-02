@@ -71,6 +71,18 @@ final class BackgroundPhoneRuntime {
                     clearLease();
                     return rejected("DISPLAY_IDENTITY_MISMATCH");
                 }
+                if (!stillCurrent.getAsBoolean()) {
+                    // The user superseded this turn while Shell was starting
+                    // the App. Release only the display we just created.
+                    try {
+                        BackgroundDisplayClient.request(new JSONObject()
+                                .put("op", "close")
+                                .put("expectedDisplayId", leasedDisplayId)
+                                .put("expectedPackage", leasedPackage));
+                    } catch (Exception ignored) {}
+                    clearLease();
+                    return rejected("STALE_USER_INTENT");
+                }
                 openedGeneration = generation;
                 invalidateScreen();
                 return new JSONObject().put("success", true)
