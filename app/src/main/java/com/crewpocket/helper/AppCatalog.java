@@ -56,6 +56,23 @@ final class AppCatalog {
 
     Resolution resolve(String query) {
         long started = System.currentTimeMillis();
+        // Known exact app names bypass fuzzy launcher labels and stale aliases.
+        // Verify visibility/installation before using a package shortcut.
+        String knownPackage = AppLaunchTargetPolicy.knownPackage(query);
+        if (!knownPackage.isEmpty()) {
+            try {
+                if (context.getPackageManager()
+                        .getLaunchIntentForPackage(knownPackage) != null) {
+                    Entry direct = new Entry(query.trim(), knownPackage);
+                    ArrayList<Entry> one = new ArrayList<Entry>();
+                    one.add(direct);
+                    return new Resolution(Resolution.FOUND, direct, one,
+                            System.currentTimeMillis() - started);
+                }
+            } catch (Exception ignored) {
+                // Continue to ordinary package catalog resolution.
+            }
+        }
         AppAliasStore.Entry alias = aliasStore.resolve(query);
         if (alias != null) {
             try {
