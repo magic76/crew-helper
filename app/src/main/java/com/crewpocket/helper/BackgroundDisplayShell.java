@@ -39,7 +39,11 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * Opt-in virtual-display POC. Only launch through adb shell/app_process.
- * Inspiration: Mika's shell-owned display architecture (Apache-2.0).
+ * Portions of the Shell Context and virtual-display approach are adapted
+ * from Mika v0.1.33 (wangzan101) and scrcpy (Genymobile / Romain Vimont),
+ * licensed under the Apache License, Version 2.0.
+ * https://github.com/wangzan101/Mika/tree/v0.1.33
+ * https://www.apache.org/licenses/LICENSE-2.0
  * The protocol is explicitly NOT connected to Gemini Live production tools.
  */
 public final class BackgroundDisplayShell {
@@ -163,9 +167,14 @@ public final class BackgroundDisplayShell {
         int dpi = Math.max(160, Math.min(420, metrics.densityDpi));
         reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 3);
         reader.setOnImageAvailableListener(this::onFrame, new Handler(frameThread.getLooper()));
-        try { display = createDisplay(reader.getSurface(), dpi, true); }
-        catch (Exception trustedFailure) {
-            display = createDisplay(reader.getSurface(), dpi, false);
+        try {
+            try { display = createDisplay(reader.getSurface(), dpi, true); }
+            catch (Exception trustedFailure) {
+                display = createDisplay(reader.getSurface(), dpi, false);
+            }
+        } catch (Exception createFailure) {
+            closeDisplay(); // Failed displays must never strand an ImageReader.
+            return fail("CREATE_DISPLAY_REJECTED");
         }
         if (display == null) {
             closeDisplay();
