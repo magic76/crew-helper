@@ -49,7 +49,7 @@ import java.util.concurrent.TimeUnit;
  */
 public final class BackgroundDisplayShell {
     static final String SOCKET = "com.crewpocket.helper.background.v1";
-    static final int PROTOCOL_VERSION = 3;
+    static final int PROTOCOL_VERSION = 4;
     private static final String PACKAGE = "com.crewpocket.helper";
     private final Context context;
     private final int appUid;
@@ -129,8 +129,14 @@ public final class BackgroundDisplayShell {
         }
         if ("open".equals(op)) return open(req.optString("package", ""));
         if (display == null) return fail("NO_BACKGROUND_DISPLAY");
-        if ("preview".equals(op)) return preview();
+        if ("preview".equals(op)) {
+            if (!matchesExpectedDisplay(req)) return fail("DISPLAY_OWNERSHIP_CHANGED");
+            return preview();
+        }
         if ("tap".equals(op)) {
+            if (!matchesExpectedDisplay(req)) return fail("DISPLAY_OWNERSHIP_CHANGED");
+            if (req.has("expectedPackage") && !taskPresentOnDisplay()) 
+                return fail("BACKGROUND_TASK_NOT_ON_DISPLAY");
             int x = req.optInt("x", -1), y = req.optInt("y", -1);
             if (!valid(x, y)) return fail("INVALID_COORDINATES");
             return command("input", "-d", String.valueOf(displayId), "tap",
@@ -138,6 +144,7 @@ public final class BackgroundDisplayShell {
                     ? ok() : fail("INPUT_REJECTED");
         }
         if ("swipe".equals(op)) {
+            if (!matchesExpectedDisplay(req)) return fail("DISPLAY_OWNERSHIP_CHANGED");
             int x1 = req.optInt("x1", -1), y1 = req.optInt("y1", -1);
             int x2 = req.optInt("x2", -1), y2 = req.optInt("y2", -1);
             int ms = req.optInt("durationMs", 300);
@@ -250,15 +257,24 @@ public final class BackgroundDisplayShell {
 
     private JSONObject preview() throws Exception {
         Bitmap shot;
+        long shotAt;
         synchronized (frameLock) {
             shot = lastFrame == null ? null : lastFrame.copy(Bitmap.Config.ARGB_8888, false);
+            shotAt = frameAt;
         }
         if (shot == null) return fail("FRAME_NOT_READY");
+        long age = SystemClock.uptimeMillis() - shotAt;
+        if (age < 0L || age > 1500L) {
+            shot.recycle();
+            return fail("FRAME_STALE");
+        }
         try {
             ByteArrayOutputStream bytes = new ByteArrayOutputStream();
             shot.compress(Bitmap.CompressFormat.JPEG, 70, bytes);
             if (bytes.size() > 1024 * 1024) return fail("FRAME_TOO_LARGE");
             return ok().put("width", width).put("height", height)
+                    .put("displayId", displayId).put("package", openedPackage)
+                    .put("frameAgeMs", age)
                     .put("jpegBase64", Base64.encodeToString(bytes.toByteArray(), Base64.NO_WRAP));
         } finally {
             shot.recycle();
@@ -324,6 +340,17 @@ public final class BackgroundDisplayShell {
                 return true;
             }
             SystemClock.sleep(120);
+        }
+        return false;
+    }
+
+    private boolean taskPresentOnDisplay() {
+        if (displayId <= Display.DEFAULT_DISPLAY || openedPackage.isEmpty())
+            return false;
+        ActivityManager am = context.getSystemService(ActivityManager.class);
+        for (ActivityManager.RunningTaskInfo task : am.getRunningTasks(100)) {
+            if (displayOf(task) == displayId && task.topActivity != null
+                    && openedPackage.equals(task.topActivity.getPackageName())) return true;
         }
         return false;
     }
