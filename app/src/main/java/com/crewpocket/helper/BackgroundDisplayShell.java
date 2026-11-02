@@ -150,7 +150,7 @@ public final class BackgroundDisplayShell {
         ActivityManager am = context.getSystemService(ActivityManager.class);
         List<ActivityManager.RunningTaskInfo> tasks = am.getRunningTasks(100);
         for (ActivityManager.RunningTaskInfo task : tasks) {
-            if (task.displayId == Display.DEFAULT_DISPLAY && task.topActivity != null
+            if (displayOf(task) == Display.DEFAULT_DISPLAY && task.topActivity != null
                     && pkg.equals(task.topActivity.getPackageName()))
                 return fail("APP_IN_USE_ON_MAIN_DISPLAY");
         }
@@ -243,7 +243,7 @@ public final class BackgroundDisplayShell {
         ActivityManager am = context.getSystemService(ActivityManager.class);
         ActivityManager.RunningTaskInfo selected = null;
         for (ActivityManager.RunningTaskInfo task : am.getRunningTasks(100)) {
-            if (task.displayId == displayId && task.topActivity != null
+            if (displayOf(task) == displayId && task.topActivity != null
                     && openedPackage.equals(task.topActivity.getPackageName())) {
                 selected = task;
                 break;
@@ -265,6 +265,19 @@ public final class BackgroundDisplayShell {
         if (!moved) return fail("HANDOFF_FAILED");
         closeDisplay();
         return ok().put("handedOff", true).put("taskId", taskId);
+    }
+
+    /**
+     * TaskInfo.displayId is hidden from SDK stubs even on modern Android.
+     * When unavailable, never assume DEFAULT_DISPLAY; refuse unsafe moves.
+     */
+    private static int displayOf(ActivityManager.RunningTaskInfo task) {
+        try {
+            Field field = task.getClass().getField("displayId");
+            return field.getInt(task);
+        } catch (Exception error) {
+            return Display.INVALID_DISPLAY;
+        }
     }
 
     private boolean valid(int x, int y) {
