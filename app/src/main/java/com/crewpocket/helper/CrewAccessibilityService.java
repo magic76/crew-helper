@@ -1260,26 +1260,68 @@ public class CrewAccessibilityService extends AccessibilityService {
                 if (!resolvedPackage.isEmpty() || (url != null && !url.trim().isEmpty()) || "settings".equalsIgnoreCase(target)) {
                     final String fResolvedPackage = resolvedPackage;
                     final boolean[] launchSuccess = new boolean[]{false};
-                    final Object launchLock = new Object();
-                    mainHandler.post(new Runnable() {
+                    final String[] launchError = new String[]{"LAUNCH_NOT_ATTEMPTED"};
+                    final java.util.concurrent.CountDownLatch completed =
+                            new java.util.concurrent.CountDownLatch(1);
+                    // StartActivity must run on the main thread. CountDownLatch
+                    // prevents the old missed-notify race and distinguishes a
+                    // timeout from Android rejecting the intent.
+                    boolean queued = mainHandler != null && mainHandler.post(new Runnable() {
                         @Override public void run() {
                             try {
                                 Intent intent = null;
-                                if (url != null && !url.trim().isEmpty()) intent = new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url.trim()));
-                                else if ("settings".equalsIgnoreCase(target)) intent = new Intent(Settings.ACTION_SETTINGS);
-                                else if (!fResolvedPackage.isEmpty()) intent = getPackageManager().getLaunchIntentForPackage(fResolvedPackage);
-                                if (intent != null) {
-                                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                                    startActivity(intent);
-                                    launchSuccess[0] = true;
+                                if (url != null && !url.trim().isEmpty()) {
+                                    intent = new Intent(Intent.ACTION_VIEW,
+                                            android.net.Uri.parse(url.trim()));
+                                } else if ("settings".equalsIgnoreCase(target)) {
+                                    intent = new Intent(Settings.ACTION_SETTINGS);
+                                } else if (!fResolvedPackage.isEmpty()) {
+                                    intent = getPackageManager()
+                                            .getLaunchIntentForPackage(fResolvedPackage);
                                 }
-                            } catch (Exception ignored) {}
-                            finally { synchronized (launchLock) { launchLock.notify(); } }
+                                if (intent == null) {
+                                    launchError[0] = "LAUNCH_INTENT_NOT_FOUND";
+                                    return;
+                                }
+                                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                                startActivity(intent);
+                                launchSuccess[0] = true;
+                                launchError[0] = "";
+                            } catch (SecurityException denied) {
+                                launchError[0] = "LAUNCH_SECURITY_DENIED";
+                            } catch (android.content.ActivityNotFoundException missing) {
+                                launchError[0] = "LAUNCH_INTENT_NOT_FOUND";
+                            } catch (Exception failure) {
+                                // Error code only: never persist exception strings,
+                                // app content, user input or serialized Intents.
+                                launchError[0] = "LAUNCH_RUNTIME_EXCEPTION";
+                                Log.w(TAG, "Android launch failed: "
+                                        + failure.getClass().getSimpleName());
+                            } finally {
+                                completed.countDown();
+                            }
                         }
                     });
-                    synchronized (launchLock) { try { launchLock.wait(1000); } catch (Exception ignored) {} }
-                    responseJson = "{\"success\":" + launchSuccess[0] + ",\"action\":\"LAUNCH\",\"package\":\"" + jsonEscape(resolvedPackage)
-                            + "\",\"label\":\"" + jsonEscape(resolvedLabel) + "\",\"runtimeMs\":" + (System.currentTimeMillis() - requestStartedAt) + "}";
+                    boolean finished = false;
+                    if (queued) {
+                        try {
+                            finished = completed.await(1600L,
+                                    java.util.concurrent.TimeUnit.MILLISECONDS);
+                        } catch (InterruptedException interrupted) {
+                            Thread.currentThread().interrupt();
+                        }
+                    }
+                    if (!queued) launchError[0] = "LAUNCH_MAIN_HANDLER_UNAVAILABLE";
+                    else if (!finished) launchError[0] = "LAUNCH_TIMED_OUT";
+                    boolean submitted = finished && launchSuccess[0];
+                    responseJson = "{\\"success\\":" + submitted
+                            + ",\\"action\\":\\"LAUNCH\\""
+                            + ",\\"package\\":\\"" + jsonEscape(resolvedPackage)
+                            + "\\",\\"label\\":\\"" + jsonEscape(resolvedLabel)
+                            + "\\",\\"error\\":\\"" + launchError[0]
+                            + "\\",\\"launchSubmitted\\":" + submitted
+                            + ",\\"runtimeMs\\":" +
+                                    (System.currentTimeMillis() - requestStartedAt) + "}";
                 }
             } else if (path.startsWith("/apps")) {
                 String query = getJsonString(body, "query");
