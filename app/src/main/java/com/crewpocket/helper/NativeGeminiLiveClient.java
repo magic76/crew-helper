@@ -2938,6 +2938,13 @@ final class NativeGeminiLiveClient {
             catch (Exception ignored) {}
             return;
         }
+        if (task.blockedReason != null) {
+            try { sendToolResponse(id, "background_phone",
+                    runtimeBlocked("BACKGROUND_TASK_BUDGET",
+                            task.blockedReason)); }
+            catch (Exception ignored) {}
+            return;
+        }
         JSONObject result = backgroundPhoneRuntime.execute(
                 args, liveTurnCoordinator.latest().text, generation,
                 () -> isCurrentUserIntent(generation)

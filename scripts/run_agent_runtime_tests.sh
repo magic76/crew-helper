@@ -8,6 +8,7 @@ trap 'rm -rf "$OUT"' EXIT
 
 javac -encoding UTF-8 -d "$OUT" \
   "$SRC/BackgroundPhonePolicy.java" \
+  "$SRC/BackgroundPhoneSessionPolicy.java" \
   "$SRC/CameraCapturePolicy.java" \
   "$SRC/ActionTransaction.java" \
   "$SRC/ActionObservation.java" \
@@ -130,6 +131,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/ScreenItemPriorityPolicy.java" \
   "$SRC/SecretMigrationPolicy.java" \
   "$ROOT/tests/BackgroundPhonePolicyTest.java" \
+  "$ROOT/tests/BackgroundPhoneSessionPolicyTest.java" \
   "$ROOT/tests/CameraCapturePolicyTest.java" \
   "$ROOT/tests/SendAuthorizationTest.java" \
   "$ROOT/tests/LiveTurnCoordinatorTest.java" \
@@ -239,6 +241,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/AgentReplayRunner.java"
 
 java -cp "$OUT" com.crewpocket.helper.BackgroundPhonePolicyTest
+java -cp "$OUT" com.crewpocket.helper.BackgroundPhoneSessionPolicyTest
 java -cp "$OUT" com.crewpocket.helper.CameraCapturePolicyTest
 java -cp "$OUT" com.crewpocket.helper.SendAuthorizationTest
 java -cp "$OUT" com.crewpocket.helper.LiveTurnCoordinatorTest
