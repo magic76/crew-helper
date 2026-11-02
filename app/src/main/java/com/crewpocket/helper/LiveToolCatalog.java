@@ -89,7 +89,7 @@ final class LiveToolCatalog {
                 .put("target", new JSONObject().put("type", "STRING")
                     .put("description", "VISUAL_TAP only: precise low-risk human-readable target (Play, Pause, Search, Back, Next track). Not account, payment, sending, deleting or confirmation."));
             tools.put(new JSONObject().put("name", "background_phone")
-                .put("description", "BACKGROUND EXPERIMENT ONLY after user explicitly requests virtual/background display. OPEN_APP then INSPECT semantic UI. If semantic elements are insufficient or user asks to see image, use VISION: model receives a fresh virtual-screen image. VISUAL_TAP needs visionToken + normalized visual_x/y (0..1000) + a low-risk target, never foreground coordinates. Tokens are one-shot and valid for this user turn only. Always INSPECT after tapping; never assume goal done, send/pay/delete, or fall back to physical display. HANDOFF/CLOSE need explicit user intent.
+                .put("description", "BACKGROUND EXPERIMENT ONLY after user explicitly requests virtual/background display. OPEN_APP then INSPECT semantic UI. If semantic elements are insufficient or user asks to see image, use VISION: model receives a fresh virtual-screen image. VISUAL_TAP needs visionToken + normalized visual_x/y (0..1000) + a low-risk target, never foreground coordinates. Tokens are one-shot and valid for this user turn only. Always INSPECT after tapping; never assume goal done, send/pay/delete, or fall back to physical display. HANDOFF/CLOSE need explicit user intent.")
                 .put("parameters", new JSONObject().put("type", "OBJECT")
                     .put("properties", bg)
                     .put("required", new JSONArray().put("action"))));
