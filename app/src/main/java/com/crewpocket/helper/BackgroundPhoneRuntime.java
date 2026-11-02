@@ -142,7 +142,7 @@ final class BackgroundPhoneRuntime {
                 Snapshot shot = awaitSnapshot(leasedDisplayId, leasedPackage, stillCurrent);
                 if (!shot.ok()) return rejected(shot.error);
                 try {
-                    if (sensitiveScreen(shot.ui))
+                    if (sensitiveScreen(shot.ui) || sensitiveAnywhere(shot.root))
                         return rejected("BACKGROUND_VISION_SENSITIVE_SCREEN");
                     if (!shot.ui.optBoolean("visionRecommended", false)
                             && !BackgroundVisionPolicy.explicitVisualRequest(userText))
@@ -151,13 +151,10 @@ final class BackgroundPhoneRuntime {
                         return rejected("STALE_USER_INTENT");
                     JSONObject photo = previewOnOwnedDisplay(leasedDisplayId, leasedPackage);
                     if (!photo.optBoolean("success", false)) return rejectHelper(photo);
+                    long age = photo.optLong("frameAgeMs", Long.MAX_VALUE);
                     if (photo.optInt("width", 0) != state.optInt("width", 0)
                             || photo.optInt("height", 0) != state.optInt("height", 0)
-                            || !BackgroundVisionPolicy.fresh(
-                                android.os.SystemClock.uptimeMillis(),
-                                android.os.SystemClock.uptimeMillis()
-                                        - photo.optLong("frameAgeMs", Long.MAX_VALUE),
-                                BackgroundVisionPolicy.MAX_FRAME_AGE_MS))
+                            || age < 0L || age > BackgroundVisionPolicy.MAX_FRAME_AGE_MS)
                         return rejected("BACKGROUND_FRAME_DIMENSION_OR_AGE_MISMATCH");
                     String encoded = photo.optString("jpegBase64", "");
                     if (encoded.isEmpty() || encoded.length() > 1_100_000)
@@ -279,7 +276,8 @@ final class BackgroundPhoneRuntime {
                 try {
                     if (!before.equals(shot.ui.optString("fingerprint", "")))
                         return rejected("BACKGROUND_SCREEN_CHANGED");
-                    if (sensitiveScreen(shot.ui) || sensitiveAt(shot.root, x, y))
+                    if (sensitiveScreen(shot.ui) || sensitiveAnywhere(shot.root)
+                            || sensitiveAt(shot.root, x, y))
                         return rejected("BACKGROUND_VISION_SENSITIVE_TARGET");
                     if (PolicyEngine.evaluate("click", target, "", false).blocked())
                         return rejected("BACKGROUND_VISUAL_POLICY_REJECTED");
@@ -470,6 +468,27 @@ final class BackgroundPhoneRuntime {
                             el.optString("label", "") + " "
                             + el.optString("viewId", "")))
                 return true;
+        }
+        return false;
+    }
+
+    private static boolean sensitiveAnywhere(AccessibilityNodeInfo node) {
+        if (node == null) return false;
+        if (SensitiveDataGuard.isSensitiveNode(node)) return true;
+        String label = String.valueOf(node.getText() == null ? "" : node.getText())
+                + " " + String.valueOf(node.getContentDescription() == null
+                    ? "" : node.getContentDescription());
+        String id = node.getViewIdResourceName() == null
+                ? "" : node.getViewIdResourceName();
+        if (BackgroundPhonePolicy.isSensitiveTarget(label + " " + id)
+                || AccessibilityNodeRepository.isSendIntent(label, id))
+            return true;
+        for (int i = 0; i < node.getChildCount(); i++) {
+            AccessibilityNodeInfo child = node.getChild(i);
+            if (child == null) continue;
+            try {
+                if (sensitiveAnywhere(child)) return true;
+            } finally { child.recycle(); }
         }
         return false;
     }
