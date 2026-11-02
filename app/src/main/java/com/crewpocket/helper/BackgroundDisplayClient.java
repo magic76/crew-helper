@@ -18,7 +18,10 @@ final class BackgroundDisplayClient {
         if (operation == null) return error("EMPTY_REQUEST");
         String op = operation.optString("op", "");
         if (!"status".equals(op)) {
-            JSONObject check = send(new JSONObject().put("op", "status"));
+            JSONObject hello = new JSONObject();
+            try { hello.put("op", "status"); }
+            catch (Exception invalid) { return error("INVALID_PROTOCOL_REQUEST"); }
+            JSONObject check = send(hello);
             if (!check.optBoolean("success", false)) return check;
             if (check.optInt("protocolVersion", -1)
                     != BackgroundDisplayShell.PROTOCOL_VERSION)
