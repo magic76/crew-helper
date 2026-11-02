@@ -24,6 +24,17 @@ public final class BackgroundVisionPolicyTest {
         check(!BackgroundVisionPolicy.validCoordinate(Double.NaN), "nan");
         check(!BackgroundVisionPolicy.validCoordinate(-1d), "negative");
         check(!BackgroundVisionPolicy.validCoordinate(1001d), "out of range");
+        int[] same = new int[64];
+        int[] mild = new int[64];
+        int[] different = new int[64];
+        java.util.Arrays.fill(same, 0xff222222);
+        java.util.Arrays.fill(mild, 0xff272727);
+        java.util.Arrays.fill(different, 0xffffffff);
+        check(BackgroundVisionPolicy.similarFrames(same, same), "identical frame");
+        check(BackgroundVisionPolicy.similarFrames(same, mild), "mild compression");
+        check(!BackgroundVisionPolicy.similarFrames(same, different), "different frame");
+        check(!BackgroundVisionPolicy.similarFrames(null, mild), "no frame");
+        check(!BackgroundVisionPolicy.similarFrames(new int[32], mild), "bad dimensions");
         check(BackgroundVisionPolicy.fresh(500, 400, 150), "fresh frame");
         check(!BackgroundVisionPolicy.fresh(600, 400, 150), "expired frame");
         check(!BackgroundVisionPolicy.fresh(300, 400, 150), "future frame");

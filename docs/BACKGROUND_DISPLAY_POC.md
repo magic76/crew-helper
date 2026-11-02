@@ -169,3 +169,61 @@ unverified action on the unchanged screen and verify it gets blocked. Check
 that a new voice instruction cannot reuse an earlier token. After deliberately
 exhausting the mutation budget, confirm HANDOFF and CLOSE still work. Continue
 checking One UI's main-screen focus and task continuity on real hardware.
+
+
+## Stage 5 — virtual-screen Vision Fallback (v1.8.118)
+
+This experiment extends the existing **Gemini Live** video channel.
+No second AI model or network endpoint is introduced. **User must enable
+experimental background Live and explicitly ask for background operations.**
+
+When semantic INSPECT reports `visionRecommended=true` or the user
+explicitly asks to view the background, Gemini can call
+`background_phone(action=VISION)`. Runtime:
+- Verifies the Live session owns the exact virtual display and package;
+- Allows only `com.apple.android.music` and `com.google.android.apps.maps`
+  and requires trusted **focus-isolated** display mode (otherwise stops);
+- Scans the **full** Accessibility tree for sensitive/credential and send
+  controls before it transmits any image. If semantic windows are completely
+  unavailable, it fails closed rather than sending an unclassified picture;
+- Obtains one fresh, display-ID + package-bound JPEG from Shell; rejects
+  stale/oversized/mismatched images and sends it as `realtimeInput.video`
+  using the existing Live WebSocket. The JPEG is **never** placed in the
+  tool response, diagnostic clipboard, or persisted on disk;
+- Returns a fresh one-time `visionToken` and the virtual image dimensions.
+
+If a desired **low-risk** button is missing from the semantic tree, Gemini
+may request `background_phone(action=VISUAL_TAP,visual_token=...,
+visual_x=...,visual_y=...,target=...)`. Normalized coordinates are 0–1000
+on the **virtual** screenshot, not the physical screen. Execution requires:
+same finalized user turn, live ownership, 8-second token, unchanged
+Accessibility fingerprint and coarse screenshot comparison, a low-risk
+semantic target, non-sensitive UI, exact display/package-bound shell tap,
+and available mutation budget. The token is consumed even on failure.
+
+After visual TAP, the result remains `STEP_PENDING`; Gemini must INSPECT
+again. A changed fingerprint is *not* proof of the whole user goal.
+
+**Vision frame budget:** three VISION captures per virtual App session;
+the existing 18 INSPECT-or-VISION and 10 mutation limits still apply.
+Install v1.8.118 and restart the ADB Shell Helper: protocol is now **v4**.
+
+### Recommended quick S25 Ultra check
+
+1. Use a non-sensitive Apple Music or Maps screen on the background display.
+2. Say 「在背景螢幕打開 Apple Music，看看現在的畫面」.
+3. After INSPECT, say 「在背景用畫面辨識找播放按鈕」.
+4. Confirm the screenshot corresponds to the background App, not Crew
+   Helper's visible Activity. Confirm nothing in the physical display
+   moves when the background button is tapped.
+5. Try 「在背景按播放」, observe fresh semantic evidence, then say
+   「把背景的 App 移到主螢幕」.
+6. Test no-helper, stale-helper, shared-focus, secure/login screen,
+   changed-UI, expired token and out-of-bounds coordinates; all should
+   fail safely rather than tapping the phone foreground.
+
+Known limitation: Real-time video frame delivery is reused from the
+existing Gemini Live channel; only real-device testing can prove the
+model associates that image with the correct tool turn. Visual TAP is
+intentionally conservative and may refuse animated screens or incomplete
+Accessibility trees.
