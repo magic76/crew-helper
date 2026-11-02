@@ -20,6 +20,12 @@ public final class BackgroundPhoneSessionPolicyTest {
         assertTrue(!session.blocksRepeat(same, "screen-A"), "new screen clears replay");
         session.recordOutcome(same, "screen-A", true);
         assertTrue(!session.blocksRepeat(same, "screen-A"), "observed change clears replay");
+        for (int i = 0; i < BackgroundPhoneSessionPolicy.MAX_VISION_FRAMES; i++)
+            session.recordVision();
+        assertTrue("BACKGROUND_VISION_BUDGET_EXHAUSTED".equals(
+                session.preflight("VISION")), "bounded vision frames");
+        assertTrue(BackgroundPhoneSessionPolicy.isMutation("VISUAL_TAP"),
+                "visual tap counts as mutation");
         for (int i = 0; i < BackgroundPhoneSessionPolicy.MAX_INSPECTIONS; i++)
             session.recordInspection();
         assertTrue("BACKGROUND_INSPECTION_BUDGET_EXHAUSTED".equals(

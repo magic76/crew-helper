@@ -63,7 +63,8 @@ final class BackgroundPhonePolicy {
             return explicitlyHandoff(text) ? "" : "HANDOFF_REQUIRES_USER_REQUEST";
         if ("CLOSE".equals(action))
             return explicitlyClose(text) ? "" : "CLOSE_REQUIRES_USER_REQUEST";
-        if ("INSPECT".equals(action) || "TAP".equals(action)
+        if ("INSPECT".equals(action) || "VISION".equals(action)
+                || "VISUAL_TAP".equals(action) || "TAP".equals(action)
                 || "SCROLL".equals(action) || "TYPE".equals(action))
             return explicit || sameGeneration ? "" : "BACKGROUND_REQUEST_REQUIRED";
         return "UNKNOWN_BACKGROUND_ACTION";

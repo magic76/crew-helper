@@ -7,21 +7,27 @@ package com.crewpocket.helper;
 final class BackgroundPhoneSessionPolicy {
     static final int MAX_INSPECTIONS = 18;
     static final int MAX_MUTATIONS = 10;
+    static final int MAX_VISION_FRAMES = 3;
     private int inspections;
     private int mutations;
+    private int visionFrames;
     private String unverifiedAction = "";
     private String unverifiedFingerprint = "";
 
     void reset() {
         inspections = 0;
         mutations = 0;
+        visionFrames = 0;
         unverifiedAction = "";
         unverifiedFingerprint = "";
     }
 
     String preflight(String action) {
-        if ("INSPECT".equals(action) && inspections >= MAX_INSPECTIONS)
+        if (("INSPECT".equals(action) || "VISION".equals(action))
+                && inspections >= MAX_INSPECTIONS)
             return "BACKGROUND_INSPECTION_BUDGET_EXHAUSTED";
+        if ("VISION".equals(action) && visionFrames >= MAX_VISION_FRAMES)
+            return "BACKGROUND_VISION_BUDGET_EXHAUSTED";
         if (isMutation(action) && mutations >= MAX_MUTATIONS)
             return "BACKGROUND_MUTATION_BUDGET_EXHAUSTED";
         return "";
@@ -29,6 +35,7 @@ final class BackgroundPhoneSessionPolicy {
 
     void recordInspection() { inspections++; }
     void recordMutation() { mutations++; }
+    void recordVision() { visionFrames++; }
 
     /**
      * If a previous mutation was dispatched but no evidence of change was
@@ -62,7 +69,8 @@ final class BackgroundPhoneSessionPolicy {
     }
 
     static boolean isMutation(String action) {
-        return "TAP".equals(action) || "SCROLL".equals(action) || "TYPE".equals(action);
+        return "TAP".equals(action) || "VISUAL_TAP".equals(action)
+                || "SCROLL".equals(action) || "TYPE".equals(action);
     }
 
     static String actionKey(String action, String element, String direction, String text) {
@@ -73,6 +81,7 @@ final class BackgroundPhoneSessionPolicy {
 
     int inspectionCount() { return inspections; }
     int mutationCount() { return mutations; }
+    int visionCount() { return visionFrames; }
 
     private static String safe(String value) { return value == null ? "" : value; }
 }

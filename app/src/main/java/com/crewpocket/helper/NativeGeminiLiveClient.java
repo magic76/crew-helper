@@ -2949,6 +2949,33 @@ final class NativeGeminiLiveClient {
                 args, liveTurnCoordinator.latest().text, generation,
                 () -> isCurrentUserIntent(generation)
                         && !task.cancelled && !task.finished);
+        if ("VISION".equalsIgnoreCase(args.optString("action", ""))
+                && result.optBoolean("visualReady", false)) {
+            byte[] virtualJpeg = backgroundPhoneRuntime.consumeVisionFrame();
+            boolean delivered = false;
+            try {
+                // A dedicated virtual-screen video source. Never update the
+                // foreground visual dimensions or forward base64 in tool JSON.
+                if (virtualJpeg != null && !task.cancelled && !task.finished
+                        && isCurrentUserIntent(generation))
+                    delivered = visionController.sendBackgroundJpegBytes(virtualJpeg);
+            } catch (Exception error) {
+                Log.w(TAG, "Background virtual screenshot send rejected", error);
+            } finally {
+                if (virtualJpeg != null) java.util.Arrays.fill(virtualJpeg, (byte) 0);
+            }
+            if (!delivered) {
+                backgroundPhoneRuntime.revokeVisionLease();
+                result = runtimeBlocked(
+                        "BACKGROUND_VISION_DELIVERY_FAILED",
+                        "虛擬螢幕影像無法送達 Gemini；視覺憑證已失效，不得猜測座標。");
+            } else {
+                try {
+                    result.put("visualSent", true).put("visualReady", false)
+                            .put("visualSource", "BACKGROUND_VIRTUAL_DISPLAY");
+                } catch (Exception ignored) {}
+            }
+        }
         if (task.cancelled || task.finished || !isCurrentUserIntent(generation)) {
             try { sendFinishedIntentToolResponse(id, "background_phone"); }
             catch (Exception ignored) {}
