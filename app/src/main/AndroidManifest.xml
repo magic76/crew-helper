@@ -71,6 +71,10 @@
             android:grantUriPermissions="true" />
 
         <activity
+            android:name=".BackgroundDisplayExperimentActivity"
+            android:exported="false" />
+
+        <activity
             android:name=".AgentInspectorActivity"
             android:screenOrientation="portrait"
             android:exported="false" />
