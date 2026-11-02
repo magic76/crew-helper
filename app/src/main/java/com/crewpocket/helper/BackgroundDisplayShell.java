@@ -283,8 +283,13 @@ public final class BackgroundDisplayShell {
      */
     private static int displayOf(ActivityManager.RunningTaskInfo task) {
         try {
-            Field field = task.getClass().getField("displayId");
-            return field.getInt(task);
+            try {
+                java.lang.reflect.Method m = task.getClass().getMethod("getDisplayId");
+                return (Integer) m.invoke(task);
+            } catch (Exception ignored) {
+                Field field = task.getClass().getField("displayId");
+                return field.getInt(task);
+            }
         } catch (Exception error) {
             return Display.INVALID_DISPLAY;
         }
