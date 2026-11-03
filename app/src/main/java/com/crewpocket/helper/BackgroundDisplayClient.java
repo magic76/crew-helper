@@ -28,6 +28,7 @@ final class BackgroundDisplayClient {
                 return error("HELPER_RESTART_REQUIRED");
         }
         JSONObject result = send(operation);
+        if (!result.optBoolean("success", false)) return result;
         if (result.optInt("protocolVersion", -1)
                 != BackgroundDisplayShell.PROTOCOL_VERSION)
             return error("HELPER_RESTART_REQUIRED");
