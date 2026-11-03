@@ -509,3 +509,40 @@ For the next S25 Ultra test: obtain `DIRECT_SHELL_BINDER` with
 display, disconnect Wi-Fi to test cellular, and then terminate the Shell
 Helper. A lost Binder must return a direct-Binder diagnostic; no
 `SOCKET_CONNECT_EACCES` from the Shizuku-started path.
+
+
+## Foreground/background tool routing (follow-up to PR #198)
+
+A background preference is not a blanket right to control a virtual display.
+Only an **explicit virtual/background display instruction in the latest
+finalized Live turn** authorizes background routing. Ordinary "open Apple
+Music" remains foreground, even when the experiment toggle is enabled.
+"Play background music" is not interpreted as permission for a virtual
+display.
+
+For an explicit background request:
+- Gemini should invoke `background_phone(OPEN_APP)` directly.
+- If Gemini instead calls `phone_action(OPEN_APP,target=...)`, Runtime
+  securely redirects this single reversible App-open step to
+  `background_phone(OPEN_APP,app=...)`; the response retains the original
+  function name for Gemini's call-ID matching and marks
+  `routeDecision=BACKGROUND_AUTO_REDIRECT`.
+- Missing/ambiguous App names, unavailable Helper, disabled opt-in,
+  foreground `inspect_ui`, or foreground TAP/SCROLL/TYPE/SEND never
+  trigger a fallback to the physical display. They fail closed with
+  `BACKGROUND_ROUTE_MISMATCH` or `BACKGROUND_LIVE_DISABLED`.
+- All background actions still run under the existing background session,
+  generation, display lease, and low-risk authorization rules.
+- The Agent Inspector reports an in-memory bounded route summary:
+  `expected=background_phone.<ACTION>`,
+  `actual=phone_action.<ACTION>`, and counts for redirects, mismatches,
+  disabled routes and correct background tool requests. No app name,
+  transcript, selector, screenshot or arguments are saved in this trace.
+
+The field log from local 1.8.135 showed foreground `launch_app FAILED`,
+zero virtual observations and a new user turn superseding the goal.
+Those facts alone **do not establish** that the user explicitly requested
+a background display, nor do they validate Direct Binder health.
+This change only addresses wrong tool routing when background intent is
+explicit. Continue collecting foreground launch failure codes independently
+(see PR #198).

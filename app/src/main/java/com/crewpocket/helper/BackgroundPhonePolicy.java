@@ -88,8 +88,7 @@ final class BackgroundPhonePolicy {
 
     static boolean blocksForegroundTool(String tool, String finalizedText) {
         return explicitlyBackground(finalizedText)
-                && hasAny(normalize(tool), "phone_action", "send_text",
-                        "run_app_capability", "wait_then_action");
+                && BackgroundToolRoutePolicy.isForegroundOperation(tool);
     }
 
     private static boolean hasAny(String v, String... snippets) {
