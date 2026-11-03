@@ -21,7 +21,6 @@ out/
 
 # Keystores & Signing Secrets (Always protect private keys!)
 *.keystore
-!test.keystore
 *.jks
 key.properties
 
