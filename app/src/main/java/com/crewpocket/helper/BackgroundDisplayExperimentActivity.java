@@ -227,12 +227,14 @@ public final class BackgroundDisplayExperimentActivity extends Activity {
                         + " | success=" + result.optBoolean("success", false)
                         + " | error=" + result.optString("error", "NONE")
                         + " | protocol=" + result.optInt("protocolVersion", -1)
+                        + " | transport=" + result.optString("transport", "DIRECT_SOCKET")
                         + " | active=" + result.optBoolean("active", false)
                         + " | displayId=" + result.optInt("displayId", -1)
                         + " | focusIsolated=" + result.optBoolean("focusIsolated", false);
                 if (result.optBoolean("success", false)) {
                     status.setText("成功 · " + result.optString("package", op)
                             + " · Display " + result.optInt("displayId", -1)
+                            + " · " + result.optString("transport", "DIRECT_SOCKET")
                             + ("status".equals(op) ? (result.optBoolean("focusIsolated", false)
                                     ? " · 獨立焦點" : " · 共用焦點／未確認") : ""));
                     if ("front".equals(op) || "close".equals(op)) clearFrame();
