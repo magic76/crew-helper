@@ -8185,8 +8185,18 @@ final class NativeGeminiLiveClient {
 
 
     private JSONObject launchApp(JSONObject args) throws Exception {
-        PhoneRuntimeExecutor.MutationResult execution =
-                phoneRuntimeExecutor.launchApp(args);
+        PhoneRuntimeExecutor.MutationResult execution;
+        try {
+            execution = phoneRuntimeExecutor.launchApp(args);
+        } catch (java.io.IOException transportFailure) {
+            // Do not return raw exception messages (IP/headers/paths) or
+            // repeat the same blind launch when the local Accessibility
+            // bridge was unreachable. The user can see a stable error code.
+            return new JSONObject()
+                    .put("success", false)
+                    .put("stepResult", "STEP_FAILED")
+                    .put("error", LaunchFailureCodePolicy.transportFailure(transportFailure));
+        }
         JSONObject reply = execution.result;
         if (!execution.actionKey.isEmpty()) {
             workingContext.recordAction(
