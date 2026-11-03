@@ -56,9 +56,12 @@ public final class BackgroundDisplayExperimentActivity extends Activity {
         layout.addView(title);
 
         TextView info = new TextView(this);
-        info.setText("背景 Shell Helper 可由 Shizuku 一鍵啟動，或保留原本 ADB 啟動方式。"
-                + "Shizuku 需先安裝、啟動並授權 Crew Helper；啟動後切換到行動網路可繼續使用，"
-                + "重新開機後無 Root 的 Shizuku 仍須重新啟動。");
+        info.setText("Shizuku 的無線偵錯啟動通常需要 Wi-Fi；純 4G／5G、"
+                + "尚未啟動 Helper 時，Crew Helper 無法自行取得 Shell 權限。"
+                + "先在 Wi-Fi 下啟動 Shizuku 與背景 Helper，成功交接 Direct Binder 後，"
+                + "如果 Shell Helper 與 App 程序仍存活，可切到行動網路繼續使用。"
+                + "若斷線、App 被系統終止或重新開機，可能需要重新在 Wi-Fi 下啟動，"
+                + "也可改用電腦 USB ADB 啟動；這不是在 5G 下自動恢復的權限。");
         info.setTextSize(14);
         info.setPadding(0, dp(12), 0, dp(12));
         layout.addView(info);
@@ -92,8 +95,12 @@ public final class BackgroundDisplayExperimentActivity extends Activity {
                         + " | result=" + message.replaceAll("[^A-Za-z0-9_ .:-]", "");
             }
         });
-        addButton(layout, "查看 Shizuku 服務狀態", () ->
-                status.setText(shizuku.status()));
+        addButton(layout, "查看背景通道／Shizuku 狀態", () -> {
+            String result = shizuku.status();
+            status.setText(result);
+            lastDiagnostics = BackgroundShizukuController.offlineTransportDiagnostics()
+                    + " | statusCode=" + result.split("[:：]")[0];
+        });
         addButton(layout, "透過 Shizuku 啟動背景 Helper", () -> {
             if (busy) return;
             busy = true;
@@ -184,7 +191,10 @@ public final class BackgroundDisplayExperimentActivity extends Activity {
 
         addButton(layout, "移到主螢幕（人工接管）", () -> run("front", null));
         addButton(layout, "關閉背景螢幕", () -> run("close", null));
-        run("status", null);
+        // Do not probe the legacy App->Shell socket merely by opening this
+        // page. Its EACCES cannot distinguish Wi-Fi-off bootstrap from a
+        // successfully established Direct Binder.
+        status.setText(shizuku.status());
     }
 
     private int[] pointOnDisplay(float x, float y) {
@@ -252,8 +262,12 @@ public final class BackgroundDisplayExperimentActivity extends Activity {
                     String hint = "HELPER_RESTART_REQUIRED".equals(code)
                             ? "（請先停止舊版 Helper，再從 Shizuku 啟動）"
                             : code.startsWith("DIRECT_SHELL_BINDER_")
-                                ? "（Direct Binder 已中斷，請重新以 Shizuku 啟動）"
-                                : "";
+                                ? "（Direct Binder 未連線：若 Shizuku 已停止，"
+                                    + "純 5G 下無法直接重啟，需 Wi-Fi 無線偵錯或 USB ADB）"
+                                : "SOCKET_CONNECT_EACCES_USE_SHIZUKU_BINDER".equals(code)
+                                    ? "（這是舊 Socket 備援路徑；請啟動 Direct Binder，"
+                                        + "而不是一直重試 Socket）"
+                                    : "";
                     status.setText("操作失敗：" + code + hint);
                 }
             });
