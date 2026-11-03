@@ -54,27 +54,36 @@ APKSIGNER="$BUILD_TOOLS/apksigner"
 [[ -f "$SDK_AIDL" ]] || fail "SDK AIDL compiler not found: $SDK_AIDL."
 [[ -f "$APKSIGNER" ]] || fail "apksigner not found: $APKSIGNER."
 
-# Android SDK's AIDL binary is often x86_64 and cannot execute on Termux ARM64.
-# Temporarily route Gradle's AIDL calls through Termux's native AIDL compiler.
-AIDL_BACKUP=""
+# Android SDK's AIDL binaries are often x86_64 and cannot execute on Termux ARM64.
+# AGP may select any installed build-tools version, so wrap each unusable AIDL.
+AIDL_ORIGINALS=()
+AIDL_BACKUPS=()
 restore_aidl() {
-    if [[ -n "$AIDL_BACKUP" && -e "$AIDL_BACKUP" ]]; then
-        rm -f "$SDK_AIDL"
-        mv "$AIDL_BACKUP" "$SDK_AIDL"
-    fi
+    local index
+    for ((index=${#AIDL_BACKUPS[@]} - 1; index >= 0; index--)); do
+        if [[ -e "${AIDL_BACKUPS[index]}" ]]; then
+            rm -f "${AIDL_ORIGINALS[index]}"
+            mv "${AIDL_BACKUPS[index]}" "${AIDL_ORIGINALS[index]}"
+        fi
+    done
 }
-if ! "$SDK_AIDL" --help >/dev/null 2>&1; then
-    AIDL_BACKUP="$SDK_AIDL.crew-backup.$$"
-    mv "$SDK_AIDL" "$AIDL_BACKUP"
-    trap restore_aidl EXIT
-    trap 'exit 130' INT
-    trap 'exit 143' TERM
-    cat > "$SDK_AIDL" <<EOF
+for SDK_AIDL in "$SDK_ROOT"/build-tools/*/aidl; do
+    [[ -f "$SDK_AIDL" ]] || continue
+    if ! "$SDK_AIDL" --help >/dev/null 2>&1; then
+        AIDL_BACKUP="$SDK_AIDL.crew-backup.$$"
+        mv "$SDK_AIDL" "$AIDL_BACKUP"
+        AIDL_ORIGINALS+=("$SDK_AIDL")
+        AIDL_BACKUPS+=("$AIDL_BACKUP")
+        trap restore_aidl EXIT
+        trap 'exit 130' INT
+        trap 'exit 143' TERM
+        cat > "$SDK_AIDL" <<EOF
 #!/data/data/com.termux/files/usr/bin/sh
 exec "$(command -v aidl)" --lang=java "\$@"
 EOF
-    chmod 755 "$SDK_AIDL"
-fi
+        chmod 755 "$SDK_AIDL"
+    fi
+done
 
 cd "$ROOT"
 echo "Building release APK with $GRADLE_BIN..."

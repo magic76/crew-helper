@@ -53,7 +53,9 @@ Never commit `.keystore`, `.jks`, key passwords, or `key.properties`. The releas
 
 ## Termux AIDL note
 
-On ARM64 Termux, the AIDL executable shipped inside Android SDK build-tools may be an x86-64 host binary. The script temporarily swaps only that SDK executable for a wrapper to Termux's native `aidl`, and restores the original file on exit, including build failures. Do not copy the wrapper into the repo or leave it installed in the SDK.
+On ARM64 Termux, AIDL executables shipped inside Android SDK build-tools may be x86-64 host binaries. AGP can select a build-tools version other than the newest installed one, so the script checks every installed AIDL executable, temporarily wraps those that cannot run with Termux's native `aidl`, and restores each original on exit, including build failures. Do not copy wrappers into the repo or leave them installed in the SDK.
+
+The installed NDK also has an x86-64 `llvm-strip`. On ARM64 Termux, Gradle may report that it could not strip native libraries and package them unstripped; this build completes, but the APK can be larger. The current build reported that for four native libraries. Keep this packaging note separate from the APK signature result.
 
 The Gradle release task does not run the agent runtime replay tests. CI runs those separately before its release build.
 
