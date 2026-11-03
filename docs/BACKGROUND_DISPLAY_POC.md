@@ -338,3 +338,64 @@ Shizuku is already running; it does not remove the Shizuku bootstrap.
   physical foreground.
 - Reboot: confirm Shizuku is stopped and retry setup, documenting
   Samsung One UI background process behavior.
+
+
+## Repair: Shizuku Binder relay for Shell Socket EACCES
+
+The root issue was that App UID requests directly connected to the Shell
+helper's abstract LocalSocket, which is rejected with EACCES on some Samsung
+One UI devices before any JSON response. Shizuku permission alone did not
+change the connecting UID.
+
+The new transport is:
+
+```text
+Crew Helper app UID
+      │ Shizuku UserService Binder (authorized app UID only)
+      ▼
+Shizuku UserService (shell UID 2000)
+      │ LocalSocket (shell UID peer)
+      ▼
+BackgroundDisplayShell (UID-checked; protocol v5)
+      │ existing virtual display tools
+      ▼
+App on virtual display
+```
+
+- Only the fixed operations `status/open/preview/tap/swipe/front/close`
+  are allowed on the Binder interface, with argument validation and
+  display/package ownership checks. No arbitrary shell commands are exposed.
+- The UserService verifies the caller really is Crew Helper's Android UID;
+  unknown UIDs fail closed.
+- Large JPEG preview results travel through a
+  `ParcelFileDescriptor` pipe. The Binder transaction never contains the
+  multi-megabyte Base64 image.
+- App requests prefer the Binder channel whenever it is connected;
+  there is **no fallback to the app Shell Socket after Binder failure**.
+  The old direct Socket route remains for installations deliberately using
+  USB ADB without Shizuku.
+- The Shell helper must be **restarted** after installing this code so its
+  peer-UID check can accept the Shizuku UserService. An old process cannot
+  be patched in place.
+- Observe `transport=SHIZUKU_BINDER` and `protocolVersion=5` in the
+  returned diagnostics. A successful spawn by itself is not proof of
+  background control.
+- GitHub main was still at v1.8.119 when this repair branch was prepared;
+  a separate local v1.8.133 snapshot is not present in this GitHub branch.
+  Reconcile/cherry-pick changes before producing an installer intended to
+  replace a locally installed 1.8.133 APK.
+
+### Device acceptance checks
+
+1. Start Shizuku, open background experiment, request permission and use
+   **透過 Shizuku 啟動背景 Helper**.
+2. Confirm STATUS returns protocol 5 and `transport=SHIZUKU_BINDER`.
+3. Open Apple Music on the virtual display; request a preview. Confirm that
+   a large screenshot transfers without Binder transaction failure.
+4. TAP and SWIPE only on the virtual display; verify the physical screen is
+   unaffected. Then test handoff/close.
+5. Disable Wi-Fi after Shizuku and the Shell helper are running. Verify
+   status, preview and gestures still work over the local Binder/Socket relay
+   while Gemini Live uses cellular data.
+6. If permissions are missing, the helper is stale, or UID checks fail, the
+   app must stop with a specific diagnostic rather than attempt display 0.

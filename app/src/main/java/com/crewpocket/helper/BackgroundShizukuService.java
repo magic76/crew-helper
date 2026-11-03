@@ -79,8 +79,8 @@ public final class BackgroundShizukuService extends IBackgroundShizukuService.St
      */
     @Override public ParcelFileDescriptor relay(String requestJson) {
         final int callerUid = Binder.getCallingUid();
-        final boolean authorized = Process.myUid() == 2000
-                && callerUid == appUid();
+        final boolean authorized = BackgroundShizukuCommandPolicy.authorizedCaller(
+                Process.myUid(), appUid(), callerUid);
         final String request = requestJson;
         ParcelFileDescriptor[] pipe;
         try {
@@ -117,7 +117,8 @@ public final class BackgroundShizukuService extends IBackgroundShizukuService.St
     }
 
     private boolean authorizedCaller() {
-        return Process.myUid() == 2000 && Binder.getCallingUid() == appUid();
+        return BackgroundShizukuCommandPolicy.authorizedCaller(
+                Process.myUid(), appUid(), Binder.getCallingUid());
     }
 
     private int appUid() {
@@ -171,7 +172,7 @@ public final class BackgroundShizukuService extends IBackgroundShizukuService.St
             // A manual UI call may omit an expected virtual-display identity.
             // Bind those calls to a fresh Shell STATUS before sending them.
             String op = command.optString("op", "");
-            if (requiresDisplay(op)
+            if (BackgroundShizukuCommandPolicy.requiresDisplay(op)
                     && (!command.has("expectedDisplayId")
                     || !command.has("expectedPackage"))) {
                 JSONObject state = sendToShell(new JSONObject().put("op", "status"));
@@ -188,36 +189,34 @@ public final class BackgroundShizukuService extends IBackgroundShizukuService.St
 
     private static String validateCommand(JSONObject c) {
         String op = c.optString("op", "");
-        if (!("status".equals(op) || "open".equals(op)
-                || "preview".equals(op) || "tap".equals(op)
-                || "swipe".equals(op) || "front".equals(op)
-                || "close".equals(op))) return "SHIZUKU_OPERATION_DENIED";
+        if (!BackgroundShizukuCommandPolicy.allowedOperation(op))
+            return "SHIZUKU_OPERATION_DENIED";
         java.util.HashSet<String> allowed = new java.util.HashSet<>();
         allowed.add("op");
         if ("open".equals(op)) {
             allowed.add("package");
-            if (!validPackage(c.optString("package", "")))
+            if (!BackgroundShizukuCommandPolicy.validPackage(c.optString("package", "")))
                 return "SHIZUKU_PACKAGE_INVALID";
         }
-        if (requiresDisplay(op)) {
+        if (BackgroundShizukuCommandPolicy.requiresDisplay(op)) {
             allowed.add("expectedDisplayId");
             allowed.add("expectedPackage");
             if (c.has("expectedDisplayId")
                     && c.optInt("expectedDisplayId", -1) <= 0)
                 return "SHIZUKU_DISPLAY_INVALID";
             if (c.has("expectedPackage")
-                    && !validPackage(c.optString("expectedPackage", "")))
+                    && !BackgroundShizukuCommandPolicy.validPackage(c.optString("expectedPackage", "")))
                 return "SHIZUKU_EXPECTED_PACKAGE_INVALID";
         }
         if ("tap".equals(op)) {
             allowed.add("x"); allowed.add("y");
-            if (!validCoordinate(c.optInt("x", -1))
-                    || !validCoordinate(c.optInt("y", -1)))
+            if (!BackgroundShizukuCommandPolicy.validCoordinate(c.optInt("x", -1))
+                    || !BackgroundShizukuCommandPolicy.validCoordinate(c.optInt("y", -1)))
                 return "SHIZUKU_COORDINATE_INVALID";
         } else if ("swipe".equals(op)) {
             for (String key : new String[]{"x1", "y1", "x2", "y2"}) {
                 allowed.add(key);
-                if (!validCoordinate(c.optInt(key, -1)))
+                if (!BackgroundShizukuCommandPolicy.validCoordinate(c.optInt(key, -1)))
                     return "SHIZUKU_COORDINATE_INVALID";
             }
             allowed.add("durationMs");
@@ -228,18 +227,6 @@ public final class BackgroundShizukuService extends IBackgroundShizukuService.St
         while (keys.hasNext())
             if (!allowed.contains(keys.next())) return "SHIZUKU_ARGUMENT_DENIED";
         return "";
-    }
-
-    private static boolean requiresDisplay(String op) {
-        return "preview".equals(op) || "tap".equals(op)
-                || "swipe".equals(op) || "front".equals(op)
-                || "close".equals(op);
-    }
-
-    private static boolean validCoordinate(int n) { return n >= 0 && n <= 8192; }
-    private static boolean validPackage(String p) {
-        return p != null && p.length() < 180
-                && p.matches("[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+");
     }
 
     private static JSONObject sendToShell(JSONObject request) throws Exception {
@@ -255,12 +242,17 @@ public final class BackgroundShizukuService extends IBackgroundShizukuService.St
             writer.flush();
             ByteArrayOutputStream reply = new ByteArrayOutputStream();
             java.io.InputStream stream = socket.getInputStream();
-            int ch;
-            while ((ch = stream.read()) != -1 && ch != '\n') {
-                if (reply.size() >= 2 * 1024 * 1024)
+            byte[] block = new byte[8192];
+            int count;
+            boolean done = false;
+            while (!done && (count = stream.read(block)) != -1) {
+                int end = 0;
+                while (end < count && block[end] != '\n') end++;
+                if (reply.size() + end > 2 * 1024 * 1024)
                     return new JSONObject().put("success", false)
                             .put("error", "SHIZUKU_RELAY_RESPONSE_TOO_LARGE");
-                reply.write(ch);
+                reply.write(block, 0, end);
+                done = end < count;
             }
             if (reply.size() == 0) return new JSONObject()
                     .put("success", false).put("error", "SHIZUKU_EMPTY_RESPONSE");
