@@ -86,12 +86,13 @@ final class AgentTaskLifecyclePolicy {
         // still blocks the exact same failed action on the unchanged screen.
         if (!safe(lastFailedMutationSignature).isEmpty()
                 && safe(signature).equals(safe(lastFailedMutationSignature))
-                && !safe(failedMutationScreenFingerprint).isEmpty()
-                && safe(failedMutationScreenFingerprint).equals(safe(latestSemanticFingerprint))) {
+                && (safe(failedMutationScreenFingerprint).isEmpty()
+                    || safe(failedMutationScreenFingerprint)
+                            .equals(safe(latestSemanticFingerprint)))) {
             return new StabilityDecision(
                     true,
                     "REPEAT_FAILED_ACTION_ON_UNCHANGED_SCREEN",
-                    "這個完全相同的操作已在目前畫面失敗。禁止原樣重試；請換 selector、換工具、返回，或直接回報卡點。");
+                    "完全相同的操作已失敗，且沒有新的畫面變更證據。禁止原樣重試；請先觀察畫面，換方法，或回報卡點。");
         }
         return new StabilityDecision(false, "", "");
     }

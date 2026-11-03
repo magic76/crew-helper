@@ -391,6 +391,15 @@ final class AgentInspectorStore {
                 }
             }
 
+            if ("launch_app".equals(runtimeTool)) {
+                if (step.has("launchSubmitted")) {
+                    out.append(" · launchSubmitted=")
+                            .append(step.optBoolean("launchSubmitted", false));
+                }
+                String launchVerify = step.optString("launchVerification", "");
+                if (!launchVerify.isEmpty())
+                    out.append(" · ").append(launchVerify);
+            }
             String failureCode = step.optString("failureCode", "");
             if ("TYPE_LENGTH_MISMATCH".equals(failureCode)) {
                 out.append(" · TYPE_LENGTH_MISMATCH expected=")
@@ -677,6 +686,20 @@ final class AgentInspectorStore {
                                                         "locatorMargin", 0.0)));
                             }
                         }
+                    }
+
+                    // Preserve only the two safe launch facts, never package
+                    // names, intent data, app labels, or exception messages.
+                    if ("launch_app".equals(tool) && diagnostic != null) {
+                        if (diagnostic.has("launchSubmitted")) {
+                            step.put("launchSubmitted",
+                                    diagnostic.optBoolean("launchSubmitted", false));
+                        }
+                        String launchVerify =
+                                diagnostic.optString("launchVerification", "");
+                        if ("LAUNCH_TARGET_VISIBLE".equals(launchVerify)
+                                || "LAUNCH_TARGET_NOT_VISIBLE".equals(launchVerify))
+                            step.put("launchVerification", launchVerify);
                     }
 
                     // Preserve only deterministic uppercase Runtime error codes;
