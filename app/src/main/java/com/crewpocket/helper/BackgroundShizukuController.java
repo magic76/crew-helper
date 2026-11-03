@@ -25,6 +25,7 @@ final class BackgroundShizukuController {
     private volatile boolean destroyed;
     private volatile boolean pending;
     private volatile boolean bound;
+    private volatile boolean launchStarted;
 
     private final Shizuku.OnRequestPermissionResultListener permissionListener =
             (requestCode, result) -> {
@@ -42,8 +43,14 @@ final class BackgroundShizukuController {
 
         @Override public void onServiceDisconnected(ComponentName name) {
             BackgroundShizukuRelay.detach();
-        BackgroundShellHandoff.cancelNonce();
-            if (!destroyed && pending) finish("SHIZUKU_SERVICE_DISCONNECTED");
+            // Shizuku only bootstraps this process. Once launch has started,
+            // Shell->App Binder handoff is independent of the UserService.
+            // Do not revoke its nonce mid-flight or claim failure before the
+            // separate direct-Binder readiness probe has completed.
+            if (!destroyed && pending && !launchStarted) {
+                BackgroundShellHandoff.cancelNonce();
+                finish("SHIZUKU_SERVICE_DISCONNECTED");
+            }
         }
     };
 
@@ -69,6 +76,7 @@ final class BackgroundShizukuController {
     void start() {
         if (destroyed || pending) return;
         pending = true;
+        launchStarted = false;
         report("正在檢查背景 Helper 與 Shizuku…", false);
         main.postDelayed(() -> {
             if (pending && !destroyed)
@@ -165,6 +173,7 @@ final class BackgroundShizukuController {
                             + current.optInt("protocolVersion", -1);
                 } else {
                     String nonce = BackgroundShellHandoff.issueLaunchNonce();
+                    launchStarted = true;
                     String launch = remote.startHelperDirect(nonce);
                     if (!"LAUNCH_REQUESTED".equals(launch)) {
                         BackgroundShellHandoff.cancelNonce();
@@ -202,12 +211,15 @@ final class BackgroundShizukuController {
 
     private void finish(String message) {
         pending = false;
+        launchStarted = false;
         report(message, true);
     }
 
     void destroy() {
         destroyed = true;
         pending = false;
+        launchStarted = false;
+        BackgroundShellHandoff.cancelNonce();
         Shizuku.removeRequestPermissionResultListener(permissionListener);
         BackgroundShizukuRelay.detach();
         if (bound) {
