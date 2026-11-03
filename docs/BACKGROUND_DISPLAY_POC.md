@@ -465,3 +465,47 @@ method from `IBackgroundShizukuService`. Shizuku now exposes only
 use Shizuku's Binder at all after the Shell Binder is attached.
 This eliminates the redundant Shell UID → LocalSocket hop rather than
 just leaving it unused.
+
+
+## Stage 8 — direct Binder contract hardening
+
+Direct Binder `tap`, `swipe`, `preview`, `front` and `close`
+requests have a strict identity pair: `expectedDisplayId` and
+`expectedPackage` must be **both present** (Live's previously observed
+lease) or **both absent** (explicit manual UI interaction). A partially
+specified pair is rejected with `DIRECT_SHELL_PARTIAL_IDENTITY`,
+instead of overwriting the provided field with the newest active
+display's identity. Full pairs are checked against the live virtual
+display by the Shell runtime. Virtual-display `swipe` also verifies
+the target App still has a task on the virtual display.
+
+For responsiveness, the App's Direct Binder preview/operation response
+pipe is polled with a **15-second end-to-end response deadline** after
+the Binder returns its file descriptor. An unresponsive Shell worker
+returns `DIRECT_SHELL_RESPONSE_TIMEOUT` and closes the descriptor,
+instead of leaving Gemini Live or the Settings UI blocked indefinitely.
+There is never a fallback to the main display.
+
+
+## Follow-up — Direct Binder fail-closed startup (post PR #195)
+
+- Once Shizuku is used for a direct Shell Helper, the App remembers it in
+  process memory. If that Binder dies, the next operation returns
+  `DIRECT_SHELL_BINDER_LOST` instead of probing a legacy LocalSocket
+  that can fail with `EACCES`. A never-attached direct session returns
+  `DIRECT_SHELL_BINDER_NOT_ATTACHED`.
+- The Shizuku startup button no longer makes an irrelevant legacy Socket
+  probe. Shizuku disconnecting *after* process launch does not prematurely
+  invalidate the one-time provider handoff nonce.
+- At most two Shell Binder requests may be in flight. A third fails rather
+  than spawning unlimited threads.
+- Keep PR #195's already-merged **15-second bounded Binder pipe response**
+  and **display/package lease** fixes unchanged.
+- Regression tests explicitly cover dead Binder, pending Shizuku bootstrap,
+  and the still-available manual USB ADB path.
+
+For the next S25 Ultra test: obtain `DIRECT_SHELL_BINDER` with
+`protocolVersion=6`, verify preview + one low-risk tap on virtual
+display, disconnect Wi-Fi to test cellular, and then terminate the Shell
+Helper. A lost Binder must return a direct-Binder diagnostic; no
+`SOCKET_CONNECT_EACCES` from the Shizuku-started path.

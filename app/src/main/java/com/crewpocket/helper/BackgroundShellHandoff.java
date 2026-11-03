@@ -7,6 +7,9 @@ import android.os.IBinder;
 import android.os.ParcelFileDescriptor;
 import android.os.Process;
 import android.os.SystemClock;
+import android.system.Os;
+import android.system.OsConstants;
+import android.system.StructPollfd;
 import android.util.Base64;
 import org.json.JSONObject;
 
@@ -31,17 +34,28 @@ final class BackgroundShellHandoff {
     static final String KEY_APP_TOKEN = "appToken";
     private static final long NONCE_TTL_MS = 60_000L;
     private static final int MAX_REPLY_BYTES = 2 * 1024 * 1024;
+    private static final long PIPE_RESPONSE_TIMEOUT_MS = 15_000L;
     private static final SecureRandom RNG = new SecureRandom();
     private static final IBinder APP_TOKEN = new Binder();
 
     private static String pendingNonce = "";
     private static long nonceIssuedAt;
     private static volatile IBackgroundDirectShell direct;
+    // Sticky until this App process ends. Do not allow a Shizuku-started
+    // session to fall back to the EACCES-prone legacy local socket.
+    private static volatile boolean directRequired;
+    private static volatile boolean hadDirectBinder;
     private static IBinder directBinder;
 
     private BackgroundShellHandoff() {}
 
+    static boolean directRequired() { return directRequired; }
+    static boolean hadDirectBinder() { return hadDirectBinder; }
+
+    static synchronized void requireDirect() { directRequired = true; }
+
     static synchronized String issueLaunchNonce() {
+        requireDirect();
         byte[] data = new byte[32];
         RNG.nextBytes(data);
         pendingNonce = Base64.encodeToString(data,
@@ -119,6 +133,8 @@ final class BackgroundShellHandoff {
         cancelNonce();
         directBinder = raw;
         direct = shell;
+        directRequired = true;
+        hadDirectBinder = true;
         response.putBinder(KEY_APP_TOKEN, APP_TOKEN);
         response.putBoolean("accepted", true);
         return response;
@@ -136,8 +152,20 @@ final class BackgroundShellHandoff {
             try (InputStream in = new ParcelFileDescriptor.AutoCloseInputStream(source);
                  ByteArrayOutputStream out = new ByteArrayOutputStream()) {
                 byte[] buffer = new byte[8192];
-                int n;
-                while ((n = in.read(buffer)) != -1) {
+                StructPollfd pollFd = new StructPollfd();
+                pollFd.fd = source.getFileDescriptor();
+                pollFd.events = (short) (OsConstants.POLLIN
+                        | OsConstants.POLLHUP | OsConstants.POLLERR);
+                final long deadline = SystemClock.elapsedRealtime()
+                        + PIPE_RESPONSE_TIMEOUT_MS;
+                for (;;) {
+                    long remaining = deadline - SystemClock.elapsedRealtime();
+                    if (remaining <= 0L)
+                        return fail("DIRECT_SHELL_RESPONSE_TIMEOUT");
+                    if (Os.poll(new StructPollfd[]{pollFd}, (int) remaining) == 0)
+                        return fail("DIRECT_SHELL_RESPONSE_TIMEOUT");
+                    int n = in.read(buffer);
+                    if (n < 0) break;
                     if (out.size() + n > MAX_REPLY_BYTES)
                         return fail("DIRECT_SHELL_RESPONSE_TOO_LARGE");
                     out.write(buffer, 0, n);

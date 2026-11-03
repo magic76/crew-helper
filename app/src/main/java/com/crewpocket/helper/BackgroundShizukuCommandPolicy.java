@@ -11,6 +11,15 @@ final class BackgroundShizukuCommandPolicy {
                 || "close".equals(op);
     }
 
+    /**
+     * Never turn a stale or incomplete Live lease into a new display target.
+     * Only manual UI commands with NEITHER identity field may be bound to
+     * the current, already verified display by the shell process.
+     */
+    static boolean completeDisplayIdentity(boolean hasId, boolean hasPackage) {
+        return hasId == hasPackage;
+    }
+
     static boolean requiresDisplay(String op) {
         return "preview".equals(op) || "tap".equals(op)
                 || "swipe".equals(op) || "front".equals(op)

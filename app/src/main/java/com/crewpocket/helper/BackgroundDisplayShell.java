@@ -47,6 +47,7 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.Semaphore;
 
 /**
  * Opt-in virtual-display POC. Launch through adb shell/app_process or
@@ -74,6 +75,8 @@ public final class BackgroundDisplayShell {
     private boolean focusIsolated = false;
     private int width, height;
     private long frameAt;
+    // Prevent unbounded Shell workers when an App-side request stalls.
+    private final Semaphore directRequests = new Semaphore(2);
     private final IBackgroundDirectShell.Stub directEndpoint = new IBackgroundDirectShell.Stub() {
         @Override public int[] identity() {
             return new int[]{Process.myUid(), Process.myPid()};
@@ -81,9 +84,13 @@ public final class BackgroundDisplayShell {
         @Override public ParcelFileDescriptor executeCommand(String json) {
             if (Process.myUid() != 2000
                     || Binder.getCallingUid() != appUid) return null;
+            if (!directRequests.tryAcquire()) return null;
             final ParcelFileDescriptor[] ends;
             try { ends = ParcelFileDescriptor.createPipe(); }
-            catch (Exception failed) { return null; }
+            catch (Exception failed) {
+                directRequests.release();
+                return null;
+            }
             final ParcelFileDescriptor sink = ends[1];
             Thread worker = new Thread(() -> {
                 String response;
@@ -101,8 +108,8 @@ public final class BackgroundDisplayShell {
                             // Bind UI-originated commands to THIS display. Live
                             // sends its own expectedDisplayId / expectedPackage.
                             if (BackgroundShizukuCommandPolicy.requiresDisplay(op)
-                                    && (!req.has("expectedDisplayId")
-                                    || !req.has("expectedPackage"))) {
+                                    && !req.has("expectedDisplayId")
+                                    && !req.has("expectedPackage")) {
                                 if (displayId <= Display.DEFAULT_DISPLAY || openedPackage.isEmpty())
                                     throw new IllegalStateException("NO_BACKGROUND_DISPLAY");
                                 req.put("expectedDisplayId", displayId);
@@ -124,10 +131,19 @@ public final class BackgroundDisplayShell {
                     out.write(response.getBytes(StandardCharsets.UTF_8));
                 } catch (Exception ignored) {
                     try { sink.close(); } catch (Exception ignoredClose) {}
+                } finally {
+                    directRequests.release();
                 }
             }, "crew-bg-direct-binder");
             worker.setDaemon(true);
-            worker.start();
+            try {
+                worker.start();
+            } catch (RuntimeException cannotStart) {
+                try { ends[0].close(); } catch (Exception ignored) {}
+                try { ends[1].close(); } catch (Exception ignored) {}
+                directRequests.release();
+                return null;
+            }
             return ends[0];
         }
     };
@@ -202,6 +218,10 @@ public final class BackgroundDisplayShell {
                 return "DIRECT_SHELL_INVALID_PACKAGE";
         }
         if (BackgroundShizukuCommandPolicy.requiresDisplay(op)) {
+            if (!BackgroundShizukuCommandPolicy.completeDisplayIdentity(
+                    command.has("expectedDisplayId"),
+                    command.has("expectedPackage")))
+                return "DIRECT_SHELL_PARTIAL_IDENTITY";
             allowed.add("expectedDisplayId");
             allowed.add("expectedPackage");
             if (command.has("expectedDisplayId")
@@ -367,6 +387,8 @@ public final class BackgroundDisplayShell {
         }
         if ("swipe".equals(op)) {
             if (!matchesExpectedDisplay(req)) return fail("DISPLAY_OWNERSHIP_CHANGED");
+            if (req.has("expectedPackage") && !taskPresentOnDisplay())
+                return fail("BACKGROUND_TASK_NOT_ON_DISPLAY");
             int x1 = req.optInt("x1", -1), y1 = req.optInt("y1", -1);
             int x2 = req.optInt("x2", -1), y2 = req.optInt("y2", -1);
             int ms = req.optInt("durationMs", 300);

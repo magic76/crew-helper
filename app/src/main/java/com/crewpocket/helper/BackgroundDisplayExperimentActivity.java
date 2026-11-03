@@ -34,6 +34,8 @@ public final class BackgroundDisplayExperimentActivity extends Activity {
     private Bitmap previewBitmap;
     private boolean busy;
     private int screenWidth, screenHeight;
+    private int previewDisplayId = -1;
+    private String previewPackage = "";
     private float pressX, pressY;
     private long pressAt;
     private String lastDiagnostics = "尚未檢查 Helper";
@@ -158,10 +160,15 @@ public final class BackgroundDisplayExperimentActivity extends Activity {
             if (event.getAction() != MotionEvent.ACTION_UP) return true;
             int[] from = pointOnDisplay(pressX, pressY);
             int[] to = pointOnDisplay(event.getX(), event.getY());
-            if (from == null || to == null) return true;
+            // A screenshot is a lease on one specific virtual display/App.
+            // Never replay old image coordinates on a different display.
+            if (from == null || to == null || previewDisplayId <= 0
+                    || previewPackage.isEmpty()) return true;
             try {
                 boolean swipe = Math.hypot(event.getX() - pressX, event.getY() - pressY) > dp(24);
-                JSONObject gesture = new JSONObject();
+                JSONObject gesture = new JSONObject()
+                        .put("expectedDisplayId", previewDisplayId)
+                        .put("expectedPackage", previewPackage);
                 if (swipe) {
                     gesture.put("x1", from[0]).put("y1", from[1])
                             .put("x2", to[0]).put("y2", to[1])
@@ -237,11 +244,17 @@ public final class BackgroundDisplayExperimentActivity extends Activity {
                             + " · " + result.optString("transport", "DIRECT_SOCKET")
                             + ("status".equals(op) ? (result.optBoolean("focusIsolated", false)
                                     ? " · 獨立焦點" : " · 共用焦點／未確認") : ""));
-                    if ("front".equals(op) || "close".equals(op)) clearFrame();
+                    if ("front".equals(op) || "close".equals(op)
+                            || "open".equals(op) || "tap".equals(op)
+                            || "swipe".equals(op)) clearFrame();
                 } else {
-                    status.setText("操作失敗：" + result.optString("error", "UNKNOWN")
-                            + ("HELPER_RESTART_REQUIRED".equals(result.optString("error", ""))
-                                    ? "（請先停止舊版 Helper，再從 Shizuku 啟動）" : ""));
+                    String code = result.optString("error", "UNKNOWN");
+                    String hint = "HELPER_RESTART_REQUIRED".equals(code)
+                            ? "（請先停止舊版 Helper，再從 Shizuku 啟動）"
+                            : code.startsWith("DIRECT_SHELL_BINDER_")
+                                ? "（Direct Binder 已中斷，請重新以 Shizuku 啟動）"
+                                : "";
+                    status.setText("操作失敗：" + code + hint);
                 }
             });
         });
@@ -263,11 +276,19 @@ public final class BackgroundDisplayExperimentActivity extends Activity {
             final Bitmap shot = bitmap;
             runOnUiThread(() -> {
                 busy = false;
-                if (shot == null) {
-                    status.setText("無畫面：" + reply.optString("error", "DECODE_FAILED"));
+                int id = reply.optInt("displayId", -1);
+                String pkg = reply.optString("package", "");
+                if (shot == null || id <= 0
+                        || !BackgroundShizukuCommandPolicy.validPackage(pkg)) {
+                    if (shot != null) shot.recycle();
+                    clearFrame();
+                    status.setText("無可驗證背景畫面："
+                            + reply.optString("error", "INVALID_DISPLAY_IDENTITY"));
                     return;
                 }
                 clearFrame();
+                previewDisplayId = id;
+                previewPackage = pkg;
                 previewBitmap = shot;
                 preview.setImageBitmap(shot);
                 screenWidth = reply.optInt("width", shot.getWidth());
@@ -283,6 +304,8 @@ public final class BackgroundDisplayExperimentActivity extends Activity {
         previewBitmap = null;
         screenWidth = 0;
         screenHeight = 0;
+        previewDisplayId = -1;
+        previewPackage = "";
     }
 
     @Override protected void onDestroy() {

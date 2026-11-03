@@ -38,12 +38,17 @@ final class BackgroundDisplayClient {
     private static JSONObject send(JSONObject operation) {
         // Mika-style direct Binder from Shell to App. A Shizuku UserService
         // merely launches it; no operation takes a second Socket hop.
-        if (BackgroundShellHandoff.connected())
+        BackgroundDirectTransportPolicy.Route route =
+                BackgroundDirectTransportPolicy.route(
+                        BackgroundShellHandoff.connected(),
+                        BackgroundShellHandoff.directRequired(),
+                        BackgroundShizukuRelay.connected());
+        if (route == BackgroundDirectTransportPolicy.Route.DIRECT_BINDER)
             return BackgroundShellHandoff.request(operation);
-        // Once Shizuku has been used, do not silently fall back to the
-        // legacy App->Shell socket (which One UI can reject with EACCES).
-        if (BackgroundShizukuRelay.connected())
-            return error("DIRECT_SHELL_BINDER_NOT_ATTACHED");
+        if (route == BackgroundDirectTransportPolicy.Route.REQUIRE_DIRECT_BINDER)
+            return error(BackgroundShellHandoff.hadDirectBinder()
+                    ? "DIRECT_SHELL_BINDER_LOST"
+                    : "DIRECT_SHELL_BINDER_NOT_ATTACHED");
         LocalSocket socket = new LocalSocket();
         try {
             socket.connect(new LocalSocketAddress(BackgroundDisplayShell.SOCKET,
