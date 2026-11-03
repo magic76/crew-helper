@@ -269,3 +269,72 @@ authorized ADB session and an explicit user action. Automatically enabling
 Wireless Debugging or silently escalating a normal App's privileges would
 violate the existing safety boundary. Real-device acceptance is still
 required before claiming Mika-equivalent operation.
+
+
+## Stage 6: Shizuku-assisted Shell Helper startup (v1.8.119)
+
+Shizuku is an **alternative launcher** to USB ADB for the same
+`BackgroundDisplayShell` process, not a new Gemini Live executor.
+The existing private LocalSocket peer-UID check, virtual display ownership,
+semantic control, Vision safety limits and handoff verification remain unchanged.
+
+Official Shizuku: https://shizuku.rikka.app/download/
+Shizuku API: https://github.com/RikkaApps/Shizuku-API
+
+### Setup (Samsung One UI / Android 12+)
+
+1. Install Shizuku v13+ from the official distribution.
+2. Start the Shizuku service *using its own authorized Wireless debugging
+   pairing flow* (usually requires Wi-Fi on non-root devices), or USB ADB.
+   Crew Helper does **not** bypass pairing, silently enable debugging,
+   run arbitrary shell strings, or grant itself access.
+3. Install Crew Helper v1.8.119, open
+   **Settings > Advanced > Background Display POC**.
+4. Tap **查看 Shizuku 服務狀態**, then
+   **透過 Shizuku 啟動背景 Helper**. Approve Shizuku permission for
+   Crew Helper when prompted.
+5. Confirm **SHIZUKU_HELPER_CONNECTED** before enabling Gemini Live
+   background experiment. Then restart Live to refresh its tool catalog.
+6. To test the cellular-only requirement, disconnect Wi-Fi and USB
+   **after the Shizuku-started helper is online**. Gemini Live requires
+   Internet access but works over 4G/5G; the local helper socket does
+   not need an ongoing ADB connection.
+
+**Important:** On an unrooted device, Shizuku is *not* a permanent
+boot-persistent privilege grant. After reboot, Shizuku itself usually
+needs to be started again (Wireless debugging or USB). This patch removes
+the need to manually type the Crew Helper `app_process` command once
+Shizuku is already running; it does not remove the Shizuku bootstrap.
+
+### Implementation and failure isolation
+
+- Uses `dev.rikka.shizuku:api/provider:13.1.5` and the recommended
+  **Shizuku UserService**, not deprecated `Shizuku.newProcess`.
+- The UserService checks Linux UID **2000** and exposes only
+  `startHelper()` and `shellUid()` over Binder; no arbitrary command
+  execution, file paths or process kill from the main App.
+- It launches the same known `app_process` class with fixed arguments
+  and the installed APK path resolved internally. A separate App-side
+  socket probe confirms success: a spawned child process alone is
+  not considered successful.
+- If a valid helper is already running, it is reused. If an older
+  incompatible helper is running, it is **not** killed automatically.
+- Shizuku UserService connection is detached when closing this Settings
+  page but the background helper is not stopped.
+- Normal ADB launcher remains supported as backup. Shizuku features
+  are initiated only by pressing the user-visible button.
+
+### Local validation matrix
+
+- Not installed/running: show `SHIZUKU_NOT_RUNNING` without request.
+- Running but unapproved: Shizuku permission prompt.
+- Denied: `SHIZUKU_PERMISSION_DENIED`; no helper launch.
+- Shell UID mismatch or root backend: fail closed.
+- Granted + not yet running: Shizuku starts helper and socket confirms.
+- Helper already connected: no duplicate process.
+- Old APK helper: diagnostic, no forced stop or ownership takeover.
+- Disable Wi-Fi after successful start: use 4G/5G Gemini Live and verify
+  that the helper socket continues to respond and does not affect the
+  physical foreground.
+- Reboot: confirm Shizuku is stopped and retry setup, documenting
+  Samsung One UI background process behavior.

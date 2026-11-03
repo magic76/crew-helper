@@ -39,7 +39,8 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Opt-in virtual-display POC. Only launch through adb shell/app_process.
+ * Opt-in virtual-display POC. Launch through adb shell/app_process or
+ * a Shizuku shell-UID UserService that starts the same app_process binary.
  * Portions of the Shell Context and virtual-display approach are adapted
  * from Mika v0.1.33 (wangzan101) and scrcpy (Genymobile / Romain Vimont),
  * licensed under the Apache License, Version 2.0.

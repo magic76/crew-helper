@@ -22,10 +22,12 @@ import java.util.concurrent.Executors;
 
 /**
  * Manual test UI only. Never routes tool calls or fallbacks to the main display.
- * The helper is not started automatically: user must authorize an ADB shell first.
+ * The helper is not started automatically: user must explicitly authorize
+ * Shizuku UserService or start it through ADB shell.
  */
 public final class BackgroundDisplayExperimentActivity extends Activity {
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
+    private BackgroundShizukuController shizuku;
     private TextView status;
     private EditText packageField;
     private ImageView preview;
@@ -52,7 +54,9 @@ public final class BackgroundDisplayExperimentActivity extends Activity {
         layout.addView(title);
 
         TextView info = new TextView(this);
-        info.setText("需先透過 ADB 啟動 Shell Helper。可選擇開啟 Gemini Live 背景操作實驗，前景工具維持原樣。");
+        info.setText("背景 Shell Helper 可由 Shizuku 一鍵啟動，或保留原本 ADB 啟動方式。"
+                + "Shizuku 需先安裝、啟動並授權 Crew Helper；啟動後切換到行動網路可繼續使用，"
+                + "重新開機後無 Root 的 Shizuku 仍須重新啟動。");
         info.setTextSize(14);
         info.setPadding(0, dp(12), 0, dp(12));
         layout.addView(info);
@@ -77,6 +81,36 @@ public final class BackgroundDisplayExperimentActivity extends Activity {
         status.setText("尚未檢查 Helper");
         status.setPadding(0, dp(8), 0, dp(12));
         layout.addView(status);
+
+        shizuku = new BackgroundShizukuController(this, worker, (message, finished) -> {
+            status.setText(message);
+            if (finished) {
+                busy = false;
+                lastDiagnostics = "Crew Helper BG Shizuku"
+                        + " | result=" + message.replaceAll("[^A-Za-z0-9_ .:-]", "");
+            }
+        });
+        addButton(layout, "查看 Shizuku 服務狀態", () ->
+                status.setText(shizuku.status()));
+        addButton(layout, "透過 Shizuku 啟動背景 Helper", () -> {
+            if (busy) return;
+            busy = true;
+            shizuku.start();
+        });
+        addButton(layout, "安裝／開啟 Shizuku", () -> {
+            try {
+                android.content.Intent launch = getPackageManager()
+                        .getLaunchIntentForPackage("moe.shizuku.privileged.api");
+                if (launch != null) {
+                    startActivity(launch);
+                    return;
+                }
+                startActivity(new android.content.Intent(android.content.Intent.ACTION_VIEW,
+                        android.net.Uri.parse("https://shizuku.rikka.app/download/")));
+            } catch (Exception failure) {
+                status.setText("無法開啟 Shizuku，請手動安裝。");
+            }
+        });
 
         packageField = new EditText(this);
         packageField.setSingleLine(true);
@@ -205,7 +239,7 @@ public final class BackgroundDisplayExperimentActivity extends Activity {
                 } else {
                     status.setText("操作失敗：" + result.optString("error", "UNKNOWN")
                             + ("HELPER_RESTART_REQUIRED".equals(result.optString("error", ""))
-                                    ? "（請重啟 ADB Helper）" : ""));
+                                    ? "（請先停止舊版 Helper，再從 Shizuku 啟動）" : ""));
                 }
             });
         });
@@ -250,6 +284,7 @@ public final class BackgroundDisplayExperimentActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
+        if (shizuku != null) shizuku.destroy();
         clearFrame();
         worker.shutdownNow();
         super.onDestroy();
