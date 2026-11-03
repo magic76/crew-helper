@@ -59,7 +59,10 @@ final class BackgroundShizukuController {
         args = new Shizuku.UserServiceArgs(new ComponentName(
                 activity.getPackageName(), BackgroundShizukuService.class.getName()))
                 .daemon(true).processNameSuffix("background")
-                .version(version);
+                // Force a fresh UserService with the Binder relay interface.
+                // The old daemon only exposes shellUid/startHelper and cannot
+                // serve the new relay method, even if it is still alive.
+                .version(version * 100 + 5);
         Shizuku.addRequestPermissionResultListener(permissionListener);
     }
 
