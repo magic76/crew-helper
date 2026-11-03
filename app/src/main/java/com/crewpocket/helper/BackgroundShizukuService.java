@@ -271,7 +271,7 @@ public final class BackgroundShizukuService extends IBackgroundShizukuService.St
     private static String error(String code) {
         try { return new JSONObject().put("success", false)
                     .put("error", code).toString(); }
-        catch (Exception ignored) { return "{\\"success\\":false}"; }
+        catch (Exception ignored) { return "{}"; }
     }
 
     private String resolveOwnApk() {

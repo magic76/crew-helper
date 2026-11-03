@@ -50,7 +50,7 @@ import java.util.concurrent.TimeUnit;
  */
 public final class BackgroundDisplayShell {
     static final String SOCKET = "com.crewpocket.helper.background.v1";
-    static final int PROTOCOL_VERSION = 4;
+    static final int PROTOCOL_VERSION = 5;
     private static final String PACKAGE = "com.crewpocket.helper";
     private final Context context;
     private final int appUid;
@@ -82,8 +82,13 @@ public final class BackgroundDisplayShell {
             for (;;) {
                 LocalSocket client = server.accept();
                 try {
-                    if (client.getPeerCredentials() == null
-                            || client.getPeerCredentials().getUid() != helper.appUid) {
+                    // App UID may be denied cross-UID socket access by One UI.
+                    // The Shizuku UserService connects as UID 2000 instead.
+                    // A shell UID client has shell privileges already; the
+                    // UserService Binder independently authorizes the App UID.
+                    int peerUid = client.getPeerCredentials() == null
+                            ? -1 : client.getPeerCredentials().getUid();
+                    if (peerUid != helper.appUid && peerUid != 2000) {
                         client.close();
                         continue;
                     }
