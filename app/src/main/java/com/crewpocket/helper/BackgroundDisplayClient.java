@@ -57,8 +57,6 @@ final class BackgroundDisplayClient {
             if (response == null || response.length() > 2 * 1024 * 1024)
                 return error("INVALID_HELPER_RESPONSE");
             return new JSONObject(response);
-        } catch (android.system.ErrnoException denied) {
-            return error("SOCKET_" + denied.errno);
         } catch (Exception failure) {
             String message = String.valueOf(failure.getMessage());
             if (message.contains("EACCES") || message.contains("Permission denied"))
