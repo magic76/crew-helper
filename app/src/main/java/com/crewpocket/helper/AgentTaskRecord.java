@@ -426,8 +426,7 @@ final class AgentTaskRecord {
         String detail = result.optString("message", result.optString("error", ""));
         // Launch can be accepted by Android but fail exact-package observation.
         // The success message otherwise masks LAUNCH_NOT_VISIBLE in Inspector.
-        if ("launch_app".equals(name) && !"成功".equals(outcome)
-                && !"待確認".equals(outcome)) {
+        if ("launch_app".equals(name) && "失敗".equals(outcome)) {
             detail = LaunchFailureCodePolicy.classify(
                     result.optString("error", ""),
                     result.optString("verification", ""),
