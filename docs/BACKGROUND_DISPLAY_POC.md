@@ -465,3 +465,23 @@ method from `IBackgroundShizukuService`. Shizuku now exposes only
 use Shizuku's Binder at all after the Shell Binder is attached.
 This eliminates the redundant Shell UID → LocalSocket hop rather than
 just leaving it unused.
+
+
+## Stage 8 — direct Binder contract hardening
+
+Direct Binder `tap`, `swipe`, `preview`, `front` and `close`
+requests have a strict identity pair: `expectedDisplayId` and
+`expectedPackage` must be **both present** (Live's previously observed
+lease) or **both absent** (explicit manual UI interaction). A partially
+specified pair is rejected with `DIRECT_SHELL_PARTIAL_IDENTITY`,
+instead of overwriting the provided field with the newest active
+display's identity. Full pairs are checked against the live virtual
+display by the Shell runtime. Virtual-display `swipe` also verifies
+the target App still has a task on the virtual display.
+
+For responsiveness, the App's Direct Binder preview/operation response
+pipe is polled with a **15-second end-to-end response deadline** after
+the Binder returns its file descriptor. An unresponsive Shell worker
+returns `DIRECT_SHELL_RESPONSE_TIMEOUT` and closes the descriptor,
+instead of leaving Gemini Live or the Settings UI blocked indefinitely.
+There is never a fallback to the main display.

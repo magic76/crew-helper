@@ -101,8 +101,8 @@ public final class BackgroundDisplayShell {
                             // Bind UI-originated commands to THIS display. Live
                             // sends its own expectedDisplayId / expectedPackage.
                             if (BackgroundShizukuCommandPolicy.requiresDisplay(op)
-                                    && (!req.has("expectedDisplayId")
-                                    || !req.has("expectedPackage"))) {
+                                    && !req.has("expectedDisplayId")
+                                    && !req.has("expectedPackage")) {
                                 if (displayId <= Display.DEFAULT_DISPLAY || openedPackage.isEmpty())
                                     throw new IllegalStateException("NO_BACKGROUND_DISPLAY");
                                 req.put("expectedDisplayId", displayId);
@@ -202,6 +202,10 @@ public final class BackgroundDisplayShell {
                 return "DIRECT_SHELL_INVALID_PACKAGE";
         }
         if (BackgroundShizukuCommandPolicy.requiresDisplay(op)) {
+            if (!BackgroundShizukuCommandPolicy.completeDisplayIdentity(
+                    command.has("expectedDisplayId"),
+                    command.has("expectedPackage")))
+                return "DIRECT_SHELL_PARTIAL_IDENTITY";
             allowed.add("expectedDisplayId");
             allowed.add("expectedPackage");
             if (command.has("expectedDisplayId")
@@ -367,6 +371,8 @@ public final class BackgroundDisplayShell {
         }
         if ("swipe".equals(op)) {
             if (!matchesExpectedDisplay(req)) return fail("DISPLAY_OWNERSHIP_CHANGED");
+            if (req.has("expectedPackage") && !taskPresentOnDisplay())
+                return fail("BACKGROUND_TASK_NOT_ON_DISPLAY");
             int x1 = req.optInt("x1", -1), y1 = req.optInt("y1", -1);
             int x2 = req.optInt("x2", -1), y2 = req.optInt("y2", -1);
             int ms = req.optInt("durationMs", 300);
