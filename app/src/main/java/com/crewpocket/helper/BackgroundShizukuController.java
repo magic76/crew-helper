@@ -22,9 +22,9 @@ final class BackgroundShizukuController {
     private final Feedback feedback;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final Shizuku.UserServiceArgs args;
-    private boolean destroyed;
-    private boolean pending;
-    private boolean bound;
+    private volatile boolean destroyed;
+    private volatile boolean pending;
+    private volatile boolean bound;
 
     private final Shizuku.OnRequestPermissionResultListener permissionListener =
             (requestCode, result) -> {
