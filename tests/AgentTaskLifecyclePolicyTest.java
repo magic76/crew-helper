@@ -111,6 +111,17 @@ public final class AgentTaskLifecyclePolicyTest {
                         && "REPEAT_FAILED_ACTION_ON_UNCHANGED_SCREEN".equals(repeat.code),
                 "same failed mutation on unchanged screen is blocked");
 
+        AgentTaskLifecyclePolicy.StabilityDecision noObservation =
+                AgentTaskLifecyclePolicy.evaluateStability(
+                        false, false, "launch_app",
+                        false, false,
+                        "launch:com.apple.android.music",
+                        "launch:com.apple.android.music", "", "");
+        check(noObservation.blocked
+                        && "REPEAT_FAILED_ACTION_ON_UNCHANGED_SCREEN"
+                                .equals(noObservation.code),
+                "failed app open without a screen fingerprint must not retry blindly");
+
         AgentTaskLifecyclePolicy.StabilityDecision changedScreen =
                 AgentTaskLifecyclePolicy.evaluateStability(
                         false, false, "tap_screen",

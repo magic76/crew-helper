@@ -424,11 +424,29 @@ final class AgentTaskRecord {
                         ? "成功"
                         : (result.optBoolean("cancelled") ? "已取消" : "失敗"));
         String detail = result.optString("message", result.optString("error", ""));
+        // Launch can be accepted by Android but fail exact-package observation.
+        // The success message otherwise masks LAUNCH_NOT_VISIBLE in Inspector.
+        if ("launch_app".equals(name) && !"成功".equals(outcome)
+                && !"待確認".equals(outcome)) {
+            detail = LaunchFailureCodePolicy.classify(
+                    result.optString("error", ""),
+                    result.optString("verification", ""),
+                    result.optBoolean("launchSubmitted", false));
+        }
         stepsSummary.add(name + "：" + outcome
                 + (detail.isEmpty() ? "" : "（" + detail + "）"));
 
         JSONObject diagnostic = new JSONObject();
         try {
+            if ("launch_app".equals(name)) {
+                if (result.has("launchSubmitted"))
+                    diagnostic.put("launchSubmitted",
+                            result.optBoolean("launchSubmitted", false));
+                String verification = result.optString("verification", "");
+                if ("LAUNCH_TARGET_VISIBLE".equals(verification)
+                        || "LAUNCH_TARGET_NOT_VISIBLE".equals(verification))
+                    diagnostic.put("launchVerification", verification);
+            }
             String semanticAction = result.optString("semanticAction", "").trim();
             String target = AgentTapDiagnostic.targetFromRuntimeSignature(
                     name, semanticAction, lastSignature);
