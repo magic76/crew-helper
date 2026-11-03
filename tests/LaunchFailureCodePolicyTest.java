@@ -24,6 +24,18 @@ public final class LaunchFailureCodePolicyTest {
         check("LAUNCH_NOT_VISIBLE".equals(
                 LaunchFailureCodePolicy.classify("oops", "LAUNCH_TARGET_NOT_VISIBLE", false)),
                 "known verification code takes priority");
+        check("LAUNCH_BRIDGE_UNREACHABLE".equals(
+                LaunchFailureCodePolicy.transportFailure(
+                        new java.net.ConnectException("sensitive endpoint info"))),
+                "loopback bridge connection failed");
+        check("LAUNCH_BRIDGE_TIMEOUT".equals(
+                LaunchFailureCodePolicy.transportFailure(
+                        new java.net.SocketTimeoutException("secret"))),
+                "bridge timed out");
+        check("LAUNCH_BRIDGE_IO_FAILURE".equals(
+                LaunchFailureCodePolicy.transportFailure(
+                        new java.io.IOException("don't disclose this message"))),
+                "generic IO error sanitized");
         System.out.println("LaunchFailureCodePolicyTest OK");
     }
 }
