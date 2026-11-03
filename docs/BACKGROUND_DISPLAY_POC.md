@@ -399,3 +399,58 @@ App on virtual display
    while Gemini Live uses cellular data.
 6. If permissions are missing, the helper is stale, or UID checks fail, the
    app must stop with a specific diagnostic rather than attempt display 0.
+
+
+## Stage 7 — Mika-style direct Binder handoff (experimental)
+
+Instead of sending every phone operation from App → Shizuku UserService →
+Shell LocalSocket → Helper, the **Shell Helper directly returns a Binder to
+Crew Helper**. Shizuku now only bootstraps its creation.
+
+```text
+User-authorized Shizuku → startHelperDirect(one-time nonce over stdin)
+      ↓
+Shell UID 2000 BackgroundDisplayShell
+      ↓  protected ContentProvider handoff (nonce, APK path, UID/PID)
+Crew Helper App holds IBackgroundDirectShell Binder
+      ↓  executeCommand (ParcelFileDescriptor response stream)
+Same Shell Helper executes status/open/preview/tap/swipe/front/close
+```
+
+**Trust contract:** the provider requires
+`android.permission.INTERACT_ACROSS_USERS_FULL` (Shell UID),
+and independently validates the Binder calling UID/PID, the claimed
+UID/PID, the exact currently installed `base.apk` source path, a
+cryptographically random **single-use 60-second** launch nonce, and a
+live Binder round-trip `identity()` to the exact Shell process. The
+Shell Binder accepts calls only from Crew Helper's UID. Unknown ops or
+arguments are denied; no arbitrary shell command interface is exposed.
+
+The Shell Helper links to the owner's App Binder token and closes its
+virtual display when the App dies. It does not create any LocalSocket in
+direct mode. An explicit old USB ADB launch without a nonce still
+supports its legacy local socket as a fallback, but Shizuku never uses
+that path. Protocol **v6** is used for direct Binder requests and their
+response stream is size-bounded. Large previews travel through a
+`ParcelFileDescriptor`, not a Binder string.
+
+### Acceptance sequence (S25 Ultra)
+
+1. Install the CI APK with this patch and open Shizuku, start its daemon.
+2. Enable/background experiment and press **透過 Shizuku 啟動背景 Helper**.
+3. Require **DIRECT_SHELL_BINDER_CONNECTED**.
+4. Press **檢查 Helper**: require
+   `transport=DIRECT_SHELL_BINDER`, `protocol=6`.
+5. Open Apple Music *on the virtual display* and inspect its screenshot.
+   Do one low-risk virtual button TAP. Ensure the main display never moves.
+6. Test close/handoff. Disconnect Wi-Fi and confirm the same transport
+   still works with Gemini Live over 4G/5G.
+7. Force-stop/restart the App. A lost Binder is not task completion and
+   cannot authorize further virtual actions without reattaching.
+
+**Not claimed:** boot-persistent Shizuku without root, confirmed Samsung
+One UI compatibility, or Mika's complete self-healing/restart watcher.
+These require separate real-device acceptance. GitHub main still had
+v1.8.119 at branch creation while the user's local installer was
+reportedly v1.8.133; this patch deliberately does not rewrite local
+version numbers.

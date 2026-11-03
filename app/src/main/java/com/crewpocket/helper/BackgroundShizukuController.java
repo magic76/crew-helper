@@ -62,7 +62,7 @@ final class BackgroundShizukuController {
                 // Force a fresh UserService with the Binder relay interface.
                 // The old daemon only exposes shellUid/startHelper and cannot
                 // serve the new relay method, even if it is still alive.
-                .version(version * 100 + 5);
+                .version(version * 100 + 6);
         Shizuku.addRequestPermissionResultListener(permissionListener);
     }
 
@@ -149,41 +149,42 @@ final class BackgroundShizukuController {
             if (!BackgroundShizukuRelay.attach(remote)) {
                 result = "SHIZUKU_SHELL_IDENTITY_MISMATCH";
             } else {
-                // Crucial: STATUS now runs through the Shizuku Binder, not
-                // App->Shell LocalSocket. Do not spawn a duplicate helper.
+                // A Shizuku UserService only launches the Helper. All phone
+                // operations must later use the Shell Helper's DIRECT Binder.
                 org.json.JSONObject current = BackgroundDisplayClient.command("status");
-                if (current.optBoolean("success", false)) {
-                    result = "SHIZUKU_BINDER_CONNECTED · protocol "
-                            + current.optInt("protocolVersion", -1)
-                            + " · Display " + current.optInt("displayId", -1);
-                } else if ("HELPER_RESTART_REQUIRED".equals(
-                        current.optString("error", ""))
-                        || "SHIZUKU_EMPTY_RESPONSE".equals(
-                            current.optString("error", ""))) {
-                    result = "HELPER_RESTART_REQUIRED：舊版 Socket 可能仍由"
-                            + "不接受 Shell UID 的 Helper 佔用。請先停止舊版 Helper，"
-                            + "再從 Shizuku 啟動。";
+                if (current.optBoolean("success", false)
+                        && "DIRECT_SHELL_BINDER".equals(
+                            current.optString("transport", ""))) {
+                    result = "DIRECT_SHELL_BINDER_CONNECTED · protocol "
+                            + current.optInt("protocolVersion", -1);
                 } else {
-                    String launch = remote.startHelper();
+                    String nonce = BackgroundShellHandoff.issueLaunchNonce();
+                    String launch;
+                    try {
+                        launch = remote.startHelperDirect(nonce);
+                    } finally {
+                        // The handoff provider owns its one-time nonce until
+                        // acceptance or the short timeout; not a shell secret.
+                    }
                     if (!"LAUNCH_REQUESTED".equals(launch)) {
+                        BackgroundShellHandoff.cancelNonce();
                         result = launch;
                     } else {
-                        result = "SHIZUKU_BINDER_HELPER_NOT_READY";
-                        for (int attempt = 0; attempt < 12 && pending && !destroyed; attempt++) {
+                        result = "DIRECT_SHELL_BINDER_HANDOFF_TIMEOUT";
+                        for (int attempt = 0; attempt < 30 && pending && !destroyed; attempt++) {
                             org.json.JSONObject state = BackgroundDisplayClient.command("status");
-                            if (state.optBoolean("success", false)) {
-                                result = "SHIZUKU_BINDER_CONNECTED · protocol "
+                            if (state.optBoolean("success", false)
+                                    && "DIRECT_SHELL_BINDER".equals(
+                                        state.optString("transport", ""))) {
+                                result = "DIRECT_SHELL_BINDER_CONNECTED · protocol "
                                         + state.optInt("protocolVersion", -1)
                                         + " · Display " + state.optInt("displayId", -1);
                                 break;
                             }
-                            String error = state.optString("error", "");
-                            if ("HELPER_RESTART_REQUIRED".equals(error)) {
-                                result = error;
-                                break;
-                            }
-                            android.os.SystemClock.sleep(300);
+                            android.os.SystemClock.sleep(250);
                         }
+                        if (!result.startsWith("DIRECT_SHELL_BINDER_CONNECTED"))
+                            BackgroundShellHandoff.cancelNonce();
                     }
                 }
             }
@@ -208,6 +209,7 @@ final class BackgroundShizukuController {
         destroyed = true;
         pending = false;
         Shizuku.removeRequestPermissionResultListener(permissionListener);
+        BackgroundShizukuRelay.detach();
         if (bound) {
             try {
                 // Detach callbacks only. Do not stop the daemon or background App.

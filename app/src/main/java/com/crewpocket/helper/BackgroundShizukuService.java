@@ -18,6 +18,7 @@ import android.os.RemoteException;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.TimeUnit;
 
@@ -43,6 +44,40 @@ public final class BackgroundShizukuService extends IBackgroundShizukuService.St
 
     @Override public int shellUid() {
         return Process.myUid();
+    }
+
+    /**
+     * Start the direct Binder helper. No LocalSocket is created for this
+     * child. The nonce is transferred via the child's private stdin, never
+     * logged and never passed as a command-line argument.
+     */
+    @Override public synchronized String startHelperDirect(String nonce) {
+        if (!authorizedCaller()) return "SHIZUKU_CALLER_NOT_AUTHORIZED";
+        if (Process.myUid() != 2000) return "SHELL_UID_2000_REQUIRED";
+        if (android.os.Build.VERSION.SDK_INT < 31) return "ANDROID_12_REQUIRED";
+        if (nonce == null || !nonce.matches("[A-Za-z0-9_-]{30,160}"))
+            return "INVALID_HANDOFF_NONCE";
+        String apk = resolveOwnApk();
+        if (apk.isEmpty()) return "APP_APK_NOT_FOUND";
+        try {
+            ProcessBuilder builder = new ProcessBuilder(
+                    "/system/bin/app_process", "/system/bin",
+                    "--nice-name=crew-bg-direct",
+                    BackgroundDisplayShell.class.getName(), "binder");
+            builder.environment().put("CLASSPATH", apk);
+            builder.redirectErrorStream(true);
+            builder.redirectOutput(new File(LOG));
+            java.lang.Process child = builder.start();
+            try (OutputStream input = child.getOutputStream()) {
+                input.write((nonce + "\n").getBytes(StandardCharsets.UTF_8));
+                input.flush();
+            }
+            if (!child.isAlive() && child.exitValue() != 0)
+                return "DIRECT_HELPER_EXIT_" + child.exitValue();
+            return "LAUNCH_REQUESTED";
+        } catch (Exception error) {
+            return "DIRECT_HELPER_START_FAILED_" + error.getClass().getSimpleName();
+        }
     }
 
     @Override public synchronized String startHelper() {

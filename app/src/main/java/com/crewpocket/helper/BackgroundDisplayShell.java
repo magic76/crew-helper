@@ -60,7 +60,7 @@ import java.util.concurrent.TimeUnit;
  */
 public final class BackgroundDisplayShell {
     static final String SOCKET = "com.crewpocket.helper.background.v1";
-    static final int PROTOCOL_VERSION = 5;
+    static final int PROTOCOL_VERSION = 6;
     private static final String PACKAGE = "com.crewpocket.helper";
     private final Context context;
     private final int appUid;

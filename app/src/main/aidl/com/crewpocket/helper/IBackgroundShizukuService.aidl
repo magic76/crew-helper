@@ -6,6 +6,8 @@ import android.os.ParcelFileDescriptor;
 interface IBackgroundShizukuService {
     int shellUid() = 1;
     String startHelper() = 2;
+    /** App-granted one-time nonce forwarded on the child's stdin. */
+    String startHelperDirect(String nonce) = 4;
     ParcelFileDescriptor relay(in String requestJson) = 3;
     void destroy() = 16777114;
 }
