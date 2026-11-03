@@ -19,17 +19,8 @@ final class LiveToolCatalog {
 
     private LiveToolCatalog() {}
 
-    static JSONArray build(
-            boolean deckMode,
-            boolean createMode,
-            boolean presentMode,
-            boolean workspaceMode) throws Exception {
-        return build(deckMode, createMode, presentMode, workspaceMode, false);
-    }
-
     static JSONArray build(boolean deckMode, boolean createMode,
-            boolean presentMode, boolean workspaceMode,
-            boolean backgroundEnabled) throws Exception {
+            boolean presentMode, boolean workspaceMode) throws Exception {
         JSONArray tools = new JSONArray();
         JSONObject phoneActionProperties = new JSONObject()
                 .put("action", new JSONObject().put("type", "STRING")
@@ -63,37 +54,10 @@ final class LiveToolCatalog {
                         .put("description", "For TAKE_PHOTO only. CAPTURE means the user only wants a photo saved. INSPECT means the photo is visual evidence needed to answer or continue the task, so Runtime sends a compact copy back to vision. Default CAPTURE."));
         tools.put(new JSONObject().put("name", "phone_action")
                 .put("description",
-                        "FOREGROUND PHYSICAL SCREEN ONLY. If the user explicitly asks for a background/virtual screen, use background_phone instead; NEVER use this tool as a fallback. Perform exactly ONE semantic phone step. Choose WHAT: OPEN_APP, SEARCH, COMMIT_SEARCH, TAP, TYPE, SCROLL, BACK, HOME or TAKE_PHOTO; Runtime owns HOW and verification. For a user goal 'search for artist and play', SEARCH alone is not completion: use TAP on the artist/song result, then TAP on a verified Play control; NEVER invent action=PLAY, only TAP.  TAKE_PHOTO is deterministic and must be preferred over TAP on a shutter button. Use purpose=CAPTURE when the user only wants the photo saved; use purpose=INSPECT when the captured scene is needed to answer, identify, verify, read, or continue the task. Use camera=FRONT for selfies and camera=BACK for the rear camera. For TAP, prefer latest screen.items[].id, then target. Only when inspect_ui visually shows a low-risk target that has no usable semantic item, use the one-shot screen.visualTapLease with target + visual_lease_id + normalized visual_x/visual_y. Never use visual TAP for SEND, payment, deletion, account, credential or other sensitive commits. TYPE never submits. SEARCH owns query entry; do not manually TAP+TYPE a search. Use send_text only for message submission.")
+                        "FOREGROUND PHYSICAL SCREEN ONLY. Virtual/background-display control is unavailable; if requested, explain the limitation instead of silently operating the physical screen. Perform exactly ONE semantic phone step. Choose WHAT: OPEN_APP, SEARCH, COMMIT_SEARCH, TAP, TYPE, SCROLL, BACK, HOME or TAKE_PHOTO; Runtime owns HOW and verification. For a user goal 'search for artist and play', SEARCH alone is not completion: use TAP on the artist/song result, then TAP on a verified Play control; NEVER invent action=PLAY, only TAP.  TAKE_PHOTO is deterministic and must be preferred over TAP on a shutter button. Use purpose=CAPTURE when the user only wants the photo saved; use purpose=INSPECT when the captured scene is needed to answer, identify, verify, read, or continue the task. Use camera=FRONT for selfies and camera=BACK for the rear camera. For TAP, prefer latest screen.items[].id, then target. Only when inspect_ui visually shows a low-risk target that has no usable semantic item, use the one-shot screen.visualTapLease with target + visual_lease_id + normalized visual_x/visual_y. Never use visual TAP for SEND, payment, deletion, account, credential or other sensitive commits. TYPE never submits. SEARCH owns query entry; do not manually TAP+TYPE a search. Use send_text only for message submission.")
                 .put("parameters", new JSONObject().put("type", "OBJECT")
                         .put("properties", phoneActionProperties)
                         .put("required", new JSONArray().put("action"))));
-        if (backgroundEnabled) {
-            JSONObject bg = new JSONObject()
-                .put("action", new JSONObject().put("type", "STRING")
-                    .put("enum", new JSONArray().put("OPEN_APP").put("INSPECT")
-                        .put("TAP").put("SCROLL").put("TYPE")
-                        .put("VISION").put("VISUAL_TAP")
-                        .put("HANDOFF").put("CLOSE").put("STATUS")))
-                .put("app", new JSONObject().put("type", "STRING"))
-                .put("screen_token", new JSONObject().put("type", "STRING"))
-                .put("element_id", new JSONObject().put("type", "STRING"))
-                .put("direction", new JSONObject().put("type", "STRING")
-                    .put("enum", new JSONArray().put("forward").put("backward")))
-                .put("text", new JSONObject().put("type", "STRING"))
-                .put("visual_token", new JSONObject().put("type", "STRING")
-                    .put("description", "VISUAL_TAP only: exact one-shot visionToken from the latest background VISION on the same user turn."))
-                .put("visual_x", new JSONObject().put("type", "NUMBER")
-                    .put("description", "VISUAL_TAP only: normalized 0..1000 x on the virtual image, never physical screen."))
-                .put("visual_y", new JSONObject().put("type", "NUMBER")
-                    .put("description", "VISUAL_TAP only: normalized 0..1000 y on the virtual image, never physical screen."))
-                .put("target", new JSONObject().put("type", "STRING")
-                    .put("description", "VISUAL_TAP only: precise low-risk human-readable target (Play, Pause, Search, Back, Next track). Not account, payment, sending, deleting or confirmation."));
-            tools.put(new JSONObject().put("name", "background_phone")
-                .put("description", "BACKGROUND EXPERIMENT ONLY after user explicitly requests virtual/background display. OPEN_APP then INSPECT semantic UI. If semantic elements are insufficient or user asks to see image, use VISION: model receives a fresh virtual-screen image. VISUAL_TAP needs visionToken + normalized visual_x/y (0..1000) + a low-risk target, never foreground coordinates. Tokens are one-shot and valid for this user turn only. Always INSPECT after tapping; never assume goal done, send/pay/delete, or fall back to physical display. HANDOFF/CLOSE need explicit user intent.")
-                .put("parameters", new JSONObject().put("type", "OBJECT")
-                    .put("properties", bg)
-                    .put("required", new JSONArray().put("action"))));
-        }
         // Read-only and generation-scoped: no ADB, screenshot or free-form logs.
         tools.put(new JSONObject().put("name", "inspect_runtime_trace")
                 .put("description", "When a phone tool fails or a user requests debugging, read a small sanitized summary for the CURRENT finalized user intent only. Includes bounded event types, failure codes and original tool action, never transcripts, raw arguments, keys or screen contents. Do not call on ordinary success."));
@@ -417,8 +381,7 @@ final class LiveToolCatalog {
     }
 
     private static boolean isNormalPhoneModelTool(String name) {
-        return "background_phone".equals(name)
-                || "phone_action".equals(name)
+        return "phone_action".equals(name)
                 || "inspect_ui".equals(name)
                 || "inspect_runtime_trace".equals(name)
                 || "get_recovery_options".equals(name)

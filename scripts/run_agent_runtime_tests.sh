@@ -7,15 +7,7 @@ mkdir -p "$OUT"
 trap 'rm -rf "$OUT"' EXIT
 
 javac -encoding UTF-8 -d "$OUT" \
-  "$SRC/BackgroundPhonePolicy.java" \
-  "$SRC/BackgroundToolRoutePolicy.java" \
-  "$SRC/BackgroundToolRouteTrace.java" \
-  "$SRC/BackgroundPhoneSessionPolicy.java" \
-  "$SRC/BackgroundVisionPolicy.java" \
-  "$SRC/BackgroundShizukuCommandPolicy.java" \
-  "$SRC/BackgroundShellHandoffPolicy.java" \
-  "$SRC/BackgroundDirectTransportPolicy.java" \
-  "$SRC/BackgroundBootstrapPolicy.java" \
+  "$SRC/RetiredVirtualDisplayPolicy.java" \
   "$SRC/CameraCapturePolicy.java" \
   "$SRC/ActionTransaction.java" \
   "$SRC/ActionObservation.java" \
@@ -139,14 +131,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/ContextPayloadBudget.java" \
   "$SRC/ScreenItemPriorityPolicy.java" \
   "$SRC/SecretMigrationPolicy.java" \
-  "$ROOT/tests/BackgroundPhonePolicyTest.java" \
-  "$ROOT/tests/BackgroundToolRoutePolicyTest.java" \
-  "$ROOT/tests/BackgroundPhoneSessionPolicyTest.java" \
-  "$ROOT/tests/BackgroundVisionPolicyTest.java" \
-  "$ROOT/tests/BackgroundShizukuCommandPolicyTest.java" \
-  "$ROOT/tests/BackgroundShellHandoffPolicyTest.java" \
-  "$ROOT/tests/BackgroundDirectTransportPolicyTest.java" \
-  "$ROOT/tests/BackgroundBootstrapPolicyTest.java" \
+  "$ROOT/tests/RetiredVirtualDisplayPolicyTest.java" \
   "$ROOT/tests/CameraCapturePolicyTest.java" \
   "$ROOT/tests/SendAuthorizationTest.java" \
   "$ROOT/tests/LiveTurnCoordinatorTest.java" \
@@ -257,14 +242,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/SecretMigrationPolicyTest.java" \
   "$ROOT/tests/AgentReplayRunner.java"
 
-java -cp "$OUT" com.crewpocket.helper.BackgroundPhonePolicyTest
-java -cp "$OUT" com.crewpocket.helper.BackgroundToolRoutePolicyTest
-java -cp "$OUT" com.crewpocket.helper.BackgroundPhoneSessionPolicyTest
-java -cp "$OUT" com.crewpocket.helper.BackgroundVisionPolicyTest
-java -cp "$OUT" com.crewpocket.helper.BackgroundShizukuCommandPolicyTest
-java -cp "$OUT" com.crewpocket.helper.BackgroundShellHandoffPolicyTest
-java -cp "$OUT" com.crewpocket.helper.BackgroundDirectTransportPolicyTest
-java -cp "$OUT" com.crewpocket.helper.BackgroundBootstrapPolicyTest
+java -cp "$OUT" com.crewpocket.helper.RetiredVirtualDisplayPolicyTest
 java -cp "$OUT" com.crewpocket.helper.CameraCapturePolicyTest
 java -cp "$OUT" com.crewpocket.helper.SendAuthorizationTest
 java -cp "$OUT" com.crewpocket.helper.LiveTurnCoordinatorTest

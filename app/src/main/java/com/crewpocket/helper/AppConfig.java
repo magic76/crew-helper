@@ -9,16 +9,6 @@ public class AppConfig {
     public static final String KEY_VOICE_NAME = "live_voice_name";
     public static final String KEY_LIVE_MODEL = "live_model_selection";
     public static final String KEY_LOCAL_BRIDGE = "local_bridge_enabled";
-    public static final String KEY_BACKGROUND_LIVE_EXPERIMENT = "background_live_experiment_v2";
-
-    public static boolean isBackgroundLiveEnabled(Context context) {
-        return context != null && getPrefs(context).getBoolean(KEY_BACKGROUND_LIVE_EXPERIMENT, false);
-    }
-
-    public static void setBackgroundLiveEnabled(Context context, boolean enabled) {
-        if (context != null) getPrefs(context).edit()
-                .putBoolean(KEY_BACKGROUND_LIVE_EXPERIMENT, enabled).apply();
-    }
     /** 0084: private per-install capability token for localhost:8766. */
     public static final String KEY_LOCAL_BRIDGE_TOKEN = "local_bridge_token";
     public static final String KEY_NOISE_MODE = "noise_mode";

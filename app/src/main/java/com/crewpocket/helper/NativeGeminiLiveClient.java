@@ -68,7 +68,6 @@ final class NativeGeminiLiveClient {
     private volatile long taskRecipeCandidateGeneration = -1L;
     private volatile String taskRecipeCandidateId = "";
     private final PhoneRuntimeExecutor phoneRuntimeExecutor;
-    private final BackgroundPhoneRuntime backgroundPhoneRuntime;
     private final CandidateArbitrationExperimentController
             candidateArbitrationController;
     private final RuntimeToolExecutor runtimeToolExecutor;
@@ -186,7 +185,6 @@ final class NativeGeminiLiveClient {
     }
     NativeGeminiLiveClient(Context context, String apiKey, String serverUrl, String voiceName, String noiseMode, int noiseSuppression, String liveTone, String customPrompt, int interruptionSensitivity, String audioOutput, Listener listener) {
         this.appContext = context == null ? null : context.getApplicationContext();
-        this.backgroundPhoneRuntime = new BackgroundPhoneRuntime(this.appContext);
         this.liveModel = LiveModelSelection.resolve(
                 AppConfig.getLiveModelId(this.appContext));
         this.backgroundThinkingPlanner = new BackgroundThinkingPlanner(
@@ -2699,8 +2697,7 @@ final class NativeGeminiLiveClient {
                         deckRuntimeController.isSessionMode(),
                         deckRuntimeController.isCreateStartup(),
                         deckRuntimeController.isPresentStartup(),
-                        deckRuntimeController.hasWorkspaceStartup(),
-                        AppConfig.isBackgroundLiveEnabled(appContext));
+                        deckRuntimeController.hasWorkspaceStartup());
         CrewDebugTrace.count("TOOL_CATALOG", userIntentGeneration,
                 "NONE", modelTools.length());
         boolean phoneToolDeclared = false;
@@ -2729,17 +2726,6 @@ final class NativeGeminiLiveClient {
         String baseInstruction = LivePrompt.CORE + "\n" + LivePrompt.NATURAL_VOICE
                 + "\n" + personality
                 + (deckInstruction.isEmpty() ? "" : "\n" + deckInstruction);
-        if (AppConfig.isBackgroundLiveEnabled(appContext)) {
-            baseInstruction += "\nVIRTUAL DISPLAY ROUTING: Only when the latest "
-                    + "user utterance EXPLICITLY asks for a virtual/background "
-                    + "screen, call background_phone(OPEN_APP, app=the named App), "
-                    + "then background_phone(INSPECT). Do not use phone_action "
-                    + "or inspect_ui on the physical screen for that request. "
-                    + "If the direct Shell Binder is unavailable, report the "
-                    + "failure and do not fall back to foreground. Ordinary "
-                    + "App requests without explicit virtual-display wording "
-                    + "still use normal phone_action.";
-        }
         if (liveModel.usesBackgroundPlanner()) {
             baseInstruction += "\n[Think Supervisor / Live Executor] "
                     + "You are the sole authorized phone tool executor. "
@@ -2936,98 +2922,6 @@ final class NativeGeminiLiveClient {
         return out;
     }
 
-    /**
-     * Generation checked at dispatch and immediately before each sensitive
-     * display operation. Background never feeds the foreground Runtime path.
-     */
-    private void executeBackgroundLiveTool(String id, String replyToolName,
-                                           JSONObject args, long generation,
-                                           boolean redirected) {
-        AgentTaskRecord task = beginAgentStep("background_phone", args);
-        if (task == null || task.cancelled || task.finished || !isCurrentUserIntent(generation)) {
-            try { sendToolResponse(id, replyToolName,
-                    runtimeBlocked("STALE_BACKGROUND_INTENT",
-                            "背景操作已取消；不操作實體螢幕。")); }
-            catch (Exception ignored) {}
-            return;
-        }
-        if (task.blockedReason != null) {
-            try { sendToolResponse(id, replyToolName,
-                    runtimeBlocked("BACKGROUND_TASK_BUDGET",
-                            task.blockedReason)); }
-            catch (Exception ignored) {}
-            return;
-        }
-        JSONObject result = backgroundPhoneRuntime.execute(
-                args, liveTurnCoordinator.latest().text, generation,
-                () -> isCurrentUserIntent(generation)
-                        && !task.cancelled && !task.finished);
-        if (redirected) {
-            try {
-                result.put("routeDecision", "BACKGROUND_AUTO_REDIRECT")
-                        .put("effectiveTool", "background_phone");
-                if (result.optBoolean("success", false)) {
-                    result.put("instruction", result.optString("instruction", "")
-                            + " Continue only with background_phone(INSPECT) on "
-                            + "the virtual display; do not use inspect_ui.");
-                }
-            } catch (Exception ignored) {}
-        }
-        if ("VISION".equalsIgnoreCase(args.optString("action", ""))
-                && result.optBoolean("visualReady", false)) {
-            byte[] virtualJpeg = backgroundPhoneRuntime.consumeVisionFrame();
-            boolean delivered = false;
-            try {
-                // A dedicated virtual-screen video source. Never update the
-                // foreground visual dimensions or forward base64 in tool JSON.
-                if (virtualJpeg != null && !task.cancelled && !task.finished
-                        && isCurrentUserIntent(generation))
-                    delivered = visionController.sendBackgroundJpegBytes(virtualJpeg);
-            } catch (Exception error) {
-                Log.w(TAG, "Background virtual screenshot send rejected", error);
-            } finally {
-                if (virtualJpeg != null) java.util.Arrays.fill(virtualJpeg, (byte) 0);
-            }
-            if (!delivered) {
-                backgroundPhoneRuntime.revokeVisionLease();
-                result = runtimeBlocked(
-                        "BACKGROUND_VISION_DELIVERY_FAILED",
-                        "虛擬螢幕影像無法送達 Gemini；視覺憑證已失效，不得猜測座標。");
-            } else {
-                try {
-                    result.put("visualSent", true).put("visualReady", false)
-                            .put("visualSource", "BACKGROUND_VIRTUAL_DISPLAY");
-                } catch (Exception ignored) {}
-            }
-        }
-        if (task.cancelled || task.finished || !isCurrentUserIntent(generation)) {
-            try { sendFinishedIntentToolResponse(id, replyToolName); }
-            catch (Exception ignored) {}
-            return;
-        }
-        try {
-            task.lastToolName = "background_phone";
-            task.lastTaskState = result.optString("taskState", "");
-            task.lastCompletionEvidence = result.optString("completionEvidence", "");
-            task.addStep("background_phone", result);
-            sendToolResponse(id, replyToolName, result);
-            if ("DONE".equals(result.optString("taskState", ""))
-                    && result.optBoolean("success", false)) {
-                finishAgentTask(task, "背景任務已移交或結束", "");
-            } else {
-                synchronized (agentTaskCoordinator.monitor()) {
-                    if (!task.cancelled && !task.finished) {
-                        task.awaitingModel = true;
-                        task.watchdogPrompted = false;
-                    }
-                }
-                agentResponseCoordinator.scheduleWatchdog(task);
-            }
-        } catch (Exception failure) {
-            Log.w(TAG, "Background Live tool response failed", failure);
-        }
-    }
-
     private void executeSingleTool(final JSONObject call) {
         LivePipelineDiagnostic.onExecution();
         final String id = call.optString("id", "tool_" + System.nanoTime());
@@ -3141,74 +3035,21 @@ final class NativeGeminiLiveClient {
             sendFinishedIntentToolResponse(id, requestedName);
             return;
         }
-        // One authoritative finalized user turn owns background routing.
-        // Ordinary requests remain foreground even if the experiment toggle
-        // is enabled. Never remap foreground TAP/TYPE/inspection into virtual
-        // coordinates; only an explicit OPEN_APP with a named target is safe
-        // to redirect through the same background authorization boundary.
-        LiveTurnCoordinator.FinalizedTurn backgroundTurn = liveTurnCoordinator.latest();
-        BackgroundToolRoutePolicy.Decision backgroundRoute =
-                backgroundTurn.generation == callIntentGeneration
-                    ? BackgroundToolRoutePolicy.decide(
-                            backgroundTurn.text,
-                            AppConfig.isBackgroundLiveEnabled(appContext),
-                            requestedName,
-                            requestedArgs.optString("action", ""),
-                            requestedArgs.optString("target", ""))
-                    : BackgroundToolRoutePolicy.Decision.FOREGROUND;
-        if ("background_phone".equals(requestedName)) {
-            BackgroundToolRouteTrace.record(
-                    BackgroundToolRoutePolicy.Decision.BACKGROUND_TOOL,
-                    requestedName, requestedArgs.optString("action", ""));
-            executeBackgroundLiveTool(id, requestedName, requestedArgs,
-                    callIntentGeneration, false);
-            return;
-        }
-        if (backgroundRoute == BackgroundToolRoutePolicy.Decision.REDIRECT_BACKGROUND_OPEN) {
-            BackgroundToolRouteTrace.record(backgroundRoute, requestedName,
-                    requestedArgs.optString("action", ""));
+        // The privileged virtual-display experiment was intentionally retired.
+        // A stale model background_phone call or explicit virtual-display
+        // request MUST NOT be silently redirected to the physical display.
+        LiveTurnCoordinator.FinalizedTurn virtualRequestTurn = liveTurnCoordinator.latest();
+        String requestText = virtualRequestTurn.generation == callIntentGeneration
+                ? virtualRequestTurn.text : "";
+        if (RetiredVirtualDisplayPolicy.mustBlock(requestText, requestedName)) {
             CrewDebugTrace.record("RUNTIME_GATE", callIntentGeneration, id,
-                    requestedName, "OPEN_APP", "BACKGROUND_AUTO_REDIRECT");
+                    requestedName, requestedArgs.optString("action", ""),
+                    "VIRTUAL_DISPLAY_REMOVED");
             try {
-                JSONObject backgroundArgs = new JSONObject()
-                        .put("action", "OPEN_APP")
-                        .put("app", requestedArgs.optString("target", ""));
-                // Response name MUST match the model's original phone_action
-                // function call, even though Runtime executes background_phone.
-                executeBackgroundLiveTool(id, requestedName, backgroundArgs,
-                        callIntentGeneration, true);
-            } catch (Exception error) {
-                try {
-                    sendToolResponse(id, requestedName, runtimeBlocked(
-                            "BACKGROUND_ROUTE_MISMATCH",
-                            "背景 App 開啟路由失敗；未操作主螢幕。"));
-                } catch (Exception ignored) {}
-            }
-            return;
-        }
-        if (backgroundRoute == BackgroundToolRoutePolicy.Decision.BLOCK_BACKGROUND_DISABLED
-                || backgroundRoute == BackgroundToolRoutePolicy.Decision.BLOCK_BACKGROUND_ROUTE_MISMATCH) {
-            BackgroundToolRouteTrace.record(backgroundRoute, requestedName,
-                    requestedArgs.optString("action", ""));
-            String code = backgroundRoute ==
-                    BackgroundToolRoutePolicy.Decision.BLOCK_BACKGROUND_DISABLED
-                    ? "BACKGROUND_LIVE_DISABLED" : "BACKGROUND_ROUTE_MISMATCH";
-            CrewDebugTrace.record("RUNTIME_GATE", callIntentGeneration, id,
-                    requestedName, requestedArgs.optString("action", ""), code);
-            try {
-                JSONObject blocked = runtimeBlocked(code,
-                        "使用者要求背景虛擬螢幕，拒絕前景操作；"
-                                + ("BACKGROUND_LIVE_DISABLED".equals(code)
-                                    ? "請先由使用者啟用背景功能。"
-                                    : "請使用 background_phone 的相同語意操作。"));
-                blocked.put("routeExpected", "background_phone."
-                        + BackgroundToolRoutePolicy.expectedAction(
-                                requestedName, requestedArgs.optString("action", "")));
-                blocked.put("routeReceived", BackgroundToolRoutePolicy.safeReceivedTool(
-                                requestedName) + "." + BackgroundToolRoutePolicy.safeReceivedAction(
-                                requestedArgs.optString("action", "")));
-                blocked.put("routeDecision", "BACKGROUND_ROUTE_MISMATCH");
-                sendToolResponse(id, requestedName, blocked);
+                sendToolResponse(id, requestedName, runtimeBlocked(
+                        "VIRTUAL_DISPLAY_REMOVED",
+                        "已移除需要 Shizuku／ADB Shell 的背景虛擬螢幕操作；"
+                        + "沒有將此操作轉到手機主螢幕。如需操作主螢幕，請明確重新下達指令。"));
             } catch (Exception ignored) {}
             return;
         }
