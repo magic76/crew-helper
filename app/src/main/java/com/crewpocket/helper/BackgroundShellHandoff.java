@@ -69,7 +69,7 @@ final class BackgroundShellHandoff {
         Bundle response = new Bundle();
         response.putBoolean("accepted", false);
         if (app == null || extras == null || callingUid != 2000
-                || callingPid <= 0 || !connected()) {
+                || callingPid <= 0 || connected()) {
             // A currently running direct helper must not be silently replaced
             // by an unverified second process.
             if (app == null || extras == null || callingUid != 2000 || callingPid <= 0) {
@@ -131,7 +131,7 @@ final class BackgroundShellHandoff {
         if (raw.isEmpty() || raw.getBytes(StandardCharsets.UTF_8).length > 8192)
             return fail("DIRECT_SHELL_INVALID_REQUEST");
         try {
-            ParcelFileDescriptor source = shell.transact(raw);
+            ParcelFileDescriptor source = shell.executeCommand(raw);
             if (source == null) return fail("DIRECT_SHELL_PIPE_FAILED");
             try (InputStream in = new ParcelFileDescriptor.AutoCloseInputStream(source);
                  ByteArrayOutputStream out = new ByteArrayOutputStream()) {
