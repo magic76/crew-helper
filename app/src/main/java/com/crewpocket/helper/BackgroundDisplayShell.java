@@ -16,6 +16,16 @@ import android.hardware.display.VirtualDisplay;
 import android.media.ImageReader;
 import android.net.LocalServerSocket;
 import android.net.LocalSocket;
+import android.net.Uri;
+import android.os.Binder;
+import android.os.Bundle;
+import android.os.IBinder;
+import android.os.ParcelFileDescriptor;
+import android.content.pm.ProviderInfo;
+import java.io.FileOutputStream;
+import java.lang.reflect.Method;
+import java.util.HashSet;
+import java.util.Iterator;
 import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -64,6 +74,63 @@ public final class BackgroundDisplayShell {
     private boolean focusIsolated = false;
     private int width, height;
     private long frameAt;
+    private final IBackgroundDirectShell.Stub directEndpoint = new IBackgroundDirectShell.Stub() {
+        @Override public int[] identity() {
+            return new int[]{Process.myUid(), Process.myPid()};
+        }
+        @Override public ParcelFileDescriptor executeCommand(String json) {
+            if (Process.myUid() != 2000
+                    || Binder.getCallingUid() != appUid) return null;
+            final ParcelFileDescriptor[] ends;
+            try { ends = ParcelFileDescriptor.createPipe(); }
+            catch (Exception failed) { return null; }
+            final ParcelFileDescriptor sink = ends[1];
+            Thread worker = new Thread(() -> {
+                String response;
+                try {
+                    JSONObject req = new JSONObject(json == null ? "" : json);
+                    if (json == null || json.length() > 8192)
+                        throw new IllegalArgumentException("INVALID_BINDER_COMMAND");
+                    synchronized (BackgroundDisplayShell.this) {
+                        String denied = validateBinderCommand(req);
+                        if (!denied.isEmpty()) {
+                            response = fail(denied).put("protocolVersion", PROTOCOL_VERSION)
+                                    .toString();
+                        } else {
+                            String op = req.optString("op", "");
+                            // Bind UI-originated commands to THIS display. Live
+                            // sends its own expectedDisplayId / expectedPackage.
+                            if (BackgroundShizukuCommandPolicy.requiresDisplay(op)
+                                    && (!req.has("expectedDisplayId")
+                                    || !req.has("expectedPackage"))) {
+                                if (displayId <= Display.DEFAULT_DISPLAY || openedPackage.isEmpty())
+                                    throw new IllegalStateException("NO_BACKGROUND_DISPLAY");
+                                req.put("expectedDisplayId", displayId);
+                                req.put("expectedPackage", openedPackage);
+                            }
+                            JSONObject output = execute(req);
+                            output.put("protocolVersion", PROTOCOL_VERSION);
+                            response = output.toString();
+                        }
+                    }
+                } catch (Throwable error) {
+                    try {
+                        response = fail("DIRECT_SHELL_EXECUTION_REJECTED")
+                                .put("protocolVersion", PROTOCOL_VERSION).toString();
+                    } catch (Exception ignored) { response = "{}"; }
+                }
+                try (FileOutputStream out =
+                             new ParcelFileDescriptor.AutoCloseOutputStream(sink)) {
+                    out.write(response.getBytes(StandardCharsets.UTF_8));
+                } catch (Exception ignored) {
+                    try { sink.close(); } catch (Exception ignoredClose) {}
+                }
+            }, "crew-bg-direct-binder");
+            worker.setDaemon(true);
+            worker.start();
+            return ends[0];
+        }
+    };
 
     private BackgroundDisplayShell(Context context, int uid) {
         this.context = context;
@@ -78,6 +145,25 @@ public final class BackgroundDisplayShell {
         Context ctx = shellContext();
         int uid = ctx.getPackageManager().getApplicationInfo(PACKAGE, 0).uid;
         BackgroundDisplayShell helper = new BackgroundDisplayShell(ctx, uid);
+        if (args != null && args.length == 1 && "binder".equals(args[0])) {
+            String nonce;
+            try (BufferedReader input = new BufferedReader(
+                    new InputStreamReader(System.in, StandardCharsets.UTF_8))) {
+                nonce = input.readLine();
+            }
+            if (nonce == null || nonce.length() < 30 || nonce.length() > 160
+                    || !helper.handoffDirectBinder(nonce)) {
+                helper.closeDisplay();
+                helper.frameThread.quitSafely();
+                throw new SecurityException("DIRECT_BINDER_HANDOFF_REJECTED");
+            }
+            // Commands arrive on Binder worker threads; no Shell socket exists
+            // for this process. App death revokes display ownership.
+            Looper.loop();
+            return;
+        }
+        // Legacy manual ADB startup is unchanged and kept as an explicit
+        // backup only. The Shizuku path never enters this socket loop.
         try (LocalServerSocket server = new LocalServerSocket(SOCKET)) {
             for (;;) {
                 LocalSocket client = server.accept();
@@ -100,6 +186,136 @@ public final class BackgroundDisplayShell {
         } finally {
             helper.closeDisplay();
             helper.frameThread.quitSafely();
+        }
+    }
+
+    private static String validateBinderCommand(JSONObject command) {
+        String op = command.optString("op", "");
+        if (!BackgroundShizukuCommandPolicy.allowedOperation(op))
+            return "DIRECT_SHELL_OPERATION_DENIED";
+        HashSet<String> allowed = new HashSet<>();
+        allowed.add("op");
+        if ("open".equals(op)) {
+            allowed.add("package");
+            if (!BackgroundShizukuCommandPolicy.validPackage(
+                    command.optString("package", "")))
+                return "DIRECT_SHELL_INVALID_PACKAGE";
+        }
+        if (BackgroundShizukuCommandPolicy.requiresDisplay(op)) {
+            allowed.add("expectedDisplayId");
+            allowed.add("expectedPackage");
+            if (command.has("expectedDisplayId")
+                    && command.optInt("expectedDisplayId", -1) <= 0)
+                return "DIRECT_SHELL_INVALID_DISPLAY";
+            if (command.has("expectedPackage")
+                    && !BackgroundShizukuCommandPolicy.validPackage(
+                        command.optString("expectedPackage", "")))
+                return "DIRECT_SHELL_INVALID_EXPECTED_PACKAGE";
+        }
+        if ("tap".equals(op)) {
+            allowed.add("x");
+            allowed.add("y");
+            if (!BackgroundShizukuCommandPolicy.validCoordinate(
+                    command.optInt("x", -1))
+                    || !BackgroundShizukuCommandPolicy.validCoordinate(
+                        command.optInt("y", -1))) return "DIRECT_SHELL_BAD_COORDINATE";
+        }
+        if ("swipe".equals(op)) {
+            for (String key : new String[]{"x1", "y1", "x2", "y2"}) {
+                allowed.add(key);
+                if (!BackgroundShizukuCommandPolicy.validCoordinate(
+                        command.optInt(key, -1)))
+                    return "DIRECT_SHELL_BAD_COORDINATE";
+            }
+            allowed.add("durationMs");
+            int duration = command.optInt("durationMs", 300);
+            if (duration < 100 || duration > 3000) return "DIRECT_SHELL_BAD_DURATION";
+        }
+        Iterator<String> keys = command.keys();
+        while (keys.hasNext())
+            if (!allowed.contains(keys.next())) return "DIRECT_SHELL_ARGUMENT_DENIED";
+        return "";
+    }
+
+    private boolean handoffDirectBinder(String nonce) {
+        Bundle parcel = new Bundle();
+        parcel.putString(BackgroundShellHandoff.KEY_NONCE, nonce);
+        parcel.putString(BackgroundShellHandoff.KEY_APK,
+                System.getProperty("java.class.path", ""));
+        parcel.putBinder(BackgroundShellHandoff.KEY_BINDER, directEndpoint);
+        parcel.putInt(BackgroundShellHandoff.KEY_UID, Process.myUid());
+        parcel.putInt(BackgroundShellHandoff.KEY_PID, Process.myPid());
+        Bundle accepted = null;
+        // Standard API first; custom Shell Context has a valid AttributionSource.
+        try {
+            accepted = context.getContentResolver().call(
+                    Uri.parse("content://" + BackgroundShellHandoff.AUTHORITY),
+                    BackgroundShellHandoff.METHOD_ATTACH, null, parcel);
+        } catch (Throwable ignored) {}
+        if (accepted == null || !accepted.getBoolean("accepted", false)) {
+            accepted = offerUsingShellActivityManager(parcel);
+        }
+        if (accepted == null || !accepted.getBoolean("accepted", false)) return false;
+        IBinder appToken = accepted.getBinder(BackgroundShellHandoff.KEY_APP_TOKEN);
+        if (appToken == null) return false;
+        try {
+            // Mika pattern: if the owning App process goes away, do not leave
+            // its virtual display or controls stranded in the Shell process.
+            appToken.linkToDeath(() -> {
+                synchronized (BackgroundDisplayShell.this) {
+                    closeDisplay();
+                }
+                Process.killProcess(Process.myPid());
+            }, 0);
+        } catch (Exception gone) { return false; }
+        return true;
+    }
+
+    /** Mika-style provider handoff through shell's ActivityManager service. */
+    private Bundle offerUsingShellActivityManager(Bundle extras) {
+        IBinder token = new Binder();
+        Object am = null;
+        int userId = appUid / 100000;
+        try {
+            am = Class.forName("android.app.ActivityManager")
+                    .getMethod("getService").invoke(null);
+            Object holder = am.getClass().getMethod(
+                    "getContentProviderExternal", String.class, int.class,
+                    IBinder.class, String.class).invoke(
+                    am, BackgroundShellHandoff.AUTHORITY, userId, token,
+                    "CrewBackgroundShell");
+            if (holder == null) return null;
+            ProviderInfo info = (ProviderInfo) holder.getClass().getField("info").get(holder);
+            if (info == null || !PACKAGE.equals(info.packageName)
+                    || info.applicationInfo == null
+                    || info.applicationInfo.uid != appUid) return null;
+            Object target = holder.getClass().getField("provider").get(holder);
+            if (target == null) return null;
+            Method method = null;
+            for (Method candidate : target.getClass().getMethods()) {
+                if (candidate.getName().equals("call")
+                        && candidate.getParameterCount() == 5
+                        && candidate.getParameterTypes()[0] == AttributionSource.class) {
+                    method = candidate;
+                    break;
+                }
+            }
+            if (method == null) return null;
+            AttributionSource source = new AttributionSource.Builder(2000)
+                    .setPackageName("com.android.shell").build();
+            return (Bundle) method.invoke(target, source,
+                    BackgroundShellHandoff.AUTHORITY,
+                    BackgroundShellHandoff.METHOD_ATTACH, null, extras);
+        } catch (Throwable ignored) {
+            return null;
+        } finally {
+            if (am != null) {
+                try {
+                    am.getClass().getMethod("removeContentProviderExternalAsUser",
+                            String.class, IBinder.class, int.class)
+                            .invoke(am, BackgroundShellHandoff.AUTHORITY, token, userId);
+                } catch (Exception ignored) {}
+            }
         }
     }
 
