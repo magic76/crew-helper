@@ -42,6 +42,7 @@ final class BackgroundShizukuController {
 
         @Override public void onServiceDisconnected(ComponentName name) {
             BackgroundShizukuRelay.detach();
+        BackgroundShellHandoff.cancelNonce();
             if (!destroyed && pending) finish("SHIZUKU_SERVICE_DISCONNECTED");
         }
     };
@@ -78,14 +79,17 @@ final class BackgroundShizukuController {
             org.json.JSONObject status = BackgroundDisplayClient.command("status");
             main.post(() -> {
                 if (destroyed || !pending) return;
-                if (status.optBoolean("success", false)) {
-                    finish("背景 Helper 已運作 · protocol "
+                if (status.optBoolean("success", false)
+                        && "DIRECT_SHELL_BINDER".equals(
+                            status.optString("transport", ""))) {
+                    finish("Direct Shell Binder 已運作 · protocol "
                             + status.optInt("protocolVersion", -1)
                             + " · Display " + status.optInt("displayId", -1));
-                } else if ("HELPER_RESTART_REQUIRED".equals(status.optString("error"))) {
-                    finish("舊版 Helper 正在執行。請先用原本 ADB 方法停止該程序，"
-                            + "再以 Shizuku 啟動；不會強制關閉他人的程序。");
                 } else {
+                    // A legacy Socket helper may still be running, or may
+                    // have an incompatible protocol. Neither is evidence of
+                    // direct Binder attachment. New direct helper does NOT
+                    // bind that Socket, so it can be started independently.
                     checkPermission();
                 }
             });
@@ -159,13 +163,7 @@ final class BackgroundShizukuController {
                             + current.optInt("protocolVersion", -1);
                 } else {
                     String nonce = BackgroundShellHandoff.issueLaunchNonce();
-                    String launch;
-                    try {
-                        launch = remote.startHelperDirect(nonce);
-                    } finally {
-                        // The handoff provider owns its one-time nonce until
-                        // acceptance or the short timeout; not a shell secret.
-                    }
+                    String launch = remote.startHelperDirect(nonce);
                     if (!"LAUNCH_REQUESTED".equals(launch)) {
                         BackgroundShellHandoff.cancelNonce();
                         result = launch;
