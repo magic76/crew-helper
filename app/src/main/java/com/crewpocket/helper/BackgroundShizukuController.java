@@ -154,9 +154,12 @@ final class BackgroundShizukuController {
                             + current.optInt("protocolVersion", -1)
                             + " · Display " + current.optInt("displayId", -1);
                 } else if ("HELPER_RESTART_REQUIRED".equals(
-                        current.optString("error", ""))) {
-                    result = "HELPER_RESTART_REQUIRED：先停止舊版 Shell Helper，"
-                            + "再重新啟動，避免 Socket 名稱衝突。";
+                        current.optString("error", ""))
+                        || "SHIZUKU_EMPTY_RESPONSE".equals(
+                            current.optString("error", ""))) {
+                    result = "HELPER_RESTART_REQUIRED：舊版 Socket 可能仍由"
+                            + "不接受 Shell UID 的 Helper 佔用。請先停止舊版 Helper，"
+                            + "再從 Shizuku 啟動。";
                 } else {
                     String launch = remote.startHelper();
                     if (!"LAUNCH_REQUESTED".equals(launch)) {
