@@ -182,8 +182,14 @@ public final class BackgroundShizukuService extends IBackgroundShizukuService.St
                 command.put("expectedPackage", state.optString("package", ""));
             }
             return sendToShell(command).toString();
-        } catch (Exception error) {
-            return error("SHIZUKU_RELAY_REQUEST_FAILED");
+        } catch (Exception failed) {
+            String message = String.valueOf(failed.getMessage());
+            if (message.contains("EACCES") || message.contains("Permission denied"))
+                return error("SHIZUKU_SHELL_SOCKET_EACCES");
+            if (message.contains("ECONNREFUSED") || message.contains("Connection refused"))
+                return error("SHIZUKU_SHELL_SOCKET_NOT_LISTENING");
+            return error("SHIZUKU_RELAY_REQUEST_FAILED_"
+                    + failed.getClass().getSimpleName());
         }
     }
 
