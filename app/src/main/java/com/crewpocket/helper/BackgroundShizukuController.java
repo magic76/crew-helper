@@ -41,6 +41,7 @@ final class BackgroundShizukuController {
         }
 
         @Override public void onServiceDisconnected(ComponentName name) {
+            BackgroundShizukuRelay.detach();
             if (!destroyed && pending) finish("SHIZUKU_SERVICE_DISCONNECTED");
         }
     };
@@ -58,7 +59,10 @@ final class BackgroundShizukuController {
         args = new Shizuku.UserServiceArgs(new ComponentName(
                 activity.getPackageName(), BackgroundShizukuService.class.getName()))
                 .daemon(true).processNameSuffix("background")
-                .version(version);
+                // Force a fresh UserService with the Binder relay interface.
+                // The old daemon only exposes shellUid/startHelper and cannot
+                // serve the new relay method, even if it is still alive.
+                .version(version * 100 + 5);
         Shizuku.addRequestPermissionResultListener(permissionListener);
     }
 
@@ -142,36 +146,51 @@ final class BackgroundShizukuController {
     private void startRemote(IBackgroundShizukuService remote) {
         String result;
         try {
-            if (remote == null || remote.shellUid() != 2000) {
+            if (!BackgroundShizukuRelay.attach(remote)) {
                 result = "SHIZUKU_SHELL_IDENTITY_MISMATCH";
             } else {
-                String launch = remote.startHelper();
-                if (!"LAUNCH_REQUESTED".equals(launch)) {
-                    result = launch;
+                // Crucial: STATUS now runs through the Shizuku Binder, not
+                // App->Shell LocalSocket. Do not spawn a duplicate helper.
+                org.json.JSONObject current = BackgroundDisplayClient.command("status");
+                if (current.optBoolean("success", false)) {
+                    result = "SHIZUKU_BINDER_CONNECTED · protocol "
+                            + current.optInt("protocolVersion", -1)
+                            + " · Display " + current.optInt("displayId", -1);
+                } else if ("HELPER_RESTART_REQUIRED".equals(
+                        current.optString("error", ""))
+                        || "SHIZUKU_EMPTY_RESPONSE".equals(
+                            current.optString("error", ""))) {
+                    result = "HELPER_RESTART_REQUIRED：舊版 Socket 可能仍由"
+                            + "不接受 Shell UID 的 Helper 佔用。請先停止舊版 Helper，"
+                            + "再從 Shizuku 啟動。";
                 } else {
-                    result = "SHIZUKU_HELPER_SOCKET_NOT_READY";
-                    for (int attempt = 0; attempt < 12 && pending && !destroyed; attempt++) {
-                        org.json.JSONObject state = BackgroundDisplayClient.command("status");
-                        if (state.optBoolean("success", false)) {
-                            result = "SHIZUKU_HELPER_CONNECTED · protocol "
-                                    + state.optInt("protocolVersion", -1)
-                                    + " · Display " + state.optInt("displayId", -1);
-                            break;
+                    String launch = remote.startHelper();
+                    if (!"LAUNCH_REQUESTED".equals(launch)) {
+                        result = launch;
+                    } else {
+                        result = "SHIZUKU_BINDER_HELPER_NOT_READY";
+                        for (int attempt = 0; attempt < 12 && pending && !destroyed; attempt++) {
+                            org.json.JSONObject state = BackgroundDisplayClient.command("status");
+                            if (state.optBoolean("success", false)) {
+                                result = "SHIZUKU_BINDER_CONNECTED · protocol "
+                                        + state.optInt("protocolVersion", -1)
+                                        + " · Display " + state.optInt("displayId", -1);
+                                break;
+                            }
+                            String error = state.optString("error", "");
+                            if ("HELPER_RESTART_REQUIRED".equals(error)) {
+                                result = error;
+                                break;
+                            }
+                            android.os.SystemClock.sleep(300);
                         }
-                        String error = state.optString("error", "");
-                        if ("HELPER_RESTART_REQUIRED".equals(error)) {
-                            result = error;
-                            break;
-                        }
-                        android.os.SystemClock.sleep(300);
                     }
                 }
             }
         } catch (Exception error) {
             result = "SHIZUKU_USER_SERVICE_FAILED_" + error.getClass().getSimpleName();
         }
-        final String finishedResult = result;
-        finish(finishedResult);
+        finish(result);
     }
 
     private void report(String message, boolean finished) {

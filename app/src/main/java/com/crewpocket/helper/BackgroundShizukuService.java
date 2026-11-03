@@ -2,6 +2,17 @@ package com.crewpocket.helper;
 
 import android.content.Context;
 import android.content.pm.ApplicationInfo;
+import android.net.LocalSocket;
+import android.net.LocalSocketAddress;
+import android.os.Binder;
+import android.os.ParcelFileDescriptor;
+import org.json.JSONObject;
+import java.io.BufferedWriter;
+import java.io.ByteArrayOutputStream;
+import java.io.FileOutputStream;
+import java.io.OutputStreamWriter;
+import java.util.Iterator;
+import java.util.concurrent.Semaphore;
 import android.os.Process;
 import android.os.RemoteException;
 import java.io.BufferedReader;
@@ -19,6 +30,8 @@ public final class BackgroundShizukuService extends IBackgroundShizukuService.St
     private static final String PACKAGE = "com.crewpocket.helper";
     private static final String LOG = "/data/local/tmp/crew-bg-helper.log";
     private final Context serviceContext;
+    private final Semaphore relaySlots = new Semaphore(2);
+    private volatile int allowedAppUid = -1;
 
     public BackgroundShizukuService() {
         serviceContext = null;
@@ -33,6 +46,7 @@ public final class BackgroundShizukuService extends IBackgroundShizukuService.St
     }
 
     @Override public synchronized String startHelper() {
+        if (!authorizedCaller()) return "SHIZUKU_CALLER_NOT_AUTHORIZED";
         if (Process.myUid() != 2000) return "SHELL_UID_2000_REQUIRED";
         if (android.os.Build.VERSION.SDK_INT < 31) return "ANDROID_12_REQUIRED";
         final String apk = resolveOwnApk();
@@ -55,6 +69,207 @@ public final class BackgroundShizukuService extends IBackgroundShizukuService.St
         } catch (Exception error) {
             return "APP_PROCESS_START_FAILED_" + error.getClass().getSimpleName();
         }
+    }
+
+    /**
+     * Run the existing, narrow Shell Socket protocol in the Shizuku shell UID.
+     * The App never opens the Shell LocalSocket. The response is a stream FD,
+     * so virtual-display JPEG previews cannot overflow Binder's 1 MiB buffer.
+     * The Binder does NOT expose command execution or general file reads.
+     */
+    @Override public ParcelFileDescriptor relay(String requestJson) {
+        final int callerUid = Binder.getCallingUid();
+        final boolean authorized = BackgroundShizukuCommandPolicy.authorizedCaller(
+                Process.myUid(), appUid(), callerUid);
+        final String request = requestJson;
+        ParcelFileDescriptor[] pipe;
+        try {
+            pipe = ParcelFileDescriptor.createPipe();
+        } catch (Exception error) { return null; }
+        final ParcelFileDescriptor sink = pipe[1];
+        Thread worker = new Thread(() -> {
+            String response;
+            boolean slot = false;
+            try {
+                if (!authorized) {
+                    response = error("SHIZUKU_CALLER_NOT_AUTHORIZED");
+                } else if (!relaySlots.tryAcquire()) {
+                    response = error("SHIZUKU_RELAY_BUSY");
+                } else {
+                    slot = true;
+                    response = executeRelay(request);
+                }
+            } catch (Throwable failure) {
+                response = error("SHIZUKU_RELAY_FAILED");
+            } finally {
+                if (slot) relaySlots.release();
+            }
+            try (FileOutputStream output =
+                         new ParcelFileDescriptor.AutoCloseOutputStream(sink)) {
+                output.write(response.getBytes(StandardCharsets.UTF_8));
+            } catch (Exception ignored) {
+                try { sink.close(); } catch (Exception ignoredAgain) {}
+            }
+        }, "crew-bg-shizuku-relay");
+        worker.setDaemon(true);
+        worker.start();
+        return pipe[0];
+    }
+
+    private boolean authorizedCaller() {
+        return BackgroundShizukuCommandPolicy.authorizedCaller(
+                Process.myUid(), appUid(), Binder.getCallingUid());
+    }
+
+    private int appUid() {
+        int cached = allowedAppUid;
+        if (cached >= 10000) return cached;
+        try {
+            if (serviceContext != null) {
+                int value = serviceContext.getPackageManager()
+                        .getApplicationInfo(PACKAGE, 0).uid;
+                if (value >= 10000) {
+                    allowedAppUid = value;
+                    return value;
+                }
+            }
+        } catch (Exception ignored) {}
+        // Shizuku's UserService constructor may not receive a Context.
+        // Ask Android's package manager using constant arguments only.
+        java.lang.Process proc = null;
+        try {
+            proc = new ProcessBuilder("pm", "list", "packages", "-U", PACKAGE)
+                    .redirectErrorStream(true).start();
+            try (BufferedReader in = new BufferedReader(new InputStreamReader(
+                    proc.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = in.readLine()) != null) {
+                    String prefix = "package:" + PACKAGE + " uid:";
+                    if (!line.startsWith(prefix)) continue;
+                    String uid = line.substring(prefix.length()).trim();
+                    if (!uid.matches("[0-9]{5,7}")) continue;
+                    int result = Integer.parseInt(uid);
+                    if (result >= 10000) {
+                        allowedAppUid = result;
+                        return result;
+                    }
+                }
+            }
+            if (!proc.waitFor(3, TimeUnit.SECONDS)) proc.destroyForcibly();
+        } catch (Exception ignored) {
+        } finally {
+            if (proc != null) proc.destroy();
+        }
+        return -1;
+    }
+
+    private String executeRelay(String raw) {
+        if (raw == null || raw.length() > 8192) return error("INVALID_RELAY_REQUEST");
+        try {
+            JSONObject command = new JSONObject(raw);
+            String check = validateCommand(command);
+            if (!check.isEmpty()) return error(check);
+            // A manual UI call may omit an expected virtual-display identity.
+            // Bind those calls to a fresh Shell STATUS before sending them.
+            String op = command.optString("op", "");
+            if (BackgroundShizukuCommandPolicy.requiresDisplay(op)
+                    && (!command.has("expectedDisplayId")
+                    || !command.has("expectedPackage"))) {
+                JSONObject state = sendToShell(new JSONObject().put("op", "status"));
+                if (!state.optBoolean("success", false)) return state.toString();
+                if (!state.optBoolean("active", false)) return error("NO_BACKGROUND_DISPLAY");
+                command.put("expectedDisplayId", state.optInt("displayId", -1));
+                command.put("expectedPackage", state.optString("package", ""));
+            }
+            return sendToShell(command).toString();
+        } catch (Exception failed) {
+            String message = String.valueOf(failed.getMessage());
+            if (message.contains("EACCES") || message.contains("Permission denied"))
+                return error("SHIZUKU_SHELL_SOCKET_EACCES");
+            if (message.contains("ECONNREFUSED") || message.contains("Connection refused"))
+                return error("SHIZUKU_SHELL_SOCKET_NOT_LISTENING");
+            return error("SHIZUKU_RELAY_REQUEST_FAILED_"
+                    + failed.getClass().getSimpleName());
+        }
+    }
+
+    private static String validateCommand(JSONObject c) {
+        String op = c.optString("op", "");
+        if (!BackgroundShizukuCommandPolicy.allowedOperation(op))
+            return "SHIZUKU_OPERATION_DENIED";
+        java.util.HashSet<String> allowed = new java.util.HashSet<>();
+        allowed.add("op");
+        if ("open".equals(op)) {
+            allowed.add("package");
+            if (!BackgroundShizukuCommandPolicy.validPackage(c.optString("package", "")))
+                return "SHIZUKU_PACKAGE_INVALID";
+        }
+        if (BackgroundShizukuCommandPolicy.requiresDisplay(op)) {
+            allowed.add("expectedDisplayId");
+            allowed.add("expectedPackage");
+            if (c.has("expectedDisplayId")
+                    && c.optInt("expectedDisplayId", -1) <= 0)
+                return "SHIZUKU_DISPLAY_INVALID";
+            if (c.has("expectedPackage")
+                    && !BackgroundShizukuCommandPolicy.validPackage(c.optString("expectedPackage", "")))
+                return "SHIZUKU_EXPECTED_PACKAGE_INVALID";
+        }
+        if ("tap".equals(op)) {
+            allowed.add("x"); allowed.add("y");
+            if (!BackgroundShizukuCommandPolicy.validCoordinate(c.optInt("x", -1))
+                    || !BackgroundShizukuCommandPolicy.validCoordinate(c.optInt("y", -1)))
+                return "SHIZUKU_COORDINATE_INVALID";
+        } else if ("swipe".equals(op)) {
+            for (String key : new String[]{"x1", "y1", "x2", "y2"}) {
+                allowed.add(key);
+                if (!BackgroundShizukuCommandPolicy.validCoordinate(c.optInt(key, -1)))
+                    return "SHIZUKU_COORDINATE_INVALID";
+            }
+            allowed.add("durationMs");
+            int ms = c.optInt("durationMs", 300);
+            if (ms < 100 || ms > 3000) return "SHIZUKU_DURATION_INVALID";
+        }
+        Iterator<String> keys = c.keys();
+        while (keys.hasNext())
+            if (!allowed.contains(keys.next())) return "SHIZUKU_ARGUMENT_DENIED";
+        return "";
+    }
+
+    private static JSONObject sendToShell(JSONObject request) throws Exception {
+        try (LocalSocket socket = new LocalSocket()) {
+            socket.connect(new LocalSocketAddress(
+                    BackgroundDisplayShell.SOCKET,
+                    LocalSocketAddress.Namespace.ABSTRACT));
+            socket.setSoTimeout(8000);
+            BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(
+                    socket.getOutputStream(), StandardCharsets.UTF_8));
+            writer.write(request.toString());
+            writer.write('\n');
+            writer.flush();
+            ByteArrayOutputStream reply = new ByteArrayOutputStream();
+            java.io.InputStream stream = socket.getInputStream();
+            byte[] block = new byte[8192];
+            int count;
+            boolean done = false;
+            while (!done && (count = stream.read(block)) != -1) {
+                int end = 0;
+                while (end < count && block[end] != '\n') end++;
+                if (reply.size() + end > 2 * 1024 * 1024)
+                    return new JSONObject().put("success", false)
+                            .put("error", "SHIZUKU_RELAY_RESPONSE_TOO_LARGE");
+                reply.write(block, 0, end);
+                done = end < count;
+            }
+            if (reply.size() == 0) return new JSONObject()
+                    .put("success", false).put("error", "SHIZUKU_EMPTY_RESPONSE");
+            return new JSONObject(reply.toString(StandardCharsets.UTF_8));
+        }
+    }
+
+    private static String error(String code) {
+        try { return new JSONObject().put("success", false)
+                    .put("error", code).toString(); }
+        catch (Exception ignored) { return "{}"; }
     }
 
     private String resolveOwnApk() {

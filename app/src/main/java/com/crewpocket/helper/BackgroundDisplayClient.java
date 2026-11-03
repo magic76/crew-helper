@@ -36,6 +36,11 @@ final class BackgroundDisplayClient {
     }
 
     private static JSONObject send(JSONObject operation) {
+        // Shizuku's UserService owns the Shell connection. App->Shell
+        // LocalSocket is denied with EACCES on some Samsung builds.
+        // Never silently fall back to direct Socket after Binder failure.
+        if (BackgroundShizukuRelay.connected())
+            return BackgroundShizukuRelay.request(operation);
         LocalSocket socket = new LocalSocket();
         try {
             socket.connect(new LocalSocketAddress(BackgroundDisplayShell.SOCKET,
@@ -53,6 +58,9 @@ final class BackgroundDisplayClient {
                 return error("INVALID_HELPER_RESPONSE");
             return new JSONObject(response);
         } catch (Exception failure) {
+            String message = String.valueOf(failure.getMessage());
+            if (message.contains("EACCES") || message.contains("Permission denied"))
+                return error("SOCKET_CONNECT_EACCES_USE_SHIZUKU_BINDER");
             return error("HELPER_NOT_CONNECTED");
         } finally {
             try { socket.close(); } catch (Exception ignored) {}
