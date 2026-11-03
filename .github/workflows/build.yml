@@ -45,8 +45,8 @@ jobs:
       - name: Resolve Shared Agent Harness
         run: gradle :app:dependencies --configuration releaseCompileClasspath
 
-      - name: Validate Background Helper Utility
-        run: bash -n scripts/background_display_local.sh
+      - name: Verify Privileged Virtual Display Removed
+        run: bash scripts/validate_removed_privileged_background.sh
 
       - name: Run Agent Runtime Replay Tests
         run: |
