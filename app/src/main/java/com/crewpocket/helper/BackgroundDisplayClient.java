@@ -36,11 +36,14 @@ final class BackgroundDisplayClient {
     }
 
     private static JSONObject send(JSONObject operation) {
-        // Shizuku's UserService owns the Shell connection. App->Shell
-        // LocalSocket is denied with EACCES on some Samsung builds.
-        // Never silently fall back to direct Socket after Binder failure.
+        // Mika-style direct Binder from Shell to App. A Shizuku UserService
+        // merely launches it; no operation takes a second Socket hop.
+        if (BackgroundShellHandoff.connected())
+            return BackgroundShellHandoff.request(operation);
+        // Once Shizuku has been used, do not silently fall back to the
+        // legacy App->Shell socket (which One UI can reject with EACCES).
         if (BackgroundShizukuRelay.connected())
-            return BackgroundShizukuRelay.request(operation);
+            return error("DIRECT_SHELL_BINDER_NOT_ATTACHED");
         LocalSocket socket = new LocalSocket();
         try {
             socket.connect(new LocalSocketAddress(BackgroundDisplayShell.SOCKET,

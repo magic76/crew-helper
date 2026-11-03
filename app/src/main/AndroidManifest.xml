@@ -55,6 +55,14 @@
             android:multiprocess="false"
             android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
 
+        <!-- Handoff from Shell UID 2000 only; provider verifies one-time nonce,
+             PID, exact installed APK, and the returned Binder identity. -->
+        <provider
+            android:name=".BackgroundShellHandoffProvider"
+            android:authorities="${applicationId}.shellhandoff"
+            android:exported="true"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+
         <activity
             android:name=".MainActivity"
             android:icon="@mipmap/ic_launcher"
