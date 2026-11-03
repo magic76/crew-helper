@@ -14,6 +14,14 @@ public final class BackgroundShizukuCommandPolicyTest {
                 "download", "rm", "read_file", "", "status;rm"}) {
             yes(!BackgroundShizukuCommandPolicy.allowedOperation(op), "deny " + op);
         }
+        yes(BackgroundShizukuCommandPolicy.completeDisplayIdentity(false, false),
+                "manual UI request can bind both fields");
+        yes(BackgroundShizukuCommandPolicy.completeDisplayIdentity(true, true),
+                "Live request with complete identity");
+        yes(!BackgroundShizukuCommandPolicy.completeDisplayIdentity(true, false),
+                "stale display-only requests denied");
+        yes(!BackgroundShizukuCommandPolicy.completeDisplayIdentity(false, true),
+                "stale package-only requests denied");
         yes(BackgroundShizukuCommandPolicy.requiresDisplay("tap"), "tap bound");
         yes(BackgroundShizukuCommandPolicy.requiresDisplay("preview"), "preview bound");
         yes(!BackgroundShizukuCommandPolicy.requiresDisplay("status"), "status");
