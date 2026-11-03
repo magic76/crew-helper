@@ -40,8 +40,13 @@ final class BackgroundDisplayClient {
         // merely launches it; no operation takes a second Socket hop.
         if (BackgroundShellHandoff.connected())
             return BackgroundShellHandoff.request(operation);
-        // Once Shizuku has been used, do not silently fall back to the
-        // legacy App->Shell socket (which One UI can reject with EACCES).
+        // Sticky once Shizuku bootstrap is explicitly approved. Never let
+        // a dead/unattached direct Binder silently drop into the previously
+        // EACCES-denied App->Shell socket path (even after UI unbind).
+        if (BackgroundShellHandoff.directRequired())
+            return error(BackgroundShellHandoff.hadDirectBinder()
+                    ? "DIRECT_SHELL_BINDER_LOST"
+                    : "DIRECT_SHELL_BINDER_NOT_ATTACHED");
         if (BackgroundShizukuRelay.connected())
             return error("DIRECT_SHELL_BINDER_NOT_ATTACHED");
         LocalSocket socket = new LocalSocket();

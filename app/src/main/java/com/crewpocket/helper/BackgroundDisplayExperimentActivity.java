@@ -239,9 +239,14 @@ public final class BackgroundDisplayExperimentActivity extends Activity {
                                     ? " · 獨立焦點" : " · 共用焦點／未確認") : ""));
                     if ("front".equals(op) || "close".equals(op)) clearFrame();
                 } else {
-                    status.setText("操作失敗：" + result.optString("error", "UNKNOWN")
-                            + ("HELPER_RESTART_REQUIRED".equals(result.optString("error", ""))
-                                    ? "（請先停止舊版 Helper，再從 Shizuku 啟動）" : ""));
+                    String code = result.optString("error", "UNKNOWN");
+                    String next = "HELPER_RESTART_REQUIRED".equals(code)
+                            ? "（請先停止舊版 Helper，再從 Shizuku 啟動）"
+                            : (code.startsWith("DIRECT_SHELL_BINDER_")
+                                || code.startsWith("DIRECT_SHELL_REPLY_"))
+                                ? "（Direct Binder 未就緒／已中斷；請按 Shizuku 啟動背景 Helper）"
+                                : "";
+                    status.setText("操作失敗：" + code + next);
                 }
             });
         });

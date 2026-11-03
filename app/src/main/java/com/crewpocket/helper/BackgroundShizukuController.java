@@ -60,10 +60,9 @@ final class BackgroundShizukuController {
         args = new Shizuku.UserServiceArgs(new ComponentName(
                 activity.getPackageName(), BackgroundShizukuService.class.getName()))
                 .daemon(true).processNameSuffix("background")
-                // Force a fresh UserService with the Binder relay interface.
-                // The old daemon only exposes shellUid/startHelper and cannot
-                // serve the new relay method, even if it is still alive.
-                .version(version * 100 + 7);
+                // Revision 8 makes the bootstrap-only direct Binder contract
+                // explicit and cannot reuse an older relay daemon.
+                .version(version * 100 + 8);
         Shizuku.addRequestPermissionResultListener(permissionListener);
     }
 
@@ -75,25 +74,27 @@ final class BackgroundShizukuController {
             if (pending && !destroyed)
                 finish("SHIZUKU_START_TIMEOUT：請確認 Shizuku 正在執行，再按一次啟動。");
         }, 15_000L);
-        worker.execute(() -> {
-            org.json.JSONObject status = BackgroundDisplayClient.command("status");
-            main.post(() -> {
-                if (destroyed || !pending) return;
-                if (status.optBoolean("success", false)
-                        && "DIRECT_SHELL_BINDER".equals(
-                            status.optString("transport", ""))) {
-                    finish("Direct Shell Binder 已運作 · protocol "
-                            + status.optInt("protocolVersion", -1)
-                            + " · Display " + status.optInt("displayId", -1));
-                } else {
-                    // A legacy Socket helper may still be running, or may
-                    // have an incompatible protocol. Neither is evidence of
-                    // direct Binder attachment. New direct helper does NOT
-                    // bind that Socket, so it can be started independently.
-                    checkPermission();
-                }
+        // Query the live direct Binder only. This avoids an irrelevant (and
+        // potentially EACCES-denied) legacy Socket probe before Shizuku bind.
+        if (BackgroundShellHandoff.connected()) {
+            worker.execute(() -> {
+                org.json.JSONObject status = BackgroundDisplayClient.command("status");
+                main.post(() -> {
+                    if (destroyed || !pending) return;
+                    if (status.optBoolean("success", false)
+                            && "DIRECT_SHELL_BINDER".equals(
+                                status.optString("transport", ""))) {
+                        finish("Direct Shell Binder 已運作 · protocol "
+                                + status.optInt("protocolVersion", -1)
+                                + " · Display " + status.optInt("displayId", -1));
+                    } else {
+                        checkPermission();
+                    }
+                });
             });
-        });
+        } else {
+            checkPermission();
+        }
     }
 
     String status() {
@@ -153,6 +154,7 @@ final class BackgroundShizukuController {
             if (!BackgroundShizukuRelay.attach(remote)) {
                 result = "SHIZUKU_SHELL_IDENTITY_MISMATCH";
             } else {
+                BackgroundShellHandoff.requireDirect();
                 // A Shizuku UserService only launches the Helper. All phone
                 // operations must later use the Shell Helper's DIRECT Binder.
                 org.json.JSONObject current = BackgroundDisplayClient.command("status");

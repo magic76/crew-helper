@@ -465,3 +465,38 @@ method from `IBackgroundShizukuService`. Shizuku now exposes only
 use Shizuku's Binder at all after the Shell Binder is attached.
 This eliminates the redundant Shell UID → LocalSocket hop rather than
 just leaving it unused.
+
+
+## P0 direct Binder stability follow-up
+
+Once Shizuku is authorized for a direct Shell Helper, the App marks its
+in-process direct transport as **required**. A missing or dead direct Binder
+now yields `DIRECT_SHELL_BINDER_NOT_ATTACHED` or
+`DIRECT_SHELL_BINDER_LOST` instead of silently probing the legacy
+App → Shell LocalSocket and resurfacing `SOCKET_CONNECT_EACCES`.
+
+A Shell Binder response is read via Android `Os.poll` on its own
+`ParcelFileDescriptor` with a **12-second cumulative deadline**. This
+prevents a stalled Shell response from indefinitely blocking the
+background-experiment worker. Pipe replies are limited to 2 MiB.
+The Shell helper also accepts a maximum of two concurrent direct
+requests, rather than spawning unlimited waiting threads. When busy,
+the request fails closed.
+
+The settings page performs direct Binder readiness checks before trying
+to bootstrap again, and reports a direct-Binder-specific recovery hint
+if the connection was lost. This is a transport stability improvement,
+**not** a claim of Samsung S25 Ultra hardware compatibility.
+
+### Acceptance
+
+- Bootstrap through Shizuku: `transport=DIRECT_SHELL_BINDER`,
+  `protocol=6`, then status and preview.
+- Force-stop the Shell Helper: the next operation must return
+  `DIRECT_SHELL_BINDER_LOST` without trying the legacy socket.
+- Repeat startup after failure: confirm a fresh one-time nonce, and
+  verify no active helper is replaced without authorization.
+- Simulate a stalled Shell command: the App must return
+  `DIRECT_SHELL_REPLY_TIMEOUT` and remain interactive.
+- Verify Apple Music preview and one low-risk tap without movement on
+  the physical display.

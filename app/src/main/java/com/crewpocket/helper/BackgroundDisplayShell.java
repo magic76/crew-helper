@@ -47,6 +47,7 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.Semaphore;
 
 /**
  * Opt-in virtual-display POC. Launch through adb shell/app_process or
@@ -74,6 +75,7 @@ public final class BackgroundDisplayShell {
     private boolean focusIsolated = false;
     private int width, height;
     private long frameAt;
+    private final Semaphore directRequests = new Semaphore(2);
     private final IBackgroundDirectShell.Stub directEndpoint = new IBackgroundDirectShell.Stub() {
         @Override public int[] identity() {
             return new int[]{Process.myUid(), Process.myPid()};
@@ -81,9 +83,15 @@ public final class BackgroundDisplayShell {
         @Override public ParcelFileDescriptor executeCommand(String json) {
             if (Process.myUid() != 2000
                     || Binder.getCallingUid() != appUid) return null;
+            // Fail closed and fail fast when requests are backed up; never
+            // spawn unlimited shell threads waiting for a blocked app reader.
+            if (!directRequests.tryAcquire()) return null;
             final ParcelFileDescriptor[] ends;
             try { ends = ParcelFileDescriptor.createPipe(); }
-            catch (Exception failed) { return null; }
+            catch (Exception failed) {
+                directRequests.release();
+                return null;
+            }
             final ParcelFileDescriptor sink = ends[1];
             Thread worker = new Thread(() -> {
                 String response;
@@ -124,10 +132,19 @@ public final class BackgroundDisplayShell {
                     out.write(response.getBytes(StandardCharsets.UTF_8));
                 } catch (Exception ignored) {
                     try { sink.close(); } catch (Exception ignoredClose) {}
+                } finally {
+                    directRequests.release();
                 }
             }, "crew-bg-direct-binder");
             worker.setDaemon(true);
-            worker.start();
+            try {
+                worker.start();
+            } catch (RuntimeException cannotStart) {
+                try { ends[0].close(); } catch (Exception ignored) {}
+                try { ends[1].close(); } catch (Exception ignored) {}
+                directRequests.release();
+                return null;
+            }
             return ends[0];
         }
     };
