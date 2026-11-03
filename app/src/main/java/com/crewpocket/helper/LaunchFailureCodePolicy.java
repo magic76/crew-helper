@@ -7,6 +7,14 @@ package com.crewpocket.helper;
 final class LaunchFailureCodePolicy {
     private LaunchFailureCodePolicy() {}
 
+    static String transportFailure(java.io.IOException error) {
+        if (error instanceof java.net.ConnectException)
+            return "LAUNCH_BRIDGE_UNREACHABLE";
+        if (error instanceof java.net.SocketTimeoutException)
+            return "LAUNCH_BRIDGE_TIMEOUT";
+        return "LAUNCH_BRIDGE_IO_FAILURE";
+    }
+
     static String classify(String rawError, String verification,
                            boolean launchSubmitted) {
         String code = rawError == null ? "" : rawError.trim();
@@ -19,6 +27,9 @@ final class LaunchFailureCodePolicy {
             case "LAUNCH_MAIN_HANDLER_UNAVAILABLE":
             case "LAUNCH_RUNTIME_EXCEPTION":
             case "LAUNCH_NOT_VISIBLE":
+            case "LAUNCH_BRIDGE_UNREACHABLE":
+            case "LAUNCH_BRIDGE_TIMEOUT":
+            case "LAUNCH_BRIDGE_IO_FAILURE":
             case "INVALID_APP_TARGET":
                 return code;
             default:
