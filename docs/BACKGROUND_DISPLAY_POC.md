@@ -546,3 +546,38 @@ a background display, nor do they validate Direct Binder health.
 This change only addresses wrong tool routing when background intent is
 explicit. Continue collecting foreground launch failure codes independently
 (see PR #198).
+
+
+## 5G-only / Wi-Fi-off bootstrap clarification (Nov 3, 2026)
+
+On an unrooted Samsung phone, **4G/5G mobile data is not an ADB
+authorization channel**. Stock Shizuku's wireless-debugging bootstrap
+normally needs Wi-Fi enabled and paired, or a pre-authorized PC/USB ADB
+startup. Crew Helper cannot elevate itself from its normal App UID to
+Shell UID 2000 on cellular data alone.
+
+The already-handoffed `IBackgroundDirectShell` Binder **does not
+depend on Shizuku** for individual commands. If the App process and
+Shell helper remain alive after Wi-Fi is switched off, background
+status/open/preview/gestures can continue locally. Neither this nor
+CI guarantees Samsung One UI will retain both processes. If the helper
+has died, rebootstrap is required; **no silent LocalSocket fallback**,
+no privilege escalation, and no claim of autonomous offline restart.
+
+The settings page now checks the live Direct Binder before reporting
+Shizuku as offline, no longer probes an EACCES-prone legacy socket just
+by opening the page, and describes first-start versus post-handoff
+limitations. Agent Inspector exposes only bounded flags under
+`Background Shell bootstrap` (no transcript, app names, or image data).
+The pure JVM bootstrap state matrix covers Wi-Fi-off-with-Binder,
+never-started 5G-only, lost Binder, ready Shizuku, and permissions.
+
+Manual acceptance:
+1. Start Shizuku and **Direct Shell Helper** with Wi-Fi enabled.
+2. Require `transport=DIRECT_SHELL_BINDER` in a successful status reply.
+3. Switch off Wi-Fi, keep cellular on, and check status/preview once.
+4. If Binder remains alive, require operations to work without Shizuku.
+5. If Binder died, expect an explicit bootstrap-required diagnosis; no
+   Socket EACCES retry loop and no false success.
+6. Force-stop Crew Helper or reboot, then confirm that recovery does
+   not pretend the App can reacquire Shell on 5G without authorization.

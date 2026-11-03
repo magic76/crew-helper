@@ -101,23 +101,64 @@ final class BackgroundShizukuController {
     }
 
     String status() {
+        // A Shizuku UserService is a bootstrap transport, NOT a runtime
+        // dependency. Never present its offline state as a failed live Binder.
+        if (BackgroundShellHandoff.connected())
+            return "DIRECT_SHELL_BINDER_ALIVE：背景通道已交接；即使 Shizuku 停止，"
+                    + "仍可按「檢查 Helper」驗證（不代表螢幕操作已成功）。";
         try {
             if (!Shizuku.pingBinder())
-                return "SHIZUKU_NOT_RUNNING（先開 Shizuku App 啟動服務）";
+                return unavailableBootstrapMessage(BackgroundShellHandoff.hadDirectBinder());
             if (Shizuku.isPreV11() || Shizuku.getVersion() < 13)
                 return "SHIZUKU_V13_REQUIRED";
             if (Shizuku.getUid() != 2000)
                 return "SHIZUKU_SHELL_UID_REQUIRED（此版本只支援 ADB Shell）";
             return Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
-                    ? "SHIZUKU_READY：已授權" : "SHIZUKU_PERMISSION_REQUIRED";
+                    ? "SHIZUKU_READY：可以啟動背景 Helper"
+                    : "SHIZUKU_PERMISSION_REQUIRED";
         } catch (Exception error) {
-            return "SHIZUKU_STATUS_UNAVAILABLE";
+            return "SHIZUKU_STATUS_UNAVAILABLE：若 Direct Binder 已中斷，"
+                    + "需重新以 Wi-Fi 無線偵錯或 USB ADB 啟動。";
         }
+    }
+
+    private static String unavailableBootstrapMessage(boolean previouslyConnected) {
+        String code = previouslyConnected
+                ? "DIRECT_SHELL_BINDER_LOST_BOOTSTRAP_REQUIRED"
+                : "SHIZUKU_NOT_RUNNING_BOOTSTRAP_REQUIRED";
+        return code + "：目前沒有可用的直接 Shell 通道。"
+                + "純 4G／5G 無法讓一般 App 自行取得 Shell 權限；"
+                + "請先透過 Wi-Fi 無線偵錯啟動 Shizuku，"
+                + "或使用已授權的 USB ADB 啟動 Helper。";
+    }
+
+    /** Sanitized, bounded evidence for Agent Inspector; no network or UI contents. */
+    static String offlineTransportDiagnostics() {
+        boolean directAlive = BackgroundShellHandoff.connected();
+        boolean shizukuAlive = false;
+        boolean authorized = false;
+        try {
+            if (!directAlive) {
+                shizukuAlive = Shizuku.pingBinder();
+                if (shizukuAlive)
+                    authorized = Shizuku.checkSelfPermission()
+                            == PackageManager.PERMISSION_GRANTED;
+            }
+        } catch (Exception ignored) {}
+        BackgroundBootstrapPolicy.State state = BackgroundBootstrapPolicy.classify(
+                directAlive, BackgroundShellHandoff.hadDirectBinder(),
+                shizukuAlive, authorized);
+        return "Background Shell bootstrap (current process): " + state.name()
+                + " · directBinderAlive=" + directAlive
+                + " · ShizukuBootstrapAlive=" + shizukuAlive
+                + " · 5GOnlyFirstBootstrap=UNSUPPORTED";
     }
 
     private void checkPermission() {
         String state = status();
-        if ("SHIZUKU_READY：已授權".equals(state)) {
+        if (state.startsWith("DIRECT_SHELL_BINDER_ALIVE")) {
+            finish(state);
+        } else if (state.startsWith("SHIZUKU_READY")) {
             bind();
         } else if ("SHIZUKU_PERMISSION_REQUIRED".equals(state)) {
             try {
