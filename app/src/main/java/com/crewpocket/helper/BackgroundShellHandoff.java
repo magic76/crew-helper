@@ -7,11 +7,13 @@ import android.os.IBinder;
 import android.os.ParcelFileDescriptor;
 import android.os.Process;
 import android.os.SystemClock;
+import android.system.Os;
+import android.system.OsConstants;
+import android.system.StructPollfd;
 import android.util.Base64;
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
-import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 
@@ -31,17 +33,30 @@ final class BackgroundShellHandoff {
     static final String KEY_APP_TOKEN = "appToken";
     private static final long NONCE_TTL_MS = 60_000L;
     private static final int MAX_REPLY_BYTES = 2 * 1024 * 1024;
+    private static final long RESPONSE_DEADLINE_MS = 12_000L;
     private static final SecureRandom RNG = new SecureRandom();
     private static final IBinder APP_TOKEN = new Binder();
 
     private static String pendingNonce = "";
     private static long nonceIssuedAt;
     private static volatile IBackgroundDirectShell direct;
+    // After user-approved Shizuku bootstrap, never silently use the legacy
+    // App->Shell LocalSocket if the direct Binder dies or is not yet ready.
+    private static volatile boolean directRequired;
+    private static volatile boolean hadDirectBinder;
     private static IBinder directBinder;
 
     private BackgroundShellHandoff() {}
 
+    static boolean directRequired() { return directRequired; }
+    static boolean hadDirectBinder() { return hadDirectBinder; }
+
+    static synchronized void requireDirect() {
+        directRequired = true;
+    }
+
     static synchronized String issueLaunchNonce() {
+        requireDirect();
         byte[] data = new byte[32];
         RNG.nextBytes(data);
         pendingNonce = Base64.encodeToString(data,
@@ -119,6 +134,8 @@ final class BackgroundShellHandoff {
         cancelNonce();
         directBinder = raw;
         direct = shell;
+        directRequired = true;
+        hadDirectBinder = true;
         response.putBinder(KEY_APP_TOKEN, APP_TOKEN);
         response.putBoolean("accepted", true);
         return response;
@@ -126,22 +143,43 @@ final class BackgroundShellHandoff {
 
     static JSONObject request(JSONObject operation) {
         IBackgroundDirectShell shell = direct;
-        if (!connected() || shell == null) return fail("DIRECT_SHELL_BINDER_NOT_CONNECTED");
+        if (!connected() || shell == null) return fail(
+                hadDirectBinder ? "DIRECT_SHELL_BINDER_LOST"
+                        : "DIRECT_SHELL_BINDER_NOT_CONNECTED");
         String raw = operation == null ? "" : operation.toString();
         if (raw.isEmpty() || raw.getBytes(StandardCharsets.UTF_8).length > 8192)
             return fail("DIRECT_SHELL_INVALID_REQUEST");
         try {
             ParcelFileDescriptor source = shell.executeCommand(raw);
-            if (source == null) return fail("DIRECT_SHELL_PIPE_FAILED");
-            try (InputStream in = new ParcelFileDescriptor.AutoCloseInputStream(source);
+            if (source == null) return fail("DIRECT_SHELL_PIPE_BUSY_OR_UNAVAILABLE");
+            try (ParcelFileDescriptor reader = source;
                  ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+                // Android's Os.poll waits on the returned pipe itself. An
+                // unresponsive Shell worker can no longer block the whole
+                // App's single-threaded background-experiment executor.
+                StructPollfd fd = new StructPollfd();
+                fd.fd = reader.getFileDescriptor();
+                fd.events = (short) (OsConstants.POLLIN | OsConstants.POLLHUP);
+                final long deadline = SystemClock.elapsedRealtime()
+                        + RESPONSE_DEADLINE_MS;
                 byte[] buffer = new byte[8192];
-                int n;
-                while ((n = in.read(buffer)) != -1) {
+                for (;;) {
+                    long remaining = deadline - SystemClock.elapsedRealtime();
+                    if (remaining <= 0L) return fail("DIRECT_SHELL_REPLY_TIMEOUT");
+                    fd.revents = 0;
+                    if (Os.poll(new StructPollfd[]{fd}, (int) Math.min(
+                            remaining, Integer.MAX_VALUE)) <= 0)
+                        return fail("DIRECT_SHELL_REPLY_TIMEOUT");
+                    if ((fd.revents & (OsConstants.POLLIN | OsConstants.POLLHUP)) == 0)
+                        return fail("DIRECT_SHELL_PIPE_ERROR");
+                    int n = Os.read(reader.getFileDescriptor(), buffer, 0, buffer.length);
+                    if (n == 0) break;
+                    if (n < 0) return fail("DIRECT_SHELL_PIPE_ERROR");
                     if (out.size() + n > MAX_REPLY_BYTES)
                         return fail("DIRECT_SHELL_RESPONSE_TOO_LARGE");
                     out.write(buffer, 0, n);
                 }
+                if (out.size() == 0) return fail("DIRECT_SHELL_EMPTY_RESPONSE");
                 JSONObject answer = new JSONObject(out.toString(StandardCharsets.UTF_8));
                 answer.put("transport", "DIRECT_SHELL_BINDER");
                 return answer;
