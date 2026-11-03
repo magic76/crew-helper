@@ -5,7 +5,6 @@
 
 
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -26,7 +25,6 @@
     <!-- Android 11+ hides unrelated packages by default.  We only query
          launchable activities so the App finder can resolve user requests. -->
     <queries>
-        <package android:name="moe.shizuku.privileged.api" />
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
@@ -44,24 +42,6 @@
         android:fullBackupContent="@xml/backup_rules"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
-
-        <meta-data android:name="moe.shizuku.client.V3_SUPPORT"
-            android:value="true" />
-        <provider
-            android:name="rikka.shizuku.ShizukuProvider"
-            android:authorities="${applicationId}.shizuku"
-            android:enabled="true"
-            android:exported="true"
-            android:multiprocess="false"
-            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
-
-        <!-- Handoff from Shell UID 2000 only; provider verifies one-time nonce,
-             PID, exact installed APK, and the returned Binder identity. -->
-        <provider
-            android:name=".BackgroundShellHandoffProvider"
-            android:authorities="${applicationId}.shellhandoff"
-            android:exported="true"
-            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
 
         <activity
             android:name=".MainActivity"
@@ -89,10 +69,6 @@
             android:authorities="com.crewpocket.helper.debugbundle"
             android:exported="false"
             android:grantUriPermissions="true" />
-
-        <activity
-            android:name=".BackgroundDisplayExperimentActivity"
-            android:exported="false" />
 
         <activity
             android:name=".AgentInspectorActivity"

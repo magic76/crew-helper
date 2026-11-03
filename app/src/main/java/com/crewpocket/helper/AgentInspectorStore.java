@@ -213,9 +213,7 @@ final class AgentInspectorStore {
         if (updatedAt > 0L) out.append("Updated: ").append(formatTime(updatedAt)).append("\n");
 
         out.append(LivePipelineDiagnostic.report()).append("\n\n")
-                .append(BackgroundToolRouteTrace.report()).append("\n\n")
-                .append(BackgroundShizukuController.offlineTransportDiagnostics())
-                .append("\n\n");
+                .append("Privileged virtual-display experiment: REMOVED (no Shizuku / ADB Shell).\n\n");
         out.append("Task snapshot below may be from a previous session.\n");
         if (task.length() > 0) {
             String taskState = task.optString("state",

@@ -48,20 +48,6 @@ final class LiveVisionController {
     int lastScreenWidth() { return lastScreenWidth; }
     int lastScreenHeight() { return lastScreenHeight; }
 
-    /**
-     * Isolated background screenshot. Does NOT update physical-screen
-     * coordinate dimensions or the foreground visual tap lease.
-     */
-    boolean sendBackgroundJpegBytes(byte[] jpegBytes) throws Exception {
-        if (jpegBytes == null || jpegBytes.length == 0
-                || jpegBytes.length > BackgroundVisionPolicy.MAX_JPEG_BYTES)
-            return false;
-        JSONObject video = new JSONObject()
-                .put("mimeType", "image/jpeg")
-                .put("data", Base64.encodeToString(jpegBytes, Base64.NO_WRAP));
-        return sendVideo(video, "background_virtual_jpeg", jpegBytes.length);
-    }
-
     boolean sendJpegBytes(byte[] jpegBytes) throws Exception {
         if (jpegBytes == null || jpegBytes.length == 0) return false;
         JSONObject video = new JSONObject()
