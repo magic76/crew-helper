@@ -41,11 +41,21 @@ final class BackgroundShellHandoff {
     private static String pendingNonce = "";
     private static long nonceIssuedAt;
     private static volatile IBackgroundDirectShell direct;
+    // Sticky until this App process ends. Do not allow a Shizuku-started
+    // session to fall back to the EACCES-prone legacy local socket.
+    private static volatile boolean directRequired;
+    private static volatile boolean hadDirectBinder;
     private static IBinder directBinder;
 
     private BackgroundShellHandoff() {}
 
+    static boolean directRequired() { return directRequired; }
+    static boolean hadDirectBinder() { return hadDirectBinder; }
+
+    static synchronized void requireDirect() { directRequired = true; }
+
     static synchronized String issueLaunchNonce() {
+        requireDirect();
         byte[] data = new byte[32];
         RNG.nextBytes(data);
         pendingNonce = Base64.encodeToString(data,
@@ -123,6 +133,8 @@ final class BackgroundShellHandoff {
         cancelNonce();
         directBinder = raw;
         direct = shell;
+        directRequired = true;
+        hadDirectBinder = true;
         response.putBinder(KEY_APP_TOKEN, APP_TOKEN);
         response.putBoolean("accepted", true);
         return response;
