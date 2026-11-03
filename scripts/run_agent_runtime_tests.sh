@@ -12,6 +12,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/BackgroundVisionPolicy.java" \
   "$SRC/BackgroundShizukuCommandPolicy.java" \
   "$SRC/BackgroundShellHandoffPolicy.java" \
+  "$SRC/BackgroundDirectTransportPolicy.java" \
   "$SRC/CameraCapturePolicy.java" \
   "$SRC/ActionTransaction.java" \
   "$SRC/ActionObservation.java" \
@@ -139,6 +140,7 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/BackgroundVisionPolicyTest.java" \
   "$ROOT/tests/BackgroundShizukuCommandPolicyTest.java" \
   "$ROOT/tests/BackgroundShellHandoffPolicyTest.java" \
+  "$ROOT/tests/BackgroundDirectTransportPolicyTest.java" \
   "$ROOT/tests/CameraCapturePolicyTest.java" \
   "$ROOT/tests/SendAuthorizationTest.java" \
   "$ROOT/tests/LiveTurnCoordinatorTest.java" \
@@ -253,6 +255,7 @@ java -cp "$OUT" com.crewpocket.helper.BackgroundPhoneSessionPolicyTest
 java -cp "$OUT" com.crewpocket.helper.BackgroundVisionPolicyTest
 java -cp "$OUT" com.crewpocket.helper.BackgroundShizukuCommandPolicyTest
 java -cp "$OUT" com.crewpocket.helper.BackgroundShellHandoffPolicyTest
+java -cp "$OUT" com.crewpocket.helper.BackgroundDirectTransportPolicyTest
 java -cp "$OUT" com.crewpocket.helper.CameraCapturePolicyTest
 java -cp "$OUT" com.crewpocket.helper.SendAuthorizationTest
 java -cp "$OUT" com.crewpocket.helper.LiveTurnCoordinatorTest

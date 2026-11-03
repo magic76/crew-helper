@@ -248,9 +248,13 @@ public final class BackgroundDisplayExperimentActivity extends Activity {
                             || "open".equals(op) || "tap".equals(op)
                             || "swipe".equals(op)) clearFrame();
                 } else {
-                    status.setText("操作失敗：" + result.optString("error", "UNKNOWN")
-                            + ("HELPER_RESTART_REQUIRED".equals(result.optString("error", ""))
-                                    ? "（請先停止舊版 Helper，再從 Shizuku 啟動）" : ""));
+                    String code = result.optString("error", "UNKNOWN");
+                    String hint = "HELPER_RESTART_REQUIRED".equals(code)
+                            ? "（請先停止舊版 Helper，再從 Shizuku 啟動）"
+                            : code.startsWith("DIRECT_SHELL_BINDER_")
+                                ? "（Direct Binder 已中斷，請重新以 Shizuku 啟動）"
+                                : "";
+                    status.setText("操作失敗：" + code + hint);
                 }
             });
         });
