@@ -454,3 +454,14 @@ These require separate real-device acceptance. GitHub main still had
 v1.8.119 at branch creation while the user's local installer was
 reportedly v1.8.133; this patch deliberately does not rewrite local
 version numbers.
+
+
+### No legacy operation relay in Shizuku
+
+The stage-7 handoff also removes the previous `relay(requestJson)`
+method from `IBackgroundShizukuService`. Shizuku now exposes only
+`shellUid()`, the legacy startup method and the authenticated
+`startHelperDirect(nonce)`; the App's phone operation path does not
+use Shizuku's Binder at all after the Shell Binder is attached.
+This eliminates the redundant Shell UID → LocalSocket hop rather than
+just leaving it unused.

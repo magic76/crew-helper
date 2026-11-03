@@ -63,7 +63,7 @@ final class BackgroundShizukuController {
                 // Force a fresh UserService with the Binder relay interface.
                 // The old daemon only exposes shellUid/startHelper and cannot
                 // serve the new relay method, even if it is still alive.
-                .version(version * 100 + 6);
+                .version(version * 100 + 7);
         Shizuku.addRequestPermissionResultListener(permissionListener);
     }
 
