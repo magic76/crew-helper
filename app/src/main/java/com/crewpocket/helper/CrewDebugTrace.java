@@ -25,7 +25,7 @@ final class CrewDebugTrace {
             + "|MODEL_SETUP|";
     private static final String TOOLS =
             "|NONE|phone_action|inspect_ui|launch_app|tap_screen|tap_element"
-            + "|search_current_app|commit_search|type_text|send_text|OTHER|";
+            + "|search_current_app|commit_search|type_text|send_text|background_phone|OTHER|";
     private static final String ACTIONS =
             "|NONE|OPEN_APP|TAP|SEARCH|COMMIT_SEARCH|TYPE|SCROLL|BACK"
             + "|HOME|TAKE_PHOTO|OTHER|";
@@ -39,6 +39,7 @@ final class CrewDebugTrace {
             + "|SEARCH_NEEDS_QUERY|LOCATOR_MARGIN_TOO_SMALL"
             + "|TARGET_REQUIRED|AMBIGUOUS|UNVERIFIED"
             + "|RECOVERY_TARGET_MISMATCH|RECOVERY_LIMIT_REACHED"
+            + "|BACKGROUND_AUTO_REDIRECT|BACKGROUND_ROUTE_MISMATCH|BACKGROUND_LIVE_DISABLED"
             + "|COMPLETED|SUPERSEDED_BY_USER|USER_INTERRUPTED"
             + "|STANDARD|EXTENDED_LOW|EXTENDED_MEDIUM|OTHER|";
     private static final ArrayDeque<String> events = new ArrayDeque<String>();
