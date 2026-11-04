@@ -8,6 +8,15 @@ final class LaunchFailureCodePolicy {
     private LaunchFailureCodePolicy() {}
 
     static String transportFailure(java.io.IOException error) {
+        String reason = error == null ? "" : error.getMessage();
+        // These values are authored only by Runtime's local readiness check,
+        // never copied from an arbitrary exception or user input.
+        if ("LOCAL_BRIDGE_DISABLED".equals(reason))
+            return "LAUNCH_BRIDGE_DISABLED";
+        if ("ACCESSIBILITY_SERVICE_NOT_RUNNING".equals(reason))
+            return "LAUNCH_ACCESSIBILITY_NOT_RUNNING";
+        if ("LOCAL_BRIDGE_NOT_LISTENING".equals(reason))
+            return "LAUNCH_BRIDGE_NOT_LISTENING";
         if (error instanceof java.net.ConnectException)
             return "LAUNCH_BRIDGE_UNREACHABLE";
         if (error instanceof java.net.SocketTimeoutException)
@@ -27,6 +36,9 @@ final class LaunchFailureCodePolicy {
             case "LAUNCH_MAIN_HANDLER_UNAVAILABLE":
             case "LAUNCH_RUNTIME_EXCEPTION":
             case "LAUNCH_NOT_VISIBLE":
+            case "LAUNCH_BRIDGE_DISABLED":
+            case "LAUNCH_ACCESSIBILITY_NOT_RUNNING":
+            case "LAUNCH_BRIDGE_NOT_LISTENING":
             case "LAUNCH_BRIDGE_UNREACHABLE":
             case "LAUNCH_BRIDGE_TIMEOUT":
             case "LAUNCH_BRIDGE_IO_FAILURE":

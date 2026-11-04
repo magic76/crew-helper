@@ -24,6 +24,18 @@ public final class LaunchFailureCodePolicyTest {
         check("LAUNCH_NOT_VISIBLE".equals(
                 LaunchFailureCodePolicy.classify("oops", "LAUNCH_TARGET_NOT_VISIBLE", false)),
                 "known verification code takes priority");
+        check("LAUNCH_ACCESSIBILITY_NOT_RUNNING".equals(
+                LaunchFailureCodePolicy.transportFailure(
+                        new java.io.IOException("ACCESSIBILITY_SERVICE_NOT_RUNNING"))),
+                "readiness explains missing Accessibility rather than App target");
+        check("LAUNCH_BRIDGE_DISABLED".equals(
+                LaunchFailureCodePolicy.transportFailure(
+                        new java.io.IOException("LOCAL_BRIDGE_DISABLED"))),
+                "respects explicit bridge disable");
+        check("LAUNCH_BRIDGE_NOT_LISTENING".equals(
+                LaunchFailureCodePolicy.transportFailure(
+                        new java.io.IOException("LOCAL_BRIDGE_NOT_LISTENING"))),
+                "distinguishes server died from Android app launch failure");
         check("LAUNCH_BRIDGE_UNREACHABLE".equals(
                 LaunchFailureCodePolicy.transportFailure(
                         new java.net.ConnectException("sensitive endpoint info"))),

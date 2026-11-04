@@ -1302,7 +1302,9 @@ public class MainActivity extends Activity
                 + "\nLive Service: " + (NativeLiveService.isActive() ? "Active" : "Idle")
                 + "\nAlways-On: " + (AppConfig.isAlwaysOnEnabled(this) ? NativeLiveService.getRuntimeState() : "Disabled")
                 + "\nWake Phrase: " + AppConfig.getWakePhrase(this)
-                + "\nBridge: 127.0.0.1:8766")
+                + "\nLocal Bridge: "
+                + CrewAccessibilityService.localBridgeStatus(this, false)
+                + " (127.0.0.1:8766)")
             .setPositiveButton(I18n.get(this, "關閉", "Close"), null)
             .show();
     }

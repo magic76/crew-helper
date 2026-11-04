@@ -91,7 +91,14 @@ final class PhoneRuntimeExecutor {
         }
     }
 
+    /** One bounded readiness check, before any HTTP action is dispatched. */
+    private void requireLocalBridge() throws java.io.IOException {
+        String state = CrewAccessibilityService.localBridgeStatus(appContext, true);
+        if (!"READY".equals(state)) throw new java.io.IOException(state);
+    }
+
     JSONObject get(String endpoint) throws Exception {
+        requireLocalBridge();
         HttpURLConnection connection = null;
         try {
             connection = (HttpURLConnection) new URL(
@@ -129,6 +136,7 @@ final class PhoneRuntimeExecutor {
             String endpoint,
             JSONObject payload,
             int readTimeoutMs) throws Exception {
+        requireLocalBridge();
         HttpURLConnection connection = null;
         try {
             connection = (HttpURLConnection) new URL(
