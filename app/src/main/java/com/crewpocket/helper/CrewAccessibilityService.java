@@ -65,6 +65,16 @@ public class CrewAccessibilityService extends AccessibilityService {
     public static CrewAccessibilityService getInstance() {
         return instance;
     }
+
+    /** Safe operational state; never contains app names or bridge tokens. */
+    static String localBridgeStatus(Context context, boolean attemptRecovery) {
+        boolean enabled = AppConfig.isLocalBridgeEnabled(context);
+        CrewAccessibilityService service = instance;
+        AccessibilityBridgeServer bridge = service == null ? null : service.bridgeServer;
+        boolean listening = enabled && bridge != null
+                && (attemptRecovery ? bridge.ensureListening(750L) : bridge.isListening());
+        return LocalBridgeReadinessPolicy.code(enabled, service != null, listening);
+    }
     public LearnedUiMappingStore getLearnedUiMappingStore() {
         if (learnedUiMappingStore == null) learnedUiMappingStore = new LearnedUiMappingStore(this);
         return learnedUiMappingStore;
@@ -227,6 +237,9 @@ public class CrewAccessibilityService extends AccessibilityService {
     protected void onServiceConnected() {
         super.onServiceConnected();
         instance = this;
+        // Some OEMs recreate/bind the AccessibilityService after onCreate.
+        // A previously failed loopback bind must be reattempted here.
+        if (bridgeServer != null) bridgeServer.start();
         if (learnedUiMappingStore == null) learnedUiMappingStore = new LearnedUiMappingStore(this);
         if (uiTeachOverlay == null) uiTeachOverlay = new UiTeachOverlay(this);
         if (appCatalog == null) { appCatalog = new AppCatalog(this); appCatalog.prewarm(); }
@@ -245,6 +258,7 @@ public class CrewAccessibilityService extends AccessibilityService {
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
+        if (bridgeServer != null) bridgeServer.recoverIfNeeded();
         if (event == null) return;
         int type = event.getEventType();
         if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
