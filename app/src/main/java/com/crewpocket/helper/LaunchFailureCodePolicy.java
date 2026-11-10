@@ -30,6 +30,7 @@ final class LaunchFailureCodePolicy {
             case "LAUNCH_BRIDGE_UNREACHABLE":
             case "LAUNCH_BRIDGE_TIMEOUT":
             case "LAUNCH_BRIDGE_IO_FAILURE":
+            case "CAPABILITY_UNAVAILABLE":
             case "INVALID_APP_TARGET":
                 return code;
             default:
