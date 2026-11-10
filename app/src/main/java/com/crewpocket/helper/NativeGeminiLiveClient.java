@@ -8141,15 +8141,17 @@ final class NativeGeminiLiveClient {
                 .put("recoverable", false)
                 .put("completionEvidence", ScreenActionCapabilityPolicy.UNAVAILABLE)
                 .put("message", I18n.get(appContext,
-                        "螢幕操作尚未啟用，請點通知前往設定開啟權限。",
-                        "Screen actions are disabled. Tap the notification to enable them."))
+                        "螢幕操作尚未啟用。請點通知，或在 Crew Helper 首頁點「螢幕操作」前往設定。",
+                        "Screen actions are disabled. Tap the notification, or open Screen actions on the Crew Helper home page."))
                 .put("instruction", I18n.get(appContext,
                         "螢幕操作權限尚未開啟，所以無法替使用者開啟 App 或操作畫面。"
-                                + "請提醒使用者點擊 Crew Helper 的螢幕操作通知，"
+                                + "請提醒使用者點擊 Crew Helper 的螢幕操作通知；若未顯示通知，"
+                                + "可在 Crew Helper 首頁點「螢幕操作」。"
                                 + "按照說明啟用 Android 無障礙服務；啟用後請使用者重新說一次指令。"
                                 + "禁止再呼叫任何螢幕操作工具，也不可宣稱已完成。",
                         "Screen actions are disabled. Ask the user to tap the Crew Helper "
-                                + "screen-actions notification and enable Accessibility in Settings. "
+                                + "screen-actions notification (or the Screen actions card on the home page) "
+                                + "and enable Accessibility in Settings. "
                                 + "After enabling it, ask the user to repeat the command. "
                                 + "Do not retry screen tools or claim success."));
     }
