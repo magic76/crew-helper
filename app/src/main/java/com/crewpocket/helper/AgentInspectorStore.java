@@ -577,6 +577,9 @@ final class AgentInspectorStore {
             int actualBlockedAttempts =
                     Math.max(0, raw.optInt("blockedAttempts", 0));
             safe.put("blockedAttempts", actualBlockedAttempts);
+            if (raw.optBoolean("capabilityUnavailable", false)) {
+                safe.put("capabilityUnavailable", true);
+            }
             JSONObject blockedAttemptReasons =
                     sanitizeBlockedAttemptReasons(
                             raw.optJSONObject(
