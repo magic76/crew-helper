@@ -32,6 +32,9 @@ public final class LaunchFailureCodePolicyTest {
                 LaunchFailureCodePolicy.transportFailure(
                         new java.net.SocketTimeoutException("secret"))),
                 "bridge timed out");
+        check("CAPABILITY_UNAVAILABLE".equals(
+                LaunchFailureCodePolicy.classify("CAPABILITY_UNAVAILABLE", "", false)),
+                "screen action capability unavailability is safe to report");
         check("LAUNCH_BRIDGE_IO_FAILURE".equals(
                 LaunchFailureCodePolicy.transportFailure(
                         new java.io.IOException("don't disclose this message"))),
