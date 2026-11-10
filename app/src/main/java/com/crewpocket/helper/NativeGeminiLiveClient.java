@@ -3181,6 +3181,18 @@ final class NativeGeminiLiveClient {
             } catch (Exception ignored) {}
             return;
         }
+        // Permission is a device capability, not a Gemini planning failure.
+        // Gate before recipe replay so remembered workflows cannot bypass it.
+        if (!CrewAccessibilityService.isServiceRunning()
+                && ScreenActionCapabilityPolicy.requiresAccessibilityRequest(
+                        requestedName,
+                        requestedArgs.optString("action", ""))) {
+            sendScreenActionCapabilityUnavailable(
+                    id, requestedName, "phone_action".equals(requestedName)
+                            ? "phone_action" : requestedName);
+            return;
+        }
+
         // A matching learned recipe may replace the model's first semantic
         // phone mutation with one deterministic Runtime run. The user turn
         // itself selected the recipe; the model never grants extra authority.
@@ -3298,6 +3310,11 @@ final class NativeGeminiLiveClient {
         }
         final String name = semantic.runtimeName;
         final JSONObject args = semantic.runtimeArgs;
+        if (!CrewAccessibilityService.isServiceRunning()
+                && ScreenActionCapabilityPolicy.requiresAccessibilityTool(name)) {
+            sendScreenActionCapabilityUnavailable(id, requestedName, name);
+            return;
+        }
         MediaFlowDiagnostic.toolGate(
                 "SEMANTIC_RESOLUTION_COMPLETED",
                 requestedName,
@@ -8101,18 +8118,85 @@ final class NativeGeminiLiveClient {
      */
 
 
+    /**
+     * Disabled phone-control is an actionable WAITING_USER boundary.
+     * Never spin on inspect_ui, retry a blind launch, or count this as a
+     * model failure. Notification entry preserves the existing disclosure.
+     */
+    private JSONObject screenActionUnavailableResult() throws Exception {
+        ScreenActionCapabilityNotice.show(appContext);
+        reportStage(I18n.get(appContext,
+                "螢幕操作尚未啟用 · 請點通知前往設定",
+                "Screen actions disabled · Open settings from the notification"));
+        AgentTaskRecord active = agentTaskCoordinator.activeRunning();
+        if (active != null) active.capabilityUnavailable = true;
+        return new JSONObject()
+                .put("success", false)
+                .put("blockedByRuntime", true)
+                .put("stepResult", "STEP_FAILED")
+                .put("error", ScreenActionCapabilityPolicy.UNAVAILABLE)
+                .put("taskState", "WAITING_USER")
+                .put("nextRequirement", "ENABLE_SCREEN_ACTIONS")
+                .put("needsUser", true)
+                .put("recoverable", false)
+                .put("completionEvidence", ScreenActionCapabilityPolicy.UNAVAILABLE)
+                .put("message", I18n.get(appContext,
+                        "螢幕操作尚未啟用。請點通知，或在 Crew Helper 首頁點「螢幕操作」前往設定。",
+                        "Screen actions are disabled. Tap the notification, or open Screen actions on the Crew Helper home page."))
+                .put("instruction", I18n.get(appContext,
+                        "螢幕操作權限尚未開啟，所以無法替使用者開啟 App 或操作畫面。"
+                                + "請提醒使用者點擊 Crew Helper 的螢幕操作通知；若未顯示通知，"
+                                + "可在 Crew Helper 首頁點「螢幕操作」。"
+                                + "按照說明啟用 Android 無障礙服務；啟用後請使用者重新說一次指令。"
+                                + "禁止再呼叫任何螢幕操作工具，也不可宣稱已完成。",
+                        "Screen actions are disabled. Ask the user to tap the Crew Helper "
+                                + "screen-actions notification (or the Screen actions card on the home page) "
+                                + "and enable Accessibility in Settings. "
+                                + "After enabling it, ask the user to repeat the command. "
+                                + "Do not retry screen tools or claim success."));
+    }
+
+    private void sendScreenActionCapabilityUnavailable(
+            String id, String requestedName, String runtimeName) {
+        try {
+            JSONObject blocked = screenActionUnavailableResult();
+            AgentTaskRecord task = agentTaskCoordinator.activeRunning();
+            if (task != null) {
+                task.recordBlockedAttempt(ScreenActionCapabilityPolicy.UNAVAILABLE);
+                task.lastTaskState = "WAITING_USER";
+                task.lastCompletionEvidence =
+                        ScreenActionCapabilityPolicy.UNAVAILABLE;
+                task.requiresPostActionInspection = false;
+                task.addStep(runtimeName, blocked);
+                task.awaitingModel = true;
+            }
+            sendToolResponse(id, requestedName, blocked);
+            if (task != null) agentResponseCoordinator.scheduleWatchdog(task);
+        } catch (Exception error) {
+            Log.w(TAG, "Failed to surface screen-action capability gate", error);
+        }
+    }
+
     private JSONObject launchApp(JSONObject args) throws Exception {
+        // Fast paths and deterministic recipes can call here without the
+        // semantic tool gate. Always re-check immediately before mutation.
+        if (!CrewAccessibilityService.isServiceRunning()) {
+            return screenActionUnavailableResult();
+        }
         PhoneRuntimeExecutor.MutationResult execution;
         try {
             execution = phoneRuntimeExecutor.launchApp(args);
         } catch (java.io.IOException transportFailure) {
-            // Do not return raw exception messages (IP/headers/paths) or
-            // repeat the same blind launch when the local Accessibility
-            // bridge was unreachable. The user can see a stable error code.
+            // The user can turn Accessibility off after the initial gate.
+            // Do not confuse that with a broken live bridge.
+            if (!CrewAccessibilityService.isServiceRunning()) {
+                return screenActionUnavailableResult();
+            }
             return new JSONObject()
                     .put("success", false)
                     .put("stepResult", "STEP_FAILED")
-                    .put("error", LaunchFailureCodePolicy.transportFailure(transportFailure));
+                    .put("error", ScreenActionCapabilityPolicy.launchTransportError(
+                            true, transportFailure));
         }
         JSONObject reply = execution.result;
         if (!execution.actionKey.isEmpty()) {

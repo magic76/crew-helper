@@ -38,17 +38,23 @@ final class AgentPerformanceStore {
                 if (containsTask(tasks, taskId)) return;
 
                 boolean cancelled = status.contains("停止") || status.contains("取消");
-                boolean partial = task.optBoolean("partialOutcome", false)
-                        || !task.optString("blockCategory", "").isEmpty()
-                        || task.optBoolean("modelRefusal", false);
+                boolean capabilityUnavailable =
+                        task.optBoolean("capabilityUnavailable", false);
+                boolean partial = !capabilityUnavailable
+                        && (task.optBoolean("partialOutcome", false)
+                            || !task.optString("blockCategory", "").isEmpty()
+                            || task.optBoolean("modelRefusal", false));
                 boolean terminalSuccess =
                         AgentInspectorStore.isSuccessfulTaskEnd(status)
                                 && !cancelled
-                                && !partial;
+                                && !partial
+                                && !capabilityUnavailable;
                 boolean recovered = terminalSuccess
                         && hasFailureThenSuccess(task.optJSONArray("steps"));
                 String outcome = cancelled
                         ? "CANCELLED"
+                        : capabilityUnavailable
+                                ? ScreenActionCapabilityPolicy.UNAVAILABLE
                         : partial
                                 ? "PARTIAL"
                                 : recovered
@@ -73,6 +79,7 @@ final class AgentPerformanceStore {
                         .put("runtimePolicyEpoch",
                                 AgentRuntimePolicyEpoch.CURRENT_REVISION)
                         .put("outcome", outcome)
+                        .put("capabilityUnavailable", capabilityUnavailable)
                         .put("success", terminalSuccess)
                         .put("cancelled", cancelled)
                         .put("cancelCategory", task.optString("cancelCategory", ""))
@@ -120,6 +127,7 @@ final class AgentPerformanceStore {
         int noMutationSupersedes = 0;
         int excludedFromSuccessRate = 0;
         int hardFailure = 0;
+        int capabilityUnavailable = 0;
         LinkedHashMap<String, Integer> cancelCategories =
                 new LinkedHashMap<String, Integer>();
         long taskTotal = 0L;
@@ -139,6 +147,7 @@ final class AgentPerformanceStore {
             if ("SUCCESS".equals(outcome)) success++;
             else if ("RECOVERED_SUCCESS".equals(outcome)) recovered++;
             else if ("PARTIAL".equals(outcome)) partial++;
+            else if (ScreenActionCapabilityPolicy.UNAVAILABLE.equals(outcome)) capabilityUnavailable++;
             else if ("CANCELLED".equals(outcome)) {
                 cancelled++;
                 String progress = item.optString("cancelProgressEvidence", "");
@@ -185,6 +194,7 @@ final class AgentPerformanceStore {
         out.append("Success: ").append(success).append("\n")
                 .append("Recovered success: ").append(recovered).append("\n")
                 .append("Partial: ").append(partial).append("\n")
+                .append("Screen actions disabled: ").append(capabilityUnavailable).append("\n")
                 .append("Hard failures: ").append(hardFailure).append("\n")
                 .append("Cancelled / superseded: ").append(cancelled).append("\n");
         if (!cancelCategories.isEmpty()) {
@@ -212,7 +222,7 @@ final class AgentPerformanceStore {
                     .append(implicitUserRetries)
                     .append(" · included in success-rate evaluation\n");
         }
-        int evaluatedTotal = Math.max(0, total - excludedFromSuccessRate);
+        int evaluatedTotal = Math.max(0, total - excludedFromSuccessRate - capabilityUnavailable);
         out.append("Full-success rate: ");
         if (evaluatedTotal == 0) {
             out.append("n/a");
@@ -224,6 +234,10 @@ final class AgentPerformanceStore {
         if (excludedFromSuccessRate > 0) {
             out.append(" · user-controlled exclusions=")
                     .append(excludedFromSuccessRate);
+        }
+        if (capabilityUnavailable > 0) {
+            out.append(" · capability exclusions=")
+                    .append(capabilityUnavailable);
         }
         out.append("\n");
         int trustScore =
@@ -277,6 +291,7 @@ final class AgentPerformanceStore {
         int recovered = 0;
         int partial = 0;
         int hardFailure = 0;
+        int capabilityUnavailable = 0;
         int cancelled = 0;
         int verifiedStepSupersedes = 0;
         int executedUnverifiedSupersedes = 0;
@@ -298,6 +313,7 @@ final class AgentPerformanceStore {
                 if ("SUCCESS".equals(outcome)) success++;
                 else if ("RECOVERED_SUCCESS".equals(outcome)) recovered++;
                 else if ("PARTIAL".equals(outcome)) partial++;
+            else if (ScreenActionCapabilityPolicy.UNAVAILABLE.equals(outcome)) capabilityUnavailable++;
                 else if ("CANCELLED".equals(outcome)) {
                     cancelled++;
                     String progress = item.optString("cancelProgressEvidence", "");
@@ -336,11 +352,12 @@ final class AgentPerformanceStore {
             return out.toString();
         }
 
-        int evaluated = Math.max(0, total - excluded);
+        int evaluated = Math.max(0, total - excluded - capabilityUnavailable);
         int fullSuccess = success + recovered;
         out.append("\nSuccess: ").append(success)
                 .append(" · recovered: ").append(recovered)
                 .append(" · partial: ").append(partial)
+                .append(" · capability unavailable: ").append(capabilityUnavailable)
                 .append(" · hard failure: ").append(hardFailure)
                 .append("\nCancelled / superseded: ").append(cancelled);
         if (!cancelCategories.isEmpty()) {
@@ -376,6 +393,10 @@ final class AgentPerformanceStore {
         if (excluded > 0) {
             out.append(" · user-controlled exclusions=")
                     .append(excluded);
+        }
+        if (capabilityUnavailable > 0) {
+            out.append(" · capability exclusions=")
+                    .append(capabilityUnavailable);
         }
         int trustScore =
                 TrustScorePolicy.score(

@@ -227,6 +227,7 @@ public class CrewAccessibilityService extends AccessibilityService {
     protected void onServiceConnected() {
         super.onServiceConnected();
         instance = this;
+        ScreenActionCapabilityNotice.clear(this);
         if (learnedUiMappingStore == null) learnedUiMappingStore = new LearnedUiMappingStore(this);
         if (uiTeachOverlay == null) uiTeachOverlay = new UiTeachOverlay(this);
         if (appCatalog == null) { appCatalog = new AppCatalog(this); appCatalog.prewarm(); }

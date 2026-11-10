@@ -23,6 +23,7 @@ import android.widget.Toast;
 public class MainActivity extends Activity
         implements NativeLiveService.RuntimeStateListener {
     static final String EXTRA_OPEN_GEMINI_KEY_SETTINGS = "crew.open_gemini_key_settings";
+    static final String EXTRA_OPEN_SCREEN_ACTIONS_SETTINGS = "crew.open_screen_actions_settings";
     private TextView statusDot;
     private TextView statusText;
     private TextView statusDetail;
@@ -75,6 +76,21 @@ public class MainActivity extends Activity
                         EXTRA_OPEN_GEMINI_KEY_SETTINGS, false);
         renderTab(openGeminiKeySettings ? 2 : 0);
 
+        boolean openScreenActions = getIntent() != null
+                && getIntent().getBooleanExtra(
+                        EXTRA_OPEN_SCREEN_ACTIONS_SETTINGS, false);
+        if (openScreenActions) {
+            getIntent().removeExtra(EXTRA_OPEN_SCREEN_ACTIONS_SETTINGS);
+            pageContent.postDelayed(new Runnable() {
+                @Override public void run() {
+                    if (!isFinishing()
+                            && !CrewAccessibilityService.isServiceRunning()) {
+                        showAccessibilityDisclosureDialog();
+                    }
+                }
+            }, 180L);
+        }
+
         if (openGeminiKeySettings) {
             // Consume the one-shot deep link so Activity recreation does not
             // reopen the dialog forever.
@@ -95,8 +111,26 @@ public class MainActivity extends Activity
     }
 
     @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        if (intent != null && intent.getBooleanExtra(
+                EXTRA_OPEN_SCREEN_ACTIONS_SETTINGS, false)) {
+            intent.removeExtra(EXTRA_OPEN_SCREEN_ACTIONS_SETTINGS);
+            if (CrewAccessibilityService.isServiceRunning()) {
+                ScreenActionCapabilityNotice.clear(this);
+            } else {
+                showAccessibilityDisclosureDialog();
+            }
+        }
+    }
+
+    @Override
     protected void onResume() {
         super.onResume();
+        if (CrewAccessibilityService.isServiceRunning()) {
+            ScreenActionCapabilityNotice.clear(this);
+        }
         NativeLiveService.reconcileAlwaysOn(this);
         if (activeTab == 0) renderHomePage();
         else refreshServiceStatus();

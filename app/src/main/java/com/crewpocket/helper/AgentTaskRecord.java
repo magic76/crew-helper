@@ -35,6 +35,7 @@ final class AgentTaskRecord {
     String visualObservationFingerprint = "";
     int sameScreenVisualObservations;
     int blockedAttempts;
+    boolean capabilityUnavailable;
     final HashMap<String, Integer> blockedAttemptReasons =
             new HashMap<String, Integer>();
     int consecutiveMutationFailures;
@@ -536,6 +537,7 @@ final class AgentTaskRecord {
                     .put("consecutiveVisualObservations", consecutiveVisualObservations)
                     .put("sameScreenVisualObservations", sameScreenVisualObservations)
                     .put("blockedAttempts", blockedAttempts)
+                    .put("capabilityUnavailable", capabilityUnavailable)
                     .put("blockedAttemptReasons", blockedAttemptReasonsJson())
                     .put("blockedReason", blockedReason == null ? "" : blockedReason)
                     .put("endReason", endReason)
