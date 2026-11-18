@@ -106,6 +106,8 @@ final class NativeGeminiLiveClient {
     private final ToolCallDispatcher toolCallDispatcher;
     private final Set<String> internalCoachToolIds =
             java.util.Collections.synchronizedSet(new HashSet<String>());
+    private final java.util.concurrent.ConcurrentMap<String, HelperCoachRuntimePolicy.Advice>
+            internalCoachAdviceByToolId = new java.util.concurrent.ConcurrentHashMap<String, HelperCoachRuntimePolicy.Advice>();
     private volatile Thread activeToolThread;
     // 0018: a goal can span several execution tasks/follow-ups inside one Live session.
     // Safety/tool budgets remain per AgentTaskRecord; they are NOT shared for the whole call.
@@ -896,6 +898,8 @@ final class NativeGeminiLiveClient {
                 : agentTaskCoordinator.cancelActive(reason, category);
         if (task == null) return false;
 
+        cancelPendingCoachAdvice(task.taskId, "TASK_CANCELLED");
+
         if (helperCoachBridge != null) {
             helperCoachBridge.recordTaskOutcome(
                     task.taskId,
@@ -1599,6 +1603,7 @@ final class NativeGeminiLiveClient {
         liveHumanTurnBoundary.reset();
         clearPendingInternalDirectiveTurn();
         internalCoachToolIds.clear();
+        internalCoachAdviceByToolId.clear();
         liveConnection.stop();
         if (wasRunning) listener.onStopped("已結束");
     }
@@ -4115,11 +4120,27 @@ final class NativeGeminiLiveClient {
             String retryTarget,
             long intentGeneration) {
         if (!isCurrentCoachTask(observation.taskId, intentGeneration)
-                || advice.expiresAtMs <= System.currentTimeMillis()) return;
+                || advice.expiresAtMs <= System.currentTimeMillis()) {
+            recordCoachActionResult(advice,
+                    HelperCoachActionResultPolicy.STATUS_CANCELLED,
+                    advice.expiresAtMs <= System.currentTimeMillis()
+                            ? "COACH_ADVICE_STALE" : "TASK_CANCELLED", null);
+            return;
+        }
         JSONObject current;
         try { current = phoneRuntimeExecutor.get("/semantic_screen"); }
-        catch (Exception ignored) { return; }
-        if (current == null || !current.optBoolean("success", false)) return;
+        catch (Exception ignored) {
+            recordCoachActionResult(advice,
+                    HelperCoachActionResultPolicy.STATUS_FAILED,
+                    "COACH_REOBSERVE_FAILED", null);
+            return;
+        }
+        if (current == null || !current.optBoolean("success", false)) {
+            recordCoachActionResult(advice,
+                    HelperCoachActionResultPolicy.STATUS_FAILED,
+                    "COACH_REOBSERVE_FAILED", null);
+            return;
+        }
         String currentPackage = current.optString("package", "").trim();
         String currentFingerprint = current.optString("fingerprint", "").trim();
         if (!observation.appPackage.equals(currentPackage)
@@ -4130,11 +4151,20 @@ final class NativeGeminiLiveClient {
                 publishCoachReobservation(
                         task, current, intentGeneration, "COACH_UI_CHANGED");
             }
+            recordCoachActionResult(advice,
+                    HelperCoachActionResultPolicy.STATUS_CANCELLED,
+                    "COACH_UI_CHANGED", null);
             return;
         }
         observationVerificationController.recordSemanticObservation(current);
         if (!isCurrentCoachTask(observation.taskId, intentGeneration)
-                || advice.expiresAtMs <= System.currentTimeMillis()) return;
+                || advice.expiresAtMs <= System.currentTimeMillis()) {
+            recordCoachActionResult(advice,
+                    HelperCoachActionResultPolicy.STATUS_CANCELLED,
+                    advice.expiresAtMs <= System.currentTimeMillis()
+                            ? "COACH_ADVICE_STALE" : "TASK_CANCELLED", null);
+            return;
+        }
 
         JSONObject call = new JSONObject();
         JSONObject args = new JSONObject();
@@ -4145,7 +4175,12 @@ final class NativeGeminiLiveClient {
                 tool = "inspect_ui";
             } else {
                 String target = CoachDataRedactor.safeLabel(retryTarget);
-                if (target.isEmpty()) return;
+                if (target.isEmpty()) {
+                    recordCoachActionResult(advice,
+                            HelperCoachActionResultPolicy.STATUS_FAILED,
+                            "COACH_ACTION_UNSAFE", null);
+                    return;
+                }
                 tool = SemanticPhoneAction.TOOL_NAME;
                 args.put("action", "TAP").put("target", target);
             }
@@ -4160,12 +4195,60 @@ final class NativeGeminiLiveClient {
                     .put("_coach_expected_package", observation.appPackage)
                     .put("_coach_expected_fingerprint", observation.uiFingerprint)
                     .put("_coach_expires_at_ms", advice.expiresAtMs);
-        } catch (Exception ignored) { return; }
+        } catch (Exception ignored) {
+            recordCoachActionResult(advice,
+                    HelperCoachActionResultPolicy.STATUS_FAILED,
+                    "COACH_ACTION_BUILD_FAILED", null);
+            return;
+        }
         String internalId = call.optString("id", "");
         internalCoachToolIds.add(internalId);
+        internalCoachAdviceByToolId.put(internalId, advice);
         if (!toolCallDispatcher.enqueue(call, intentGeneration)) {
             internalCoachToolIds.remove(internalId);
+            internalCoachAdviceByToolId.remove(internalId);
+            recordCoachActionResult(advice,
+                    HelperCoachActionResultPolicy.STATUS_FAILED,
+                    "COACH_QUEUE_FAILED", null);
         }
+    }
+
+    private void cancelPendingCoachAdvice(String taskId, String errorCode) {
+        if (taskId == null || taskId.trim().isEmpty()) return;
+        for (java.util.Map.Entry<String, HelperCoachRuntimePolicy.Advice> entry
+                : internalCoachAdviceByToolId.entrySet()) {
+            HelperCoachRuntimePolicy.Advice advice = entry.getValue();
+            if (advice == null || !taskId.equals(advice.taskId)) continue;
+            if (internalCoachAdviceByToolId.remove(entry.getKey(), advice)) {
+                recordCoachActionResult(advice,
+                        HelperCoachActionResultPolicy.STATUS_CANCELLED,
+                        errorCode, null);
+            }
+        }
+    }
+
+    private void recordCoachActionResult(
+            HelperCoachRuntimePolicy.Advice advice,
+            String status,
+            String errorCode,
+            JSONObject result) {
+        if (helperCoachBridge == null || advice == null) return;
+        boolean success = result != null
+                && (result.optBoolean("success", false)
+                    || "STEP_OK".equals(result.optString("stepResult", "")));
+        String evidence = result == null ? ""
+                : result.optString("completionEvidence", "").trim();
+        if (!isCoachTrustedEvidence(evidence)) evidence = "";
+        String resultCode = result == null ? errorCode
+                : result.optString("verificationCode",
+                        result.optString("error", "RUNTIME_ACTION_FAILED"));
+        String safeStatus = status == null || status.trim().isEmpty()
+                ? HelperCoachActionResultPolicy.statusForRuntimeResult(success, resultCode)
+                : status;
+        String safeError = success ? "NONE"
+                : resultCode;
+        helperCoachBridge.recordCoachActionResult(
+                advice, safeStatus, safeError, success, evidence);
     }
 
     private boolean isCurrentCoachTask(String taskId, long intentGeneration) {
@@ -9307,6 +9390,11 @@ final class NativeGeminiLiveClient {
         shadowAgentRuntime.onToolResult(
                 id, name, shadowSuccess, shadowCode, shadowFingerprint);
         recordCoachResponseObservation(name, result);
+        HelperCoachRuntimePolicy.Advice coachAdvice = id == null ? null
+                : internalCoachAdviceByToolId.remove(id);
+        if (coachAdvice != null) {
+            recordCoachActionResult(coachAdvice, null, null, result);
+        }
         if (id != null && internalCoachToolIds.remove(id)) {
             // Pocket suggestions use the same Runtime executor and task ledger,
             // but they do not correspond to a Gemini functionCall ID.

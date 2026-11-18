@@ -79,6 +79,8 @@ final class HelperCoachBridge {
     private final ArrayList<JSONObject> events = new ArrayList<JSONObject>();
     private final LinkedHashMap<String, StoredObservation> observations =
             new LinkedHashMap<String, StoredObservation>();
+    private final LinkedHashMap<String, Boolean> terminalAdviceEvents =
+            new LinkedHashMap<String, Boolean>();
     private final Map<String, ArrayList<Long>> rateEvents =
             new HashMap<String, ArrayList<Long>>();
     private volatile AdviceListener adviceListener;
@@ -183,6 +185,45 @@ final class HelperCoachBridge {
             appendEventLocked(event);
         }
         return cloneObject(event);
+    }
+
+    void recordCoachActionResult(
+            HelperCoachRuntimePolicy.Advice advice,
+            String status,
+            String errorCode,
+            boolean runtimeActionSuccess,
+            String evidence) {
+        if (!isEnabled() || advice == null) return;
+        ArrayList<String> evidenceRefs = new ArrayList<String>();
+        if (evidence != null && !evidence.trim().isEmpty()) {
+            evidenceRefs.add(evidence.trim());
+        }
+        Map<String, Object> payload = HelperCoachActionResultPolicy.buildEvent(
+                "coach_result_" + UUID.randomUUID().toString(),
+                advice.taskId,
+                HelperCoachTime.formatIsoUtc(System.currentTimeMillis()),
+                advice.observationEventId,
+                advice.adviceId,
+                advice.suggestedActionId,
+                status,
+                errorCode,
+                runtimeActionSuccess,
+                evidenceRefs);
+        if (payload == null) return;
+        JSONObject event;
+        try { event = new JSONObject(payload); }
+        catch (Exception ignored) { return; }
+        synchronized (lock) {
+            if (terminalAdviceEvents.containsKey(advice.adviceId)) return;
+            terminalAdviceEvents.put(advice.adviceId, Boolean.TRUE);
+            while (terminalAdviceEvents.size() > 512) {
+                Iterator<String> iterator = terminalAdviceEvents.keySet().iterator();
+                if (!iterator.hasNext()) break;
+                iterator.next();
+                iterator.remove();
+            }
+            appendEventLocked(event);
+        }
     }
 
     void recordTaskOutcome(
@@ -402,6 +443,8 @@ final class HelperCoachBridge {
                     .put("kind", "coach_advice_receipt")
                     .put("status", "accepted")
                     .put("queued", true)
+                    .put("observation_event_id", observationId)
+                    .put("advice_event_id", eventId)
                     .put("diagnosis_received", !diagnosis.isEmpty());
         } catch (Exception ignored) {}
         return new HttpResponse(202, "Accepted", out);
