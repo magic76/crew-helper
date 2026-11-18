@@ -39,6 +39,8 @@ import java.util.ArrayList;
 import java.util.Date;
 import java.util.Locale;
 import java.util.List;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.Executor;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
@@ -489,10 +491,47 @@ public class CrewAccessibilityService extends AccessibilityService {
         }
     }
 
+    private static String readBridgeHttpLine(InputStream input, int maxBytes)
+            throws Exception {
+        if (input == null) return null;
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        while (bytes.size() < maxBytes) {
+            int value = input.read();
+            if (value < 0) return bytes.size() == 0
+                    ? null : new String(bytes.toByteArray(), StandardCharsets.US_ASCII);
+            if (value == '\n') break;
+            if (value != '\r') bytes.write(value);
+        }
+        if (bytes.size() >= maxBytes) return null;
+        return new String(bytes.toByteArray(), StandardCharsets.US_ASCII);
+    }
+
+    private static byte[] readBridgeHttpBody(InputStream input, int contentLength)
+            throws Exception {
+        if (contentLength == 0) return new byte[0];
+        byte[] body = new byte[contentLength];
+        int offset = 0;
+        while (offset < body.length) {
+            int count = input.read(body, offset, body.length - offset);
+            if (count < 0) return null;
+            if (count == 0) continue;
+            offset += count;
+        }
+        return body;
+    }
+
+    private static String headerValue(String line) {
+        if (line == null) return "";
+        int colon = line.indexOf(':');
+        return colon < 0 || colon + 1 >= line.length()
+                ? "" : line.substring(colon + 1).trim();
+    }
+
     private void handleSocketRequest(final Socket socket) {
         try {
-            BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
-            String line = reader.readLine();
+            socket.setSoTimeout(5000);
+            InputStream input = socket.getInputStream();
+            String line = readBridgeHttpLine(input, 8192);
             if (line == null) {
                 socket.close();
                 return;
@@ -503,19 +542,79 @@ public class CrewAccessibilityService extends AccessibilityService {
             String path = parts.length > 1 ? parts[1] : "/";
 
             int contentLength = 0;
+            int headerBytes = line.length();
+            int headerCount = 0;
             String bridgeToken = "";
-            while ((line = reader.readLine()) != null && !line.isEmpty()) {
+            boolean chunked = false;
+            boolean invalidContentLength = false;
+            boolean headersComplete = false;
+            Map<String, String> coachHeaders = new HashMap<String, String>();
+            while ((line = readBridgeHttpLine(input, 8192)) != null) {
+                headerBytes += line.length() + 2;
+                headerCount++;
+                if (headerBytes > 16 * 1024 || headerCount > 64) {
+                    writeBridgeHttpJsonAndClose(socket, 431,
+                            "Request Header Fields Too Large",
+                            "{\"success\":false,\"error\":\"HEADERS_TOO_LARGE\"}");
+                    return;
+                }
+                if (line.isEmpty()) {
+                    headersComplete = true;
+                    break;
+                }
                 String lowerLine = line.toLowerCase(Locale.ROOT);
                 if (lowerLine.startsWith("content-length:")) {
                     try {
                         contentLength = Integer.parseInt(line.substring(15).trim());
-                    } catch (Exception e) {}
+                    } catch (Exception e) { invalidContentLength = true; }
                 } else if (lowerLine.startsWith("x-crew-bridge-token:")) {
                     int colon = line.indexOf(':');
                     if (colon >= 0 && colon + 1 < line.length()) {
                         bridgeToken = line.substring(colon + 1).trim();
                     }
+                } else if (lowerLine.startsWith("x-coach-timestamp:")) {
+                    coachHeaders.put("x-coach-timestamp", headerValue(line));
+                } else if (lowerLine.startsWith("x-coach-nonce:")) {
+                    coachHeaders.put("x-coach-nonce", headerValue(line));
+                } else if (lowerLine.startsWith("x-coach-signature:")) {
+                    coachHeaders.put("x-coach-signature", headerValue(line));
+                } else if (lowerLine.startsWith("transfer-encoding:")) {
+                    chunked = lowerLine.contains("chunked");
                 }
+            }
+
+            boolean coachRoute = path.startsWith("/coach/v1");
+            if (!headersComplete || invalidContentLength || contentLength < 0 || chunked) {
+                writeBridgeHttpJsonAndClose(socket, 400, "Bad Request",
+                        "{\"success\":false,\"error\":\"INVALID_HTTP_BODY\"}");
+                return;
+            }
+            if (coachRoute) {
+                if (contentLength > HelperCoachAuthPolicy.MAX_BODY_BYTES) {
+                    writeBridgeHttpJsonAndClose(socket, 413, "Payload Too Large",
+                            "{\"success\":false,\"error\":\"BODY_TOO_LARGE\"}");
+                    return;
+                }
+                byte[] rawBody = readBridgeHttpBody(input, contentLength);
+                if (rawBody == null) {
+                    writeBridgeHttpJsonAndClose(socket, 400, "Bad Request",
+                            "{\"success\":false,\"error\":\"INCOMPLETE_BODY\"}");
+                    return;
+                }
+                HelperCoachBridge coach = HelperCoachBridge.get(this);
+                HelperCoachBridge.HttpResponse coachResponse = coach == null
+                        ? null : coach.handleRequest(
+                                method, path, coachHeaders, rawBody);
+                if (coachResponse == null) {
+                    writeBridgeHttpJsonAndClose(socket, 503, "Service Unavailable",
+                            "{\"success\":false,\"error\":\"COACH_UNAVAILABLE\"}");
+                } else {
+                    writeBridgeHttpJsonAndClose(socket,
+                            coachResponse.statusCode,
+                            coachResponse.statusText,
+                            coachResponse.body);
+                }
+                return;
             }
 
             if (!AppConfig.isLocalBridgeTokenValid(
@@ -537,21 +636,18 @@ public class CrewAccessibilityService extends AccessibilityService {
                 return;
             }
 
-            StringBuilder bodyBuilder = new StringBuilder();
-            if (contentLength > 0) {
-                // HTTP Content-Length is measured in bytes, not Java UTF-16 chars.
-                // Reading a Chinese JSON payload by char count made the request wait forever.
-                char[] buf = new char[Math.min(contentLength, 1024)];
-                int bytesRead = 0;
-                while (bytesRead < contentLength) {
-                    int r = reader.read(buf, 0, Math.min(buf.length, contentLength - bytesRead));
-                    if (r == -1) break;
-                    String chunk = new String(buf, 0, r);
-                    bodyBuilder.append(chunk);
-                    bytesRead += chunk.getBytes(StandardCharsets.UTF_8).length;
-                }
+            if (contentLength > 8 * 1024 * 1024) {
+                writeBridgeHttpJsonAndClose(socket, 413, "Payload Too Large",
+                        "{\"success\":false,\"error\":\"BODY_TOO_LARGE\"}");
+                return;
             }
-            String body = bodyBuilder.toString();
+            byte[] bodyBytes = readBridgeHttpBody(input, contentLength);
+            if (bodyBytes == null) {
+                writeBridgeHttpJsonAndClose(socket, 400, "Bad Request",
+                        "{\"success\":false,\"error\":\"INCOMPLETE_BODY\"}");
+                return;
+            }
+            String body = new String(bodyBytes, StandardCharsets.UTF_8);
 
             String responseJson = "{\"status\":\"OK\"}";
             if (path.startsWith("/wait_ui_change")) {

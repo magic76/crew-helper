@@ -11,6 +11,7 @@ public class AppConfig {
     public static final String KEY_LOCAL_BRIDGE = "local_bridge_enabled";
     /** 0084: private per-install capability token for localhost:8766. */
     public static final String KEY_LOCAL_BRIDGE_TOKEN = "local_bridge_token";
+    public static final String KEY_HELPER_COACH_ENABLED = "helper_coach_enabled";
     public static final String KEY_NOISE_MODE = "noise_mode";
     public static final String KEY_NOISE_SUPPRESSION = "noise_suppression";
     public static final String KEY_LIVE_TONE = "live_tone";
@@ -50,6 +51,7 @@ public class AppConfig {
 
     private static final String KEY_RETIRED_VOICE_REVIEW_CLEANED =
             "retired_jev_cleaned_v1";
+    private static final String SECURE_HELPER_COACH_SECRET = "helper_coach_pairing_secret";
 
     public static SharedPreferences getPrefs(Context context) {
         Context app = context.getApplicationContext();
@@ -297,6 +299,53 @@ public class AppConfig {
             diff |= expected.charAt(i) ^ candidate.charAt(i);
         }
         return diff == 0;
+    }
+
+    /** Pocket coaching is opt-in and has a separate key from the Runtime bridge. */
+    public static boolean isHelperCoachEnabled(Context context) {
+        return context != null && getPrefs(context).getBoolean(
+                KEY_HELPER_COACH_ENABLED, false);
+    }
+
+    public static void setHelperCoachEnabled(Context context, boolean enabled) {
+        if (context == null) return;
+        getPrefs(context).edit()
+                .putBoolean(KEY_HELPER_COACH_ENABLED, enabled)
+                .commit();
+        if (!enabled) {
+            SecureSecretStore.delete(
+                    context.getApplicationContext(),
+                    SECURE_HELPER_COACH_SECRET);
+        }
+    }
+
+    public static synchronized String getHelperCoachPairingSecret(Context context) {
+        if (context == null || !isHelperCoachEnabled(context)) return "";
+        return SecureSecretStore.read(
+                context.getApplicationContext(),
+                SECURE_HELPER_COACH_SECRET);
+    }
+
+    /** Generates a new per-install 256-bit key only after opt-in. */
+    public static synchronized String rotateHelperCoachPairingSecret(Context context) {
+        if (context == null || !isHelperCoachEnabled(context)) return "";
+        byte[] bytes = new byte[32];
+        new java.security.SecureRandom().nextBytes(bytes);
+        StringBuilder secret = new StringBuilder(64);
+        for (byte value : bytes) {
+            secret.append(String.format(java.util.Locale.US, "%02x", value & 0xff));
+        }
+        String candidate = secret.toString();
+        return SecureSecretStore.write(
+                context.getApplicationContext(),
+                SECURE_HELPER_COACH_SECRET,
+                candidate)
+                && candidate.equals(getHelperCoachPairingSecret(context))
+                ? candidate : "";
+    }
+
+    public static boolean hasHelperCoachPairingSecret(Context context) {
+        return !getHelperCoachPairingSecret(context).isEmpty();
     }
 
     // ── 5. Voice environment: auto, quiet, or noisy ──
