@@ -25,14 +25,14 @@ public final class MediaPlaybackCompletionPolicyTest {
         check(MediaPlaybackCompletionPolicy.uiIndicatesPlaying(
                         "{label:'暫停'}"),
                 "pause UI proves player entered playing state");
-        check(MediaPlaybackCompletionPolicy.shouldComplete(
+        check(!MediaPlaybackCompletionPolicy.shouldComplete(
                         "com.apple.android.music",
                         "播放",
                         true,
                         false,
                         true,
                         false),
-                "inactive to active transition completes task");
+                "device-wide audio activity alone does not complete Apple Music playback");
         check(MediaPlaybackCompletionPolicy.shouldComplete(
                         "com.apple.android.music",
                         "播放",
@@ -41,6 +41,14 @@ public final class MediaPlaybackCompletionPolicyTest {
                         true,
                         true),
                 "pause UI completes even when audio was already active");
+        check(MediaPlaybackCompletionPolicy.shouldComplete(
+                        "com.apple.android.music",
+                        "播放",
+                        true,
+                        false,
+                        false,
+                        true),
+                "Apple Music playing UI is sufficient even if device-wide audio sampling misses it");
         check(!MediaPlaybackCompletionPolicy.shouldComplete(
                         "com.apple.android.music",
                         "播放",

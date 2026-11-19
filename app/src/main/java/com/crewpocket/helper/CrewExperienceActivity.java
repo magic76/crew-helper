@@ -2,6 +2,8 @@ package com.crewpocket.helper;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.DialogInterface;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -15,6 +17,7 @@ import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
+import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -101,6 +104,9 @@ public class CrewExperienceActivity extends Activity {
         intro.setLineSpacing(dp(2), 1.08f);
         intro.setPadding(0, dp(14), 0, dp(12));
         content.addView(intro);
+
+        addPocketCoachSettings();
+        addCoachRegistrySection();
 
         JSONArray items = store.list();
         int candidate = 0;
@@ -200,13 +206,263 @@ public class CrewExperienceActivity extends Activity {
                             "No learned Experience yet. Only strong friction or repeated medium friction enters learning."),
                     11, CrewTheme.TEXT_SECONDARY, false));
             content.addView(empty, cardParams());
+        } else {
+            for (int i = items.length() - 1; i >= 0; i--) {
+                JSONObject item = items.optJSONObject(i);
+                if (item != null) content.addView(experienceCard(item), cardParams());
+            }
+        }
+    }
+
+    private void addPocketCoachSettings() {
+        TextView title = text(
+                I18n.get(this, "Pocket 教練連線", "POCKET COACH CONNECTION"),
+                10.5f, CrewTheme.INDIGO_400, true);
+        title.setPadding(dp(4), dp(14), 0, dp(6));
+        content.addView(title);
+
+        LinearLayout card = card();
+        Switch enabled = new Switch(this);
+        enabled.setText(I18n.get(
+                this,
+                "允許 Crew Pocket 提供操作建議",
+                "Allow Crew Pocket to suggest Runtime actions"));
+        enabled.setTextColor(CrewTheme.TEXT_PRIMARY);
+        enabled.setTextSize(12);
+        enabled.setChecked(AppConfig.isHelperCoachEnabled(this));
+        enabled.setOnCheckedChangeListener((button, checked) -> {
+            AppConfig.setHelperCoachEnabled(this, checked);
+            render();
+        });
+        card.addView(enabled);
+        TextView privacy = text(
+                I18n.get(this,
+                        "僅使用 127.0.0.1 的現有 Bridge。配對密鑰由 Android Keystore 加密；不傳送截圖、語音錄音、搜尋輸入或訊息內容。Pocket 離線時 Helper 照常獨立運作。",
+                        "Uses the existing 127.0.0.1 Bridge. Android Keystore encrypts the pairing key. Screenshots, audio recordings, search input and message content are not sent. Helper keeps working when Pocket is offline."),
+                10.5f, CrewTheme.TEXT_SECONDARY, false);
+        privacy.setLineSpacing(dp(2), 1.05f);
+        privacy.setPadding(0, dp(5), 0, dp(4));
+        card.addView(privacy);
+
+        if (AppConfig.isHelperCoachEnabled(this)) {
+            boolean paired = AppConfig.hasHelperCoachPairingSecret(this);
+            TextView status = text(
+                    paired
+                            ? I18n.get(this,
+                                    "配對密鑰已建立。Pocket 建議仍需由 Helper Runtime 驗證。",
+                                    "Pairing key is ready. Helper Runtime validates every Pocket suggestion.")
+                            : I18n.get(this,
+                                    "尚未配對。建立密鑰後，貼到 Crew Pocket 的 Helper Coach 連線設定。",
+                                    "Not paired. Create a key, then paste it into Crew Pocket's Helper Coach connection settings."),
+                    10.5f, CrewTheme.TEXT_SECONDARY, false);
+            status.setPadding(0, dp(6), 0, dp(6));
+            card.addView(status);
+
+            Button pair = new Button(this);
+            pair.setAllCaps(false);
+            pair.setText(I18n.get(this,
+                    paired ? "複製配對密鑰" : "建立配對密鑰",
+                    paired ? "Copy pairing key" : "Create pairing key"));
+            pair.setOnClickListener(v -> {
+                String key = paired
+                        ? AppConfig.getHelperCoachPairingSecret(this)
+                        : AppConfig.rotateHelperCoachPairingSecret(this);
+                if (key.isEmpty()) {
+                    Toast.makeText(this,
+                            I18n.get(this, "配對密鑰建立失敗", "Could not create the pairing key"),
+                            Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                ClipboardManager clipboard = (ClipboardManager)
+                        getSystemService(CLIPBOARD_SERVICE);
+                if (clipboard == null) return;
+                ClipData clip = ClipData.newPlainText(
+                        "Helper Coach pairing key", key);
+                clipboard.setPrimaryClip(clip);
+                if (!paired) render();
+                new android.os.Handler(android.os.Looper.getMainLooper())
+                        .postDelayed(() -> {
+                            try {
+                                if (clipboard.hasPrimaryClip()
+                                        && clipboard.getPrimaryClip() != null
+                                        && clipboard.getPrimaryClip().getItemCount() > 0
+                                        && key.contentEquals(clipboard.getPrimaryClip()
+                                                .getItemAt(0).coerceToText(this))) {
+                                    clipboard.setPrimaryClip(ClipData.newPlainText(
+                                            "", ""));
+                                }
+                            } catch (Exception ignored) {}
+                        }, 60_000L);
+                Toast.makeText(this,
+                        I18n.get(this,
+                                "配對密鑰已複製；貼到 Crew Pocket。密鑰將在 60 秒後從剪貼簿清除。",
+                                "Pairing key copied. Paste it into Crew Pocket; the clipboard copy clears in 60 seconds."),
+                        Toast.LENGTH_LONG).show();
+            });
+            card.addView(pair);
+
+            if (paired) {
+                Button rotate = new Button(this);
+                rotate.setAllCaps(false);
+                rotate.setText(I18n.get(this,
+                        "重新產生並撤銷舊密鑰",
+                        "Rotate key and revoke the old one"));
+                rotate.setOnClickListener(v -> new AlertDialog.Builder(this)
+                        .setTitle(I18n.get(this,
+                                "重新配對 Crew Pocket？",
+                                "Rotate the Crew Pocket pairing key?"))
+                        .setMessage(I18n.get(this,
+                                "舊密鑰會立即失效，Pocket 必須使用新密鑰重新連線。",
+                                "The old key becomes invalid immediately; Pocket must reconnect with the new key."))
+                        .setPositiveButton(I18n.get(this, "重新產生", "Rotate"),
+                                (dialog, which) -> {
+                                    String rotated = AppConfig
+                                            .rotateHelperCoachPairingSecret(this);
+                                    render();
+                                    if (!rotated.isEmpty()) {
+                                        Toast.makeText(this,
+                                                I18n.get(this,
+                                                        "密鑰已更新，請按複製配對密鑰並更新 Pocket 設定。",
+                                                        "Key rotated. Copy it and update Pocket's settings."),
+                                                Toast.LENGTH_LONG).show();
+                                    }
+                                })
+                        .setNegativeButton(I18n.get(this, "取消", "Cancel"), null)
+                        .show());
+                card.addView(rotate);
+            }
+        }
+        content.addView(card, cardParams());
+    }
+
+    private void addCoachRegistrySection() {
+        HelperCoachRegistryStore registry = new HelperCoachRegistryStore(this);
+        JSONArray skills = registry.listSkills();
+        JSONArray proposals = registry.listCodeProposals();
+
+        TextView title = text(
+                I18n.get(this, "Pocket 技能候選與程式提案", "POCKET SKILLS AND CODE PROPOSALS"),
+                10.5f, CrewTheme.INDIGO_400, true);
+        title.setPadding(dp(4), dp(18), 0, dp(8));
+        content.addView(title);
+
+        TextView note = text(
+                I18n.get(this,
+                        "Pocket 提交的技能預設停用；啟用需兩個獨立的已驗證任務及使用者確認回歸檢查。程式提案只保存 GitHub PR/commit 參照，不會修改或安裝程式碼。",
+                        "Pocket skills stay inactive until two independent verified tasks and a user-confirmed regression check. Code proposals store GitHub PR/commit references only; they never modify or install code."),
+                10.5f, CrewTheme.TEXT_SECONDARY, false);
+        note.setLineSpacing(dp(2), 1.05f);
+        note.setPadding(0, 0, 0, dp(8));
+        content.addView(note);
+
+        if (skills.length() == 0 && proposals.length() == 0) {
+            LinearLayout empty = card();
+            empty.addView(text(
+                    I18n.get(this, "尚無 Pocket 技能候選或程式提案。", "No Pocket skill candidates or code proposals yet."),
+                    11, CrewTheme.TEXT_SECONDARY, false));
+            content.addView(empty, cardParams());
             return;
         }
 
-        for (int i = items.length() - 1; i >= 0; i--) {
-            JSONObject item = items.optJSONObject(i);
-            if (item != null) content.addView(experienceCard(item), cardParams());
+        for (int i = skills.length() - 1; i >= 0; i--) {
+            JSONObject skill = skills.optJSONObject(i);
+            if (skill == null) continue;
+            String skillId = skill.optString("skill_id", "");
+            String status = skill.optString("status", "CANDIDATE");
+            int version = skill.optInt("version", 1);
+            JSONArray verified = skill.optJSONArray("verified_task_ids");
+            int verifiedCount = verified == null ? 0 : verified.length();
+            LinearLayout item = card();
+            item.addView(text(
+                    skill.optString("name", skillId) + " · v" + version,
+                    12, CrewTheme.TEXT_PRIMARY, true));
+            item.addView(text(
+                    skill.optString("app_package", "") + " · " + status
+                            + " · " + verifiedCount + "/2 "
+                            + I18n.get(this, "獨立驗證", "verified tasks"),
+                    10, CrewTheme.TEXT_SECONDARY, false));
+            JSONArray actions = skill.optJSONArray("action_sequence");
+            item.addView(text(
+                    I18n.get(this, "允許動作：", "Allowlisted actions: ")
+                            + (actions == null ? "" : actions.toString()),
+                    9.5f, CrewTheme.TEXT_MUTED, false));
+
+            if (verifiedCount >= HelperCoachSkillLifecyclePolicy.MIN_INDEPENDENT_VERIFICATIONS
+                    && !skill.optBoolean("regression_checks_passed", false)) {
+                Button regression = new Button(this);
+                regression.setAllCaps(false);
+                regression.setText(I18n.get(this,
+                        "確認已完成回歸檢查", "Confirm regression checks passed"));
+                regression.setOnClickListener(v -> new AlertDialog.Builder(this)
+                        .setTitle(I18n.get(this, "回歸檢查", "Regression checks"))
+                        .setMessage(I18n.get(this,
+                                "只有在已實際檢查此技能的前置條件、允許動作與完成驗證後才確認。這會解鎖啟用按鈕。",
+                                "Confirm only after checking this skill's preconditions, allowlisted actions and completion verification. This unlocks activation."))
+                        .setPositiveButton(I18n.get(this, "確認", "Confirm"),
+                                (dialog, which) -> {
+                                    registry.markRegressionChecksPassed(skillId);
+                                    render();
+                                })
+                        .setNegativeButton(I18n.get(this, "取消", "Cancel"), null)
+                        .show());
+                item.addView(regression);
+            }
+
+            if (skill.optBoolean("active", false)) {
+                addRegistryButton(item, I18n.get(this, "停用技能", "Deactivate skill"),
+                        () -> { registry.deactivate(skillId); render(); });
+            } else if (verifiedCount >= 2
+                    && skill.optBoolean("regression_checks_passed", false)) {
+                addRegistryButton(item, I18n.get(this, "啟用技能", "Activate skill"),
+                        () -> new AlertDialog.Builder(this)
+                                .setTitle(I18n.get(this, "啟用技能？", "Activate skill?"))
+                                .setMessage(I18n.get(this,
+                                        "此技能只會在列出的 App 範圍內提供給 Pocket 參考；Runtime 仍會逐次驗證動作。",
+                                        "This skill is shared with Pocket only for its listed app. Runtime will still validate each action."))
+                                .setPositiveButton(I18n.get(this, "啟用", "Activate"),
+                                        (dialog, which) -> { registry.activate(skillId); render(); })
+                                .setNegativeButton(I18n.get(this, "取消", "Cancel"), null)
+                                .show());
+            }
+
+            JSONArray history = skill.optJSONArray("history");
+            if (history != null && history.length() > 0) {
+                addRegistryButton(item,
+                        I18n.get(this, "回滾到上一版本", "Rollback to previous version"),
+                        () -> new AlertDialog.Builder(this)
+                                .setTitle(I18n.get(this, "回滾技能版本？", "Rollback skill version?"))
+                                .setPositiveButton(I18n.get(this, "回滾", "Rollback"),
+                                        (dialog, which) -> { registry.rollback(skillId); render(); })
+                                .setNegativeButton(I18n.get(this, "取消", "Cancel"), null)
+                                .show());
+            }
+            content.addView(item, cardParams());
         }
+
+        for (int i = proposals.length() - 1; i >= 0; i--) {
+            JSONObject proposal = proposals.optJSONObject(i);
+            if (proposal == null) continue;
+            LinearLayout item = card();
+            item.addView(text(
+                    proposal.optString("title", "Helper code proposal"),
+                    12, CrewTheme.TEXT_PRIMARY, true));
+            item.addView(text(
+                    proposal.optString("diagnosis", ""),
+                    10, CrewTheme.TEXT_SECONDARY, false));
+            item.addView(text(
+                    proposal.optString("proposed_diff_ref", "")
+                            + " · " + proposal.optString("status", "PENDING_REVIEW"),
+                    9.5f, CrewTheme.TEXT_MUTED, false));
+            content.addView(item, cardParams());
+        }
+    }
+
+    private void addRegistryButton(LinearLayout parent, String label, Runnable action) {
+        Button button = new Button(this);
+        button.setAllCaps(false);
+        button.setText(label);
+        button.setOnClickListener(v -> action.run());
+        parent.addView(button);
     }
 
     private View experienceCard(final JSONObject item) {

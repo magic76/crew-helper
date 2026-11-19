@@ -23,6 +23,7 @@ import java.util.HashSet;
 import java.util.Locale;
 import java.util.Set;
 import java.util.ArrayList;
+import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import android.content.Context;
@@ -68,6 +69,7 @@ final class NativeGeminiLiveClient {
     private volatile long taskRecipeCandidateGeneration = -1L;
     private volatile String taskRecipeCandidateId = "";
     private final PhoneRuntimeExecutor phoneRuntimeExecutor;
+    private final HelperCoachBridge helperCoachBridge;
     private final CandidateArbitrationExperimentController
             candidateArbitrationController;
     private final RuntimeToolExecutor runtimeToolExecutor;
@@ -102,6 +104,10 @@ final class NativeGeminiLiveClient {
             new AgentTaskCoordinator();
     private final AgentResponseCoordinator agentResponseCoordinator;
     private final ToolCallDispatcher toolCallDispatcher;
+    private final Set<String> internalCoachToolIds =
+            java.util.Collections.synchronizedSet(new HashSet<String>());
+    private final java.util.concurrent.ConcurrentMap<String, HelperCoachRuntimePolicy.Advice>
+            internalCoachAdviceByToolId = new java.util.concurrent.ConcurrentHashMap<String, HelperCoachRuntimePolicy.Advice>();
     private volatile Thread activeToolThread;
     // 0018: a goal can span several execution tasks/follow-ups inside one Live session.
     // Safety/tool budgets remain per AgentTaskRecord; they are NOT shared for the whole call.
@@ -726,6 +732,26 @@ final class NativeGeminiLiveClient {
                     }
                 });
 
+        this.helperCoachBridge = this.appContext == null
+                ? null : HelperCoachBridge.get(this.appContext);
+        if (this.helperCoachBridge != null) {
+            this.helperCoachBridge.setAdviceListener(
+                    new HelperCoachBridge.AdviceListener() {
+                        @Override public boolean onCoachAdvice(
+                                HelperCoachRuntimePolicy.Observation observation,
+                                HelperCoachRuntimePolicy.Advice advice,
+                                String retryTarget,
+                                long intentGeneration) {
+                            return NativeGeminiLiveClient.this
+                                    .queueCoachAdvice(
+                                            observation,
+                                            advice,
+                                            retryTarget,
+                                            intentGeneration);
+                        }
+                    });
+        }
+
         shadowAgentRuntime.setListener(new AgentLedger.Listener() {
             @Override public void onEvent(AgentEvent event, AgentState state) {
                 Log.d(TAG, "AgentLedger " + event.type + " => " + state.phase);
@@ -871,6 +897,20 @@ final class NativeGeminiLiveClient {
                 ? agentTaskCoordinator.cancelActive(reason)
                 : agentTaskCoordinator.cancelActive(reason, category);
         if (task == null) return false;
+
+        cancelPendingCoachAdvice(task.taskId, "TASK_CANCELLED");
+
+        if (helperCoachBridge != null) {
+            helperCoachBridge.recordTaskOutcome(
+                    task.taskId,
+                    currentCoachAppPackage(),
+                    GoalIntentKey.derive(task.recipeGoal),
+                    Math.max(0L, System.currentTimeMillis() - task.startedAt),
+                    task.lastTaskState,
+                    task.lastCompletionEvidence,
+                    false);
+            helperCoachBridge.clearActiveTask(task.taskId);
+        }
 
         sendCancelledToolCalls(toolCallDispatcher.clearPending());
         agentResponseCoordinator.clear();
@@ -1533,6 +1573,11 @@ final class NativeGeminiLiveClient {
 
     void stop() {
         contextPayloadAudit.flushTurn();
+        if (helperCoachBridge != null) {
+            helperCoachBridge.setAdviceListener(null);
+            helperCoachBridge.clearActiveTask(
+                    agentTaskCoordinator.activeTaskId());
+        }
         stopConversationDelegation("LIVE_SESSION_STOPPED");
         backgroundThinkingPlanner.stop();
         workingContext.setPendingTask("");
@@ -1558,6 +1603,8 @@ final class NativeGeminiLiveClient {
         liveTurnCoordinator.reset();
         liveHumanTurnBoundary.reset();
         clearPendingInternalDirectiveTurn();
+        internalCoachToolIds.clear();
+        internalCoachAdviceByToolId.clear();
         liveConnection.stop();
         if (wasRunning) listener.onStopped("已結束");
     }
@@ -3035,6 +3082,13 @@ final class NativeGeminiLiveClient {
             sendFinishedIntentToolResponse(id, requestedName);
             return;
         }
+        JSONObject coachPreflightFailure = preflightCoachSyntheticCall(
+                call, callIntentGeneration);
+        if (coachPreflightFailure != null) {
+            try { sendToolResponse(id, requestedName, coachPreflightFailure); }
+            catch (Exception ignored) {}
+            return;
+        }
         // The privileged virtual-display experiment was intentionally retired.
         // A stale model background_phone call or explicit virtual-display
         // request MUST NOT be silently redirected to the physical display.
@@ -3893,6 +3947,403 @@ final class NativeGeminiLiveClient {
         } catch (Exception error) { reportStage("Agent 工具結果回灌失敗：" + error.getMessage()); }
     }
 
+    private void recordCoachResponseObservation(String requestedName, JSONObject result) {
+        if (helperCoachBridge == null
+                || (!isPhoneContextTool(requestedName)
+                    && !"inspect_ui".equals(requestedName)
+                    && !SemanticPhoneAction.TOOL_NAME.equals(requestedName))) return;
+        AgentTaskRecord task = agentTaskCoordinator.active();
+        if (task == null || task.cancelled || task.finished) return;
+
+        ActionObservation observed = observationVerificationController.latestObservation();
+        JSONObject after = result == null ? null : result.optJSONObject("after");
+        String packageName = after == null ? "" : after.optString("package", "").trim();
+        String fingerprint = after == null ? "" : after.optString("fingerprint", "").trim();
+        if (observed != null && observed.available) {
+            if (packageName.isEmpty()) packageName = observed.packageName;
+            if (fingerprint.isEmpty()) fingerprint = observed.fingerprint;
+        }
+        if (packageName.isEmpty()) packageName = workingContext.toProgressJson()
+                .optString("currentApp", "").trim();
+        if (fingerprint.isEmpty()) fingerprint = observationVerificationController.latestFingerprint();
+        if (packageName.isEmpty() || fingerprint.isEmpty()) return;
+
+        String semanticAction = result == null ? ""
+                : result.optString("semanticAction", "").trim();
+        String runtimeName = result == null ? requestedName
+                : result.optString("resolvedByRuntime", requestedName).trim();
+        String retryTarget = result == null ? ""
+                : result.optString("semanticTarget",
+                        result.optString("modelTarget", "")).trim();
+        String error = result == null ? "NO_RESULT"
+                : result.optString("verificationCode",
+                        result.optString("error", "RUNTIME_ACTION_FAILED"));
+        boolean success = result != null
+                && (result.optBoolean("success", false)
+                    || "STEP_OK".equals(result.optString("stepResult", "")));
+        boolean retryable = "TAP".equalsIgnoreCase(semanticAction)
+                && ("tap_element".equals(runtimeName) || "tap_screen".equals(runtimeName))
+                && !success && result != null
+                && result.optBoolean("recoverable", false)
+                && !result.optBoolean("blockedByRuntime", false)
+                && !result.optBoolean("needsUser", false)
+                && !CoachDataRedactor.safeLabel(retryTarget).isEmpty()
+                && !ActionSafetyPolicy.blocks(retryTarget)
+                && !UserActionScope.looksLikeSendTarget(retryTarget)
+                && !PendingActionPolicy.looksLikeHighRiskCommit(retryTarget)
+                && !MediaGoalUiPolicy.shouldRejectNumericTarget(
+                        retryTarget, ElementReferenceRuntime.isActive());
+        String upperError = error.toUpperCase(Locale.ROOT);
+        retryable &= !upperError.contains("AMBIGUOUS")
+                && !upperError.contains("NOT_FOUND")
+                && !upperError.contains("STALE")
+                && !upperError.contains("NO_PROGRESS")
+                && !upperError.contains("CONFIRM")
+                && !upperError.contains("POLICY");
+
+        String goalIntent = workingContext.toProgressJson()
+                .optString("goalIntent", GoalIntentKey.derive(task.recipeGoal));
+        JSONArray actions = new JSONArray()
+                .put(HelperCoachRuntimePolicy.ACTION_INSPECT_UI);
+        if (retryable) actions.put(
+                HelperCoachRuntimePolicy.ACTION_RETRY_PREVIOUS_SAFE_TAP);
+        JSONArray refs = new JSONArray();
+        String evidence = result == null ? ""
+                : result.optString("completionEvidence", "");
+        if (isCoachTrustedEvidence(evidence)) refs.put(evidence);
+        String previousAction = requestedName == null ? "phone_action" : requestedName;
+        if (!semanticAction.isEmpty()) previousAction += "/" + semanticAction;
+        helperCoachBridge.recordTaskObservation(
+                task.taskId,
+                task.intentGeneration,
+                packageName,
+                task.recipeGoal,
+                goalIntent,
+                task.steps,
+                coachUiSummary(after, observed),
+                actions,
+                previousAction,
+                success ? "success" : "failed",
+                error,
+                refs,
+                fingerprint,
+                coachExpectedPostcondition(goalIntent),
+                retryable,
+                retryTarget);
+    }
+
+    private String coachUiSummary(
+            JSONObject screen,
+            ActionObservation observed) {
+        int elements = observed == null ? 0 : observed.elementCount;
+        int clickables = 0;
+        int editables = 0;
+        int scrollables = 0;
+        JSONArray nodes = screen == null ? null : screen.optJSONArray("elements");
+        if (nodes == null && screen != null) nodes = screen.optJSONArray("important");
+        if (nodes != null) {
+            elements = nodes.length();
+            for (int i = 0; i < nodes.length(); i++) {
+                JSONObject item = nodes.optJSONObject(i);
+                if (item == null) continue;
+                if (item.optBoolean("clickable", false)) clickables++;
+                if (item.optBoolean("editable", false)) editables++;
+                if (item.optBoolean("scrollable", false)) scrollables++;
+            }
+        }
+        return "accessibility=" + (elements > 0 ? "available" : "unknown")
+                + ";elements=" + Math.max(0, elements)
+                + ";clickable=" + clickables
+                + ";editable=" + editables
+                + ";scrollable=" + scrollables;
+    }
+
+    private String coachExpectedPostcondition(String goalIntent) {
+        if (MediaGoalUiPolicy.isMediaPlayGoal(goalIntent)) {
+            return "MEDIA_PLAYBACK_BECAME_ACTIVE";
+        }
+        String goal = goalIntent == null ? "" : goalIntent.toUpperCase(Locale.ROOT);
+        return goal.startsWith("NAVIGATION") || goal.startsWith("MAPS")
+                ? "NAVIGATION_ACTIVE" : "";
+    }
+
+    private boolean isCoachTrustedEvidence(String evidence) {
+        return "MEDIA_PLAYBACK_BECAME_ACTIVE".equals(evidence)
+                || "RUNTIME_VERIFIED".equals(evidence)
+                || "TAP_EFFECT_OBSERVED".equals(evidence)
+                || "NAVIGATION_TRANSITION_OBSERVED".equals(evidence)
+                || "APP_PACKAGE_TRANSITION_OBSERVED".equals(evidence);
+    }
+
+    private String currentCoachAppPackage() {
+        ActionObservation latest = observationVerificationController.latestObservation();
+        if (latest != null && latest.available && latest.packageName != null
+                && !latest.packageName.trim().isEmpty()) {
+            return latest.packageName.trim();
+        }
+        return workingContext.toProgressJson().optString("currentApp", "").trim();
+    }
+
+    private boolean queueCoachAdvice(
+            HelperCoachRuntimePolicy.Observation observation,
+            HelperCoachRuntimePolicy.Advice advice,
+            String retryTarget,
+            long intentGeneration) {
+        if (!running || helperCoachBridge == null
+                || observation == null || advice == null
+                || !isCurrentUserIntent(intentGeneration)
+                || advice.expiresAtMs <= System.currentTimeMillis()) return false;
+        AgentTaskRecord active = agentTaskCoordinator.active();
+        if (active == null || active.cancelled || active.finished
+                || !observation.taskId.equals(active.taskId)
+                || active.intentGeneration != intentGeneration) return false;
+        if (HelperCoachRuntimePolicy.ACTION_RETRY_PREVIOUS_SAFE_TAP.equals(
+                advice.suggestedActionId)
+                && CoachDataRedactor.safeLabel(retryTarget).isEmpty()) return false;
+        if (!HelperCoachRuntimePolicy.ACTION_INSPECT_UI.equals(
+                    advice.suggestedActionId)
+                && !HelperCoachRuntimePolicy.ACTION_RETRY_PREVIOUS_SAFE_TAP.equals(
+                    advice.suggestedActionId)) return false;
+
+        Thread worker = new Thread(new Runnable() {
+            @Override public void run() {
+                runCoachAdvice(observation, advice, retryTarget, intentGeneration);
+            }
+        }, "crew-helper-pocket-coach");
+        worker.setDaemon(true);
+        worker.start();
+        return true;
+    }
+
+    private void runCoachAdvice(
+            HelperCoachRuntimePolicy.Observation observation,
+            HelperCoachRuntimePolicy.Advice advice,
+            String retryTarget,
+            long intentGeneration) {
+        if (!isCurrentCoachTask(observation.taskId, intentGeneration)
+                || advice.expiresAtMs <= System.currentTimeMillis()) {
+            recordCoachActionResult(advice,
+                    HelperCoachActionResultPolicy.STATUS_CANCELLED,
+                    advice.expiresAtMs <= System.currentTimeMillis()
+                            ? "COACH_ADVICE_STALE" : "TASK_CANCELLED", null);
+            return;
+        }
+        JSONObject current;
+        try { current = phoneRuntimeExecutor.get("/semantic_screen"); }
+        catch (Exception ignored) {
+            recordCoachActionResult(advice,
+                    HelperCoachActionResultPolicy.STATUS_FAILED,
+                    "COACH_REOBSERVE_FAILED", null);
+            return;
+        }
+        if (current == null || !current.optBoolean("success", false)) {
+            recordCoachActionResult(advice,
+                    HelperCoachActionResultPolicy.STATUS_FAILED,
+                    "COACH_REOBSERVE_FAILED", null);
+            return;
+        }
+        String currentPackage = current.optString("package", "").trim();
+        String currentFingerprint = current.optString("fingerprint", "").trim();
+        if (!observation.appPackage.equals(currentPackage)
+                || !observation.uiFingerprint.equals(currentFingerprint)) {
+            AgentTaskRecord task = agentTaskCoordinator.active();
+            if (task != null && helperCoachBridge != null) {
+                observationVerificationController.recordSemanticObservation(current);
+                publishCoachReobservation(
+                        task, current, intentGeneration, "COACH_UI_CHANGED");
+            }
+            recordCoachActionResult(advice,
+                    HelperCoachActionResultPolicy.STATUS_CANCELLED,
+                    "COACH_UI_CHANGED", null);
+            return;
+        }
+        observationVerificationController.recordSemanticObservation(current);
+        if (!isCurrentCoachTask(observation.taskId, intentGeneration)
+                || advice.expiresAtMs <= System.currentTimeMillis()) {
+            recordCoachActionResult(advice,
+                    HelperCoachActionResultPolicy.STATUS_CANCELLED,
+                    advice.expiresAtMs <= System.currentTimeMillis()
+                            ? "COACH_ADVICE_STALE" : "TASK_CANCELLED", null);
+            return;
+        }
+
+        JSONObject call = new JSONObject();
+        JSONObject args = new JSONObject();
+        try {
+            String tool;
+            if (HelperCoachRuntimePolicy.ACTION_INSPECT_UI.equals(
+                    advice.suggestedActionId)) {
+                tool = "inspect_ui";
+            } else {
+                String target = CoachDataRedactor.safeLabel(retryTarget);
+                if (target.isEmpty()) {
+                    recordCoachActionResult(advice,
+                            HelperCoachActionResultPolicy.STATUS_FAILED,
+                            "COACH_ACTION_UNSAFE", null);
+                    return;
+                }
+                tool = SemanticPhoneAction.TOOL_NAME;
+                args.put("action", "TAP").put("target", target);
+            }
+            call.put("id", "coach_internal_" + UUID.randomUUID().toString())
+                    .put("name", tool)
+                    .put("args", args)
+                    .put("_crew_internal_directive", true)
+                    .put("_crew_coach_internal", true)
+                    .put("_coach_task_id", observation.taskId)
+                    .put("_coach_observation_event_id", observation.eventId)
+                    .put("_coach_action_id", advice.suggestedActionId)
+                    .put("_coach_expected_package", observation.appPackage)
+                    .put("_coach_expected_fingerprint", observation.uiFingerprint)
+                    .put("_coach_expires_at_ms", advice.expiresAtMs);
+        } catch (Exception ignored) {
+            recordCoachActionResult(advice,
+                    HelperCoachActionResultPolicy.STATUS_FAILED,
+                    "COACH_ACTION_BUILD_FAILED", null);
+            return;
+        }
+        String internalId = call.optString("id", "");
+        internalCoachToolIds.add(internalId);
+        internalCoachAdviceByToolId.put(internalId, advice);
+        if (!toolCallDispatcher.enqueue(call, intentGeneration)) {
+            internalCoachToolIds.remove(internalId);
+            internalCoachAdviceByToolId.remove(internalId);
+            recordCoachActionResult(advice,
+                    HelperCoachActionResultPolicy.STATUS_FAILED,
+                    "COACH_QUEUE_FAILED", null);
+        }
+    }
+
+    private void cancelPendingCoachAdvice(String taskId, String errorCode) {
+        if (taskId == null || taskId.trim().isEmpty()) return;
+        for (java.util.Map.Entry<String, HelperCoachRuntimePolicy.Advice> entry
+                : internalCoachAdviceByToolId.entrySet()) {
+            HelperCoachRuntimePolicy.Advice advice = entry.getValue();
+            if (advice == null || !taskId.equals(advice.taskId)) continue;
+            if (internalCoachAdviceByToolId.remove(entry.getKey(), advice)) {
+                recordCoachActionResult(advice,
+                        HelperCoachActionResultPolicy.STATUS_CANCELLED,
+                        errorCode, null);
+            }
+        }
+    }
+
+    private void recordCoachActionResult(
+            HelperCoachRuntimePolicy.Advice advice,
+            String status,
+            String errorCode,
+            JSONObject result) {
+        if (helperCoachBridge == null || advice == null) return;
+        boolean success = result != null
+                && (result.optBoolean("success", false)
+                    || "STEP_OK".equals(result.optString("stepResult", "")));
+        String evidence = result == null ? ""
+                : result.optString("completionEvidence", "").trim();
+        if (!isCoachTrustedEvidence(evidence)) evidence = "";
+        String resultCode = result == null ? errorCode
+                : result.optString("verificationCode",
+                        result.optString("error", "RUNTIME_ACTION_FAILED"));
+        String safeStatus = status == null || status.trim().isEmpty()
+                ? HelperCoachActionResultPolicy.statusForRuntimeResult(success, resultCode)
+                : status;
+        String safeError = success ? "NONE"
+                : resultCode;
+        helperCoachBridge.recordCoachActionResult(
+                advice, safeStatus, safeError, success, evidence);
+    }
+
+    private boolean isCurrentCoachTask(String taskId, long intentGeneration) {
+        if (!running || !isCurrentUserIntent(intentGeneration)
+                || isFinishedIntentGeneration(intentGeneration)) return false;
+        AgentTaskRecord active = agentTaskCoordinator.active();
+        return active != null && !active.cancelled && !active.finished
+                && intentGeneration == active.intentGeneration
+                && taskId != null && taskId.equals(active.taskId);
+    }
+
+    private JSONObject preflightCoachSyntheticCall(
+            JSONObject call,
+            long intentGeneration) {
+        if (call == null || !call.optBoolean("_crew_coach_internal", false)) return null;
+        String taskId = call.optString("_coach_task_id", "");
+        String observationId = call.optString("_coach_observation_event_id", "");
+        String actionId = call.optString("_coach_action_id", "");
+        String expectedPackage = call.optString("_coach_expected_package", "");
+        String expectedFingerprint = call.optString("_coach_expected_fingerprint", "");
+        long expiresAt = call.optLong("_coach_expires_at_ms", 0L);
+        String id = call.optString("id", "");
+        if (!id.startsWith("coach_internal_")
+                || observationId.isEmpty()
+                || expiresAt <= System.currentTimeMillis()
+                || !isCurrentCoachTask(taskId, intentGeneration)
+                || !AppConfig.isHelperCoachEnabled(appContext)) {
+            return runtimeBlocked("COACH_ADVICE_STALE", "Pocket 建議已過期或任務已改變；操作已取消。");
+        }
+        if (HelperCoachRuntimePolicy.ACTION_INSPECT_UI.equals(actionId)) {
+            if (!"inspect_ui".equals(call.optString("name", ""))) {
+                return runtimeBlocked("COACH_ACTION_MISMATCH", "Pocket 建議與 Runtime 動作不一致。");
+            }
+        } else if (HelperCoachRuntimePolicy.ACTION_RETRY_PREVIOUS_SAFE_TAP.equals(actionId)) {
+            JSONObject args = call.optJSONObject("args");
+            String target = args == null ? "" : args.optString("target", "");
+            if (!SemanticPhoneAction.TOOL_NAME.equals(call.optString("name", ""))
+                    || args == null || !"TAP".equalsIgnoreCase(args.optString("action", ""))
+                    || CoachDataRedactor.safeLabel(target).isEmpty()
+                    || ActionSafetyPolicy.blocks(target)
+                    || UserActionScope.looksLikeSendTarget(target)
+                    || PendingActionPolicy.looksLikeHighRiskCommit(target)
+                    || MediaGoalUiPolicy.shouldRejectNumericTarget(
+                            target, ElementReferenceRuntime.isActive())) {
+                return runtimeBlocked("COACH_ACTION_UNSAFE", "Pocket 建議未通過 Runtime 安全檢查。");
+            }
+        } else {
+            return runtimeBlocked("COACH_ACTION_UNKNOWN", "Pocket 建議的動作不在 Runtime allowlist。");
+        }
+
+        try {
+            JSONObject screen = phoneRuntimeExecutor.get("/semantic_screen");
+            if (screen == null || !screen.optBoolean("success", false)
+                    || !expectedPackage.equals(screen.optString("package", "").trim())
+                    || !expectedFingerprint.equals(screen.optString("fingerprint", "").trim())) {
+                return runtimeBlocked("COACH_UI_CHANGED", "畫面已改變，Pocket 建議已取消並要求重新觀察。");
+            }
+            observationVerificationController.recordSemanticObservation(screen);
+        } catch (Exception error) {
+            return runtimeBlocked("COACH_REOBSERVE_FAILED", "無法重新確認畫面，Pocket 建議已取消。");
+        }
+        return null;
+    }
+
+    private void publishCoachReobservation(
+            AgentTaskRecord task,
+            JSONObject screen,
+            long generation,
+            String errorCode) {
+        if (helperCoachBridge == null || task == null || screen == null) return;
+        JSONArray actions = new JSONArray().put(
+                HelperCoachRuntimePolicy.ACTION_INSPECT_UI);
+        ActionObservation observation = observationVerificationController.latestObservation();
+        String goalIntent = workingContext.toProgressJson()
+                .optString("goalIntent", GoalIntentKey.derive(task.recipeGoal));
+        helperCoachBridge.recordTaskObservation(
+                task.taskId,
+                generation,
+                screen.optString("package", ""),
+                task.recipeGoal,
+                goalIntent,
+                task.steps,
+                coachUiSummary(screen, observation),
+                actions,
+                "runtime/reobserve",
+                "failed",
+                errorCode,
+                new JSONArray(),
+                screen.optString("fingerprint", ""),
+                coachExpectedPostcondition(goalIntent),
+                false,
+                "");
+    }
+
     private boolean tryExecuteTaskRecipeFastPath(
             String id,
             String requestedName,
@@ -4074,6 +4525,12 @@ final class NativeGeminiLiveClient {
                                 recipeContext.optString("currentApp", ""));
                 existing = started.task;
                 if (started.created) {
+                    if (helperCoachBridge != null) {
+                        helperCoachBridge.recordTaskReceived(
+                                existing.taskId,
+                                currentCoachAppPackage(),
+                                GoalIntentKey.derive(existing.recipeGoal));
+                    }
                     reportStage("Agent 任務開始：" + existing.taskId);
                 }
             }
@@ -5585,7 +6042,7 @@ final class NativeGeminiLiveClient {
         boolean screenChanged =
                 observed.optBoolean("screenChanged", false);
 
-        if (MediaPlaybackCompletionPolicy.shouldComplete(
+        boolean playbackVerified = MediaPlaybackCompletionPolicy.shouldComplete(
                 afterPackage,
                 targetMetadata,
                 actionSucceeded,
@@ -5593,16 +6050,20 @@ final class NativeGeminiLiveClient {
                 musicActiveAfter,
                 uiPlaying,
                 goalIntent,
-                screenChanged)) {
+                screenChanged);
+        if (!playbackVerified
+                && actionSucceeded
+                && MediaPlaybackCompletionPolicy.isDefaultTrustedPackage(afterPackage)
+                && MediaPlaybackCompletionPolicy.isPlayControl(targetMetadata)) {
+            MediaFlowDiagnostic.playbackVerificationPending(
+                    musicActiveBefore, musicActiveAfter, uiPlaying);
+        }
+        if (playbackVerified) {
             try {
-                String completionEvidence;
-                if (uiPlaying) {
-                    completionEvidence = "MEDIA_UI_PLAYING";
-                } else if (musicActiveAfter) {
-                    completionEvidence = "MEDIA_PLAYBACK_BECAME_ACTIVE";
-                } else {
-                    completionEvidence = "MEDIA_PLAY_CONTROL_EFFECT";
-                }
+                // shouldComplete now requires an explicit playing state from
+                // Apple Music's own UI. The device-wide AudioManager signal is
+                // diagnostic only and is not sufficient completion evidence.
+                String completionEvidence = "MEDIA_PLAYBACK_BECAME_ACTIVE";
 
                 observed.put("taskState", "DONE")
                         .put(
@@ -5687,6 +6148,17 @@ final class NativeGeminiLiveClient {
         agentResponseCoordinator.clear();
         if (!agentTaskCoordinator.finish(task, reason, finalReply)) {
             return;
+        }
+        if (helperCoachBridge != null && task != null) {
+            helperCoachBridge.recordTaskOutcome(
+                    task.taskId,
+                    currentCoachAppPackage(),
+                    GoalIntentKey.derive(task.recipeGoal),
+                    Math.max(0L, System.currentTimeMillis() - task.startedAt),
+                    task.lastTaskState,
+                    task.lastCompletionEvidence,
+                    AgentTaskEndReason.COMPLETED.equals(reason));
+            helperCoachBridge.clearActiveTask(task.taskId);
         }
         CrewDebugTrace.record("TASK_FINISHED", task.intentGeneration,
                 "", "NONE", "NONE",
@@ -6089,6 +6561,12 @@ final class NativeGeminiLiveClient {
                                         context.optString("currentApp", ""));
                         task = started.task;
                         if (task != null && started.created) {
+                            if (helperCoachBridge != null) {
+                                helperCoachBridge.recordTaskReceived(
+                                        task.taskId,
+                                        currentCoachAppPackage(),
+                                        GoalIntentKey.derive(task.recipeGoal));
+                            }
                             task.recipeEligible = false;
                             task.recipeIneligibleReason =
                                     "BACKGROUND_CONVERSATION_WAKE";
@@ -8922,6 +9400,17 @@ final class NativeGeminiLiveClient {
         String shadowFingerprint = result == null ? "" : result.optString("fingerprint", "");
         shadowAgentRuntime.onToolResult(
                 id, name, shadowSuccess, shadowCode, shadowFingerprint);
+        recordCoachResponseObservation(name, result);
+        HelperCoachRuntimePolicy.Advice coachAdvice = id == null ? null
+                : internalCoachAdviceByToolId.remove(id);
+        if (coachAdvice != null) {
+            recordCoachActionResult(coachAdvice, null, null, result);
+        }
+        if (id != null && internalCoachToolIds.remove(id)) {
+            // Pocket suggestions use the same Runtime executor and task ledger,
+            // but they do not correspond to a Gemini functionCall ID.
+            return;
+        }
         if (deckRuntimeController.hasActiveDeck()
                 && name.contains("deck")) {
             result.put("modeInstructions", LivePrompt.DECK);

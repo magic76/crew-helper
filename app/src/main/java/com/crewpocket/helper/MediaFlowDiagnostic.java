@@ -197,6 +197,19 @@ final class MediaFlowDiagnostic {
                 + " ui_playing=" + uiPlaying);
     }
 
+    static void playbackVerificationPending(
+            boolean musicActiveBefore,
+            boolean musicActiveAfter,
+            boolean uiPlaying) {
+        String reason = musicActiveAfter && !uiPlaying
+                ? "UNATTRIBUTED_AUDIO_ONLY" : "PLAYER_UI_NOT_CONFIRMED";
+        Log.i(TAG, "event=playback_verification_pending goal=MEDIA:PLAY"
+                + " reason=" + reason
+                + " music_active_before=" + musicActiveBefore
+                + " music_active_after=" + musicActiveAfter
+                + " ui_playing=" + uiPlaying);
+    }
+
     static void observationLoop(
             boolean pendingMediaSearch,
             boolean blocked,

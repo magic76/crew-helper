@@ -161,19 +161,16 @@ final class MediaPlaybackCompletionPolicy {
             boolean uiIndicatesPlaying,
             String goalIntent,
             boolean screenChanged) {
-        boolean playbackBecameActive =
-                !musicActiveBefore && musicActiveAfter;
-
         if (!isPlayControl(targetMetadata) || !tapSuccess) {
             return false;
         }
 
-        // Never equate "Play was tapped" or "the screen changed" with actual
-        // playback. Completion needs strong post-action evidence from the
-        // trusted player: audio became active, or the UI now exposes a playing
-        // state such as Pause / Now Playing.
+        // AudioManager.isMusicActive() is device-wide. It can reflect audio
+        // from Gemini Live or another player, so it cannot attribute playback
+        // to Apple Music. Keep the before/after values for diagnostics, but
+        // require Apple Music's own post-action UI to expose a playing state.
         return isDefaultTrustedPackage(packageName)
-                && (playbackBecameActive || uiIndicatesPlaying);
+                && uiIndicatesPlaying;
     }
 
     private static String clean(String value) {
