@@ -135,6 +135,8 @@ javac -encoding UTF-8 -d "$OUT" \
   "$SRC/HelperCoachAuthPolicy.java" \
   "$SRC/HelperCoachRuntimePolicy.java" \
   "$SRC/HelperCoachActionResultPolicy.java" \
+  "$SRC/HelperCoachTaskReceiptPolicy.java" \
+  "$SRC/HelperCoachTaskOutcomePolicy.java" \
   "$SRC/HelperCoachSkillLifecyclePolicy.java" \
   "$SRC/HelperCoachTime.java" \
   "$ROOT/tests/RetiredVirtualDisplayPolicyTest.java" \
@@ -250,6 +252,8 @@ javac -encoding UTF-8 -d "$OUT" \
   "$ROOT/tests/HelperCoachAuthPolicyTest.java" \
   "$ROOT/tests/HelperCoachRuntimePolicyTest.java" \
   "$ROOT/tests/HelperCoachActionResultPolicyTest.java" \
+  "$ROOT/tests/HelperCoachTaskReceiptPolicyTest.java" \
+  "$ROOT/tests/HelperCoachTaskOutcomePolicyTest.java" \
   "$ROOT/tests/HelperCoachSkillLifecyclePolicyTest.java" \
   "$ROOT/tests/HelperCoachTimeTest.java" \
   "$ROOT/tests/AgentReplayRunner.java"
@@ -373,5 +377,7 @@ java -cp "$OUT" com.crewpocket.helper.SecretMigrationPolicyTest
 java -cp "$OUT" com.crewpocket.helper.HelperCoachAuthPolicyTest
 java -cp "$OUT" com.crewpocket.helper.HelperCoachRuntimePolicyTest
 java -cp "$OUT" com.crewpocket.helper.HelperCoachActionResultPolicyTest
+java -cp "$OUT" com.crewpocket.helper.HelperCoachTaskReceiptPolicyTest
+java -cp "$OUT" com.crewpocket.helper.HelperCoachTaskOutcomePolicyTest
 java -cp "$OUT" com.crewpocket.helper.HelperCoachSkillLifecyclePolicyTest
 java -cp "$OUT" com.crewpocket.helper.HelperCoachTimeTest

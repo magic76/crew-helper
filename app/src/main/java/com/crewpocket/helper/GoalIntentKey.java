@@ -1,6 +1,10 @@
 package com.crewpocket.helper;
 
 import java.util.Locale;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
 
 /**
  * Privacy-bounded terminal intent for the current finalized user goal.
@@ -9,7 +13,28 @@ import java.util.Locale;
  * contains the user's query, recipient, message text, or other free-form data.
  */
 final class GoalIntentKey {
+    private static final Set<String> ALLOWED = Collections.unmodifiableSet(
+            new HashSet<String>(Arrays.asList(
+                    "MEDIA:PAUSE",
+                    "MEDIA:NEXT",
+                    "MEDIA:PREVIOUS",
+                    "NAVIGATION:START",
+                    "MEDIA:PLAY",
+                    "MESSAGE:SEND",
+                    "TEXT:TYPE_ONLY",
+                    "SEARCH:RESULT",
+                    "APP:OPEN")));
+
     private GoalIntentKey() {}
+
+    static boolean isAllowed(String value) {
+        return value != null && ALLOWED.contains(value.trim().toUpperCase(Locale.ROOT));
+    }
+
+    static String closedValue(String value) {
+        String normalized = value == null ? "" : value.trim().toUpperCase(Locale.ROOT);
+        return isAllowed(normalized) ? normalized : "";
+    }
 
     static String derive(String text) {
         String value = normalize(text);

@@ -19,8 +19,7 @@ final class CoachDataRedactor {
         // Natural-language goals often contain the exact search, recipient,
         // address, or message content. Only emit the Runtime's stable intent
         // category; never use the free-form task text as a fallback.
-        String intent = clean(goalIntent, 80).toUpperCase(Locale.ROOT);
-        return intent.matches("[A-Z0-9:_-]{1,80}") ? intent : "";
+        return GoalIntentKey.closedValue(clean(goalIntent, 80));
     }
 
     static String safeLabel(String label) {

@@ -904,10 +904,11 @@ final class NativeGeminiLiveClient {
             helperCoachBridge.recordTaskOutcome(
                     task.taskId,
                     currentCoachAppPackage(),
+                    GoalIntentKey.derive(task.recipeGoal),
                     Math.max(0L, System.currentTimeMillis() - task.startedAt),
-                    false,
-                    "TASK_CANCELLED",
-                    "TASK_NOT_VERIFIED");
+                    task.lastTaskState,
+                    task.lastCompletionEvidence,
+                    false);
             helperCoachBridge.clearActiveTask(task.taskId);
         }
 
@@ -4524,6 +4525,12 @@ final class NativeGeminiLiveClient {
                                 recipeContext.optString("currentApp", ""));
                 existing = started.task;
                 if (started.created) {
+                    if (helperCoachBridge != null) {
+                        helperCoachBridge.recordTaskReceived(
+                                existing.taskId,
+                                currentCoachAppPackage(),
+                                GoalIntentKey.derive(existing.recipeGoal));
+                    }
                     reportStage("Agent 任務開始：" + existing.taskId);
                 }
             }
@@ -6035,7 +6042,7 @@ final class NativeGeminiLiveClient {
         boolean screenChanged =
                 observed.optBoolean("screenChanged", false);
 
-        if (MediaPlaybackCompletionPolicy.shouldComplete(
+        boolean playbackVerified = MediaPlaybackCompletionPolicy.shouldComplete(
                 afterPackage,
                 targetMetadata,
                 actionSucceeded,
@@ -6043,16 +6050,20 @@ final class NativeGeminiLiveClient {
                 musicActiveAfter,
                 uiPlaying,
                 goalIntent,
-                screenChanged)) {
+                screenChanged);
+        if (!playbackVerified
+                && actionSucceeded
+                && MediaPlaybackCompletionPolicy.isDefaultTrustedPackage(afterPackage)
+                && MediaPlaybackCompletionPolicy.isPlayControl(targetMetadata)) {
+            MediaFlowDiagnostic.playbackVerificationPending(
+                    musicActiveBefore, musicActiveAfter, uiPlaying);
+        }
+        if (playbackVerified) {
             try {
-                String completionEvidence;
-                if (uiPlaying) {
-                    completionEvidence = "MEDIA_UI_PLAYING";
-                } else if (musicActiveAfter) {
-                    completionEvidence = "MEDIA_PLAYBACK_BECAME_ACTIVE";
-                } else {
-                    completionEvidence = "MEDIA_PLAY_CONTROL_EFFECT";
-                }
+                // shouldComplete now requires an explicit playing state from
+                // Apple Music's own UI. The device-wide AudioManager signal is
+                // diagnostic only and is not sufficient completion evidence.
+                String completionEvidence = "MEDIA_PLAYBACK_BECAME_ACTIVE";
 
                 observed.put("taskState", "DONE")
                         .put(
@@ -6139,20 +6150,14 @@ final class NativeGeminiLiveClient {
             return;
         }
         if (helperCoachBridge != null && task != null) {
-            boolean verified = AgentTaskEndReason.COMPLETED.equals(reason)
-                    && AgentTaskLifecyclePolicy
-                            .shouldFinishImmediatelyAfterRuntimeResult(
-                                    task.lastTaskState)
-                    && isCoachTrustedEvidence(task.lastCompletionEvidence);
-            String evidence = verified
-                    ? task.lastCompletionEvidence : "TASK_NOT_VERIFIED";
             helperCoachBridge.recordTaskOutcome(
                     task.taskId,
                     currentCoachAppPackage(),
+                    GoalIntentKey.derive(task.recipeGoal),
                     Math.max(0L, System.currentTimeMillis() - task.startedAt),
-                    verified,
-                    verified ? task.lastCompletionEvidence : "RUNTIME_UNVERIFIED",
-                    evidence);
+                    task.lastTaskState,
+                    task.lastCompletionEvidence,
+                    AgentTaskEndReason.COMPLETED.equals(reason));
             helperCoachBridge.clearActiveTask(task.taskId);
         }
         CrewDebugTrace.record("TASK_FINISHED", task.intentGeneration,
@@ -6556,6 +6561,12 @@ final class NativeGeminiLiveClient {
                                         context.optString("currentApp", ""));
                         task = started.task;
                         if (task != null && started.created) {
+                            if (helperCoachBridge != null) {
+                                helperCoachBridge.recordTaskReceived(
+                                        task.taskId,
+                                        currentCoachAppPackage(),
+                                        GoalIntentKey.derive(task.recipeGoal));
+                            }
                             task.recipeEligible = false;
                             task.recipeIneligibleReason =
                                     "BACKGROUND_CONVERSATION_WAKE";

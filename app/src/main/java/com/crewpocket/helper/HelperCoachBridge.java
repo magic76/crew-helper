@@ -81,9 +81,29 @@ final class HelperCoachBridge {
             new LinkedHashMap<String, StoredObservation>();
     private final LinkedHashMap<String, Boolean> terminalAdviceEvents =
             new LinkedHashMap<String, Boolean>();
+    private final LinkedHashMap<String, Boolean> receivedTaskIds =
+            new LinkedHashMap<String, Boolean>();
+    private final LinkedHashMap<String, Boolean> terminalTaskOutcomes =
+            new LinkedHashMap<String, Boolean>();
     private final Map<String, ArrayList<Long>> rateEvents =
             new HashMap<String, ArrayList<Long>>();
     private volatile AdviceListener adviceListener;
+    // Process-local counters only: never retain or report event contents.
+    private long receivedTaskEventsCreated;
+    private long observationEventsCreated;
+    private long outcomeEventsCreated;
+    private long actionResultEventsCreated;
+    private long authenticatedRequests;
+    private long authRejectedRequests;
+    private long eventPollRequests;
+    private long eventsDelivered;
+    private long adviceRequests;
+    private long acceptedAdvices;
+    private long rejectedAdvices;
+    private long lastPollAtMs;
+    private String lastAuthRejection = "NONE";
+    private String lastAdviceDecision = "NONE";
+    private String lastAdviceRuntimeResult = "NONE";
     private String activeTaskId = "";
     private long activeIntentGeneration = -1L;
 
@@ -92,6 +112,33 @@ final class HelperCoachBridge {
         noncePrefs = context == null ? null
                 : context.getSharedPreferences(NONCE_PREFS, Context.MODE_PRIVATE);
         registry = new HelperCoachRegistryStore(context);
+    }
+
+    /** Emits one minimal receipt when a Runtime task is accepted. */
+    void recordTaskReceived(String taskId, String appPackage, String goalIntent) {
+        if (!isEnabled()) return;
+        String safeTask = safeId(taskId);
+        if (safeTask.isEmpty()) return;
+        String safeApp = CoachDataRedactor.isSensitivePackage(appPackage)
+                ? "" : safePackage(appPackage);
+        long now = System.currentTimeMillis();
+        Map<String, Object> payload = HelperCoachTaskReceiptPolicy.buildEvent(
+                UUID.randomUUID().toString(),
+                safeTask,
+                HelperCoachTime.formatIsoUtc(now),
+                safeApp,
+                goalIntent);
+        if (payload == null) return;
+        JSONObject event;
+        try { event = new JSONObject(payload); }
+        catch (Exception ignored) { return; }
+        synchronized (lock) {
+            if (receivedTaskIds.containsKey(safeTask)) return;
+            receivedTaskIds.put(safeTask, Boolean.TRUE);
+            trimSeenIds(receivedTaskIds, 512);
+            appendEventLocked(event);
+            receivedTaskEventsCreated++;
+        }
     }
 
     void setAdviceListener(AdviceListener listener) {
@@ -183,6 +230,7 @@ final class HelperCoachBridge {
                 iterator.remove();
             }
             appendEventLocked(event);
+            observationEventsCreated++;
         }
         return cloneObject(event);
     }
@@ -223,45 +271,69 @@ final class HelperCoachBridge {
                 iterator.remove();
             }
             appendEventLocked(event);
+            actionResultEventsCreated++;
+            lastAdviceRuntimeResult = diagnosticResultStatus(status);
         }
     }
 
     void recordTaskOutcome(
             String taskId,
             String appPackage,
+            String goalIntent,
             long durationMs,
-            boolean verified,
-            String verificationMethod,
-            String completionEvidence) {
+            String taskState,
+            String completionEvidence,
+            boolean taskCompleted) {
         if (!isEnabled()) return;
+        String safeTask = safeId(taskId);
+        if (safeTask.isEmpty()) return;
+        String safeApp = CoachDataRedactor.isSensitivePackage(appPackage)
+                ? "" : safePackage(appPackage);
+        HelperCoachTaskOutcomePolicy.Outcome outcome =
+                HelperCoachTaskOutcomePolicy.evaluate(
+                        goalIntent, taskState, completionEvidence, taskCompleted);
         long now = System.currentTimeMillis();
         JSONObject event = new JSONObject();
         try {
             event.put("protocol_version", 1)
                     .put("event_id", UUID.randomUUID().toString())
-                    .put("task_id", safeId(taskId))
+                    .put("task_id", safeTask)
                     .put("timestamp", HelperCoachTime.formatIsoUtc(now))
                     .put("source", "helper")
                     .put("kind", "task_outcome")
-                    .put("app_package", safePackage(appPackage))
-                    .put("verified", verified)
-                    .put("verification_method", CoachDataRedactor.safeErrorCode(verificationMethod))
+                    .put("app_package", safeApp)
+                    .put("verified", outcome.verified)
+                    .put("verification_method", outcome.verificationMethod)
                     .put("duration_ms", Math.max(0L, durationMs))
-                    .put("result", verified ? "success" : "unknown")
-                    .put("error_code", verified ? "NONE" : "TASK_NOT_VERIFIED")
-                    .put("evidence_refs", safeEvidence(completionEvidence));
+                    .put("result", outcome.verified ? "success" : "unknown")
+                    .put("error_code", outcome.verified ? "NONE" : "TASK_NOT_VERIFIED")
+                    .put("evidence_refs", safeEvidence(outcome.evidenceRef));
         } catch (Exception ignored) { return; }
         synchronized (lock) {
+            if (terminalTaskOutcomes.containsKey(safeTask)) return;
+            terminalTaskOutcomes.put(safeTask, Boolean.TRUE);
+            trimSeenIds(terminalTaskOutcomes, 512);
             appendEventLocked(event);
-            if (safeId(taskId).equals(activeTaskId)) {
+            outcomeEventsCreated++;
+            if (safeTask.equals(activeTaskId)) {
                 activeTaskId = "";
                 activeIntentGeneration = -1L;
             }
         }
-        if (verified) {
+        if (outcome.verified && !CoachDataRedactor.isSensitivePackage(appPackage)) {
             registry.recordVerifiedOutcomeForCandidates(
-                    safePackage(appPackage), safeId(taskId),
-                    CoachDataRedactor.safeErrorCode(completionEvidence));
+                    safeApp, safeTask, outcome.evidenceRef);
+        }
+    }
+
+    private static void trimSeenIds(
+            LinkedHashMap<String, Boolean> seen,
+            int maximum) {
+        while (seen.size() > maximum) {
+            Iterator<String> iterator = seen.keySet().iterator();
+            if (!iterator.hasNext()) return;
+            iterator.next();
+            iterator.remove();
         }
     }
 
@@ -273,6 +345,63 @@ final class HelperCoachBridge {
                 activeIntentGeneration = -1L;
             }
         }
+    }
+
+    String diagnosticReport() {
+        long observationsCount;
+        long receiptsCount;
+        long outcomesCount;
+        long resultsCount;
+        long authenticatedCount;
+        long authRejectedCount;
+        long pollsCount;
+        long deliveredCount;
+        long adviceCount;
+        long acceptedCount;
+        long rejectedCount;
+        long lastPoll;
+        int queuedCount;
+        String authDecision;
+        String adviceDecision;
+        String adviceResult;
+        synchronized (lock) {
+            observationsCount = observationEventsCreated;
+            receiptsCount = receivedTaskEventsCreated;
+            outcomesCount = outcomeEventsCreated;
+            resultsCount = actionResultEventsCreated;
+            authenticatedCount = authenticatedRequests;
+            authRejectedCount = authRejectedRequests;
+            pollsCount = eventPollRequests;
+            deliveredCount = eventsDelivered;
+            adviceCount = adviceRequests;
+            acceptedCount = acceptedAdvices;
+            rejectedCount = rejectedAdvices;
+            lastPoll = lastPollAtMs;
+            queuedCount = events.size();
+            authDecision = lastAuthRejection;
+            adviceDecision = lastAdviceDecision;
+            adviceResult = lastAdviceRuntimeResult;
+        }
+        return "Helper Coach bridge (current process; counters only)\n"
+                + "Enabled + paired: " + (isEnabled() ? "yes" : "no") + "\n"
+                + "Helper events: observations=" + observationsCount
+                + " receipts=" + receiptsCount
+                + " outcomes=" + outcomesCount
+                + " advice-results=" + resultsCount
+                + " queued=" + queuedCount + "\n"
+                + "Pocket requests: authenticated=" + authenticatedCount
+                + " auth-rejected=" + authRejectedCount
+                + " last-auth-rejection=" + authDecision + "\n"
+                + "Pocket feed: polls=" + pollsCount
+                + " delivered-events=" + deliveredCount
+                + " last-poll=" + (lastPoll > 0L
+                        ? HelperCoachTime.formatIsoUtc(lastPoll) : "NONE") + "\n"
+                + "Advice: received=" + adviceCount
+                + " queued=" + acceptedCount
+                + " rejected=" + rejectedCount
+                + " last-decision=" + adviceDecision
+                + " last-runtime-result=" + adviceResult + "\n"
+                + "Counters reset when Helper process restarts; no transcript is stored.";
     }
 
     HttpResponse handleRequest(
@@ -307,6 +436,10 @@ final class HelperCoachBridge {
                 System.currentTimeMillis(),
                 this::markNonceIfNew);
         if (auth != HelperCoachAuthPolicy.Result.VALID) {
+            synchronized (lock) {
+                authRejectedRequests++;
+                lastAuthRejection = auth.name();
+            }
             if (!allowRate("auth-fail", 12)) {
                 return response(429, "Too Many Requests", "RATE_LIMITED");
             }
@@ -321,6 +454,7 @@ final class HelperCoachBridge {
             }
             return response(401, "Unauthorized", "COACH_AUTH_REJECTED");
         }
+        synchronized (lock) { authenticatedRequests++; }
 
         String path = target;
         int queryAt = path.indexOf('?');
@@ -374,6 +508,9 @@ final class HelperCoachBridge {
                 selected.put(cloneObject(event));
                 nextCursor = event.optString("event_id", nextCursor);
             }
+            eventPollRequests++;
+            eventsDelivered += selected.length();
+            lastPollAtMs = System.currentTimeMillis();
         }
         JSONObject out = new JSONObject();
         try {
@@ -386,7 +523,9 @@ final class HelperCoachBridge {
     }
 
     private HttpResponse acceptAdvice(JSONObject request) {
+        synchronized (lock) { adviceRequests++; }
         if (!validEnvelope(request, "pocket", "coach_advice")) {
+            noteAdviceRejected("INVALID_ENVELOPE");
             return response(400, "Bad Request", "INVALID_ENVELOPE");
         }
         String eventId = safeId(request.optString("event_id", ""));
@@ -396,6 +535,7 @@ final class HelperCoachBridge {
         JSONObject parameters = request.optJSONObject("parameters");
         if (eventId.isEmpty() || observationId.isEmpty() || taskId.isEmpty()
                 || parameters == null || parameters.length() != 0) {
+            noteAdviceRejected("INVALID_ADVICE_FIELDS");
             return response(400, "Bad Request", "INVALID_ADVICE_FIELDS");
         }
         String adviceTimestamp = request.optString("timestamp", "");
@@ -403,6 +543,7 @@ final class HelperCoachBridge {
         long now = System.currentTimeMillis();
         if (sentAt <= 0L || !HelperCoachTime.withinClockSkew(
                 sentAt, now, HelperCoachAuthPolicy.MAX_CLOCK_SKEW_MS)) {
+            noteAdviceRejected("STALE_ADVICE_TIMESTAMP");
             return response(400, "Bad Request", "STALE_ADVICE_TIMESTAMP");
         }
         long expiresAt = HelperCoachTime.parseMillis(request.optString("expires_at", ""));
@@ -415,7 +556,10 @@ final class HelperCoachBridge {
             stored = observations.get(observationId);
             liveTask = activeTaskId;
         }
-        if (stored == null) return response(409, "Conflict", "OBSERVATION_NOT_FOUND");
+        if (stored == null) {
+            noteAdviceRejected("OBSERVATION_NOT_FOUND");
+            return response(409, "Conflict", "OBSERVATION_NOT_FOUND");
+        }
         String diagnosis = CoachDataRedactor.safeFreeText(
                 request.optString("diagnosis", ""), 240);
         HelperCoachRuntimePolicy.Advice advice = new HelperCoachRuntimePolicy.Advice(
@@ -426,13 +570,19 @@ final class HelperCoachBridge {
                 stored.policy, advice, liveTask,
                 stored.policy.appPackage, stored.policy.uiFingerprint, now);
         if (decision != HelperCoachRuntimePolicy.Decision.ACCEPT) {
+            noteAdviceRejected(decision.name());
             return decisionResponse(decision);
         }
         AdviceListener listener = adviceListener;
         if (listener == null || !listener.onCoachAdvice(
                 stored.policy, advice, stored.retryTarget,
                 stored.intentGeneration)) {
+            noteAdviceRejected("RUNTIME_UNAVAILABLE");
             return response(503, "Service Unavailable", "RUNTIME_UNAVAILABLE");
+        }
+        synchronized (lock) {
+            acceptedAdvices++;
+            lastAdviceDecision = "ACCEPTED_QUEUED";
         }
         JSONObject out = new JSONObject();
         try {
@@ -448,6 +598,22 @@ final class HelperCoachBridge {
                     .put("diagnosis_received", !diagnosis.isEmpty());
         } catch (Exception ignored) {}
         return new HttpResponse(202, "Accepted", out);
+    }
+
+    private void noteAdviceRejected(String decision) {
+        String safeDecision = decision == null ? "UNKNOWN" : decision.trim();
+        if (!safeDecision.matches("[A-Z0-9_]{1,64}")) safeDecision = "UNKNOWN";
+        synchronized (lock) {
+            rejectedAdvices++;
+            lastAdviceDecision = safeDecision;
+        }
+    }
+
+    private static String diagnosticResultStatus(String status) {
+        if (HelperCoachActionResultPolicy.STATUS_EXECUTED.equals(status)) return "EXECUTED";
+        if (HelperCoachActionResultPolicy.STATUS_FAILED.equals(status)) return "FAILED";
+        if (HelperCoachActionResultPolicy.STATUS_CANCELLED.equals(status)) return "CANCELLED";
+        return "UNKNOWN";
     }
 
     private HttpResponse stageSkill(JSONObject request) {
